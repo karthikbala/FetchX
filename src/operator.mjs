@@ -1,3 +1,4 @@
+import {CaptchaSolver} from './captcha.mjs';
 import {reconcileResidential} from './residential.mjs';
 // Run inside the gateway container by an operator. Never dispatches source work.
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
@@ -9,6 +10,9 @@ try{
  if(process.argv[2]==='status'){
   const config=JSON.parse(await readFile(process.env.GATEWAY_CONFIG??'/run/secrets/gateway.json','utf8'));
   console.log(JSON.stringify(await gatewayStatus(store,config)));
+ }else if(process.argv[2]==='reconcile-captcha'){
+  const config=JSON.parse(await readFile(process.env.GATEWAY_CONFIG??'/run/secrets/gateway.json','utf8'));
+  console.log(JSON.stringify(await new CaptchaSolver(store,config).reconcile(process.argv[3])));
  }else if(process.argv[2]==='reconcile-residential'){
   console.log(JSON.stringify(await reconcileResidential(store,JSON.parse(await readFile(process.argv[3],'utf8')))));
  }else if(process.argv[2]==='reconcile'){
@@ -25,7 +29,7 @@ try{
   const config=JSON.parse(await readFile(process.env.GATEWAY_CONFIG,'utf8'));
   const data={};
   // Small operational export, encrypted and owner-protected. Captures are separate files.
-  for(const name of ['residential_reconciliations','residential_usage','browser_state','workflows','operations','attempts','ledger','source_limits','pool_cursor','project_admission','admission_queue','operation_outcomes','route_health','route_health_workflows','route_health_pools'])data[name]=(await store.pool.query('SELECT * FROM '+name)).rows;
+  for(const name of ['captcha_tasks','fetch_jobs','residential_reconciliations','residential_usage','browser_state','workflows','operations','attempts','ledger','source_limits','pool_cursor','project_admission','admission_queue','operation_outcomes','route_health','route_health_workflows','route_health_pools'])data[name]=(await store.pool.query('SELECT * FROM '+name)).rows;
   await writeFile(process.argv[3],new Sealer(config.artifactKey).seal({created_at:new Date().toISOString(),tables:data}),{mode:0o600});
   console.log('encrypted_operator_snapshot_written');
  }else throw Error('usage_status_reconcile_or_snapshot');

@@ -9,6 +9,7 @@ export function residentialPolicy(p,config){
  if(!['legacy',RESIDENTIAL_POLICY].includes(policy))fail('routing_policy_invalid',500);
  if(policy==='legacy')return {...p,routingPolicy:policy};
  if(!/^[A-Z]{2}$/.test(p.country)||p.ttlSeconds>1800)fail('residential_profile_invalid',500);
+ if(p.maxRouteAttempts!==undefined&&(!Number.isInteger(p.maxRouteAttempts)||p.maxRouteAttempts<1||p.maxRouteAttempts>4))fail('residential_profile_invalid',500);
  if(p.execution&&!['http','browser'].includes(p.execution))fail('residential_profile_invalid',500);
  return {...p,routingPolicy:policy,execution:p.execution??'http',maxConcurrent:1,maxFallbackCredits:0,
   routeIndex:0,residentialSession:randomBytes(5).toString('hex'),

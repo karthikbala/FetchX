@@ -68,3 +68,7 @@ Residential usage is reserved before dispatch. Local byte counters are not provi
 ## Remaining capability work
 
 Automatic CAPTCHA solving, vendor-specific managed unblocking, general interactive browser sessions/CDP, durable webhook delivery, cross-process browser pools and distributed job ownership are not implemented. Qualify real source identity, context and completeness before migrating a crawler. Provider connectivity, fixture tests and HTTP 200 alone do not establish source acceptance.
+
+## CAPTCHA jobs
+
+Profiles advertising `captcha.async_required` must use `/v1/jobs`. A synchronous fetch is rejected before dispatch. Results include a safe `captcha` summary; `verified` means the reviewed source success selector appeared after token submission. It does not replace application record validation. See [configuration and accounting](captcha.md).

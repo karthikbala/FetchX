@@ -14,11 +14,12 @@ Native requests use **Evomi → DataImpulse**. Browser requests use **Evomi/free
 - Structured selector extraction and PNG screenshots.
 - Sticky workflow sessions with encrypted cookies/localStorage.
 - Durable asynchronous jobs, polling and queued-job cancellation.
+- Central reCAPTCHA v2 and standalone Turnstile form solving with cost reservations and source verification.
 - Idempotent capture replay without repeating provider charges.
 - Encrypted request/capture storage, destination restrictions, project isolation, rate limits and spending reservations.
 - JavaScript and Python clients; diagnostics and application acceptance reporting.
 
-FetchX is not yet a complete Scrape.do replacement. It does not include automatic CAPTCHA solving, universal managed unblocking, arbitrary browser scripts/CDP, webhooks or horizontal workers. Actual source acceptance must be qualified per site. Residential bandwidth can cost money on failed requests. Paid browser builds require an active entitlement; a trial key is not perpetual.
+FetchX is not yet a complete Scrape.do replacement. It does not include universal managed unblocking, arbitrary browser scripts/CDP, webhooks or horizontal workers. CAPTCHA support requires a reviewed form profile; hCaptcha, DataDome and managed Cloudflare challenge pages are not supported. Actual source acceptance must be qualified per site. Residential bandwidth can cost money on failed requests. Paid browser builds require an active entitlement; a trial key is not perpetual.
 
 ## Quick start
 
@@ -48,7 +49,7 @@ curl http://localhost:8788/v1/fetch \
   -d '{"profile":"example.http","url":"https://example.com/","idempotency_key":"saved-example-key"}'
 ```
 
-Example profiles are limited to `example.com`; configure your own reviewed profiles before onboarding real sources. Keep the listener private or put authenticated TLS access in front of it. Read the [API contract](docs/api.md), [operations guide](docs/operations.md), and [client examples](clients/README.md).
+Example profiles are limited to `example.com`; configure your own reviewed profiles before onboarding real sources. Keep the listener private or put authenticated TLS access in front of it. Read the [CAPTCHA setup and limits](docs/captcha.md), [API contract](docs/api.md), [operations guide](docs/operations.md), and [client examples](clients/README.md).
 
 ## Test
 

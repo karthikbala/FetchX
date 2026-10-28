@@ -49,7 +49,7 @@ export class JobQueue {
    return (await c.query("UPDATE fetch_jobs SET state='running',updated_at=now() WHERE id=(SELECT id FROM fetch_jobs WHERE state='queued' ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *")).rows[0];
   });if(!row)return false;
   try{
-   const result=await fetchOnce(this.gateway,row.project,JSON.parse(this.gateway.sealer.open(row.input)));
+   const result=await fetchOnce(this.gateway,row.project,JSON.parse(this.gateway.sealer.open(row.input)),{asyncJob:true});
    await this.store.pool.query("UPDATE fetch_jobs SET state='completed',operation=$2,updated_at=now() WHERE id=$1",[row.id,result.id]);
   }catch(e){await this.store.pool.query("UPDATE fetch_jobs SET state=$2,error=$3,updated_at=now() WHERE id=$1",[row.id,e instanceof GatewayError?'failed':'unknown',e instanceof GatewayError?e.code:'job_outcome_unknown']);}
   return true;

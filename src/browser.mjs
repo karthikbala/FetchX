@@ -14,19 +14,29 @@ export async function checkBrowserTier(config,tier,{fetchImpl=fetch}={}){
  if(tier==='paid'&&!['solo','team','business','scale','enterprise'].includes(String(info.plan).toLowerCase()))fail('browser_paid_subscription_required',503);
  return t;
 }
-export async function browserRequest(input,profile,config,tier,relay,storageState){
+export async function browserRequest(input,profile,config,tier,relay,storageState,captcha){
  if(active>=(config.browser?.maxConcurrent??1))fail('browser_capacity',503);
  active++;let dir;
  try{
   const t=await checkBrowserTier(config,tier);dir=await mkdtemp(join(tmpdir(),'gateway-browser-'));
   return await new Promise((resolve)=>{
-   const child=spawn(process.execPath,[new URL('./browser-worker.mjs',import.meta.url).pathname],{detached:true,stdio:['pipe','pipe','ignore'],env:{...process.env,HOME:dir,CLOAKBROWSER_LICENSE_KEY:'',CLOAKBROWSER_CACHE_DIR:dir}});
-   let chunks=[],size=0,forced=null;
+   const child=spawn(process.execPath,[new URL('./browser-worker.mjs',import.meta.url).pathname],{detached:true,stdio:['pipe','pipe','ignore','ipc'],env:{...process.env,HOME:dir,CLOAKBROWSER_LICENSE_KEY:'',CLOAKBROWSER_CACHE_DIR:dir}});
+   let chunks=[],size=0,forced=null,solveRequested=false,reports=0;const pending=new Set(),controller=new AbortController();
+   child.on('message',message=>{
+    const task=(async()=>{
+     let result,error;try{
+      if(message?.kind==='captcha_solve'&&!solveRequested&&captcha?.solve){solveRequested=true;result=await captcha.solve(message.data,{signal:controller.signal});}
+      else if(message?.kind==='captcha_report'&&captcha?.report&&++reports<=3){await captcha.report(message.data);result={ok:true};}
+      else throw Object.assign(Error(),{code:'captcha_ipc_rejected'});
+     }catch(e){error=e.code?.startsWith('captcha_')?e.code:'captcha_provider_outcome_unknown';}
+     try{if(child.connected)child.send({id:message?.id,result,error},()=>{});}catch{}
+    })();pending.add(task);task.finally(()=>pending.delete(task));
+   });
    const killGroup=()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}};
-   const timer=setTimeout(()=>{forced='browser_deadline';killGroup();},60000);
+   const timer=setTimeout(()=>{forced='browser_deadline';killGroup();},profile.captcha?180000:60000);
    child.stdout.on('data',b=>{size+=b.length;if(size>profile.maxResponseBytes*1.4+1024*1024){forced='response_too_large';killGroup();}else chunks.push(b);});
    child.on('error',()=>{forced='browser_launch_failed';});
-   child.on('close',()=>{clearTimeout(timer);try{if(forced)throw Error();const r=JSON.parse(Buffer.concat(chunks));resolve({...r,body:Buffer.from(r.body_base64??'','base64'),providerStatus:null});}catch{resolve({status:null,headers:{},cookies:[],body:Buffer.alloc(0),error:forced??'browser_protocol_error'});}});
+   child.on('close',async()=>{clearTimeout(timer);controller.abort();await Promise.allSettled([...pending]);try{if(forced)throw Error();const r=JSON.parse(Buffer.concat(chunks));resolve({...r,body:Buffer.from(r.body_base64??'','base64'),providerStatus:null});}catch{resolve({status:null,headers:{},cookies:[],body:Buffer.alloc(0),error:forced??'browser_protocol_error'});}});
    child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({url:input.url,headers:input.headers,profile,recipeInput:input.browser,browser:t,relay,storageState,cacheDir:dir}));
   });
  }finally{active--;if(dir)await rm(dir,{recursive:true,force:true});}

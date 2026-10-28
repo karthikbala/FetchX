@@ -1,3 +1,4 @@
+import {captchaStatus} from './captcha.mjs';
 import {residentialStatus} from './residential.mjs';
 import {artifactUsage} from './artifacts.mjs';
 import {METERED_BLOCKING_ERRORS} from './policy.mjs';
@@ -26,7 +27,7 @@ export async function gatewayStatus(store,config,project=null){
  return {
   release:config.release,default_provider:config.defaultRouting==='residential-v1'?'evomi':'oxylabs',observed_at:new Date().toISOString(),
   workflows:workflows.rows,attempts:attempts.rows,errors_last_24h:errors.rows,financial_holds:holds.rows,billing_warnings:warnings.rows,
-  diagnostics,routing,admission,residential:await residentialStatus(store.pool,config,project),
+  diagnostics,routing,admission,captcha:await captchaStatus(store.pool,config,project),residential:await residentialStatus(store.pool,config,project),
   fallback:{available:blocked.length===0,blocked_by:blocked,daily_reserved_or_spent:Number(cost.daily_reserved_or_spent),daily_limit:config.maxDailyFallbackCredits,day_timezone:'UTC',unknown_attempts:cost.unknown_attempts,unknown_reserved_credits:Number(cost.unknown_reserved_credits)},
   storage:{...storage,utilization:Number((storage.bytes/storage.max_bytes).toFixed(4)),pressure:storage.bytes>=storage.max_bytes*0.85||storage.free_bytes<storage.min_free_bytes},
  };

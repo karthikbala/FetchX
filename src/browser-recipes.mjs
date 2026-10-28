@@ -31,13 +31,14 @@ export function validateRecipe(recipe){
  }
  if(recipe.screenshot!==undefined&&recipe.screenshot!==false&&recipe.screenshot!=='viewport'&&!selector(recipe.screenshot))fail('browser_recipe_configuration',500);
 }
-export async function runRecipe(page,recipe,values,progress,{status}={}){
+export async function runRecipe(page,recipe,values,progress,{status,onCheckpoint}={}){
  if(status!==undefined){
   if([401,403].includes(status))fail('source_denied');
   if(status===429)fail('browser_capture_failed');
   if(hasHtmlChallenge({status,headers:{'content-type':'text/html'},body:Buffer.from(await page.content())}))fail('source_challenge');
  }
  for(const [index,step]of recipe.steps.entries()){
+  if(onCheckpoint)await onCheckpoint();
   progress.step=index;
   // Any action may trigger JavaScript/network effects; never replay it on a
   // different provider after a timeout, denial, or lost acknowledgement.
@@ -48,10 +49,11 @@ export async function runRecipe(page,recipe,values,progress,{status}={}){
    case 'fill':await locator.fill(value);break;
    case 'select':await locator.selectOption(value);break;
    case 'press':await locator.press(value);break;
-   case 'wait':await locator.waitFor({state:step.state??'visible'});break;
+   case 'wait':try{await locator.waitFor({state:step.state??'visible'});}catch(e){if(!onCheckpoint||!await onCheckpoint())throw e;await locator.waitFor({state:step.state??'visible'});}break;
    case 'scroll':await locator.scrollIntoViewIfNeeded();break;
   }
   progress.completed=index+1;
+  if(onCheckpoint&&['click','press'].includes(step.action))await onCheckpoint({waitForChallenge:true});
  }
 }
 export async function extractRecipe(page,recipe){

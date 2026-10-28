@@ -1,3 +1,4 @@
+import {initCaptcha} from './captcha.mjs';
 import {initJobs} from './jobs.mjs';
 import {initResidential} from './residential.mjs';
 import pg from 'pg';
@@ -36,11 +37,12 @@ export class Store {
  CREATE INDEX IF NOT EXISTS operations_retained_created ON operations(created_at,id) WHERE result_path IS NOT NULL;
  CREATE INDEX IF NOT EXISTS attempts_held_operation ON attempts(operation) WHERE state='unknown' OR error IN ('cost_overrun','provider_account_rejected','sensitive_provider_response');
  `);
- await initJobs(this.pool);await initResidential(this.pool);await initAdmission(this.pool);await initDiagnostics(this.pool);await initRouteHealth(this.pool);
+ await initCaptcha(this.pool);await initJobs(this.pool);await initResidential(this.pool);await initAdmission(this.pool);await initDiagnostics(this.pool);await initRouteHealth(this.pool);
  }
  async recover(){// Never resubmit sent work. Reserved work has provably not reached transport.
   await this.tx(async c=>{
    await c.query('DELETE FROM admission_queue');
+   await c.query("UPDATE captcha_tasks SET state='unknown',error='captcha_interrupted_unknown',updated_at=now() WHERE state IN ('reserved','processing')");
    const unsent=(await c.query("UPDATE attempts SET state='cancelled',credits=CASE WHEN provider='scrapedo' THEN 0 ELSE NULL END,error='interrupted_before_dispatch',finished_at=clock_timestamp(),outcome_category='cancelled' WHERE state='reserved' RETURNING id,workflow")).rows;
    for(const row of unsent){
     await c.query("UPDATE residential_usage SET accounted_bytes=0,estimated_micro_usd=0,state='cancelled_before_dispatch' WHERE attempt=$1",[row.id]);

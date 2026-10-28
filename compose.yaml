@@ -42,7 +42,7 @@ services:
     security_opt: [no-new-privileges:true, "seccomp=./deploy/chromium-seccomp.json"]
     mem_limit: 2g
     pids_limit: 256
-    stop_grace_period: 95s
+    stop_grace_period: 240s
     healthcheck:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:8788/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
