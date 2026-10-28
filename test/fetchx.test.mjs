@@ -24,6 +24,11 @@ test('recipe progress marks uncertain actions before execution and omits submitt
  await assert.rejects(runRecipe(page,recipe,{query:'private query'},progress),/timeout/);
  assert.deepEqual(progress,{actionsStarted:true,completed:1,step:1});assert.equal(JSON.stringify(progress).includes('private'),false);
 });
+test('initial navigation blocks are detected before form actions and retain fallback eligibility',async()=>{
+ let actions=0;const page={content:async()=>'<title>Robot Check</title>',locator:()=>({fill:async()=>{actions++;}})};
+ for(const status of [200,403,429]){const progress={actionsStarted:false,completed:0};await assert.rejects(runRecipe(page,recipe,{query:'test'},progress,{status}));assert.equal(progress.actionsStarted,false);}
+ assert.equal(actions,0);
+});
 test('extraction bounds and provider-secret redaction include structured fields and browser state',async()=>{
  const page={locator:()=>({count:async()=>101})};await assert.rejects(extractRecipe(page,recipe),/extraction_limit/);
  const r=redactProviderSecrets({headers:{},body:Buffer.from('ok'),extracted:{token:'provider-secret'},screenshot_base64:'image',storageState:{cookies:[]}},['provider-secret']);

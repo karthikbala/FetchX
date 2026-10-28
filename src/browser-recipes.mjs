@@ -1,6 +1,7 @@
 // Recipes are reviewed server configuration. Callers supply named text values,
 // never JavaScript, selectors, destinations, or provider options.
 import {fail} from './policy.mjs';
+import {hasHtmlChallenge} from './source-challenge.mjs';
 const object=x=>x&&typeof x==='object'&&!Array.isArray(x);
 const name=x=>typeof x==='string'&&/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(x);
 const selector=x=>typeof x==='string'&&x.length>0&&x.length<=512;
@@ -30,7 +31,12 @@ export function validateRecipe(recipe){
  }
  if(recipe.screenshot!==undefined&&recipe.screenshot!==false&&recipe.screenshot!=='viewport'&&!selector(recipe.screenshot))fail('browser_recipe_configuration',500);
 }
-export async function runRecipe(page,recipe,values,progress){
+export async function runRecipe(page,recipe,values,progress,{status}={}){
+ if(status!==undefined){
+  if([401,403].includes(status))fail('source_denied');
+  if(status===429)fail('browser_capture_failed');
+  if(hasHtmlChallenge({status,headers:{'content-type':'text/html'},body:Buffer.from(await page.content())}))fail('source_challenge');
+ }
  for(const [index,step]of recipe.steps.entries()){
   progress.step=index;
   // Any action may trigger JavaScript/network effects; never replay it on a

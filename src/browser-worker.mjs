@@ -36,7 +36,7 @@ try{
  page=await context.newPage();phase='navigation';page.setDefaultTimeout(x.profile.browserWaitMs??15000);
  page.on('response',r=>{if(r.request().isNavigationRequest()&&r.frame()===page.mainFrame())response=r;});
  response=await page.goto(x.url,{waitUntil:'domcontentloaded',timeout:30000});
- if(recipe){phase='actions';await runRecipe(page,recipe,recipeRequest.values,progress);}
+ if(recipe){phase='actions';await runRecipe(page,recipe,recipeRequest.values,progress,{status:response?.status()??null});}
  phase='readiness';
  if(x.profile.readySelector)await page.locator(x.profile.readySelector).waitFor({state:'visible'});
  const html=await page.content(),body=Buffer.from(html);
@@ -47,6 +47,6 @@ try{
 }catch(e){
  let partial='';try{partial=await page?.content()??'';}catch{}
  if(Buffer.byteLength(partial)>x.profile?.maxResponseBytes)partial='';
- result={actionsStarted:progress.actionsStarted,actionsCompleted:progress.completed,actionStep:progress.step,status:response?.status()??null,browserVersion:x.browser?.version,browserPhase:phase,browserFailureCode:/net::(ERR_[A-Z_]+)/.exec(e.message??'')?.[1]??(e.name==='TimeoutError'?'TIMEOUT':'CAPTURE_ERROR'),error:['browser_build_mismatch','response_too_large','browser_extraction_limit'].includes(e.code)?e.code:!browser?'browser_launch_failed':'browser_capture_failed',body_base64:Buffer.from(partial).toString('base64'),headers:partial?{'content-type':'text/html'}:{},cookies:[]};}
+ result={actionsStarted:progress.actionsStarted,actionsCompleted:progress.completed,actionStep:progress.step,status:response?.status()??null,browserVersion:x.browser?.version,browserPhase:phase,browserFailureCode:/net::(ERR_[A-Z_]+)/.exec(e.message??'')?.[1]??(e.name==='TimeoutError'?'TIMEOUT':'CAPTURE_ERROR'),error:['browser_build_mismatch','response_too_large','browser_extraction_limit','source_denied','source_challenge'].includes(e.code)?e.code:!browser?'browser_launch_failed':'browser_capture_failed',body_base64:Buffer.from(partial).toString('base64'),headers:partial?{'content-type':'text/html'}:{},cookies:[]};}
 finally{await context?.close().catch(()=>{});await browser?.close().catch(()=>{});}
 process.stdout.write(JSON.stringify(result));
