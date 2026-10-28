@@ -1,4 +1,4 @@
-import {mkdir,writeFile,access} from 'node:fs/promises';
+import {mkdir,writeFile,access,chmod} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {randomBytes,createHash} from 'node:crypto';
 const root=resolve(process.argv[2]??'local');
@@ -6,6 +6,7 @@ if(!/^[a-zA-Z0-9_./-]+$/.test(root))throw Error('Use a setup path containing let
 try{await access(root);throw Error('Setup directory already exists; refusing to overwrite it.');}catch(e){if(e.code!=='ENOENT')throw e;}
 for(const dir of [root,join(root,'secrets'),join(root,'browser')])await mkdir(dir,{recursive:true,mode:0o700});
 // Browser and seccomp files must be readable by the unprivileged service.
+await chmod(join(root,'browser'),0o755);
 await mkdir(join(root,'browser','free'),{recursive:true,mode:0o755});
 const token=randomBytes(32).toString('hex'),dbPassword=randomBytes(24).toString('hex');
 const profile={hosts:['example.com'],paths:['^/$'],methods:['GET'],headers:['accept'],country:'US',maxConcurrent:1,maxRequests:4,maxInputBytes:8192,maxResponseBytes:1024*1024,maxBytes:16*1024*1024,ttlSeconds:180,minIntervalMs:1000,maxFallbackCredits:0,maxAttemptBytes:4*1024*1024,maxResidentialBytes:16*1024*1024};
