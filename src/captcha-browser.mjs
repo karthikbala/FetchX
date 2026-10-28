@@ -63,6 +63,7 @@ export function captchaHandler(page,profile,progress,{solve,report,status=()=>nu
     // The source can navigate while a human/remote solver works. Revalidate the
     // exact page, site key and field before exposing the one-time token.
     const field=await inspectWidget(page,c);
+    if(await page.locator(c.successSelector).isVisible())fail('captcha_success_predicate_ambiguous');
     await field.evaluate((el,token)=>{el.value=token;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));},answer.token);
     await report('submitted');summary.outcome='submitted';
     await page.locator(c.submitSelector).click();
