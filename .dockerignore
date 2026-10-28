@@ -1,0 +1,15 @@
+.git
+node_modules
+.local
+.env*
+secrets
+backups
+outputs
+__pycache__
+**/__pycache__
+*.log
+
+local
+browser
+test
+.github

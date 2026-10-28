@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "experiments": [
+    {
+      "id": "synthetic-denial",
+      "project": "fixture",
+      "source": "synthetic",
+      "endpoint_class": "detail",
+      "observed_at": "2026-10-27T00:00:00Z",
+      "review_after": "2026-11-03T00:00:00Z",
+      "review_state": "reviewed",
+      "context": {
+        "engine": "fixture",
+        "engine_version": "1",
+        "engine_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "proxy_class": "residential",
+        "country": "US",
+        "session": "sticky",
+        "stealth": true
+      },
+      "evidence": {
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "result": {
+        "qualification": "failed",
+        "accepted_records": 0,
+        "credits_per_accepted_record": null,
+        "trials": 1
+      },
+      "limitations": [
+        "Synthetic test record, not source qualification."
+      ]
+    }
+  ]
+}

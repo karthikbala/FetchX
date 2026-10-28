@@ -1,0 +1,54 @@
+name: fetchx
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fetchx
+      POSTGRES_DB: fetchx
+      POSTGRES_PASSWORD: ${FETCHX_DB_PASSWORD:?required}
+    volumes: [fetchx-db:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U fetchx -d fetchx]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  init-storage:
+    image: fetchx:local
+    build: .
+    user: "0:0"
+    entrypoint: [sh, -c, "chown 10001:10001 /data/artifacts && chmod 700 /data/artifacts"]
+    volumes: [fetchx-artifacts:/data/artifacts]
+    network_mode: none
+  gateway:
+    image: fetchx:local
+    build: .
+    restart: unless-stopped
+    init: true
+    depends_on:
+      db: {condition: service_healthy}
+      init-storage: {condition: service_completed_successfully}
+    ports: [127.0.0.1:8788:8788]
+    environment:
+      DATABASE_URL: postgresql://fetchx:${FETCHX_DB_PASSWORD}@db/fetchx
+      GATEWAY_CONFIG: /run/secrets/gateway.json
+    volumes:
+      - ${FETCHX_HOME:?required}/secrets/gateway.json:/run/secrets/gateway.json:ro
+      - ${FETCHX_HOME:?required}/browser:/opt/gateway-browser:ro
+      - fetchx-artifacts:/data/artifacts
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=512m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true, "seccomp=./deploy/chromium-seccomp.json"]
+    mem_limit: 2g
+    pids_limit: 256
+    stop_grace_period: 95s
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8788/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+volumes:
+  fetchx-db:
+  fetchx-artifacts:
