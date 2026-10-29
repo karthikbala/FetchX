@@ -1,0 +1,9 @@
+---
+import Layout from '../layouts/Layout.astro';
+import SampleExplorer from '../components/SampleExplorer.astro';
+import Icon from '../components/Icon.astro';
+import Closing from '../components/Closing.astro';
+---
+<Layout title="Sample data — FetchX" active="samples">
+ <div class="container samples-page"><div class="page-intro"><span class="eyebrow"><span class="tiny-dot"></span> FROM INFORMATION TO SOMETHING USEFUL</span><h1>See what your delivered<br/>data could look like.</h1><p>Different sources. A consistent structure. Explore a few illustrative datasets, switch formats and take a sample with you.</p></div><SampleExplorer full/><div class="samples-explained"><div><Icon name="layers" size={23}/><h2>Your fields. Your schema.</h2><p>These are starting points. We agree the exact fields, formats and missing-field handling for your sources during onboarding.</p></div><div><Icon name="globe" size={23}/><h2>Context comes with it.</h2><p>Source references and collection timestamps help your team understand where each record came from and when it was observed.</p></div><div><Icon name="download" size={23}/><h2>Take a closer look.</h2><p>CSV downloads contain the same fictional records displayed here. No email address, live collection or provider requests are involved.</p></div></div></div><Closing/>
+</Layout>

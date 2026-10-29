@@ -1,0 +1,18 @@
+---
+import Icon from './Icon.astro';
+const code = `<span class="c-comment">// Endpoint provisioned during onboarding.</span>
+<span class="c-purple">const</span> response = <span class="c-purple">await</span> fetch(
+  <span class="c-green">'https://YOUR_PROVISIONED_ENDPOINT/v1/fetch'</span>,
+  {
+    method: <span class="c-green">'POST'</span>,
+    headers: {
+      <span class="c-green">'Authorization'</span>: <span class="c-green">'Bearer YOUR_API_KEY'</span>,
+      <span class="c-green">'Content-Type'</span>: <span class="c-green">'application/json'</span>
+    },
+    body: JSON.stringify({
+      url: <span class="c-green">'https://your-source.example'</span>
+    })
+  }
+);`;
+---
+<div class="code-window"><div class="code-titlebar"><div class="code-dots"><i></i><i></i><i></i></div><span class="mono">your-workflow.ts</span><span class="mono code-badge">ILLUSTRATIVE</span></div><pre><code set:html={code}/></pre><div class="code-footer"><span><span class="tiny-dot"></span> SCOPED TO YOUR WORKFLOW</span><Icon name="code" size={20}/></div></div>

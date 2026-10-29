@@ -1,0 +1,58 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Icon from '../components/Icon.astro';
+import DataSculpture from '../components/DataSculpture.astro';
+import MotionControl from '../components/MotionControl.astro';
+import SampleExplorer from '../components/SampleExplorer.astro';
+import Pricing from '../components/Pricing.astro';
+import Closing from '../components/Closing.astro';
+import CodeWindow from '../components/CodeWindow.astro';
+---
+<Layout>
+ <section class="hero container">
+  <div class="hero-copy">
+   <div class="eyebrow hero-eyebrow"><span class="status-dot"></span> MANAGED WEB DATA <span class="eyebrow-rule"></span></div>
+   <h1>The web data<br/>your business<br/>needs. <span class="hero-delivered">Delivered.<svg viewBox="0 0 370 18" aria-hidden="true"><path d="M3 12Q175 0 365 9"/></svg></span></h1>
+   <p class="hero-description">Tell us the websites, fields and update schedule. FetchX manages collection and quality checks, then delivers structured data your team can use.</p>
+   <div class="hero-actions"><a href="/pilot" class="button button-ink">Request a pilot <Icon name="diagonal" size={19}/></a><a href="/samples" class="button button-quiet">Explore sample data <Icon name="arrow" size={18}/></a></div>
+   <p class="hero-footnote">Pilots from <strong>$99</strong><span>·</span>Scope agreed before work begins</p>
+  </div>
+  <div class="hero-visual"><DataSculpture/><MotionControl/></div>
+ </section>
+ <div class="attributes container"><span class="attributes-label">BUILT AROUND YOUR DATA</span><span><Icon name="layers" size={18}/>Defined fields</span><span><Icon name="file" size={18}/>CSV and JSON</span><span><Icon name="clock" size={18}/>Agreed refresh schedules</span><span><Icon name="globe" size={18}/>Source references</span></div>
+
+ <section id="solutions" class="section container solutions-section">
+  <div class="section-heading"><div><span class="eyebrow">01 / THE POSSIBILITIES</span><h2>Bring outside data into<br/>everyday decisions.</h2></div><p>Useful information is everywhere.<br/>Bring the pieces your team needs together.</p></div>
+  <div class="solution-rows">
+   <a class="solution-row" href="/samples?dataset=commerce"><span class="solution-number mono">01</span><div class="solution-title"><Icon name="shop" size={27}/><h3>Commerce</h3></div><p>Track prices, availability and product details.<br/>Build a clearer picture of your market.</p><div class="solution-data"><span class="mono">EVERYDAY CARRY TOTE</span><div><strong>$48.00</strong><span class="status-pill">In stock</span></div></div><span class="circle-arrow"><Icon name="diagonal" size={20}/></span></a>
+   <a class="solution-row" href="/samples?dataset=property"><span class="solution-number mono">02</span><div class="solution-title"><Icon name="house" size={27}/><h3>Property</h3></div><p>Follow listing inventory, asking prices and<br/>the attributes that matter to your team.</p><div class="solution-data"><span class="mono">DUBAI · DEMO–101</span><div><strong>146 <small>m²</small></strong><span class="status-pill">Available</span></div></div><span class="circle-arrow"><Icon name="diagonal" size={20}/></span></a>
+   <a class="solution-row" href="/samples?dataset=logistics"><span class="solution-number mono">03</span><div class="solution-title"><Icon name="route" size={27}/><h3>Logistics</h3></div><p>Bring shipment milestones and operational<br/>status into a consistent view.</p><div class="solution-data"><span class="mono">DEMO SHIPMENT · 001</span><div><strong>Singapore</strong><span class="status-pill">Arrived</span></div></div><span class="circle-arrow"><Icon name="diagonal" size={20}/></span></a>
+  </div>
+  <p class="section-caption">Dataset previews are illustrative. We qualify your actual sources before agreeing a scope.</p>
+ </section>
+
+ <section class="sample-section section" id="sample-data"><div class="container">
+  <div class="section-heading"><div><span class="eyebrow">02 / MAKE IT TANGIBLE</span><h2>Scattered pages.<br/><span class="muted-heading">Consistent records.</span></h2></div><div><p>A little structure changes everything.<br/>Explore what your delivered data could look like.</p><a href="/samples" class="text-link">Explore the samples <Icon name="arrow" size={18}/></a></div></div>
+  <SampleExplorer/>
+  <div class="sample-bottom-note"><span><Icon name="check" size={15}/> Source references included</span><span><Icon name="check" size={15}/> Fields agreed with you</span><span><Icon name="check" size={15}/> Downloads without a sign-up</span></div>
+ </div></section>
+
+ <section id="how-it-works" class="section container process-section">
+  <div class="section-heading"><div><span class="eyebrow">03 / A CLEAR PATH FORWARD</span><h2>Start with a source.<br/>Finish with a usable dataset.</h2></div><a href="/pilot" class="text-link">Let’s scope your pilot <Icon name="arrow" size={18}/></a></div>
+  <div class="process-grid">
+   <article class="process-step"><div class="step-top"><span class="step-number">01</span><div class="step-line"></div><Icon name="arrow" size={18}/></div><h3>Show us what you need.</h3><p>Share your sources, required fields and the questions your team wants to answer.</p><span class="step-deliverable"><span class="tiny-dot"></span> An agreed pilot scope</span></article>
+   <article class="process-step"><div class="step-top"><span class="step-number">02</span><div class="step-line"></div><Icon name="arrow" size={18}/></div><h3>Put the data to work.</h3><p>Review a paid pilot dataset. Check the fields, coverage and fit for your workflow.</p><span class="step-deliverable"><span class="tiny-dot"></span> Your first CSV or JSON delivery</span></article>
+   <article class="process-step"><div class="step-top"><span class="step-number">03</span><div class="step-line"></div><Icon name="check" size={18}/></div><h3>Make it a regular thing.</h3><p>When the data works for you, agree a refresh schedule and recurring delivery plan.</p><span class="step-deliverable"><span class="tiny-dot"></span> A defined recurring engagement</span></article>
+  </div>
+ </section>
+
+ <section class="managed-section container">
+  <div class="managed-copy"><span class="eyebrow">LESS INFRASTRUCTURE. MORE INSIGHT.</span><h2>You define the data.<br/>We manage<br/><span>the collection.</span></h2><p>From source setup to delivery preparation, FetchX takes care of the collection work within your agreed engagement.</p><div class="managed-list"><span><Icon name="check" size={17}/> Source setup and maintenance</span><span><Icon name="check" size={17}/> Agreed field and format checks</span><span><Icon name="check" size={17}/> Delivery ready for your workflow</span></div></div>
+  <div class="record-visual"><div class="record-label mono"><span class="tiny-dot"></span> EVERY RECORD HAS CONTEXT</div><div class="record-card"><div class="record-card-heading"><span class="record-icon"><Icon name="file" size={23}/></span><div><strong>One record. A clear origin.</strong><span>Illustrative product record</span></div><Icon name="check" size={18}/></div><div class="record-code mono"><div><span>product_id</span><b>"FX–001"</b></div><div><span>title</span><b>"Everyday carry tote"</b></div><div><span>price</span><b>48.00</b></div><div><span>currency</span><b>"USD"</b></div><div class="record-highlight"><span>source_url</span><b>"store.example/products/tote"</b><i></i></div><div class="record-highlight"><span>collected_at</span><b>"2026-10-28T09:00:00Z"</b><i></i></div></div><div class="record-card-bottom"><Icon name="layers" size={14}/> An agreed schema. A consistent structure.</div></div><div class="record-annotation"><span class="annotation-line"></span><Icon name="diagonal" size={16}/><p>Know where it came from.<br/>And when it was collected.</p></div><p class="record-footnote">Missing-field handling is defined during onboarding.</p></div>
+ </section>
+
+ <section class="section container pricing-section"><div class="section-heading"><div><span class="eyebrow">04 / A PRACTICAL STARTING POINT</span><h2>Start small.<br/>Expand when the data works.</h2></div><a href="/pricing" class="text-link">Full pricing & inclusions <Icon name="arrow" size={18}/></a></div><Pricing/></section>
+
+ <section class="technical-section"><div class="container technical-inner"><div class="technical-copy"><span class="eyebrow"><span class="tiny-dot"></span> FOR YOUR ENGINEERING TEAM</span><h2>A useful dataset.<br/>An API when<br/><span>you need one.</span></h2><p>Qualified workflows can also connect to your existing systems. We’ll scope API access and custom integrations around your requirements.</p><a class="button button-lime" href="/developers">Explore the technical side <Icon name="arrow" size={19}/></a><a class="source-link" href="https://github.com/karthikbala/FetchX" target="_blank" rel="noreferrer">Explore the source code <Icon name="diagonal" size={15}/></a></div><CodeWindow/></div></section>
+ <Closing/>
+</Layout>

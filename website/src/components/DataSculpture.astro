@@ -1,0 +1,21 @@
+---
+import Brand from './Brand.astro';
+import Icon from './Icon.astro';
+---
+<div class="data-sculpture" role="img" aria-label="Illustration of source websites flowing through FetchX into structured data. This is a conceptual animation, not a live feed.">
+ <div class="sculpture-grid"></div><div class="sculpture-glow"></div>
+ <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+ <svg class="flow-wires" viewBox="0 0 620 580" fill="none" aria-hidden="true">
+  <defs><linearGradient id="wire" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#91a99a" stop-opacity=".2"/><stop offset=".5" stop-color="#8fbc58"/><stop offset="1" stop-color="#91a99a" stop-opacity=".3"/></linearGradient></defs>
+  <path class="wire" d="M120 155H230Q275 155 275 200V255M470 125H380Q340 125 340 180V255M105 390H220Q275 390 275 320M335 310V375Q335 405 380 405H493"/>
+  <path class="wire-pulse" d="M120 155H230Q275 155 275 200V255"/><path class="wire-pulse wire-delay" d="M470 125H380Q340 125 340 180V255"/><path class="wire-pulse wire-delay-two" d="M105 390H220Q275 390 275 320"/><path class="wire-pulse" d="M335 310V375Q335 405 380 405H493"/>
+  <circle cx="120" cy="155" r="4" fill="#bce478"/><circle cx="470" cy="125" r="4" fill="#bce478"/><circle cx="105" cy="390" r="4" fill="#bce478"/><circle cx="493" cy="405" r="4" fill="#bce478"/>
+ </svg>
+ <div class="source-window window-commerce float-one"><div class="mini-chrome"><span></span><span></span><span></span><b>COMMERCE</b></div><div class="mini-product"><div class="product-object"><svg viewBox="0 0 60 60" fill="none"><path d="M16 18h28l-3 31H19l-3-31Z" fill="#b6cf9f"/><path d="M23 20v-8a7 7 0 0 1 14 0v8" stroke="#49683d" stroke-width="3"/><path d="M19 30h22" stroke="#dae5cf" stroke-width="2"/></svg></div><div><i class="skeleton long"></i><i class="skeleton short"></i><strong>$48.00</strong><span class="micro-status">In stock</span></div></div></div>
+ <div class="source-window window-property float-two"><div class="mini-chrome"><span></span><span></span><span></span><b>PROPERTY</b></div><div class="building-scene"><div class="building b1"></div><div class="building b2"></div><div class="building b3"></div><div class="scene-sun"></div></div><div class="mini-property-line"><span>New listings</span><span>↗</span></div></div>
+ <div class="source-window window-logistics float-three"><div class="mini-chrome"><span></span><span></span><span></span><b>LOGISTICS</b></div><div class="logistic-path"><span></span><i></i><span></span><i></i><span class="route-last"></span></div><div class="mini-property-line"><span>Shipment milestones</span><Icon name="route" size={15}/></div></div>
+ <div class="central-object"><div class="chip-floor floor-two"></div><div class="chip-floor floor-one"></div><div class="chip-body"><div class="chip-reflection"></div><Brand compact/><span>FETCHX</span><div class="chip-led"></div></div></div>
+ <div class="output-window float-four"><div class="output-heading"><span class="output-icon"><Icon name="grid" size={16}/></span><strong>Your dataset</strong><span class="output-type">.CSV</span></div><div class="output-line"><span>product_id</span><span>price</span><span>status</span></div><div class="output-line"><span>FX–001</span><b>48.00</b><i></i></div><div class="output-line"><span>FX–002</span><b>32.50</b><i></i></div><div class="output-line"><span>FX–003</span><b>79.00</b><i></i></div><div class="output-bottom"><Icon name="check" size={12}/><span>Structured. Ready to use.</span></div></div>
+ <div class="sculpture-caption"><span class="tiny-dot"></span> MANY SOURCES. ONE CLEAR OUTPUT.</div>
+ <span class="coordinate coord-top">01 — COLLECT</span><span class="coordinate coord-bottom">02 — STRUCTURE</span>
+</div>

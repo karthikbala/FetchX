@@ -1,0 +1,6 @@
+# Copy to .dev.vars for local runtime work. This file has no real credentials.
+ALLOWED_ORIGINS=http://127.0.0.1:4328
+TURNSTILE_HOSTNAMES=127.0.0.1
+TURNSTILE_SECRET=
+RESEND_API_KEY=
+HASH_SECRET=

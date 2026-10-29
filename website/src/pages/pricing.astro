@@ -1,0 +1,15 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Pricing from '../components/Pricing.astro';
+import Closing from '../components/Closing.astro';
+import Icon from '../components/Icon.astro';
+const faqs=[
+ ['Which websites can you collect from?','We qualify the sources you share before agreeing an engagement. Access requirements, page structure, available fields and collection frequency all affect the scope. A pilot helps establish whether a source fits your requirements.'],
+ ['What do you need from us?','A few example website URLs, the fields you need, your desired refresh schedule and an estimate of the volume. Please do not include passwords, credentials or sensitive information in an enquiry.'],
+ ['What counts as a record delivery?','One row or structured item delivered is one record delivery. When a record is collected and delivered again after a refresh, it counts again toward your monthly allowance.'],
+ ['Can I choose the delivery format and schedule?','CSV and JSON are included in the published offers. We agree a feasible refresh schedule and delivery plan before work starts. API access, storage delivery and custom integrations are separately scoped.'],
+ ['What if my sources are more complex?','Published starting prices apply to straightforward, qualified sources. Complex access, additional sources, higher frequency or custom integrations are quoted before work begins.'],
+ ['Does a pilot automatically become a subscription?','No. The pilot is a one-time engagement. Recurring work only begins after you agree to a separate scope and delivery plan. There is no automatic charging or checkout on this website.']
+];
+---
+<Layout title="Pricing — FetchX" active="pricing"><div class="container pricing-page"><div class="page-intro centered"><span class="eyebrow">CLEAR SCOPE. A PRACTICAL START.</span><h1>Start with a pilot.<br/>Grow into a data service.</h1><p>Find out what your sources can deliver. Then choose a recurring plan that fits how your team uses the data.</p></div><Pricing/><p class="no-subscription-note"><Icon name="check" size={15}/> A pilot is a one-time engagement. No automatic subscription or online charging.</p><section class="section faq-section"><div class="faq-heading"><span class="eyebrow">THE DETAILS THAT MATTER</span><h2>Good questions.<br/>Clear answers.</h2><p>Every engagement starts by qualifying your sources and agreeing what’s included.</p></div><div class="faq-list">{faqs.map(([question,answer])=><details><summary>{question}</summary><p>{answer}</p></details>)}</div></section></div><Closing/></Layout>

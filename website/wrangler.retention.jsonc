@@ -1,0 +1,15 @@
+{
+ "$schema":"./node_modules/wrangler/config-schema.json",
+ "name":"fetchx-enquiry-retention",
+ "account_id":"9ecc416f47f6a620665eb552ae29df2b",
+ "main":"ops/retention-worker.ts",
+ "compatibility_date":"2026-10-29",
+ "workers_dev":false,
+ "preview_urls":false,
+ "triggers":{"crons":["15 2 * * *"]},
+ "d1_databases":[
+  {"binding":"DB","database_name":"fetchx-enquiries","database_id":"7b078ac0-ba43-4828-bcce-773e0dec5bae"},
+  {"binding":"PREVIEW_DB","database_name":"fetchx-enquiries-preview","database_id":"e842e74a-7f40-4e08-a507-09c544020027"}
+ ],
+ "observability":{"enabled":true,"traces":{"enabled":true}}
+}

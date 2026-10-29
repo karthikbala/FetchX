@@ -1,0 +1,7 @@
+---
+const { compact=false, class: className='' }=Astro.props;
+---
+<span class:list={['brand',className]}>
+ <svg class="brand-symbol" viewBox="0 0 36 36" width="31" height="31" fill="currentColor" aria-hidden="true"><path d="M3 5h10l20 26H23zM23 5h10L13 31H3z"/></svg>
+ {!compact && <span>Fetch<span class="word-x">X</span><span class="brand-period">.</span></span>}
+</span>

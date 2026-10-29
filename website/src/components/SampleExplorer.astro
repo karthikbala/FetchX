@@ -1,0 +1,13 @@
+---
+import Icon from './Icon.astro';
+import {sampleSets} from '../data/samples';
+const {full=false}=Astro.props;
+const sample=sampleSets.commerce;
+---
+<div class:list={['sample-explorer',{'sample-full':full}]} data-sample-explorer>
+ <div class="explorer-top"><div class="dataset-tabs" role="tablist" aria-label="Sample industry">{Object.entries(sampleSets).map(([key,set])=><button type="button" role="tab" aria-selected={key==='commerce'?'true':'false'} data-dataset={key} tabindex={key==='commerce'?0:-1}><Icon name={set.icon} size={17}/>{set.title}</button>)}</div><span class="sample-tag"><span class="tiny-dot"></span> ILLUSTRATIVE DATA</span></div>
+ <div class="explorer-tools"><div><span class="dataset-filename mono">commerce_sample.csv</span><span class="sample-description">{sample.description}</span></div><div class="format-controls"><div class="format-switch" role="group" aria-label="Sample format"><button data-format="table" aria-pressed="true"><Icon name="grid" size={14}/>Table</button><button data-format="json" aria-pressed="false"><Icon name="code" size={16}/>JSON</button></div><button class="download-sample icon-button" aria-label="Download sample CSV"><Icon name="download" size={17}/></button></div></div>
+ <div class="sample-scroll" tabindex="0" role="region" aria-label="Sample records"><table class="sample-table"><thead><tr>{sample.columns.map(([,label])=><th scope="col">{label}</th>)}</tr></thead><tbody>{sample.records.map(row=><tr>{sample.columns.map(([key])=><td>{String(row[key as keyof typeof row])}</td>)}</tr>)}</tbody></table><pre class="sample-json" hidden><code>{JSON.stringify(sample.records,null,2)}</code></pre></div>
+ <div class="explorer-bottom"><span><span class="record-count">4</span> records <span class="separator">/</span> <span class="field-count">7</span> fields <span class="separator">/</span> <span class="mono">UTF-8</span></span><span>Illustrative sample—not a live feed.</span></div>
+</div>
+<script>import '../scripts/samples.ts';</script>

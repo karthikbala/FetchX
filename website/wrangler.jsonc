@@ -1,0 +1,19 @@
+{
+ "$schema":"./node_modules/wrangler/config-schema.json",
+ "name":"fetchx-marketing",
+ "account_id":"9ecc416f47f6a620665eb552ae29df2b",
+ "pages_build_output_dir":"./dist",
+ "compatibility_date":"2026-10-29",
+ "d1_databases":[{"binding":"DB","database_name":"fetchx-enquiries-preview","database_id":"e842e74a-7f40-4e08-a507-09c544020027","migrations_dir":"migrations"}],
+ "vars":{"SITE_ENV":"preview","ALLOWED_ORIGINS":"https://staging.fetchx-marketing.pages.dev","TURNSTILE_HOSTNAMES":"staging.fetchx-marketing.pages.dev","MAIL_FROM":"FetchX <enquiries@notify.headrun.ai>","SALES_EMAIL":"sales@headrun.ai"},
+ "env":{
+  "preview":{
+   "d1_databases":[{"binding":"DB","database_name":"fetchx-enquiries-preview","database_id":"e842e74a-7f40-4e08-a507-09c544020027","migrations_dir":"migrations"}],
+   "vars":{"SITE_ENV":"preview","ALLOWED_ORIGINS":"https://staging.fetchx-marketing.pages.dev","TURNSTILE_HOSTNAMES":"staging.fetchx-marketing.pages.dev","MAIL_FROM":"FetchX <enquiries@notify.headrun.ai>","SALES_EMAIL":"sales@headrun.ai"}
+  },
+  "production":{
+   "d1_databases":[{"binding":"DB","database_name":"fetchx-enquiries","database_id":"7b078ac0-ba43-4828-bcce-773e0dec5bae","migrations_dir":"migrations"}],
+   "vars":{"SITE_ENV":"production","ALLOWED_ORIGINS":"https://fetch.headrun.ai","TURNSTILE_HOSTNAMES":"fetch.headrun.ai","MAIL_FROM":"FetchX <enquiries@notify.headrun.ai>","SALES_EMAIL":"sales@headrun.ai"}
+  }
+ }
+}

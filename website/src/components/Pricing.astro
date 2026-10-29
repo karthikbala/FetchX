@@ -1,0 +1,10 @@
+---
+import Icon from './Icon.astro';
+const plans=[
+ {id:'pilot',name:'Pilot',price:'99',period:'one time',caption:'One source. A clear starting point.',features:['One qualified source','Up to 500 records','One agreed schema','One CSV or JSON delivery'],cta:'Start with a pilot'},
+ {id:'managed',name:'Managed',price:'199',period:'per month',caption:'Make the data part of your routine.',features:['One qualified recurring source','Up to 5,000 record deliveries / month','Agreed refresh schedule','CSV or JSON delivery'],cta:'Explore Managed'},
+ {id:'scale',name:'Scale',price:'999',period:'per month',caption:'A wider view, built around your team.',features:['Up to three qualified sources','Up to 20,000 record deliveries / month','Agreed collection and delivery plan','Custom integrations scoped separately'],cta:'Let’s talk about Scale'}
+];
+---
+<div class="pricing-grid">{plans.map(p=><article class:list={['price-card',{featured:p.id==='managed'}]}><div class="plan-head"><span class="plan-name">{p.name}</span>{p.id==='managed'&&<span class="plan-flag">FOR RECURRING DATA</span>}</div><p class="plan-caption">{p.caption}</p><div class="plan-price"><span class="price-from">From</span><div><span class="dollar">$</span><strong>{p.price}</strong><span class="price-period"> / {p.period}</span></div></div><a href={'/pilot?plan='+p.id} class:list={['button',p.id==='managed'?'button-ink':'button-outline']}>{p.cta}<Icon name="arrow" size={18}/></a><ul>{p.features.map(f=><li><Icon name="check" size={16}/><span>{f}</span></li>)}</ul></article>)}</div>
+<p class="pricing-note">All prices in USD. Each refreshed record delivered counts toward your allowance again. Entry pricing applies to straightforward, qualified sources. Complex access, higher frequency and custom integrations are quoted before work begins.</p>

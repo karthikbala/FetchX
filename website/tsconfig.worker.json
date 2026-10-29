@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "lib": ["ES2023"], "module": "ESNext",
+    "moduleResolution": "Bundler", "strict": true, "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"]
+  },
+  "include": ["worker-configuration.d.ts", "functions/**/*.ts", "src/server/**/*.ts", "src/lib/pilot-schema.ts", "ops/retention-worker.ts", "tests/**/*.ts"],
+  "exclude": ["tests/ui/**"]
+}
