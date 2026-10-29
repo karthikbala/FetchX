@@ -13,6 +13,7 @@ if(!['status','retry','purge'].includes(operation)||!['preview','production'].in
 }
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const config=JSON.parse(await fs.readFile(path.join(root,'wrangler.jsonc'),'utf8'));
+const accountId=JSON.parse(await fs.readFile(path.join(root,'wrangler.retention.jsonc'),'utf8')).account_id;
 const settings=config.env[environment];
 const database=settings.d1_databases.find(db=>db.binding==='DB').database_id;
 const authPath=process.platform==='darwin'?path.join(os.homedir(),'Library/Preferences/.wrangler/config/default.toml'):path.join(os.homedir(),'.config/.wrangler/config/default.toml');
@@ -20,7 +21,7 @@ let token=process.env.CLOUDFLARE_API_TOKEN;
 if(!token){const auth=await fs.readFile(authPath,'utf8');token=auth.match(/^oauth_token\s*=\s*"([^"]+)"/m)?.[1];}
 if(!token)throw new Error('Run wrangler login, or provide CLOUDFLARE_API_TOKEN through your environment.');
 async function query(statements){
- const response=await fetch(`https://api.cloudflare.com/client/v4/accounts/${config.account_id}/d1/database/${database}/query`,{
+ const response=await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${database}/query`,{
   method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(Array.isArray(statements)?{batch:statements}:statements),signal:AbortSignal.timeout(20_000),
  });
  const data=await response.json();

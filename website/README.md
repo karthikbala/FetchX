@@ -27,7 +27,7 @@ Seven marketing pages are `/`, `/samples`, `/pricing`, `/pilot`, `/developers`, 
 
 ## Hosting and settings
 
-Cloudflare Pages project: `fetchx-marketing`, in the personal account identified in `wrangler.jsonc`. Production branch: `main`. Preview branch: `staging`.
+Cloudflare Pages project: `fetchx-marketing`, in the personal account identified in `wrangler.retention.jsonc`. Production branch: `main`. Preview branch: `staging`.
 
 - Intended public domain: `https://fetch.headrun.ai`.
 - Stable preview: `https://staging.fetchx-marketing.pages.dev`.
@@ -94,9 +94,10 @@ The operator must also remove corresponding enquiry notifications from the sales
 
 ## Deploy and launch
 
-For D1 commands, explicitly set `CLOUDFLARE_ACCOUNT_ID` to the account in Wrangler if the CLI cannot resolve a multi-account login. Apply migrations to the matching environment:
+Pages configuration does not accept `account_id`. For Pages and D1 commands, explicitly set the public account identifier for the multi-account login. Apply migrations to the matching environment:
 
 ```sh
+export CLOUDFLARE_ACCOUNT_ID=9ecc416f47f6a620665eb552ae29df2b
 npx wrangler d1 migrations apply fetchx-enquiries-preview --remote --env preview
 npx wrangler d1 migrations apply fetchx-enquiries --remote --env production
 PUBLIC_SITE_ENV=preview npm run build
