@@ -153,6 +153,8 @@ describe('pilot intake with isolated D1',()=>{
  });
  it('normalizes public URLs and email without collecting extra fields',()=>{
   const value=validateSubmission({...valid(),email:' TEST@EXAMPLE.COM ',websites:['https://example.com/path#section'],gatewayKey:'never-store'});
+  expect(validateSubmission({...valid(),websites:['abc.com','example.com/path']}).websites).toEqual(['https://abc.com/','https://example.com/path']);
+  expect(() => validateSubmission({...valid(),websites:['abc.com','https://abc.com/']})).toThrow();
   expect(value.email).toBe('test@example.com');expect(value.websites).toEqual(['https://example.com/path']);expect(value).not.toHaveProperty('gatewayKey');
  });
 });

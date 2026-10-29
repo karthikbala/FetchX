@@ -1,4 +1,4 @@
-import {validateSubmission, InputError} from '../lib/pilot-schema';
+import {validateSubmission, normalizeWebsite, InputError} from '../lib/pilot-schema';
 interface Turnstile {render(container:HTMLElement,options:Record<string,unknown>):string;reset(id:string):void;remove(id:string):void;}
 declare global {interface Window {turnstile?:Turnstile}}
 const form=document.querySelector<HTMLFormElement>('.pilot-form')!;
@@ -38,7 +38,7 @@ function mountVerification(){
 }
 function setStep(step:number,clearError=true){first.hidden=step!==1;first.disabled=step!==1;second.hidden=step!==2;second.disabled=step!==2;if(clearError)error.hidden=true;document.querySelectorAll<HTMLElement>('[data-progress]').forEach(p=>{p.classList.toggle('active',p.dataset.progress===String(step));if(p.dataset.progress===String(step))p.setAttribute('aria-current','step');else p.removeAttribute('aria-current');});const target=step===1?first:second;target.querySelector<HTMLElement>('input,textarea,select')?.focus({preventScroll:true});if(step===2)mountVerification();}
 function validate(fieldset:HTMLFieldSetElement){for(const field of fieldset.querySelectorAll<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>('input,textarea,select')){field.removeAttribute('aria-invalid');if(!field.checkValidity()){showError(field.validationMessage,field.name);field.reportValidity();return false;}}return true;}
-form.querySelector('[data-next]')?.addEventListener('click',()=>{if(!validate(first))return;const urls=value('websites').split(/\n+/).map(u=>u.trim()).filter(Boolean);if(urls.length>3||urls.some(s=>{try{const u=new URL(s);return !['http:','https:'].includes(u.protocol)||!!u.username||!!u.password;}catch{return true;}})){showError('Please enter up to three valid http or https website URLs, one per line, without credentials.','websites');return;}setStep(2);});
+form.querySelector('[data-next]')?.addEventListener('click',()=>{if(!validate(first))return;const urls=value('websites').split(/\n+/).map(u=>u.trim()).filter(Boolean);try{if(urls.length>3)throw new InputError('websites','Please enter up to three websites, one per line.');urls.forEach(normalizeWebsite);}catch(e){showError(e instanceof Error?e.message:'Please enter valid website domains or URLs.','websites');return;}setStep(2);});
 form.querySelector('[data-back]')?.addEventListener('click',()=>{if(!sending)setStep(1);});
 form.addEventListener('input',e=>{if(e.target instanceof HTMLElement)e.target.removeAttribute('aria-invalid');});
 form.addEventListener('submit',async event=>{

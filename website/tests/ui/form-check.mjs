@@ -7,7 +7,7 @@ await fs.mkdir(out,{recursive:true});
 const browser=await chromium.launch({headless:true});
 const checks=[],errors=[];
 async function fillData(page){
- await page.locator('#websites').fill('https://example.com/products');await page.locator('#fields').fill('Title, price, availability, source reference');
+ await page.locator('#websites').fill('abc.com');await page.locator('#fields').fill('Title, price, availability, source reference');
  await page.locator('#frequency').selectOption('Weekly');await page.locator('#volume').selectOption('501–5,000 records');
  await page.getByRole('button',{name:'Continue',exact:true}).click();
  await page.locator('#name').fill('Synthetic Tester');await page.locator('#company').fill('Example Company');await page.locator('#email').fill('test@example.com');

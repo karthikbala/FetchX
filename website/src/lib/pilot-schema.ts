@@ -25,21 +25,23 @@ function choice<T extends readonly string[]>(value: unknown, field: string, allo
  if (typeof value !== 'string' || !allowed.includes(value)) throw new InputError(field, 'Please choose one of the available options.');
  return value;
 }
+export function normalizeWebsite(raw: unknown): string {
+ const value = text(raw, 'websites', 3, 500);
+ let url: URL;
+ try { url = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(value) ? value : `https://${value}`); }
+ catch { throw new InputError('websites', 'Please enter a valid website domain or URL.'); }
+ if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || !url.hostname.includes('.') || /^(localhost|127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(url.hostname) || /^(172\.(1[6-9]|2\d|3[01])\.)/.test(url.hostname) || /\.(local|internal)$/.test(url.hostname) || url.hostname.startsWith('['))
+  throw new InputError('websites', 'Please share public website domains or URLs without credentials.');
+ url.hash = '';
+ return url.toString();
+}
 export function validateSubmission(input: unknown): PilotSubmission {
  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new InputError('form', 'Please submit a valid enquiry.');
  const data = input as Record<string, unknown>;
  const requestId = text(data.requestId, 'form', 36, 36);
  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) throw new InputError('form', 'Please reload the form and try again.');
  if (!Array.isArray(data.websites) || data.websites.length < 1 || data.websites.length > 3) throw new InputError('websites', 'Please share between one and three websites.');
- const websites = data.websites.map(raw => {
-  const value = text(raw, 'websites', 8, 500);
-  let url: URL;
-  try { url = new URL(value); } catch { throw new InputError('websites', 'Please use complete http or https website URLs.'); }
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || !url.hostname.includes('.') || /^(localhost|127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(url.hostname) || /^(172\.(1[6-9]|2\d|3[01])\.)/.test(url.hostname) || /\.(local|internal)$/.test(url.hostname) || url.hostname.startsWith('['))
-   throw new InputError('websites', 'Please share public website URLs without credentials.');
-  url.hash = '';
-  return url.toString();
- });
+ const websites = data.websites.map(normalizeWebsite);
  if (new Set(websites).size !== websites.length) throw new InputError('websites', 'Please list each website only once.');
  const email = text(data.email, 'email', 5, 254).toLowerCase();
  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) throw new InputError('email', 'Please enter a valid email address.');
