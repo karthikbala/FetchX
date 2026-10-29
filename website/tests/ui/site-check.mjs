@@ -2,7 +2,7 @@ import {chromium} from 'playwright';
 import AxeBuilder from '@axe-core/playwright';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-const base=process.env.TEST_BASE_URL||'http://127.0.0.1:4329';
+const base=process.env.TEST_BASE_URL||'http://127.0.0.1:4328';
 const out=process.env.TEST_OUTPUT_DIR||'../../../outputs/launch-review';
 await fs.mkdir(out,{recursive:true});
 const browser=await chromium.launch({headless:true});
@@ -10,11 +10,13 @@ const context=await browser.newContext({viewport:{width:1440,height:1000},accept
 const page=await context.newPage();
 const errors=[],requests=[],checks=[],accessibility=[],layouts=[],links=new Set(),metadata=[];
 page.on('pageerror',error=>errors.push(error.message));
+page.on('console',message=>{if(message.type()==='error')errors.push(message.text().slice(0,300));});
 page.on('request',request=>{if(!request.url().startsWith(base)&&!request.url().startsWith('data:')&&!request.url().startsWith('blob:'))requests.push(request.url());});
 for(const route of ['/','/samples','/pricing','/pilot','/developers','/privacy','/terms']){
  const response=await page.goto(base+route);assert.equal(response.status(),200);
  await page.evaluate(()=>document.fonts.ready);
  assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
+ assert.equal(await page.locator('script:not([src]):not([type="application/json"]):not([type="application/ld+json"])').count(),0,'Executable scripts must stay external for the deployed CSP');
  metadata.push({route,title:await page.title(),description:await page.locator('meta[name="description"]').getAttribute('content'),canonical:await page.locator('link[rel="canonical"]').getAttribute('href'),robots:await page.locator('meta[name="robots"]').getAttribute('content')});
  for(const href of await page.locator('a[href]').evaluateAll(anchors=>anchors.map(a=>a.getAttribute('href'))))if(href.startsWith('/'))links.add(href.split('#')[0]);
  for(const width of [360,768,1024,1440]){
@@ -26,7 +28,7 @@ for(const route of ['/','/samples','/pricing','/pilot','/developers','/privacy',
  const audit=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();
  accessibility.push({route,violations:audit.violations.map(v=>({id:v.id,impact:v.impact,description:v.description,nodes:v.nodes.map(n=>({html:n.html,summary:n.failureSummary}))}))});
 }
-assert.equal(new Set(metadata.map(m=>m.title)).size,7);assert.equal(new Set(metadata.map(m=>m.description)).size,7);
+assert.equal(new Set(metadata.map(m=>m.title)).size,7,'Each marketing page needs a unique title');assert.equal(new Set(metadata.map(m=>m.description)).size,7,'Each marketing page needs a unique description');
 for(const m of metadata)assert.equal(m.canonical,'https://fetch.headrun.ai'+(m.route==='/'?'/':m.route));
 for(const href of links){const response=await page.request.get(base+href);assert.ok(response.ok(),`${href} returned ${response.status()}`);}
 checks.push('Seven pages, unique metadata, canonical URLs and internal links');

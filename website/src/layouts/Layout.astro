@@ -15,7 +15,7 @@ const descriptions: Record<string,string> = {
  '/privacy':'How Headrun Technologies Private Limited handles FetchX website enquiries, security information, service providers and data retention.',
  '/terms':'Website terms for FetchX, operated by Headrun Technologies Private Limited. Source qualification, illustrative samples and enquiry terms.'
 };
-const path=Astro.url.pathname.replace(/\/$/,'') || '/';
+const path=Astro.url.pathname.replace(/\/$/,'').replace(/\.html$/,'').replace(/\/index$/,'') || '/';
 const {title='FetchX — The web data your business needs. Delivered.',description=descriptions[path]||descriptions['/'],active=''}=Astro.props;
 const production=import.meta.env.PUBLIC_SITE_ENV==='production';
 const canonical=new URL(path,'https://fetch.headrun.ai').href;
@@ -24,7 +24,7 @@ const canonical=new URL(path,'https://fetch.headrun.ai').href;
 <html lang="en" data-theme="dark">
  <head>
   <meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <meta name="robots" content={production?'index,follow':'noindex,nofollow'}/><meta name="description" content={description}/><meta name="theme-color" content="#111b16"/>
+  <meta name="robots" content={production&&path!=='/404'?'index,follow':'noindex,nofollow'}/><meta name="description" content={description}/><meta name="theme-color" content="#111b16"/>
   <link rel="canonical" href={canonical}/><link rel="icon" type="image/svg+xml" href="/brand/icon.svg"/>
   <meta property="og:type" content="website"/><meta property="og:site_name" content="FetchX"/><meta property="og:title" content={title}/><meta property="og:description" content={description}/><meta property="og:url" content={canonical}/><meta property="og:image" content="https://fetch.headrun.ai/brand/social.png"/><meta property="og:image:width" content="1200"/><meta property="og:image:height" content="630"/><meta property="og:image:alt" content="FetchX — The web data your business needs. Delivered."/><meta name="twitter:card" content="summary_large_image"/><title>{title}</title>
  </head>

@@ -1,7 +1,7 @@
 import {chromium} from 'playwright';
 const browser=await chromium.launch({headless:true});
 const page=await browser.newPage({viewport:{width:1200,height:630},deviceScaleFactor:1});
-await page.goto('http://127.0.0.1:4329/');await page.evaluate(()=>document.fonts.ready);
+await page.goto(process.env.TEST_BASE_URL||'http://127.0.0.1:4328/');await page.evaluate(()=>document.fonts.ready);
 await page.evaluate(()=>{
  const brand=document.querySelector('.brand').outerHTML;
  const sculpture=document.querySelector('.data-sculpture').outerHTML;

@@ -1,7 +1,7 @@
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-const base=process.env.TEST_BASE_URL||'http://127.0.0.1:4329';
+const base=process.env.TEST_BASE_URL||'http://127.0.0.1:4328';
 const out=process.env.TEST_OUTPUT_DIR||'../../../outputs/launch-review';
 await fs.mkdir(out,{recursive:true});
 const browser=await chromium.launch({headless:true});

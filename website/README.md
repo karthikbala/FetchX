@@ -14,7 +14,7 @@ npm test
 npm run build
 ```
 
-The development site is at `http://127.0.0.1:4327`. Astro 7 runs it in the background; use `npx astro dev status` / `npx astro dev stop` to manage it. Run a static preview with `npx astro preview --host 127.0.0.1 --port 4329` before:
+The development site is at `http://127.0.0.1:4327`. Astro 7 runs it in the background; use `npx astro dev status` / `npx astro dev stop` to manage it. `npm run test:browser` starts an isolated local Pages server and runs both browser suites. To inspect manually, use `npm run pages:dev` at `http://127.0.0.1:4328` before:
 
 ```sh
 node tests/ui/site-check.mjs
