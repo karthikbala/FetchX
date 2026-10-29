@@ -2,7 +2,7 @@ import {InputError, validateSubmission, enquiryData, PRIVACY_VERSION, type Pilot
 
 export interface PilotEnv {
  DB: D1Database; SITE_ENV: string; ALLOWED_ORIGINS: string; TURNSTILE_HOSTNAMES: string;
- MAIL_FROM: string; SALES_EMAIL: string; TURNSTILE_SECRET: string; RESEND_API_KEY: string; HASH_SECRET: string;
+ MAIL_FROM: string; SALES_EMAIL: string; TURNSTILE_SECRET: string; GOOGLE_CLIENT_ID: string; GOOGLE_CLIENT_SECRET: string; GOOGLE_REFRESH_TOKEN: string; HASH_SECRET: string;
 }
 type Background = { waitUntil(promise: Promise<unknown>): void };
 export interface EnquiryRow {
@@ -91,22 +91,41 @@ export function notificationPayload(row: EnquiryRow, env: Pick<PilotEnv,'MAIL_FR
   tags:[{name:'enquiry_reference',value:row.reference}],
  };
 }
+function base64(data: Uint8Array): string {
+ let binary=''; for(const byte of data)binary+=String.fromCharCode(byte); return btoa(binary);
+}
+export function gmailMessage(payload: ReturnType<typeof notificationPayload>, reference: string): string {
+ const text=base64(encoder.encode(payload.text)).replace(/.{1,76}/g,'$&\r\n').trimEnd();
+ const mime=[`From: ${payload.from}`,`To: ${payload.to.join(', ')}`,`Reply-To: ${payload.reply_to}`,`Subject: ${payload.subject}`,`Message-ID: <${reference.toLowerCase()}@fetchx.ai>`,'MIME-Version: 1.0','Content-Type: text/plain; charset=UTF-8','Content-Transfer-Encoding: base64','',text,''].join('\r\n');
+ return base64(encoder.encode(mime)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
 export async function notifyEnquiry(reference: string, env: PilotEnv): Promise<'sent'|'failed'|'uncertain'|'skipped'> {
- const now=Date.now();const lease=crypto.randomUUID();
- const row=await env.DB.prepare(`UPDATE enquiries SET notification_status='sending',notification_attempts=notification_attempts+1,notification_last_attempt_at=?,notification_lease=? WHERE reference=? AND expires_at>? AND notification_status!='sent' AND (notification_status!='sending' OR notification_last_attempt_at<?) AND (notification_first_attempt_at IS NULL OR notification_first_attempt_at>?) RETURNING *`).bind(now,lease,reference,now,now-120_000,now-23*3_600_000).first<EnquiryRow>();
+ const now=Date.now(), lease=crypto.randomUUID();
+ // Gmail has no documented idempotency key. Never replay an uncertain or interrupted send automatically.
+ const row=await env.DB.prepare(`UPDATE enquiries SET notification_status='sending',notification_attempts=notification_attempts+1,notification_last_attempt_at=?,notification_lease=? WHERE reference=? AND expires_at>? AND notification_status IN ('pending','failed') RETURNING *`).bind(now,lease,reference,now).first<EnquiryRow>();
  if(!row)return 'skipped';
- let status:'sent'|'failed'|'uncertain'='uncertain';let providerId:string|null=null;let errorCode:string|null=null;
- // Persist the exact message before sending so provider idempotency also survives a deployment or configuration change.
- const message = env.RESEND_API_KEY ? await env.DB.prepare('UPDATE enquiries SET notification_payload_json=COALESCE(notification_payload_json,?), notification_first_attempt_at=COALESCE(notification_first_attempt_at,?) WHERE reference=? AND notification_lease=? RETURNING notification_payload_json').bind(JSON.stringify(notificationPayload(row,env)),now,reference,lease).first<{notification_payload_json:string}>() : null;
+ let status:'sent'|'failed'|'uncertain'='failed', providerId:string|null=null, errorCode:string|null=null;
  try {
-  if(!env.RESEND_API_KEY){status='failed';errorCode='mail_not_configured';}
-  else if(!message){return 'skipped';}
+  if(!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REFRESH_TOKEN) errorCode='mail_not_configured';
   else {
-   const response=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+env.RESEND_API_KEY,'Content-Type':'application/json','Idempotency-Key':'fetchx-enquiry/'+reference},body:message.notification_payload_json,signal:AbortSignal.timeout(10_000)});
-   if(response.ok){const result:{id?:string}=await response.json();if(result.id){status='sent';providerId=result.id;}else errorCode='invalid_mail_response';}
-   else {status=response.status>=500?'uncertain':'failed';errorCode='mail_http_'+response.status;}
+   const credentials=new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID,client_secret:env.GOOGLE_CLIENT_SECRET,refresh_token:env.GOOGLE_REFRESH_TOKEN,grant_type:'refresh_token'});
+   const tokenResponse=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:credentials,signal:AbortSignal.timeout(10_000)});
+   if(!tokenResponse.ok)errorCode='mail_auth_http_'+tokenResponse.status;
+   else {
+    const token:{access_token?:string}=await tokenResponse.json();
+    if(!token.access_token)errorCode='mail_auth_invalid_response';
+    else {
+     const message=await env.DB.prepare('UPDATE enquiries SET notification_payload_json=COALESCE(notification_payload_json,?), notification_first_attempt_at=COALESCE(notification_first_attempt_at,?) WHERE reference=? AND notification_lease=? RETURNING notification_payload_json').bind(JSON.stringify(notificationPayload(row,env)),now,reference,lease).first<{notification_payload_json:string}>();
+     if(!message)return 'skipped';
+     const payload:ReturnType<typeof notificationPayload>=JSON.parse(message.notification_payload_json);
+     status='uncertain';
+     const response=await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',{method:'POST',headers:{Authorization:'Bearer '+token.access_token,'Content-Type':'application/json'},body:JSON.stringify({raw:gmailMessage(payload,reference)}),signal:AbortSignal.timeout(10_000)});
+     if(response.ok){const result:{id?:string}=await response.json();if(result.id){status='sent';providerId=result.id;}else errorCode='mail_invalid_response';}
+     else {status=response.status>=500?'uncertain':'failed';errorCode='mail_http_'+response.status;}
+    }
+   }
   }
- }catch{errorCode='mail_network_error';}
+ } catch {errorCode=status==='uncertain'?'mail_network_error':'mail_auth_network_error';}
  await env.DB.prepare('UPDATE enquiries SET notification_status=?,notification_id=?,notification_error=?,notification_lease=NULL WHERE reference=? AND notification_lease=?').bind(status,providerId,errorCode,reference,lease).run();
  log('notification_'+status,reference);return status;
 }

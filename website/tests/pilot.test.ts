@@ -6,12 +6,14 @@ import {validateSubmission} from '../src/lib/pilot-schema';
 
 const origin='https://fetchx.ai';
 const db=env.DB;
-const config: PilotEnv={DB:db,SITE_ENV:'production',ALLOWED_ORIGINS:origin,TURNSTILE_HOSTNAMES:'fetchx.ai',MAIL_FROM:'FetchX <enquiries@notify.headrun.ai>',SALES_EMAIL:'sales@headrun.ai',TURNSTILE_SECRET:'synthetic-turnstile-secret',RESEND_API_KEY:'synthetic-mail-key',HASH_SECRET:'synthetic-hmac-secret-at-least-32-characters'};
+const config: PilotEnv={DB:db,SITE_ENV:'production',ALLOWED_ORIGINS:origin,TURNSTILE_HOSTNAMES:'fetchx.ai',MAIL_FROM:'FetchX <karthik@headrun.com>',SALES_EMAIL:'sales@headrun.ai',TURNSTILE_SECRET:'synthetic-turnstile-secret',GOOGLE_CLIENT_ID:'synthetic-client',GOOGLE_CLIENT_SECRET:'synthetic-secret',GOOGLE_REFRESH_TOKEN:'synthetic-refresh',HASH_SECRET:'synthetic-hmac-secret-at-least-32-characters'};
 const valid=()=>({requestId:crypto.randomUUID(),token:crypto.randomUUID(),website_confirm:'',offer:'pilot',websites:['https://example.com/products'],fields:'title, price, availability',frequency:'One-time pilot',volume:'Up to 500 records',format:'CSV',name:'Test Operator',company:'Synthetic Company',email:'test@example.com',notes:'Synthetic test; no actual customer.'});
 let mailCalls: RequestInit[]=[];
 let verification: Record<string,unknown>;
 let mailStatus=200;
 let mailThrows=false;
+let authStatus=200;
+let authThrows=false;
 let verifyThrows=false;
 let usedTokens:Set<string>;
 let verifyReplay=false;
@@ -29,7 +31,7 @@ async function settle(){await Promise.all(background);background=[];}
 beforeEach(async()=>{
  await reset();
  await applyD1Migrations(db,(env as unknown as {TEST_MIGRATIONS:D1Migration[]}).TEST_MIGRATIONS);
- background=[];mailCalls=[];mailStatus=200;mailThrows=false;verifyThrows=false;verifyReplay=false;usedTokens=new Set();
+ background=[];mailCalls=[];mailStatus=200;mailThrows=false;authStatus=200;authThrows=false;verifyThrows=false;verifyReplay=false;usedTokens=new Set();
  verification={success:true,hostname:'fetchx.ai',action:'pilot'};
  vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
   const url=String(input);
@@ -39,11 +41,14 @@ beforeEach(async()=>{
    if(verifyReplay&&usedTokens.has(token))return Response.json({success:false,'error-codes':['timeout-or-duplicate']});
    usedTokens.add(token);return Response.json(verification);
   }
-  if(url==='https://api.resend.com/emails'){
-   const message=JSON.parse(String(init?.body));
-   const reference=message.subject.replace('FetchX pilot enquiry ','');
+  if(url==='https://oauth2.googleapis.com/token'){if(authThrows)throw new Error('Synthetic auth outage');return Response.json(authStatus===200?{access_token:'synthetic-access-token'}:{error:'synthetic'},{status:authStatus});}
+  if(url==='https://gmail.googleapis.com/gmail/v1/users/me/messages/send'){
+   const raw=JSON.parse(String(init?.body)).raw as string;
+   const decoded=atob(raw.replace(/-/g,'+').replace(/_/g,'/'));
+   const reference=decoded.match(/Subject: FetchX pilot enquiry (FX-[A-F0-9-]+)/)?.[1];
+   expect(reference).toBeDefined();
    // Mail cannot be sent unless the matching private record already exists.
-   expect(await row(reference)).not.toBeNull();
+   expect(await row(reference!)).not.toBeNull();
    mailCalls.push(init!);
    if(mailThrows)throw new Error('Synthetic mail timeout');
    return Response.json(mailStatus===200?{id:'mail-synthetic-1'}:{message:'Synthetic rejection'},{status:mailStatus});
@@ -59,6 +64,8 @@ describe('pilot intake with isolated D1',()=>{
   const stored=await row(body.reference);expect(stored).not.toBeNull();expect(stored!.expires_at-stored!.created_at).toBe(90*86_400_000);
   expect(JSON.stringify(body)).not.toContain('test@example.com');expect(stored!.payload_json).not.toContain('token');
   await settle();expect((await row(body.reference))!.notification_status).toBe('sent');expect(mailCalls).toHaveLength(1);
+  const raw=JSON.parse(String(mailCalls[0].body)).raw as string;const mime=atob(raw.replace(/-/g,'+').replace(/_/g,'/'));
+  expect(mime).toContain('From: FetchX <karthik@headrun.com>');expect(mime).toContain('To: sales@headrun.ai');expect(mime).toContain('Reply-To: test@example.com');expect(mime).not.toContain('synthetic-refresh');
   expect(response.headers.get('Cache-Control')).toBe('no-store');
  });
  it.each([
@@ -110,23 +117,30 @@ describe('pilot intake with isolated D1',()=>{
  it('retains an uncertain outcome when mail times out',async()=>{
   mailThrows=true;const result=await send();await settle();expect(result.response.status).toBe(201);expect((await row(result.body.reference))!.notification_status).toBe('uncertain');
  });
- it('retries the identical stored message and idempotency key after an uncertain outcome',async()=>{
+ it.each(['http','network'])('preserves the enquiry when Gmail authorization fails: %s',async(mode)=>{
+  if(mode==='http')authStatus=401;else authThrows=true;
+  const result=await send();await settle();expect(result.response.status).toBe(201);expect((await row(result.body.reference))!.notification_status).toBe('failed');expect(mailCalls).toHaveLength(0);
+ });
+ it('never automatically retries an uncertain Gmail send',async()=>{
   mailThrows=true;const result=await send();await settle();mailThrows=false;
+  expect(await notifyEnquiry(result.body.reference,config)).toBe('skipped');expect(mailCalls).toHaveLength(1);
+ });
+ it('retries a confirmed rejection with the identical stored message',async()=>{
+  mailStatus=422;const result=await send();await settle();mailStatus=200;
   expect(await notifyEnquiry(result.body.reference,{...config,MAIL_FROM:'Changed <changed@example.com>'})).toBe('sent');
   expect(mailCalls).toHaveLength(2);expect(mailCalls[1].body).toBe(mailCalls[0].body);
-  expect(new Headers(mailCalls[1].headers).get('Idempotency-Key')).toBe(new Headers(mailCalls[0].headers).get('Idempotency-Key'));
   expect(await notifyEnquiry(result.body.reference,config)).toBe('skipped');expect(mailCalls).toHaveLength(2);
  });
- it('does not use up the retry window while mail is unconfigured',async()=>{
-  const result=await send(valid(),{env:{...config,RESEND_API_KEY:''}});await settle();const stored=await row(result.body.reference);
+ it('retains the enquiry while Gmail credentials are missing',async()=>{
+  const result=await send(valid(),{env:{...config,GOOGLE_REFRESH_TOKEN:''}});await settle();const stored=await row(result.body.reference);
   expect(stored!.notification_status).toBe('failed');expect(stored!.notification_first_attempt_at).toBeNull();expect(mailCalls).toHaveLength(0);
   expect(await notifyEnquiry(result.body.reference,config)).toBe('sent');
  });
- it('allows only one notification sender and stops after the provider idempotency window',async()=>{
-  mailThrows=true;const result=await send();await settle();mailThrows=false;
+ it('allows only one sender and holds interrupted sends for reconciliation',async()=>{
+  mailStatus=422;const result=await send();await settle();mailStatus=200;
   const results=await Promise.all([notifyEnquiry(result.body.reference,config),notifyEnquiry(result.body.reference,config)]);
   expect(results.sort()).toEqual(['sent','skipped']);expect(mailCalls).toHaveLength(2);
-  await db.prepare("UPDATE enquiries SET notification_status='uncertain', notification_first_attempt_at=? WHERE reference=?").bind(Date.now()-24*3_600_000,result.body.reference).run();
+  await db.prepare("UPDATE enquiries SET notification_status='sending' WHERE reference=?").bind(result.body.reference).run();
   expect(await notifyEnquiry(result.body.reference,config)).toBe('skipped');expect(mailCalls).toHaveLength(2);
  });
  it('purges expired enquiries and rate buckets while retaining current requests',async()=>{

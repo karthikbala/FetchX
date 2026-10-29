@@ -15,7 +15,7 @@
     "SITE_ENV": "preview",
     "ALLOWED_ORIGINS": "https://staging.fetchx-marketing.pages.dev",
     "TURNSTILE_HOSTNAMES": "staging.fetchx-marketing.pages.dev",
-    "MAIL_FROM": "FetchX <enquiries@notify.headrun.ai>",
+    "MAIL_FROM": "FetchX <karthik@headrun.com>",
     "SALES_EMAIL": "sales@headrun.ai"
   },
   "env": {
@@ -32,7 +32,7 @@
         "SITE_ENV": "preview",
         "ALLOWED_ORIGINS": "https://staging.fetchx-marketing.pages.dev",
         "TURNSTILE_HOSTNAMES": "staging.fetchx-marketing.pages.dev",
-        "MAIL_FROM": "FetchX <enquiries@notify.headrun.ai>",
+        "MAIL_FROM": "FetchX <karthik@headrun.com>",
         "SALES_EMAIL": "sales@headrun.ai"
       }
     },
@@ -49,7 +49,7 @@
         "SITE_ENV": "production",
         "ALLOWED_ORIGINS": "https://fetchx.ai",
         "TURNSTILE_HOSTNAMES": "fetchx.ai",
-        "MAIL_FROM": "FetchX <enquiries@notify.headrun.ai>",
+        "MAIL_FROM": "FetchX <karthik@headrun.com>",
         "SALES_EMAIL": "sales@headrun.ai"
       }
     }

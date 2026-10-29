@@ -45,12 +45,12 @@ Build variables:
 Cloudflare Pages **secrets**, configured separately in each deployment environment:
 
 - `TURNSTILE_SECRET`: corresponding widget secret.
-- `RESEND_API_KEY`: sending key scoped to the verified sender domain.
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`: an OAuth client and offline Gmail send authorization for the approved HeadRun mailbox.
 - `HASH_SECRET`: random, stable HMAC key for deduplication and rate-limit hashes. Do not rotate casually while enquiries remain in the database.
 
 Runtime variables: `SITE_ENV`, `ALLOWED_ORIGINS`, `TURNSTILE_HOSTNAMES`, `MAIL_FROM`, `SALES_EMAIL`; these are in Wrangler. Turnstile must return action `pilot` and the exact submitted host. Staging accepts only the stable staging hostname, not arbitrary deployment URLs. Production accepts only `fetchx.ai`.
 
-Notifications go to `sales@headrun.ai`, from `FetchX <enquiries@notify.headrun.ai>`, with the visitor's address in Reply-To. Verify the sales mailbox and Resend sender before opening intake. Root-domain Google mail records must remain unchanged.
+Notifications go to `sales@headrun.ai`, from `FetchX <karthik@headrun.com>`, with the visitor's address in Reply-To. Verify the sales mailbox and Gmail sender authorization before opening intake. Root-domain Google mail records must remain unchanged.
 
 An absent site key leaves the form disabled. Missing server secrets fail closed. `PUBLIC_SITE_ENV` defaults to preview: previews emit noindex metadata and disallow robots, and all Pages-hosted domains additionally receive an `X-Robots-Tag` noindex header. Only the intended custom-domain production build is indexable.
 
@@ -60,9 +60,9 @@ An absent site key leaves the form disabled. Missing server secrets fail closed.
 2. Validate Turnstile server-side, including hostname and action.
 3. Use a request UUID and keyed same-day data hash to deduplicate. Changed data under an existing UUID returns a conflict. Ten new requests per hashed IP/hour are allowed.
 4. Persist the private enquiry, privacy version, reference and 90-day expiry before returning confirmation.
-5. Send a background Resend notification. Failed or uncertain delivery remains recorded; the visitor keeps the successful enquiry reference and does not need to resubmit.
+5. Send a background Gmail notification. Failed or uncertain delivery remains recorded; the visitor keeps the successful enquiry reference and does not need to resubmit.
 
-Notifications use an atomic sender lease, a stable Resend idempotency key, and a stored immutable message body. Automatic/operator retries reuse the same message and key. They stop 23 hours after the first actual send attempt, safely inside Resend's 24-hour deduplication window. A configuration failure before sending does not start that window.
+Notifications use an atomic sender lease, a stable Message-ID and a stored immutable message body. Gmail does not provide an idempotency key for sends: uncertain or interrupted sends are held for manual reconciliation and never replayed automatically. Confirmed rejections may be retried.
 
 Application logs contain event names and enquiry references, not form fields, tokens, secrets or raw IP addresses. No public admin, database-read or scraping endpoint exists.
 
@@ -78,7 +78,7 @@ node ops/enquiries.mjs purge production --apply # expired records only
 node ops/enquiries.mjs retry production FX-EXACT-ENQUIRY-UUID
 ```
 
-For retry, load `RESEND_API_KEY` into the process environment using your secure secret store or a silent prompt; never place a secret in a command argument, source file or shell history. The reference must be a real full reference. A skipped retry means already sent, an active sender lease, an expired record, or an elapsed retry window. After that window, reconcile the original reference in Resend and the sales inbox before making a separately reviewed manual contact. Do not blindly replay an uncertain send with a fresh key.
+For retry, load `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `GOOGLE_REFRESH_TOKEN` into the process environment using your secure secret store or a silent prompt; never place a secret in a command argument, source file or shell history. The reference must be a real full reference. A skipped retry means already sent, an active sender lease, an expired record, or an uncertain/interrupted send. Reconcile the reference in the Gmail Sent folder and the sales inbox before a separately reviewed manual contact. Do not blindly replay an uncertain send.
 
 Review pending/failed/uncertain notifications through `status`. A provider acceptance (`sent`) is not proof of inbox delivery: the launch test must independently confirm the same reference in the sales inbox.
 
@@ -106,9 +106,9 @@ npx wrangler pages deploy dist --project-name fetchx-marketing --branch staging
 
 The Pages project already exists. Do not create a replacement project via a CLI migration to Workers. Keep the approved Pages/external-DNS architecture.
 
-After preview review, real Turnstile configuration, verified Resend sender and sales mailbox, build with `PUBLIC_SITE_ENV=production` and the production site key, then deploy with `--branch main`. Use Pages secrets for private runtime values. Public site keys are intentionally embedded in the client build.
+After preview review, real Turnstile configuration, authorized Google Workspace sender and verified sales mailbox, build with `PUBLIC_SITE_ENV=production` and the production site key, then deploy with `--branch main`. Use Pages secrets for private runtime values. Public site keys are intentionally embedded in the client build.
 
-Associate `fetchx.ai` in Pages and configure the apex DNS record in its Cloudflare zone using the exact target returned by Cloudflare. Preserve existing records and the HeadRun domain. Add only the isolated `notify.headrun.ai` sender verification records supplied by Resend.
+Associate `fetchx.ai` in Pages and configure the apex DNS record in its Cloudflare zone using the exact target returned by Cloudflare. Preserve existing records and the HeadRun domain.
 
 Verify HTTPS, apex/trailing-slash redirects, canonical URLs, robots and sitemap. Submit one clearly labelled real launch enquiry, confirm its reference in private D1 and the verified sales inbox, then reconcile the test record. Confirm production cannot accept requests from other origins or missing verification.
 

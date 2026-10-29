@@ -49,10 +49,10 @@ if(operation==='status'){
  }
 } else {
  if(!/^FX-[A-F0-9]{8}-[A-F0-9]{4}-4[A-F0-9]{3}-[89AB][A-F0-9]{3}-[A-F0-9]{12}$/.test(reference||''))throw new Error('Provide one exact enquiry reference.');
- if(!process.env.RESEND_API_KEY)throw new Error('Provide RESEND_API_KEY through your environment, never a command argument.');
+ if(!process.env.GOOGLE_CLIENT_ID||!process.env.GOOGLE_CLIENT_SECRET||!process.env.GOOGLE_REFRESH_TOKEN)throw new Error('Provide the Google OAuth values through your secure environment, never command arguments.');
  const compiled=await build({entryPoints:[path.join(root,'src/server/pilot.ts')],bundle:true,platform:'node',format:'esm',write:false,logLevel:'silent'});
  const {notifyEnquiry}=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].text).toString('base64'));
- const status=await notifyEnquiry(reference,{...settings.vars,DB,RESEND_API_KEY:process.env.RESEND_API_KEY});
+ const status=await notifyEnquiry(reference,{...settings.vars,DB,GOOGLE_CLIENT_ID:process.env.GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET:process.env.GOOGLE_CLIENT_SECRET,GOOGLE_REFRESH_TOKEN:process.env.GOOGLE_REFRESH_TOKEN});
  console.log(JSON.stringify({environment,reference,status}));
- if(status==='skipped')console.log('No send attempted: inspect status for an existing send, active lease, expired record, or first send more than 23 hours ago.');
+ if(status==='skipped')console.log('No send attempted: inspect status for an existing send, active lease, expired record, or an uncertain send requiring mailbox reconciliation.');
 }
