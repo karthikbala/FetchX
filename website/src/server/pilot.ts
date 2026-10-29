@@ -48,7 +48,7 @@ export async function handlePilot(request: Request, env: PilotEnv, context: Back
  const origin=request.headers.get('Origin');
  if(!origin || origin!==new URL(request.url).origin || !(env.ALLOWED_ORIGINS||'').split(',').map(o=>o.trim()).includes(origin))return reply(403,{error:'origin_rejected',message:'Please submit from the FetchX website.'});
  if(!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))return reply(415,{error:'invalid_content_type',message:'Please submit the website form.'});
- if(!env.DB || !env.TURNSTILE_SECRET || !env.HASH_SECRET || !env.TURNSTILE_HOSTNAMES)return reply(503,{error:'temporarily_unavailable',message:'The form is temporarily unavailable. Email sales@headrun.ai instead.'});
+ if(!env.DB || !env.TURNSTILE_SECRET || !env.HASH_SECRET || !env.TURNSTILE_HOSTNAMES)return reply(503,{error:'temporarily_unavailable',message:'The form is temporarily unavailable. Email karthik@headrun.ai instead.'});
  let submission;
  try{submission=validateSubmission(await readInput(request));}catch(error){return reply(400,{error:'invalid_input',field:error instanceof InputError?error.field:'form',message:error instanceof InputError?error.message:'Please check your details.'});}
  if(submission.website_confirm)return reply(403,{error:'verification_failed',message:'Please complete verification and try again.'});
@@ -67,7 +67,7 @@ export async function handlePilot(request: Request, env: PilotEnv, context: Back
   const ip=request.headers.get('CF-Connecting-IP')||'local';
   const bucket=await digest(`rate:${Math.floor(now/3_600_000)}:${ip}`,env.HASH_SECRET);
   const quota=await env.DB.prepare('INSERT INTO rate_buckets(bucket_key,attempts,expires_at) VALUES(?,1,?) ON CONFLICT(bucket_key) DO UPDATE SET attempts=attempts+1 RETURNING attempts').bind(bucket,now+DAY).first<{attempts:number}>();
-  if(!quota || quota.attempts>10)return reply(429,{error:'rate_limited',message:'Too many requests. Please try later or email sales@headrun.ai.'},{'Retry-After':'3600'});
+  if(!quota || quota.attempts>10)return reply(429,{error:'rate_limited',message:'Too many requests. Please try later or email karthik@headrun.ai.'},{'Retry-After':'3600'});
   const reference='FX-'+crypto.randomUUID().toUpperCase();
   const inserted=await env.DB.prepare('INSERT INTO enquiries(reference,request_id,dedupe_key,payload_hash,payload_json,privacy_version,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING reference').bind(reference,submission.requestId,dedupe,hash,payload,PRIVACY_VERSION,now,now+90*DAY).first<{reference:string}>();
   if(!inserted){
@@ -80,7 +80,7 @@ export async function handlePilot(request: Request, env: PilotEnv, context: Back
   return reply(201,{ok:true,reference});
  } catch {
   log('enquiry_storage_failed');
-  return reply(503,{error:'storage_unavailable',message:'We could not confirm receipt. Your details are still here. Please retry or email sales@headrun.ai.'});
+  return reply(503,{error:'storage_unavailable',message:'We could not confirm receipt. Your details are still here. Please retry or email karthik@headrun.ai.'});
  }
 }
 export function notificationPayload(row: EnquiryRow, env: Pick<PilotEnv,'MAIL_FROM'|'SALES_EMAIL'>) {

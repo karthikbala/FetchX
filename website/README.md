@@ -50,7 +50,7 @@ Cloudflare Pages **secrets**, configured separately in each deployment environme
 
 Runtime variables: `SITE_ENV`, `ALLOWED_ORIGINS`, `TURNSTILE_HOSTNAMES`, `MAIL_FROM`, `SALES_EMAIL`; these are in Wrangler. Turnstile must return action `pilot` and the exact submitted host. Staging accepts only the stable staging hostname, not arbitrary deployment URLs. Production accepts only `fetchx.ai`.
 
-Notifications go to `sales@headrun.ai`, from `FetchX <karthik@headrun.com>`, with the visitor's address in Reply-To. Verify the sales mailbox and Gmail sender authorization before opening intake. Root-domain Google mail records must remain unchanged.
+Notifications go to `karthik@headrun.ai`, from `FetchX <karthik@headrun.com>`, with the visitor's address in Reply-To. Verify the sales mailbox and Gmail sender authorization before opening intake. Root-domain Google mail records must remain unchanged.
 
 An absent site key leaves the form disabled. Missing server secrets fail closed. `PUBLIC_SITE_ENV` defaults to preview: previews emit noindex metadata and disallow robots, and all Pages-hosted domains additionally receive an `X-Robots-Tag` noindex header. Only the intended custom-domain production build is indexable.
 

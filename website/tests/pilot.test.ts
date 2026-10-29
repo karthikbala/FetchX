@@ -6,7 +6,7 @@ import {validateSubmission} from '../src/lib/pilot-schema';
 
 const origin='https://fetchx.ai';
 const db=env.DB;
-const config: PilotEnv={DB:db,SITE_ENV:'production',ALLOWED_ORIGINS:origin,TURNSTILE_HOSTNAMES:'fetchx.ai',MAIL_FROM:'FetchX <karthik@headrun.com>',SALES_EMAIL:'sales@headrun.ai',TURNSTILE_SECRET:'synthetic-turnstile-secret',GOOGLE_CLIENT_ID:'synthetic-client',GOOGLE_CLIENT_SECRET:'synthetic-secret',GOOGLE_REFRESH_TOKEN:'synthetic-refresh',HASH_SECRET:'synthetic-hmac-secret-at-least-32-characters'};
+const config: PilotEnv={DB:db,SITE_ENV:'production',ALLOWED_ORIGINS:origin,TURNSTILE_HOSTNAMES:'fetchx.ai',MAIL_FROM:'FetchX <karthik@headrun.com>',SALES_EMAIL:'karthik@headrun.ai',TURNSTILE_SECRET:'synthetic-turnstile-secret',GOOGLE_CLIENT_ID:'synthetic-client',GOOGLE_CLIENT_SECRET:'synthetic-secret',GOOGLE_REFRESH_TOKEN:'synthetic-refresh',HASH_SECRET:'synthetic-hmac-secret-at-least-32-characters'};
 const valid=()=>({requestId:crypto.randomUUID(),token:crypto.randomUUID(),website_confirm:'',offer:'pilot',websites:['https://example.com/products'],fields:'title, price, availability',frequency:'One-time pilot',volume:'Up to 500 records',format:'CSV',name:'Test Operator',company:'Synthetic Company',email:'test@example.com',notes:'Synthetic test; no actual customer.'});
 let mailCalls: RequestInit[]=[];
 let verification: Record<string,unknown>;
@@ -65,7 +65,7 @@ describe('pilot intake with isolated D1',()=>{
   expect(JSON.stringify(body)).not.toContain('test@example.com');expect(stored!.payload_json).not.toContain('token');
   await settle();expect((await row(body.reference))!.notification_status).toBe('sent');expect(mailCalls).toHaveLength(1);
   const raw=JSON.parse(String(mailCalls[0].body)).raw as string;const mime=atob(raw.replace(/-/g,'+').replace(/_/g,'/'));
-  expect(mime).toContain('From: FetchX <karthik@headrun.com>');expect(mime).toContain('To: sales@headrun.ai');expect(mime).toContain('Reply-To: test@example.com');expect(mime).not.toContain('synthetic-refresh');
+  expect(mime).toContain('From: FetchX <karthik@headrun.com>');expect(mime).toContain('To: karthik@headrun.ai');expect(mime).toContain('Reply-To: test@example.com');expect(mime).not.toContain('synthetic-refresh');
   expect(response.headers.get('Cache-Control')).toBe('no-store');
  });
  it.each([

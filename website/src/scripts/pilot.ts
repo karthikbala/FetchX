@@ -53,8 +53,8 @@ form.addEventListener('submit',async event=>{
   const data: {ok?:boolean;reference?:string;message?:string;field?:string;error?:string}=await response.json();
   if(!response.ok||data.ok!==true||!data.reference){if(data.error==='request_conflict')requestId=crypto.randomUUID();showError(data.message||'We could not confirm receipt. Please retry or use the email option below.',data.field);return;}
   form.hidden=true;progress.hidden=true;document.querySelector<HTMLElement>('.form-fallback')!.hidden=true;result.hidden=false;result.querySelector('[data-reference]')!.textContent=data.reference;
-  const followup=result.querySelector<HTMLAnchorElement>('[data-followup]')!;followup.href='mailto:sales@headrun.ai?subject='+encodeURIComponent('FetchX enquiry '+data.reference);
+  const followup=result.querySelector<HTMLAnchorElement>('[data-followup]')!;followup.href='mailto:karthik@headrun.ai?subject='+encodeURIComponent('FetchX enquiry '+data.reference);
   result.focus();result.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});form.reset();
- }catch{showError('We could not confirm receipt. Your details are still here. Please retry or email sales@headrun.ai.');}
+ }catch{showError('We could not confirm receipt. Your details are still here. Please retry or email karthik@headrun.ai.');}
  finally{sending=false;token='';syncSubmit();form.removeAttribute('aria-busy');if(widgetId!==undefined){if(form.hidden){window.turnstile?.remove(widgetId);widgetId=undefined;}else window.turnstile?.reset(widgetId);}}
 });

@@ -29,7 +29,7 @@ for(const scenario of ['success','storage-failure','network-failure','validation
   if(failures-->0){
    if(scenario==='network-failure'){await route.abort();return;}
    if(scenario==='validation-failure'){await route.fulfill({status:400,json:{error:'invalid_input',field:'fields',message:'Please check the requested fields.'}});return;}
-   await route.fulfill({status:503,json:{error:'storage_unavailable',message:'We could not confirm receipt. Your details are still here. Please retry or email sales@headrun.ai.'}});return;
+   await route.fulfill({status:503,json:{error:'storage_unavailable',message:'We could not confirm receipt. Your details are still here. Please retry or email karthik@headrun.ai.'}});return;
   }
   await route.fulfill({status:201,json:{ok:true,reference:'FX-12345678-1234-4123-8123-123456789ABC'}});
  });

@@ -6,7 +6,7 @@ interface __BaseEnv_CloudflareEnv {
 	ALLOWED_ORIGINS: "https://staging.fetchx-marketing.pages.dev" | "https://fetchx.ai";
 	TURNSTILE_HOSTNAMES: "staging.fetchx-marketing.pages.dev" | "fetchx.ai";
 	MAIL_FROM: "FetchX <karthik@headrun.com>";
-	SALES_EMAIL: "sales@headrun.ai";
+	SALES_EMAIL: "karthik@headrun.ai";
 }
 declare namespace Cloudflare {
 	interface PreviewEnv {
@@ -15,7 +15,7 @@ declare namespace Cloudflare {
 		ALLOWED_ORIGINS: "https://staging.fetchx-marketing.pages.dev";
 		TURNSTILE_HOSTNAMES: "staging.fetchx-marketing.pages.dev";
 		MAIL_FROM: "FetchX <karthik@headrun.com>";
-		SALES_EMAIL: "sales@headrun.ai";
+		SALES_EMAIL: "karthik@headrun.ai";
 	}
 	interface ProductionEnv {
 		DB: D1Database;
@@ -23,7 +23,7 @@ declare namespace Cloudflare {
 		ALLOWED_ORIGINS: "https://fetchx.ai";
 		TURNSTILE_HOSTNAMES: "fetchx.ai";
 		MAIL_FROM: "FetchX <karthik@headrun.com>";
-		SALES_EMAIL: "sales@headrun.ai";
+		SALES_EMAIL: "karthik@headrun.ai";
 	}
 	interface Env extends __BaseEnv_CloudflareEnv {}
 }
