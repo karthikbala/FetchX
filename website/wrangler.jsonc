@@ -47,8 +47,8 @@
       ],
       "vars": {
         "SITE_ENV": "production",
-        "ALLOWED_ORIGINS": "https://fetch.headrun.ai",
-        "TURNSTILE_HOSTNAMES": "fetch.headrun.ai",
+        "ALLOWED_ORIGINS": "https://fetchx.ai",
+        "TURNSTILE_HOSTNAMES": "fetchx.ai",
         "MAIL_FROM": "FetchX <enquiries@notify.headrun.ai>",
         "SALES_EMAIL": "sales@headrun.ai"
       }

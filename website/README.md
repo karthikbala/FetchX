@@ -29,7 +29,7 @@ Seven marketing pages are `/`, `/samples`, `/pricing`, `/pilot`, `/developers`, 
 
 Cloudflare Pages project: `fetchx-marketing`, in the personal account identified in `wrangler.retention.jsonc`. Production branch: `main`. Preview branch: `staging`.
 
-- Intended public domain: `https://fetch.headrun.ai`.
+- Intended public domain: `https://fetchx.ai`.
 - Stable preview: `https://staging.fetchx-marketing.pages.dev`.
 - Production and preview have separate private D1 databases.
 - `wrangler.jsonc` contains public resource identifiers and non-secret settings only.
@@ -48,7 +48,7 @@ Cloudflare Pages **secrets**, configured separately in each deployment environme
 - `RESEND_API_KEY`: sending key scoped to the verified sender domain.
 - `HASH_SECRET`: random, stable HMAC key for deduplication and rate-limit hashes. Do not rotate casually while enquiries remain in the database.
 
-Runtime variables: `SITE_ENV`, `ALLOWED_ORIGINS`, `TURNSTILE_HOSTNAMES`, `MAIL_FROM`, `SALES_EMAIL`; these are in Wrangler. Turnstile must return action `pilot` and the exact submitted host. Staging accepts only the stable staging hostname, not arbitrary deployment URLs. Production accepts only `fetch.headrun.ai`.
+Runtime variables: `SITE_ENV`, `ALLOWED_ORIGINS`, `TURNSTILE_HOSTNAMES`, `MAIL_FROM`, `SALES_EMAIL`; these are in Wrangler. Turnstile must return action `pilot` and the exact submitted host. Staging accepts only the stable staging hostname, not arbitrary deployment URLs. Production accepts only `fetchx.ai`.
 
 Notifications go to `sales@headrun.ai`, from `FetchX <enquiries@notify.headrun.ai>`, with the visitor's address in Reply-To. Verify the sales mailbox and Resend sender before opening intake. Root-domain Google mail records must remain unchanged.
 
@@ -108,7 +108,7 @@ The Pages project already exists. Do not create a replacement project via a CLI 
 
 After preview review, real Turnstile configuration, verified Resend sender and sales mailbox, build with `PUBLIC_SITE_ENV=production` and the production site key, then deploy with `--branch main`. Use Pages secrets for private runtime values. Public site keys are intentionally embedded in the client build.
 
-Associate `fetch.headrun.ai` in Pages before adding its GoDaddy `fetch` CNAME to the exact Pages target returned by Cloudflare (`fetchx-marketing.pages.dev` for this project). Do not move nameservers or alter Parse/root-domain records. Add only the isolated `notify.headrun.ai` sender verification records supplied by Resend.
+Associate `fetchx.ai` in Pages and configure the apex DNS record in its Cloudflare zone using the exact target returned by Cloudflare. Preserve existing records and the HeadRun domain. Add only the isolated `notify.headrun.ai` sender verification records supplied by Resend.
 
 Verify HTTPS, apex/trailing-slash redirects, canonical URLs, robots and sitemap. Submit one clearly labelled real launch enquiry, confirm its reference in private D1 and the verified sales inbox, then reconcile the test record. Confirm production cannot accept requests from other origins or missing verification.
 

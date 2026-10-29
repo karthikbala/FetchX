@@ -1,7 +1,7 @@
 import { defineConfig } from 'astro/config';
 export default defineConfig({
  output:'static',
- site:'https://fetch.headrun.ai',
+ site:'https://fetchx.ai',
  trailingSlash:'never',
  build:{format:'file'},
  // Keep executable scripts external so the deployed Content Security Policy can stay strict.

@@ -29,7 +29,7 @@ for(const route of ['/','/samples','/pricing','/pilot','/developers','/privacy',
  accessibility.push({route,violations:audit.violations.map(v=>({id:v.id,impact:v.impact,description:v.description,nodes:v.nodes.map(n=>({html:n.html,summary:n.failureSummary}))}))});
 }
 assert.equal(new Set(metadata.map(m=>m.title)).size,7,'Each marketing page needs a unique title');assert.equal(new Set(metadata.map(m=>m.description)).size,7,'Each marketing page needs a unique description');
-for(const m of metadata)assert.equal(m.canonical,'https://fetch.headrun.ai'+(m.route==='/'?'/':m.route));
+for(const m of metadata)assert.equal(m.canonical,'https://fetchx.ai'+(m.route==='/'?'/':m.route));
 for(const href of links){const response=await page.request.get(base+href);assert.ok(response.ok(),`${href} returned ${response.status()}`);}
 checks.push('Seven pages, unique metadata, canonical URLs and internal links');
 await page.goto(base+'/samples');

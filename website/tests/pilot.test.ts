@@ -4,9 +4,9 @@ import {applyD1Migrations, reset, type D1Migration} from 'cloudflare:test';
 import {handlePilot, notifyEnquiry, purgeExpired, type EnquiryRow, type PilotEnv} from '../src/server/pilot';
 import {validateSubmission} from '../src/lib/pilot-schema';
 
-const origin='https://fetch.headrun.ai';
+const origin='https://fetchx.ai';
 const db=env.DB;
-const config: PilotEnv={DB:db,SITE_ENV:'production',ALLOWED_ORIGINS:origin,TURNSTILE_HOSTNAMES:'fetch.headrun.ai',MAIL_FROM:'FetchX <enquiries@notify.headrun.ai>',SALES_EMAIL:'sales@headrun.ai',TURNSTILE_SECRET:'synthetic-turnstile-secret',RESEND_API_KEY:'synthetic-mail-key',HASH_SECRET:'synthetic-hmac-secret-at-least-32-characters'};
+const config: PilotEnv={DB:db,SITE_ENV:'production',ALLOWED_ORIGINS:origin,TURNSTILE_HOSTNAMES:'fetchx.ai',MAIL_FROM:'FetchX <enquiries@notify.headrun.ai>',SALES_EMAIL:'sales@headrun.ai',TURNSTILE_SECRET:'synthetic-turnstile-secret',RESEND_API_KEY:'synthetic-mail-key',HASH_SECRET:'synthetic-hmac-secret-at-least-32-characters'};
 const valid=()=>({requestId:crypto.randomUUID(),token:crypto.randomUUID(),website_confirm:'',offer:'pilot',websites:['https://example.com/products'],fields:'title, price, availability',frequency:'One-time pilot',volume:'Up to 500 records',format:'CSV',name:'Test Operator',company:'Synthetic Company',email:'test@example.com',notes:'Synthetic test; no actual customer.'});
 let mailCalls: RequestInit[]=[];
 let verification: Record<string,unknown>;
@@ -30,7 +30,7 @@ beforeEach(async()=>{
  await reset();
  await applyD1Migrations(db,(env as unknown as {TEST_MIGRATIONS:D1Migration[]}).TEST_MIGRATIONS);
  background=[];mailCalls=[];mailStatus=200;mailThrows=false;verifyThrows=false;verifyReplay=false;usedTokens=new Set();
- verification={success:true,hostname:'fetch.headrun.ai',action:'pilot'};
+ verification={success:true,hostname:'fetchx.ai',action:'pilot'};
  vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
   const url=String(input);
   if(url==='https://challenges.cloudflare.com/turnstile/v0/siteverify'){
