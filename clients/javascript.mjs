@@ -27,6 +27,19 @@ export class GatewayClient {
  async status(){return this.call('/v1/status');}
  async diagnostics(operation){return this.call('/v1/operations/'+operation+'/diagnostics');}
  async outcome(operation,{accepted_records,rejected_records,reason_code}){return this.call('/v1/operations/'+operation+'/outcome',{accepted_records,rejected_records,reason_code});}
+ async capabilitiesV2(){return this.call('/v2/capabilities');}
+ async accessProfilesV2(){return this.call('/v2/access-profiles');}
+ async discoveryProfileV2(input){if(!input?.idempotency_key)throw new GatewayError('idempotency_key_required');return this.call('/v2/discovery-profiles',input,{idempotency_key:input.idempotency_key});}
+ async recipesV2(){return this.call('/v2/recipes');}
+ async sessionV2(input){if(!input?.idempotency_key)throw new GatewayError('idempotency_key_required');return this.call('/v2/sessions',input,{idempotency_key:input.idempotency_key});}
+ async readSessionV2(id){return this.call('/v2/sessions/'+encodeURIComponent(id));}
+ async operationV2(input){if(!input?.idempotency_key)throw new GatewayError('idempotency_key_required');return this.call('/v2/operations',input,{idempotency_key:input.idempotency_key});}
+ async browserProbeV2(input){if(!input?.idempotency_key)throw new GatewayError('idempotency_key_required');return this.call('/v2/browser-probes',input,{idempotency_key:input.idempotency_key});}
+ async readOperationV2(id){return this.call('/v2/operations/'+encodeURIComponent(id));}
+ async lookupOperationV2(key){return this.call('/v2/operations/by-key/'+encodeURIComponent(key));}
+ async artifactV2(id){return this.call('/v2/artifacts/'+encodeURIComponent(id));}
+ async usageV2(){return this.call('/v2/usage');}
+ async recentOperationsV2(limit=25){return this.call('/v2/operations?limit='+encodeURIComponent(limit));}
 }
 
 export {GatewayClient as FetchXClient};

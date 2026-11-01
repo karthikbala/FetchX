@@ -5,6 +5,7 @@ import pg from 'pg';
 import {initAdmission} from './admission.mjs';
 import {initDiagnostics} from './diagnostics.mjs';
 import {initRouteHealth} from './route-health.mjs';
+import {initV2,recoverV2} from './v2.mjs';
 export class Store {
  constructor(url){this.url=url;this.pool=new pg.Pool({connectionString:url,max:8});}
  async acquireRunnerLock(onLost){
@@ -37,7 +38,7 @@ export class Store {
  CREATE INDEX IF NOT EXISTS operations_retained_created ON operations(created_at,id) WHERE result_path IS NOT NULL;
  CREATE INDEX IF NOT EXISTS attempts_held_operation ON attempts(operation) WHERE state='unknown' OR error IN ('cost_overrun','provider_account_rejected','sensitive_provider_response');
  `);
- await initCaptcha(this.pool);await initJobs(this.pool);await initResidential(this.pool);await initAdmission(this.pool);await initDiagnostics(this.pool);await initRouteHealth(this.pool);
+ await initCaptcha(this.pool);await initJobs(this.pool);await initResidential(this.pool);await initAdmission(this.pool);await initDiagnostics(this.pool);await initRouteHealth(this.pool);await initV2(this.pool);
  }
  async recover(){// Never resubmit sent work. Reserved work has provably not reached transport.
   await this.tx(async c=>{
@@ -54,6 +55,7 @@ export class Store {
    for(const row of sent)await c.query('INSERT INTO ledger(attempt,event,credits) VALUES($1,$2,NULL)',[row.id,row.provider==='scrapedo'?'held_unknown':'interrupted_unknown']);
    await c.query("UPDATE operations o SET state=CASE WHEN EXISTS(SELECT 1 FROM attempts a WHERE a.operation=o.id AND a.state<>'cancelled') THEN 'unknown' ELSE 'failed' END,error=CASE WHEN EXISTS(SELECT 1 FROM attempts a WHERE a.operation=o.id AND a.state<>'cancelled') THEN 'interrupted_unknown' ELSE 'interrupted_before_dispatch' END WHERE state IN ('reserved','running')");
    await c.query("UPDATE workflows SET state='closing' WHERE state='open' AND expires_at<now()");
+   await recoverV2(c);
   });
  }
  async expire(){await this.pool.query("UPDATE workflows SET state='closing' WHERE state='open' AND expires_at<now()");await this.pool.query("UPDATE workflows w SET state='closed' WHERE state='closing' AND NOT EXISTS(SELECT 1 FROM operations o WHERE o.workflow=w.id AND o.state IN ('running','reserved'))");await this.pool.query("DELETE FROM browser_state b USING workflows w WHERE b.workflow=w.id AND w.state='closed'");}

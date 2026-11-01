@@ -25,6 +25,22 @@ FetchX is not yet a complete Scrape.do replacement. It does not include universa
 
 Requires Node.js 24+, Docker Compose and provider credentials. Browser rendering additionally requires an officially obtained Linux x86-64 CloakBrowser binary. FetchX does not redistribute browser binaries or licenses.
 
+The additive [v2 HTTP foundation](docs/api-v2.md) also works with a local Node
+process and PostgreSQL, including direct native HTTP, independently requested
+proxy class/country, encrypted source cookie sessions, original compressed
+responses/downloads, durable operations, key usage analytics and optional client
+quotas. Its security profiles and recipes are separately versioned and require
+server approval. Broad v2 browser sessions and live connections remain unsupported;
+existing v1 browser recipes continue to use the v1 API. An optional
+[one-shot browser network probe](docs/api-v2-browser-probe.md) interface separates
+decoded native responses from generated DOM. New probes are currently disabled
+until browser redirect admission is qualified. It never claims original compressed
+browser bodies.
+
+Open `/console` on your private gateway to inspect v2 project usage and recent
+operations with its API key. The key stays in tab memory, and the console is
+read-only: it does not start crawls or grant source access.
+
 ```sh
 git clone https://github.com/karthikbala/FetchX.git
 cd FetchX

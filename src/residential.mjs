@@ -41,10 +41,12 @@ export async function reserveResidential(c,config,w,attempt,provider){
  COALESCE(sum(accounted_bytes) FILTER(WHERE created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),0) AS daily,
  COALESCE(sum(accounted_bytes) FILTER(WHERE workflow=$1),0) AS workflow,
  COALESCE(sum(accounted_bytes) FILTER(WHERE project=$2 AND created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),0) AS project_daily,
- COALESCE(sum(accounted_bytes) FILTER(WHERE provider=$3),0) AS provider_total FROM residential_usage`,[w.id,w.project,provider])).rows[0];
+ COALESCE(sum(accounted_bytes) FILTER(WHERE provider=$3),0) AS provider_total FROM (
+ SELECT workflow,project,provider,accounted_bytes,created_at FROM residential_usage
+ UNION ALL SELECT session_id AS workflow,project,provider,accounted_tunnel_bytes AS accounted_bytes,created_at FROM v2_ledger WHERE proxy_class='residential') usage`,[w.id,w.project,provider])).rows[0];
  const prior=Object.values(settings.providers).reduce((sum,p)=>sum+(p.priorReservedBytes??0),0);
  if(Number(totals.daily)+n>limit(settings?.maxDailyBytes)||Number(totals.total)+prior+n>limit(settings?.maxTotalBytes)||Number(totals.workflow)+n>limit(p.maxResidentialBytes)||Number(totals.project_daily)+n>limit(config.projects[w.project].maxDailyResidentialBytes??settings.maxDailyBytes)||Number(totals.provider_total)+(pc.priorReservedBytes??0)+n>limit(pc.maxTotalBytes))fail('residential_budget_exhausted',429);
- if((await c.query("SELECT 1 FROM attempts WHERE provider=$1 AND error=ANY($2::text[]) LIMIT 1",[provider,['provider_account_rejected','sensitive_provider_response','cost_overrun']])).rowCount)fail('residential_provider_held',409);
+ if((await c.query("SELECT 1 FROM attempts WHERE provider=$1 AND error=ANY($2::text[]) UNION ALL SELECT 1 FROM v2_operations o JOIN v2_ledger l ON l.operation=o.id WHERE l.provider=$1 AND o.error=ANY($2::text[]) LIMIT 1",[provider,['provider_account_rejected','sensitive_provider_response','cost_overrun']])).rowCount)fail('residential_provider_held',409);
  if(p.execution==='browser'&&Number((await c.query("SELECT count(*) AS n FROM residential_usage u JOIN attempts a ON a.id=u.attempt WHERE u.browser_tier IS NOT NULL AND a.state IN ('reserved','sent')")).rows[0].n)>=(config.browser?.maxConcurrent??1))fail('capacity_wait',503);
  const rate=pc.microUsdPerGB;if(!Number.isSafeInteger(rate)||rate<0)fail('residential_rate_unconfigured',503);
  await c.query('INSERT INTO residential_usage(attempt,project,workflow,provider,browser_tier,reserved_bytes,accounted_bytes,estimated_micro_usd) VALUES($1,$2,$3,$4,$5,$6,$6,$7)',[attempt,w.project,w.id,provider,selectedRoute(p).tier,n,Math.ceil(n/1e9*rate)]);

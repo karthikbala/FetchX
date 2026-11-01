@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {Store} from '../src/store.mjs';
 import {Gateway} from '../src/gateway.mjs';
 import {sha} from '../src/crypto.mjs';
@@ -85,6 +86,6 @@ test('CONNECT relay meters both directions and terminates at hard byte bound',as
 });
 
 test('browser child executes its IPC protocol and rejects a mismatched build before network',()=>{
- const r=spawnSync(process.execPath,[new URL('../src/browser-worker.mjs',import.meta.url).pathname],{input:JSON.stringify({browser:{executablePath:new URL('../package.json',import.meta.url).pathname,sha256:'bad'}}),encoding:'utf8',timeout:10000});
+ const r=spawnSync(process.execPath,[fileURLToPath(new URL('../src/browser-worker.mjs',import.meta.url))],{input:JSON.stringify({browser:{executablePath:fileURLToPath(new URL('../package.json',import.meta.url)),sha256:'bad'}}),encoding:'utf8',timeout:10000});
  assert.equal(r.status,0,r.stderr);const result=JSON.parse(r.stdout);assert.equal(result.error,'browser_build_mismatch');assert.equal(result.body_base64,'');
 });

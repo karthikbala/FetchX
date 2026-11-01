@@ -2,7 +2,7 @@ import {mkdir,writeFile,access,chmod} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {randomBytes,createHash} from 'node:crypto';
 const root=resolve(process.argv[2]??'local');
-if(!/^[a-zA-Z0-9_./-]+$/.test(root))throw Error('Use a setup path containing letters, digits, slashes, dots, underscores or hyphens.');
+if(!/^[a-zA-Z0-9_./ -]+$/.test(root))throw Error('Use a setup path containing letters, digits, spaces, slashes, dots, underscores or hyphens.');
 try{await access(root);throw Error('Setup directory already exists; refusing to overwrite it.');}catch(e){if(e.code!=='ENOENT')throw e;}
 for(const dir of [root,join(root,'secrets'),join(root,'browser')])await mkdir(dir,{recursive:true,mode:0o700});
 // Browser and seccomp files must be readable by the unprivileged service.
@@ -14,5 +14,5 @@ const providers=Object.fromEntries(['evomi','dataimpulse'].map(name=>{const pref
 const config={release:'fetchx-0.3.0',defaultRouting:'residential-v1',artifactDir:'/data/artifacts',artifactKey:randomBytes(32).toString('hex'),proxies:[],maxDailyFallbackCredits:0,jobs:{enabled:true,maxQueued:100},projects:{demo:{tokenHash:createHash('sha256').update(token).digest('hex'),profiles:['example.http','example.browser'],maxQueuedJobs:20,maxDailyResidentialBytes:32*1024*1024}},residential:{maxDailyBytes:32*1024*1024,maxTotalBytes:64*1024*1024,providers},captcha:{enabled:false,apiKey:'',maxTaskMicroUsd:10000,maxDailyMicroUsd:30000,maxTotalMicroUsd:30000,maxTotalTasks:3,timeoutMs:120000},browser:{maxConcurrent:1},sourceProfiles:{'example.http':profile,'example.browser':{...profile,execution:'browser',readySelector:'body',maxBrowserRequests:20,browserRecipes:{capture:{steps:[],extract:{title:{selector:'title'}},screenshot:'viewport'}}}}};
 await writeFile(join(root,'secrets/gateway.json'),JSON.stringify(config,null,2)+'\n',{mode:0o600,flag:'wx'});
 await writeFile(join(root,'secrets/client.token'),token+'\n',{mode:0o600,flag:'wx'});
-await writeFile(join(root,'compose.env'),`FETCHX_HOME=${root}\nFETCHX_DB_PASSWORD=${dbPassword}\n`,{mode:0o600,flag:'wx'});
+await writeFile(join(root,'compose.env'),`FETCHX_HOME='${root}'\nFETCHX_DB_PASSWORD=${dbPassword}\n`,{mode:0o600,flag:'wx'});
 console.log('FetchX configuration created. Add credentials and review profiles/budgets in '+join(root,'secrets/gateway.json')+'. No provider requests were made.');

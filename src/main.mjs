@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import {JobQueue} from './jobs.mjs';
 import {fetchOnce,lookupFetch,publicProfiles} from './fetch.mjs';
 import {readFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
 import {timingSafeEqual} from 'node:crypto';
 import {Store} from './store.mjs';
 import {Gateway} from './gateway.mjs';
@@ -11,10 +12,14 @@ import {GatewayError} from './policy.mjs';
 import {pruneArtifacts} from './artifacts.mjs';
 import {gatewayStatus} from './status.mjs';
 import {operationDiagnostics,recordOutcome} from './diagnostics.mjs';
+import {registerV2} from './v2.mjs';
+import {safeFailure} from './v2-diagnostics.mjs';
+import {publicConsoleRequest,registerConsole} from './console.mjs';
 export function server(gateway){
  const app=Fastify({logger:false,bodyLimit:24*1024*1024,requestTimeout:90000});
  app.addHook('onRequest',async(req,reply)=>{
   if(req.url==='/healthz')return;
+  if(publicConsoleRequest(req))return;
   const token=/^Bearer (\S+)$/i.exec(req.headers.authorization??'')?.[1];
   if(!token)return reply.code(401).send({error:'unauthorized'});
   const hash=Buffer.from(sha(token),'hex');
@@ -24,7 +29,7 @@ export function server(gateway){
  app.setErrorHandler((error,req,reply)=>{
   const clientError=error.validation||error.statusCode===400||error.statusCode===413||error.statusCode===415;
   const status=error instanceof GatewayError?error.status:clientError?(error.statusCode??400):500;
-  reply.code(status).send({error:error instanceof GatewayError?error.code:clientError?'request_invalid':'internal_error',...(error instanceof GatewayError&&error.details?{details:error.details}:{})});
+  reply.code(status).send({error:error instanceof GatewayError?error.code:clientError?'request_invalid':'internal_error',...(error instanceof GatewayError&&error.details?{details:error.details}:{}),...(req.url.startsWith('/v2/')?{diagnostics:safeFailure(error,'request_admission')}:{} )});
  });
  app.get('/healthz',async()=>{await gateway.store.pool.query('SELECT 1');return {ok:true,service:'FetchX',release:gateway.config.release,default_provider:gateway.config.defaultRouting==='residential-v1'?'evomi':'oxylabs'};});
  app.get('/v1/profiles',req=>publicProfiles(gateway,req.project));
@@ -47,9 +52,11 @@ export function server(gateway){
  app.get('/v1/operations/:id',route,req=>gateway.result(req.project,req.params.id));
  app.get('/v1/operations/:id/diagnostics',route,req=>operationDiagnostics(gateway.store.pool,req.project,req.params.id));
  app.post('/v1/operations/:id/outcome',route,req=>recordOutcome(gateway.store.pool,req.project,req.params.id,req.body));
+ registerV2(app,gateway);
+ registerConsole(app);
  return app;
 }
-if(process.argv[1]===new URL(import.meta.url).pathname){
+if(process.argv[1]===fileURLToPath(import.meta.url)){
  const config=JSON.parse(await readFile(process.env.GATEWAY_CONFIG??'/run/secrets/gateway.json','utf8'));
  const store=new Store(process.env.DATABASE_URL);
  await store.acquireRunnerLock(()=>{process.stderr.write('gateway_ownership_lost\n');process.exit(1);});
@@ -68,6 +75,8 @@ if(process.argv[1]===new URL(import.meta.url).pathname){
   pruning=pruneArtifacts(store,config).catch(()=>{process.stderr.write('artifact_retention_failed\n');});
   try{await pruning;}finally{pruning=null;}
  },300000);retention.unref();
- await app.listen({host:'0.0.0.0',port:8788});
+ const port=process.env.GATEWAY_PORT===undefined?8788:Number(process.env.GATEWAY_PORT);
+ if(!Number.isInteger(port)||port<1||port>65535)throw Error('gateway_port_invalid');
+ await app.listen({host:process.env.GATEWAY_HOST??'0.0.0.0',port});
  for(const signal of ['SIGINT','SIGTERM'])process.on(signal,async()=>{clearInterval(expiry);clearInterval(retention);await app.close();await pruning;await store.close();process.exit(0);});
 }

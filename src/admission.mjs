@@ -43,7 +43,7 @@ export async function enqueueAdmission(store,config,{id,operation,project,provid
 // preserve FIFO within each eligible project, and skip a busy paid lane so it
 // cannot block native requests. Idle projects do not strand reserved capacity.
 export async function requireAdmissionTurn(c,config,id){
- const active=(await c.query("SELECT w.project,a.provider,count(*)::int AS n FROM attempts a JOIN workflows w ON w.id=a.workflow WHERE a.state IN ('reserved','sent') GROUP BY w.project,a.provider")).rows;
+ const active=(await c.query("SELECT w.project,a.provider,count(*)::int AS n FROM attempts a JOIN workflows w ON w.id=a.workflow WHERE a.state IN ('reserved','sent') GROUP BY w.project,a.provider UNION ALL SELECT o.project,l.provider,count(*)::int AS n FROM v2_operations o JOIN v2_ledger l ON l.operation=o.id WHERE o.state IN ('reserved','running') GROUP BY o.project,l.provider")).rows;
  if(active.reduce((n,r)=>n+r.n,0)>=(config.maxConcurrentRequests??4))fail('capacity_wait',503);
  const paidBusy=active.some(r=>r.provider==='scrapedo');
  const queued=(await c.query(`SELECT q.id,q.project,q.provider FROM admission_queue q

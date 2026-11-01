@@ -2,6 +2,7 @@ import {spawn} from 'node:child_process';
 import {mkdtemp,rm,access} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {fail} from './policy.mjs';
 let active=0;
 export async function checkBrowserTier(config,tier,{fetchImpl=fetch}={}){
@@ -20,7 +21,7 @@ export async function browserRequest(input,profile,config,tier,relay,storageStat
  try{
   const t=await checkBrowserTier(config,tier);dir=await mkdtemp(join(tmpdir(),'gateway-browser-'));
   return await new Promise((resolve)=>{
-   const child=spawn(process.execPath,[new URL('./browser-worker.mjs',import.meta.url).pathname],{detached:true,stdio:['pipe','pipe','ignore','ipc'],env:{...process.env,HOME:dir,CLOAKBROWSER_LICENSE_KEY:'',CLOAKBROWSER_CACHE_DIR:dir}});
+   const child=spawn(process.execPath,[fileURLToPath(new URL('./browser-worker.mjs',import.meta.url))],{detached:true,stdio:['pipe','pipe','ignore','ipc'],env:{...process.env,HOME:dir,CLOAKBROWSER_LICENSE_KEY:'',CLOAKBROWSER_CACHE_DIR:dir}});
    let chunks=[],size=0,forced=null,solveRequested=false,reports=0;const pending=new Set(),controller=new AbortController();
    child.on('message',message=>{
     const task=(async()=>{

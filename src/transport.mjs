@@ -1,4 +1,5 @@
 import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {fetch} from 'undici';
 import {GatewayError,fail} from './policy.mjs';
 const drop=/^(?:connection|content-length|transfer-encoding|content-encoding|proxy-authenticate|proxy-authorization|keep-alive|trailer|upgrade)$/i;
@@ -15,7 +16,7 @@ export function sourceHeaders(pairs){
 }
 export async function oxylabsRequest(input,proxy,profile){
  return new Promise((resolve,reject)=>{
-  const child=spawn(process.env.GATEWAY_PYTHON??'python3',[new URL('./proxy_http.py',import.meta.url).pathname],{stdio:['pipe','pipe','ignore']});
+  const child=spawn(process.env.GATEWAY_PYTHON??'python3',[fileURLToPath(new URL('./proxy_http.py',import.meta.url))],{stdio:['pipe','pipe','ignore']});
   let output=[],size=0,done=false;
   const timer=setTimeout(()=>{child.kill('SIGKILL');finish(new GatewayError('proxy_connect_failed',502));},35000);
   function finish(error,result){if(done)return;done=true;clearTimeout(timer);error?reject(error):resolve(result);}
