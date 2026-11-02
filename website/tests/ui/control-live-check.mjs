@@ -209,7 +209,7 @@ async function run(){
  await page.waitForURL(base+'/login');await enabled('[data-signup-email] button');await auditBoth();
  checked(!(await context.cookies(base+'/api/control/session')).some(cookie=>cookie.name==='fetchx_session'),'logout_cookie_not_cleared');
  const sessionResponse=await context.request.get(base+'/api/control/session');checked(sessionResponse.status()===401,'logout_session_not_revoked');
- await navigate('/app');await page.waitForFunction(()=>document.querySelector('[data-gate-title]')?.textContent==='Verify your email to continue.');
+ await navigate('/app');await page.waitForFunction(()=>document.querySelector('[data-gate-title]')?.textContent==='Sign in to continue.');
  checked(await page.locator('[data-workspace-content]').isHidden()&&await page.locator('[data-login-link]').isVisible(),'unauthenticated_workspace_not_gated');await storage(project.id);await auditBoth();
  checked(counts.verification_requests===1&&counts.project_creations===1&&counts.key_creations===1&&counts.key_rotations===1&&counts.key_revocations===1,'unexpected_identity_mutation_count');
  checked(counts.source_fetch_posts===1&&counts.recovery_reads===1,'unexpected_source_work_count');

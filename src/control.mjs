@@ -1,13 +1,16 @@
 import {createHmac,createHash,timingSafeEqual} from 'node:crypto';
 import {GatewayError,fail} from './policy.mjs';
 import {PublicFetchGateway,publicFetchFailure} from './v2-public-fetch.mjs';
+import {googleConfiguration} from './control-google.mjs';
 
 export const CONTROL_COOKIE='fetchx_session';
+export const CONTROL_GOOGLE_COOKIE='fetchx_google';
 export const CONTROL_BRIDGE_HEADER='x-fetchx-control-secret';
 const BODY_LIMIT=96*1024;
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const PROJECT=/^cp_[a-f0-9-]{36}$/i;
 const SESSION=/^fxs_[A-Za-z0-9_-]{43}$/;
+const GOOGLE_BINDING=/^fxg_[A-Za-z0-9_-]{43}$/;
 const plain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const exact=(v,keys)=>plain(v)&&Object.keys(v).every(k=>keys.includes(k));
 const pick=(v,keys)=>Object.fromEntries(keys.filter(k=>v?.[k]!==undefined).map(k=>[k,v[k]]));
@@ -19,20 +22,24 @@ const constantEqual=(a,b)=>typeof a==='string'&&typeof b==='string'&&timingSafeE
 export const controlCsrf=(token,secret)=>createHmac('sha256',secret).update('fetchx-control-csrf\0'+token).digest('base64url');
 const loopback=origin=>{try{const u=new URL(origin);return ['localhost','127.0.0.1','[::1]'].includes(u.hostname)&&['http:','https:'].includes(u.protocol)&&u.origin===origin;}catch{return false;}};
 
-function cookieToken(req){
- const matches=String(req.headers.cookie??'').split(';').map(s=>s.trim()).filter(s=>s.startsWith(CONTROL_COOKIE+'='));
+function cookieToken(req,name=CONTROL_COOKIE,pattern=SESSION){
+ const matches=String(req.headers.cookie??'').split(';').map(s=>s.trim()).filter(s=>s.startsWith(name+'='));
  if(matches.length!==1)return null;
- const token=matches[0].slice(CONTROL_COOKIE.length+1);return SESSION.test(token)?token:null;
+ const token=matches[0].slice(name.length+1);return pattern.test(token)?token:null;
 }
-function setCookie(reply,token,config,expires){
+function setCookie(reply,token,config,expires,name=CONTROL_COOKIE){
  const secure=config.sessionSecure!==false;
- const parts=[`${CONTROL_COOKIE}=${token??''}`,'Path=/api/control','HttpOnly','SameSite=Lax'];
+ const parts=[`${name}=${token??''}`,'Path=/api/control','HttpOnly','SameSite=Lax'];
  if(secure)parts.push('Secure');
  if(token){const date=new Date(expires);if(!Number.isFinite(date.getTime()))fail('session_invalid',503);parts.push('Expires='+date.toUTCString());}
  else parts.push('Max-Age=0','Expires=Thu, 01 Jan 1970 00:00:00 GMT');
  reply.header('Set-Cookie',parts.join('; '));
 }
 function message(code){
+ if(code==='google_email_verification_required')return 'Use an email code to verify this address and sign in.';
+ if(code==='google_identity_conflict')return 'Use your existing sign-in method for this account.';
+ if(code==='google_disabled'||code==='google_unavailable')return 'Google sign-in is currently unavailable. You can use an email code.';
+ if(code==='google_verification_invalid')return 'Google sign-in could not be verified. Try again or use an email code.';
  if(code==='unauthorized'||code==='session_invalid')return 'Sign in to continue.';
  if(code==='bridge_rejected'||code==='origin_rejected'||code==='csrf_rejected')return 'This request could not be authorized.';
  if(code==='control_disabled'||code==='control_configuration_invalid')return 'Account access is currently unavailable.';
@@ -90,7 +97,7 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,cr
   control.setErrorHandler((error,req,reply)=>{const result=controlFailure(error);reply.code(result.status).send(result.body);});
   control.addHook('onRequest',async(req,reply)=>{
    reply.header('Cache-Control','no-store').header('Pragma','no-cache').header('X-Content-Type-Options','nosniff').header('X-Robots-Tag','noindex, nofollow');
-   if(!config.enabled)return reply.code(503).send(req.url.split('?')[0]==='/control/status'?{enabled:false,mail_configured:false,api_base_url:null,capabilities:{native_http:false,render:false,routes:[]}}:{error:{code:'control_disabled',message:message('control_disabled')}});
+   if(!config.enabled)return reply.code(503).send(req.url.split('?')[0]==='/control/status'?{enabled:false,mail_configured:false,google:{enabled:false,client_id:null},api_base_url:null,capabilities:{native_http:false,render:false,routes:[]}}:{error:{code:'control_disabled',message:message('control_disabled')}});
    if(typeof config.bridgeSecret!=='string'||Buffer.byteLength(config.bridgeSecret)<32||!Array.isArray(config.origins)||!config.origins.length||!identity||!credits||config.sessionSecure===false&&!(config.allowLoopbackDevelopment===true&&config.origins.every(loopback)))fail('control_configuration_invalid',503);
    if(!constantEqual(req.headers[CONTROL_BRIDGE_HEADER],config.bridgeSecret))fail('bridge_rejected',403);
    const origin=req.headers.origin;
@@ -113,7 +120,7 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,cr
   route('GET','/status',async req=>{
    query(req);
    const localMail=config.allowLoopbackDevelopment===true&&config.origins.every(loopback)&&identity.mail?.delivery==='local_private_mailbox'&&(identity.mailConfigured===true||identity.mail?.configured===true);
-   return {enabled:true,mail_configured:identity.mailConfigured===true||identity.mail?.configured===true,...(localMail?{mail_delivery:'local_private_mailbox'}:{}),api_base_url:config.apiBaseUrl??null,capabilities:{native_http:true,render:false,routes:routes(config)}};
+   return {enabled:true,mail_configured:identity.mailConfigured===true||identity.mail?.configured===true,google:googleConfiguration(gateway.config),...(localMail?{mail_delivery:'local_private_mailbox'}:{}),api_base_url:config.apiBaseUrl??null,capabilities:{native_http:true,render:false,routes:routes(config)}};
   });
   const clientIp=req=>typeof req.headers['x-fetchx-client-ip']==='string'&&/^[a-fA-F0-9:.]{3,64}$/.test(req.headers['x-fetchx-client-ip'])?req.headers['x-fetchx-client-ip']:req.ip;
   route('POST','/auth/code',async req=>{query(req);const body=input(req,['email']);return identity.requestCode({email:body.email,ip:clientIp(req)});});
@@ -121,6 +128,21 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,cr
    query(req);const body=input(req,['email','challenge_id','code']),result=await identity.verifyCode({...body,ip:clientIp(req)});
    if(!SESSION.test(result.session?.token??''))fail('session_invalid',503);
    setCookie(reply,result.session.token,config,result.session.expires_at);
+   return {user:safeUser(result.user),csrf_token:controlCsrf(result.session.token,config.bridgeSecret),projects:(await identity.projects(result.user.id)).map(safeProject)};
+  });
+  route('POST','/auth/google/challenge',async(req,reply)=>{
+   query(req);input(req,[]);
+   const result=await identity.requestGoogleChallenge({ip:clientIp(req),binding:cookieToken(req,CONTROL_GOOGLE_COOKIE,GOOGLE_BINDING)});
+   if(!GOOGLE_BINDING.test(result.binding??''))fail('session_invalid',503);
+   setCookie(reply,result.binding,config,result.expires_at,CONTROL_GOOGLE_COOKIE);
+   return pick(result,['challenge_id','nonce','client_id','expires_in']);
+  });
+  route('POST','/auth/google/verify',async(req,reply)=>{
+   query(req);const body=input(req,['challenge_id','credential']);
+   const result=await identity.verifyGoogle({...body,binding:cookieToken(req,CONTROL_GOOGLE_COOKIE,GOOGLE_BINDING),ip:clientIp(req)});
+   if(!SESSION.test(result.session?.token??''))fail('session_invalid',503);
+   setCookie(reply,result.session.token,config,result.session.expires_at);
+   setCookie(reply,null,config,undefined,CONTROL_GOOGLE_COOKIE);
    return {user:safeUser(result.user),csrf_token:controlCsrf(result.session.token,config.bridgeSecret),projects:(await identity.projects(result.user.id)).map(safeProject)};
   });
   route('GET','/session',async req=>{query(req);const auth=await authenticated(req);return {user:safeUser(auth.user),csrf_token:controlCsrf(auth.token,config.bridgeSecret),projects:(await identity.projects(auth.user.id)).map(safeProject)};});

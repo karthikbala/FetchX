@@ -12,7 +12,7 @@ try{
   await new Promise(resolve=>setTimeout(resolve,250));
  }
  if(!ready)throw new Error('Static preview did not become ready.');
- for(const script of ['site-check.mjs','docs-check.mjs','product-check.mjs','form-check.mjs']){
+ for(const script of ['site-check.mjs','docs-check.mjs','product-check.mjs','google-check.mjs','form-check.mjs']){
   const child=spawn(process.execPath,['tests/ui/'+script],{env:environment,stdio:'inherit'});
   const [code]=await once(child,'exit');if(code!==0)throw new Error(script+' failed.');
  }
