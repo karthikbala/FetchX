@@ -71,7 +71,8 @@ async function mailAuth(env:ControlMailEnv,diagnostic:boolean):Promise<MailAuthR
  const credentials=new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID!,client_secret:env.GOOGLE_CLIENT_SECRET!,refresh_token:env.GOOGLE_REFRESH_TOKEN!,grant_type:'refresh_token'});
  const signal=AbortSignal.timeout(10000);
  let response:Response;
- try{response=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:credentials,redirect:'error',signal});}
+ // workerd supports manual/follow only; manual keeps credentials on this origin.
+ try{response=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:credentials,redirect:'manual',signal});}
  catch{return {ok:false,error:'mail_provider_unreachable'};}
  if(!response.ok){
   if(diagnostic){
@@ -110,7 +111,7 @@ export async function handleControlMail(request:Request,env:ControlMailEnv):Prom
  try{
   const signal=AbortSignal.timeout(10000);
   // One attempt only. Gmail cannot establish idempotency after an ambiguous send.
-  const response=await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',{method:'POST',headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({raw:message(data,env.MAIL_FROM)}),redirect:'error',signal});
+  const response=await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',{method:'POST',headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({raw:message(data,env.MAIL_FROM)}),redirect:'manual',signal});
   if(!response.ok){void response.body?.cancel().catch(()=>{});return failure(response.status>=500||response.status>=300&&response.status<400?502:422,'mail_unconfirmed');}
   const result=await providerJson(response,signal);
   if(typeof result.id!=='string'||!result.id)return failure(502,'mail_unconfirmed');

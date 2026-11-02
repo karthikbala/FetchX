@@ -17,9 +17,9 @@ describe('private control verification mail relay',()=>{
   expect(result.headers.get('Cache-Control')).toBe('no-store');expect(result.headers.get('Access-Control-Allow-Origin')).toBeNull();
   expect(upstream).toHaveBeenCalledTimes(2);
   const calls=upstream.mock.calls as unknown as [string,RequestInit][];
-  expect(calls[0][0]).toBe('https://oauth2.googleapis.com/token');expect(calls[0][1].redirect).toBe('error');
+  expect(calls[0][0]).toBe('https://oauth2.googleapis.com/token');expect(calls[0][1].redirect).toBe('manual');
   expect((calls[0][1].body as URLSearchParams).get('refresh_token')).toBe(config.GOOGLE_REFRESH_TOKEN);
-  expect(calls[1][0]).toBe('https://gmail.googleapis.com/gmail/v1/users/me/messages/send');expect(calls[1][1].redirect).toBe('error');
+  expect(calls[1][0]).toBe('https://gmail.googleapis.com/gmail/v1/users/me/messages/send');expect(calls[1][1].redirect).toBe('manual');
   expect(calls[1][1].headers).toEqual({'Authorization':'Bearer synthetic-access-token','Content-Type':'application/json'});
   const raw=JSON.parse(calls[1][1].body as string).raw as string;
   const mime=atob(raw.replace(/-/g,'+').replace(/_/g,'/'));
@@ -33,6 +33,22 @@ describe('private control verification mail relay',()=>{
   const upstream=successful();vi.stubGlobal('fetch',upstream);
   const result=await handleControlMail(request(undefined,{},method),config);
   expect(result.status).toBe(405);expect(result.headers.get('Allow')).toBe('GET, POST');expect(upstream).not.toHaveBeenCalled();
+ });
+
+ it('uses redirect modes accepted by the actual workerd Request API at both provider boundaries',async()=>{
+  // Construct real runtime Requests from the handler's options before providing
+  // synthetic responses. A pure fetch spy hides workerd's rejection of "error".
+  const requests:Request[]=[];
+  const upstream=vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+   const outgoing=new Request(input,init);requests.push(outgoing);
+   return outgoing.url==='https://oauth2.googleapis.com/token'?json({access_token:'synthetic-access-token'}):json({id:'synthetic-message-id'});
+  });vi.stubGlobal('fetch',upstream);
+  const result=await handleControlMail(request(),config);
+  expect(result.status).toBe(200);expect(await result.json()).toEqual({ok:true});
+  expect(requests.map(outgoing=>[outgoing.url,outgoing.redirect])).toEqual([
+   ['https://oauth2.googleapis.com/token','manual'],
+   ['https://gmail.googleapis.com/gmail/v1/users/me/messages/send','manual'],
+  ]);
  });
 
  it('checks private OAuth readiness without constructing or sending a message',async()=>{
