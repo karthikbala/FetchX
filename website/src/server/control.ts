@@ -13,6 +13,7 @@ const SESSION=/^fxs_[A-Za-z0-9_-]{43}$/;
 const GOOGLE_BINDING=/^fxg_[A-Za-z0-9_-]{43}$/;
 const GITHUB_BINDING=/^fxh_[A-Za-z0-9_-]{43}$/;
 const GITHUB_CALLBACK='/api/control/auth/github/callback';
+const GITHUB_ISSUER='https://github.com/login/oauth';
 const GITHUB_ERRORS=new Set(['github_disabled','github_unavailable','github_verification_invalid','github_cancelled','github_account_link_required','github_identity_conflict','github_session_conflict','github_email_verification_required']);
 const PROJECT='cp_[a-fA-F0-9-]{36}';
 const UUID='[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}';
@@ -86,8 +87,9 @@ async function githubCallback(request:Request,env:ControlEnv):Promise<Response> 
  if(incoming.search.length>4096)return failed();
  const parameters=[...incoming.searchParams],state=incoming.searchParams.get('state'),code=incoming.searchParams.get('code'),denied=incoming.searchParams.get('error');
  const keys=parameters.map(([key])=>key);
- // GitHub's optional error_description/error_uri are ignored, never forwarded.
- if(parameters.length>4||new Set(keys).size!==keys.length||keys.some(key=>!['code','state','error','error_description','error_uri'].includes(key))||parameters.some(([,value])=>value.length>1024)||!state||!/^[A-Za-z0-9_-]{43}$/.test(state))return failed();
+ // Validate GitHub's optional RFC 9207 issuer with exact string comparison.
+ // Issuer and optional error_description/error_uri are never forwarded.
+ if(parameters.length>5||new Set(keys).size!==keys.length||keys.some(key=>!['code','state','iss','error','error_description','error_uri'].includes(key))||incoming.searchParams.has('iss')&&incoming.searchParams.get('iss')!==GITHUB_ISSUER||parameters.some(([,value])=>value.length>1024)||!state||!/^[A-Za-z0-9_-]{43}$/.test(state))return failed();
  const cancelled=denied==='access_denied'&&code===null;
  if(!cancelled&&(denied!==null||!code||!/^[A-Za-z0-9_-]{1,512}$/.test(code)||keys.some(key=>key==='error_description'||key==='error_uri')))return failed();
  const forwarded=new Headers({'Origin':incoming.origin,'Sec-Fetch-Site':'same-origin','Accept':'application/json'});
