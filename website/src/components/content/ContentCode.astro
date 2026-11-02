@@ -1,0 +1,33 @@
+---
+import { Code } from 'astro:components';
+import type { ContentCode } from '../../data/marketing-content';
+interface Props extends ContentCode {}
+const { title, language, code, note } = Astro.props;
+---
+<figure class="content-code" data-content-code>
+  <figcaption>
+    <span class="content-code-title"><span class="content-code-dot"></span>{title}</span>
+    <button type="button" data-content-copy aria-label={'Copy ' + title}>Copy <span aria-hidden="true">↗</span></button>
+  </figcaption>
+  <div class="content-code-body"><Code code={code} lang={language} theme="github-dark-high-contrast" /></div>
+  {note && <p class="content-code-note">{note}</p>}
+  <span class="content-sr-only" role="status" aria-live="polite" data-content-copy-status></span>
+</figure>
+<script>
+  document.querySelectorAll<HTMLElement>('[data-content-code]').forEach((block) => {
+    const button = block.querySelector<HTMLButtonElement>('[data-content-copy]');
+    const status = block.querySelector<HTMLElement>('[data-content-copy-status]');
+    button?.addEventListener('click', async () => {
+      const code = block.querySelector('pre code')?.textContent;
+      if (!code) return;
+      try {
+        await navigator.clipboard.writeText(code);
+        if (status) status.textContent = 'Code copied.';
+        button.textContent = 'Copied';
+        window.setTimeout(() => { button.textContent = 'Copy ↗'; }, 2000);
+      } catch {
+        if (status) status.textContent = 'Copy is unavailable. Select and copy the code.';
+      }
+    });
+  });
+</script>

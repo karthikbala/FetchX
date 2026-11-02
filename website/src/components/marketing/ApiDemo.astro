@@ -1,0 +1,98 @@
+---
+import Icon from '../Icon.astro';
+interface Props { id?: string; }
+const { id = 'api-example' } = Astro.props;
+const request = `{
+  "idempotency_key": "example-001",
+  "access_profile": { "id": "source.http", "version": 1 },
+  "url": "https://source.example/data",
+  "proxy": { "class": "direct", "country": null }
+}`;
+const snippets = [
+  { label: 'cURL', code: `# Save this request before dispatch.
+cat > fetch-request.json <<'JSON'
+${request}
+JSON
+
+curl --silent --show-error "$FETCHX_URL/v2/fetch" \\
+  -H "Authorization: Bearer $FETCHX_TOKEN" \\
+  -H 'Content-Type: application/json' \\
+  --data-binary @fetch-request.json` },
+  { label: 'JavaScript', code: `// Read the same saved fetch-request.json.
+import { readFile } from 'node:fs/promises';
+
+const body = await readFile('fetch-request.json', 'utf8');
+const response = await fetch(process.env.FETCHX_URL + '/v2/fetch', {
+  method: 'POST',
+  headers: {
+    Authorization: 'Bearer ' + process.env.FETCHX_TOKEN,
+    'Content-Type': 'application/json',
+  },
+  body,
+});
+const result = await response.json();
+console.log(result);
+// Inspect success, source status, content and retry.next_action.` },
+  { label: 'Python', code: `# Read the same saved fetch-request.json.
+import json, os
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+with open("fetch-request.json", "rb") as file:
+    body = file.read()
+request = Request(
+    os.environ["FETCHX_URL"] + "/v2/fetch", data=body,
+    headers={"Authorization": "Bearer " + os.environ["FETCHX_TOKEN"],
+             "Content-Type": "application/json"}, method="POST")
+try:
+    response = urlopen(request, timeout=90)
+except HTTPError as error:
+    response = error
+with response:
+    result = json.load(response)
+print(result)` },
+];
+const views = [
+  {label:'Overview', code:`{
+  "success": true,
+  "state": "completed",
+  "gateway_http_status": 200,
+  "data": { "status": 200 },
+  "application_acceptance": "not_evaluated"
+}`, caption:'The API status and the source status are separate. Your application checks the content.'},
+  {label:'Payload', code:`{
+  "data": {
+    "status": 200,
+    "final_url": "https://source.example/data",
+    "content_type": "text/plain; charset=utf-8",
+    "body_base64": "b2s=",
+    "text": "ok"
+  }
+}`, caption:'Inspect the final URL, content type and returned body before accepting a result.'},
+  {label:'Recovery', code:`{
+  "retry": {
+    "safe_to_retry": false,
+    "same_key_replay_safe": true,
+    "new_request_allowed": false,
+    "next_action": "complete",
+    "lookup_url": "/v2/fetch/example-001"
+  }
+}`,caption:'A lookup reads the saved operation. It does not fetch the source again.'},
+];
+---
+<div class="mkt-api-demo">
+  <section class="mkt-request-panel" aria-label="API request example" data-mkt-tabs>
+    <div class="mkt-code-title"><span><span class="mkt-method">POST</span><code>/v2/fetch</code></span><button type="button" class="mkt-copy" data-mkt-copy aria-label="Copy selected request example"><Icon name="copy" size={14}/><span data-mkt-copy-label>Copy</span></button></div>
+    <div class="mkt-code-tabs" role="tablist" aria-label="Request language">{snippets.map((snippet, i)=><button type="button" role="tab" id={`${id}-request-tab-${i}`} aria-controls={`${id}-request-panel-${i}`} aria-selected={i===0?'true':'false'} tabindex={i===0?0:-1} data-mkt-tab>{snippet.label}</button>)}</div>
+    {snippets.map((snippet,i)=><div id={`${id}-request-panel-${i}`} role="tabpanel" aria-labelledby={`${id}-request-tab-${i}`} tabindex="0" hidden={i!==0} data-mkt-panel><pre class="mkt-code"><code>{snippet.code}</code></pre></div>)}
+    <div class="mkt-code-bottom"><span class="mkt-dot"></span> YOUR ENDPOINT + PROJECT TOKEN<span class="mkt-code-file">fetch-request.json</span></div>
+    <span class="mkt-sr-only" role="status" aria-live="polite" data-mkt-copy-status></span>
+  </section>
+  <section class="mkt-response-panel" aria-label="Illustrative API response" data-mkt-tabs>
+    <div class="mkt-response-title"><span>INSPECT THE RESPONSE</span><span class="mkt-output-status"><Icon name="check" size={12}/> 200</span></div>
+    <div class="mkt-code-tabs" role="tablist" aria-label="Response view">{views.map((view,i)=><button type="button" role="tab" id={`${id}-response-tab-${i}`} aria-controls={`${id}-response-panel-${i}`} aria-selected={i===0?'true':'false'} tabindex={i===0?0:-1} data-mkt-tab>{view.label}</button>)}</div>
+    {views.map((view,i)=><div id={`${id}-response-panel-${i}`} role="tabpanel" aria-labelledby={`${id}-response-tab-${i}`} tabindex="0" hidden={i!==0} data-mkt-panel><pre class="mkt-code"><code>{view.code}</code></pre><p class="mkt-response-caption">{view.caption}</p></div>)}
+    <span class="mkt-response-label">SYNTHETIC RESPONSE EXCERPT</span>
+  </section>
+</div>
+<p class="mkt-example-note">Use your provisioned <code>FETCHX_URL</code> and <code>FETCHX_TOKEN</code>. Replace the sample profile and URL with approved values. This HTTP example requires a profile that permits the direct route. <a href="/docs">Complete quickstart <Icon name="arrow" size={13}/></a></p>

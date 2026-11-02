@@ -2,9 +2,13 @@ import {spawn} from 'node:child_process';
 import {mkdtemp,rm,access} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {fail} from './policy.mjs';
+import {browserEngine} from './browser-engines.mjs';
 let active=0;
-export async function checkBrowserTier(config,tier,{fetchImpl=fetch}={}){
+export async function checkBrowserTier(config,tier,{fetchImpl=fetch,engine='cloakbrowser'}={}){
+ browserEngine({browserEngine:engine});
+ if(engine==='camoufox'){if(tier!=='free')fail('browser_tier_unsupported',503);fail('browser_runtime_unqualified',503);}
  const t=config.browser?.[tier];if(!t?.executablePath||!t.sha256||!t.version)fail('browser_tier_unavailable',503);
  await access(t.executablePath).catch(()=>fail('browser_tier_unavailable',503));
  if(tier==='free'&&t.entitlement==='unlicensed')return t;
@@ -18,9 +22,9 @@ export async function browserRequest(input,profile,config,tier,relay,storageStat
  if(active>=(config.browser?.maxConcurrent??1))fail('browser_capacity',503);
  active++;let dir;
  try{
-  const t=await checkBrowserTier(config,tier);dir=await mkdtemp(join(tmpdir(),'gateway-browser-'));
+  const engine=browserEngine(profile),t=await checkBrowserTier(config,tier,{engine});dir=await mkdtemp(join(tmpdir(),'gateway-browser-'));
   return await new Promise((resolve)=>{
-   const child=spawn(process.execPath,[new URL('./browser-worker.mjs',import.meta.url).pathname],{detached:true,stdio:['pipe','pipe','ignore','ipc'],env:{...process.env,HOME:dir,CLOAKBROWSER_LICENSE_KEY:'',CLOAKBROWSER_CACHE_DIR:dir}});
+   const child=spawn(process.execPath,[fileURLToPath(new URL('./browser-worker.mjs',import.meta.url))],{detached:true,stdio:['pipe','pipe','ignore','ipc'],env:{...process.env,HOME:dir,CLOAKBROWSER_LICENSE_KEY:'',CLOAKBROWSER_CACHE_DIR:dir,CAMOUFOX_EXECUTABLE_PATH:t.executablePath,CAMOUFOX_FPGEN_DATA:t.modelDir??'',MOZ_CRASHREPORTER_DISABLE:'1',MOZ_DATA_REPORTING:'0'}});
    let chunks=[],size=0,forced=null,solveRequested=false,reports=0;const pending=new Set(),controller=new AbortController();
    child.on('message',message=>{
     const task=(async()=>{

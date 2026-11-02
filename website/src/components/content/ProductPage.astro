@@ -1,0 +1,31 @@
+---
+import type { ProductPage } from '../../data/marketing-content';
+import { guides } from '../../data/marketing-content';
+import ContentDiagram from './ContentDiagram.astro';
+import ContentCode from './ContentCode.astro';
+import ContentFAQ from './ContentFAQ.astro';
+import ContentCTA from './ContentCTA.astro';
+interface Props { page: ProductPage }
+const { page } = Astro.props;
+const guide = guides.find((entry) => entry.slug === page.relatedGuide)!;
+---
+<div class="content-page container">
+  <section class="content-hero">
+    <div class="content-hero-copy"><span class="content-kicker">{page.eyebrow}</span><h1>{page.headline}</h1><p class="content-lead">{page.intro}</p><div class="content-actions"><a class="button button-lime" href="/signup">Start building <span aria-hidden="true">↗</span></a><a class="content-text-link" href={page.docs[0].href}>API reference <span aria-hidden="true">→</span></a></div><p class="content-status"><span aria-hidden="true"></span>{page.status}</p></div>
+    <ContentDiagram diagram={page.diagram}/>
+  </section>
+  <section class="content-benefits" aria-label={page.name + ' benefits'}>
+    {page.benefits.map((benefit, i) => <article><span class="content-number">{'0' + (i + 1)}</span><h2>{benefit.title}</h2><p>{benefit.text}</p></article>)}
+  </section>
+  <section class="content-section content-integration">
+    <div><span class="content-kicker">THE INTEGRATION</span><h2>Make the contract<br/>part of your code.</h2><p>Use the documented API shape. Every example keeps source access, transport results and application validation separate.</p><ul class="content-doc-links">{page.docs.map((link) => <li><a href={link.href}>{link.label}<span aria-hidden="true">↗</span></a></li>)}</ul></div>
+    <ContentCode {...page.code}/>
+  </section>
+  <section class="content-section content-output">
+    <div class="content-section-heading"><span class="content-kicker">WHAT COMES BACK</span><h2>Know what you have.</h2></div>
+    <div class="content-output-list">{page.outputs.map((output, i) => <article><span class="content-number">{'0' + (i + 1)}</span><h3>{output.title}</h3><p>{output.text}</p></article>)}</div>
+  </section>
+  <ContentFAQ items={page.faq}/>
+  <a class="content-related-guide" href={'/guides/' + guide.slug}><div><span class="content-kicker">GO DEEPER / ENGINEERING GUIDE</span><h2>{guide.name}</h2><p>{guide.description}</p></div><span class="content-guide-arrow" aria-hidden="true">↗</span></a>
+  <ContentCTA/>
+</div>

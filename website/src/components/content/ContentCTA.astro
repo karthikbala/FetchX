@@ -1,0 +1,8 @@
+---
+interface Props { title?: string; text?: string }
+const { title = 'Build your source access layer.', text = 'Start with an approved source, an explicit route and a response your application can inspect.' } = Astro.props;
+---
+<section class="content-cta">
+  <div><span class="content-kicker">FROM SOURCE TO SOMETHING USEFUL</span><h2>{title}</h2><p>{text}</p></div>
+  <div class="content-actions"><a class="button button-lime" href="/signup">Start building <span aria-hidden="true">↗</span></a><a class="content-text-link" href="/docs">Read the docs <span aria-hidden="true">→</span></a></div>
+</section>

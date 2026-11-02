@@ -1,10 +1,14 @@
 import {initCaptcha} from './captcha.mjs';
 import {initJobs} from './jobs.mjs';
 import {initResidential} from './residential.mjs';
+import {residentialTrafficCharge} from './customer-traffic.mjs';
 import pg from 'pg';
 import {initAdmission} from './admission.mjs';
 import {initDiagnostics} from './diagnostics.mjs';
 import {initRouteHealth} from './route-health.mjs';
+import {initV2,recoverV2} from './v2.mjs';
+import {initControlIdentity} from './control-identity.mjs';
+import {initControlCredits} from './control-credits.mjs';
 export class Store {
  constructor(url){this.url=url;this.pool=new pg.Pool({connectionString:url,max:8});}
  async acquireRunnerLock(onLost){
@@ -28,6 +32,7 @@ export class Store {
  ALTER TABLE source_limits ADD COLUMN IF NOT EXISTS cooldown_until timestamptz NOT NULL DEFAULT '-infinity';
  CREATE TABLE IF NOT EXISTS pool_cursor(id int PRIMARY KEY, value bigint NOT NULL); INSERT INTO pool_cursor VALUES(1,0) ON CONFLICT DO NOTHING;
  CREATE TABLE IF NOT EXISTS ledger(id bigserial PRIMARY KEY, attempt uuid NOT NULL, event text NOT NULL, credits int, created_at timestamptz NOT NULL DEFAULT now());
+ ALTER TABLE ledger ADD COLUMN IF NOT EXISTS detail jsonb;
  CREATE UNIQUE INDEX IF NOT EXISTS ledger_once ON ledger(attempt,event);
  CREATE INDEX IF NOT EXISTS workflow_project ON workflows(project,created_at);
  CREATE INDEX IF NOT EXISTS attempts_workflow_created ON attempts(workflow,created_at,id);
@@ -37,7 +42,8 @@ export class Store {
  CREATE INDEX IF NOT EXISTS operations_retained_created ON operations(created_at,id) WHERE result_path IS NOT NULL;
  CREATE INDEX IF NOT EXISTS attempts_held_operation ON attempts(operation) WHERE state='unknown' OR error IN ('cost_overrun','provider_account_rejected','sensitive_provider_response');
  `);
- await initCaptcha(this.pool);await initJobs(this.pool);await initResidential(this.pool);await initAdmission(this.pool);await initDiagnostics(this.pool);await initRouteHealth(this.pool);
+ await initCaptcha(this.pool);await initJobs(this.pool);await initResidential(this.pool);await initAdmission(this.pool);await initDiagnostics(this.pool);await initRouteHealth(this.pool);await initV2(this.pool);
+ await initControlIdentity(this.pool);await initControlCredits(this.pool);
  }
  async recover(){// Never resubmit sent work. Reserved work has provably not reached transport.
   await this.tx(async c=>{
@@ -45,15 +51,16 @@ export class Store {
    await c.query("UPDATE captcha_tasks SET state='unknown',error='captcha_interrupted_unknown',updated_at=now() WHERE state IN ('reserved','processing')");
    const unsent=(await c.query("UPDATE attempts SET state='cancelled',credits=CASE WHEN provider='scrapedo' THEN 0 ELSE NULL END,error='interrupted_before_dispatch',finished_at=clock_timestamp(),outcome_category='cancelled' WHERE state='reserved' RETURNING id,workflow")).rows;
    for(const row of unsent){
-    await c.query("UPDATE residential_usage SET accounted_bytes=0,estimated_micro_usd=0,state='cancelled_before_dispatch' WHERE attempt=$1",[row.id]);
+    await c.query("UPDATE residential_usage SET accounted_bytes=0,estimated_micro_usd=0,state='cancelled_before_dispatch',observed_proxy_bytes=CASE WHEN customer_traffic IS NOT NULL THEN 0 ELSE observed_proxy_bytes END,customer_traffic=CASE WHEN customer_traffic IS NOT NULL THEN $2::jsonb ELSE NULL END WHERE attempt=$1",[row.id,residentialTrafficCharge({status:'no_traffic'})]);
     await c.query("INSERT INTO ledger(attempt,event,credits) VALUES($1,'cancel_before_dispatch',0)",[row.id]);
     await c.query('UPDATE workflows SET requests=requests-1 WHERE id=$1',[row.workflow]);
    }
-   await c.query("UPDATE residential_usage SET state='unknown' WHERE attempt IN (SELECT id FROM attempts WHERE state='sent')");
+   await c.query("UPDATE residential_usage SET state='unknown',customer_traffic=CASE WHEN customer_traffic IS NOT NULL THEN $1::jsonb ELSE NULL END WHERE attempt IN (SELECT id FROM attempts WHERE state='sent')",[residentialTrafficCharge({status:'unknown'})]);
    const sent=(await c.query("UPDATE attempts SET state='unknown',error=COALESCE(error,'interrupted_unknown'),outcome_category='unknown' WHERE state='sent' RETURNING id,provider")).rows;
    for(const row of sent)await c.query('INSERT INTO ledger(attempt,event,credits) VALUES($1,$2,NULL)',[row.id,row.provider==='scrapedo'?'held_unknown':'interrupted_unknown']);
    await c.query("UPDATE operations o SET state=CASE WHEN EXISTS(SELECT 1 FROM attempts a WHERE a.operation=o.id AND a.state<>'cancelled') THEN 'unknown' ELSE 'failed' END,error=CASE WHEN EXISTS(SELECT 1 FROM attempts a WHERE a.operation=o.id AND a.state<>'cancelled') THEN 'interrupted_unknown' ELSE 'interrupted_before_dispatch' END WHERE state IN ('reserved','running')");
    await c.query("UPDATE workflows SET state='closing' WHERE state='open' AND expires_at<now()");
+   await recoverV2(c);
   });
  }
  async expire(){await this.pool.query("UPDATE workflows SET state='closing' WHERE state='open' AND expires_at<now()");await this.pool.query("UPDATE workflows w SET state='closed' WHERE state='closing' AND NOT EXISTS(SELECT 1 FROM operations o WHERE o.workflow=w.id AND o.state IN ('running','reserved'))");await this.pool.query("DELETE FROM browser_state b USING workflows w WHERE b.workflow=w.id AND w.state='closed'");}

@@ -6,3 +6,10 @@ GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 GOOGLE_REFRESH_TOKEN=
 HASH_SECRET=
+
+# Optional self-service gateway bridge. Keep the secret server-side.
+FETCHX_CONTROL_URL=http://127.0.0.1:8789
+FETCHX_CONTROL_SECRET=
+# Local review only; remote environments require HTTPS and secure cookies.
+SITE_ENV=development
+FETCHX_CONTROL_ALLOW_LOOPBACK=true

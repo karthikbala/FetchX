@@ -2,7 +2,7 @@ export const offers = ['pilot', 'managed', 'scale'] as const;
 export const frequencies = ['One-time pilot', 'Daily', 'Weekly', 'Monthly', 'Let’s discuss'] as const;
 export const volumes = ['Up to 500 records', '501–5,000 records', '5,001–20,000 records', 'More than 20,000', 'Not sure yet'] as const;
 export const formats = ['CSV', 'JSON', 'Let’s discuss an integration'] as const;
-export const PRIVACY_VERSION = '2026-10-29';
+export const PRIVACY_VERSION = '2026-11-02';
 
 export interface PilotData {
  offer: typeof offers[number]; websites: string[]; fields: string;

@@ -1,0 +1,60 @@
+---
+import type { ContentDiagram } from '../../data/marketing-content';
+interface Props { diagram: ContentDiagram }
+const { diagram } = Astro.props;
+---
+<figure class:list={['content-diagram', 'diagram-' + diagram.variant]}>
+  <div class="diagram-top"><span class="diagram-lights" aria-hidden="true"><i></i><i></i><i></i></span><span>{diagram.label}</span><span class="diagram-signal" aria-hidden="true">●</span></div>
+  <div class="diagram-canvas">
+    <div class="diagram-coordinate" aria-hidden="true">FETCHX / ACCESS LAYER</div>
+    <svg class="diagram-drawing" viewBox="0 0 600 220" fill="none" aria-hidden="true">
+      <defs>
+        <pattern id={'diagram-grid-' + diagram.variant} width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" stroke="currentColor" stroke-opacity=".08"/></pattern>
+      </defs>
+      <rect width="600" height="220" fill={'url(#diagram-grid-' + diagram.variant + ')'} />
+      {diagram.variant === 'fetch' && <>
+        <rect x="32" y="54" width="126" height="108" rx="7" class="diagram-shape"/><path d="M51 78H138M51 95H121M51 112H132M51 129H102" class="diagram-muted-line"/>
+        <path d="M158 108H250M350 108H442" class="diagram-wire"/><path d="m240 102 10 6-10 6m192-12 10 6-10 6" class="diagram-accent-line"/>
+        <rect x="250" y="60" width="100" height="96" rx="13" class="diagram-core"/><text x="300" y="113" text-anchor="middle" class="diagram-logo">fx</text>
+        <rect x="442" y="54" width="126" height="108" rx="7" class="diagram-shape"/><path d="M462 79H545M462 99H520M462 119H540M462 139H514" class="diagram-accent-line"/>
+        <path d="M505 162V190H95V162" class="diagram-return"/><text x="300" y="208" text-anchor="middle" class="diagram-svg-label">NATIVE RESPONSE + ROUTING EVIDENCE</text>
+      </>}
+      {diagram.variant === 'unblock' && <>
+        <path d="M118 109H247M353 109H482" class="diagram-wire"/><path d="m237 103 10 6-10 6m235-12 10 6-10 6" class="diagram-accent-line"/>
+        <circle cx="80" cy="109" r="38" class="diagram-shape"/><path d="M63 109h7l6-16 9 31 8-15h7" class="diagram-accent-line"/>
+        <rect x="247" y="57" width="106" height="104" rx="13" class="diagram-proposed"/><path d="m282 109 18-24 18 24-18 24-18-24Z" class="diagram-accent-line"/><circle cx="300" cy="109" r="5" fill="var(--cyan)"/>
+        <circle cx="520" cy="109" r="38" class="diagram-shape"/><path d="m503 109 12 12 23-24" class="diagram-accent-line"/>
+        <path d="M520 147v38H80v-38" class="diagram-return"/><text x="300" y="207" text-anchor="middle" class="diagram-svg-label">PROPOSED ADVICE / CALLER CONTROL</text>
+        <text x="300" y="43" text-anchor="middle" class="diagram-svg-label">PRODUCT PREVIEW</text>
+      </>}
+      {diagram.variant === 'browser' && <>
+        <rect x="25" y="35" width="170" height="151" rx="7" class="diagram-shape"/><path d="M25 59h170" class="diagram-muted-line"/><circle cx="40" cy="47" r="2" fill="var(--muted)"/><circle cx="50" cy="47" r="2" fill="var(--muted)"/><path d="M47 82h124M47 102h76M47 122h102" class="diagram-muted-line"/><rect x="47" y="141" width="64" height="22" rx="3" class="diagram-core"/>
+        <path d="M195 110H248M357 110H410" class="diagram-wire"/><path d="m238 104 10 6-10 6m153-12 10 6-10 6" class="diagram-accent-line"/>
+        <rect x="248" y="66" width="109" height="88" rx="9" class="diagram-core"/><text x="302" y="105" text-anchor="middle" class="diagram-svg-label">READY</text><path d="m289 122 8 8 17-19" class="diagram-accent-line"/>
+        <rect x="410" y="35" width="165" height="151" rx="7" class="diagram-shape"/><path d="M430 60h48m-48 25h123m-123 25h94m-94 25h111m-111 25h65" class="diagram-accent-line"/>
+        <text x="300" y="211" text-anchor="middle" class="diagram-svg-label">REVIEWED STEPS → CONFIGURED OUTPUT</text>
+      </>}
+      {diagram.variant === 'proxy' && <>
+        <rect x="24" y="76" width="112" height="68" rx="8" class="diagram-shape"/><text x="80" y="115" text-anchor="middle" class="diagram-svg-label">PROFILE</text>
+        <path d="M136 110H182V47H237M182 110H237M182 110V173H237" class="diagram-wire"/>
+        <rect x="237" y="24" width="126" height="45" rx="6" class="diagram-shape"/><text x="300" y="51" text-anchor="middle" class="diagram-svg-label">DIRECT</text>
+        <rect x="237" y="87" width="126" height="45" rx="6" class="diagram-core"/><text x="300" y="114" text-anchor="middle" class="diagram-svg-label">DATACENTER</text>
+        <rect x="237" y="150" width="126" height="45" rx="6" class="diagram-shape"/><text x="300" y="177" text-anchor="middle" class="diagram-svg-label">RESIDENTIAL</text>
+        <path d="M363 110H454" class="diagram-accent-line"/><path d="m444 104 10 6-10 6" class="diagram-accent-line"/>
+        <rect x="454" y="76" width="122" height="68" rx="8" class="diagram-shape"/><text x="515" y="104" text-anchor="middle" class="diagram-svg-label">SESSION</text><text x="515" y="123" text-anchor="middle" class="diagram-small-label">ROUTE PINNED</text>
+        <text x="300" y="217" text-anchor="middle" class="diagram-svg-label">EXPLICIT CLASS / EXPLICIT COUNTRY</text>
+      </>}
+      {diagram.variant === 'workflow' && <>
+        <path d="M120 104H260M340 104H480" class="diagram-wire"/><path d="m250 98 10 6-10 6m210-12 10 6-10 6" class="diagram-accent-line"/>
+        <rect x="40" y="63" width="80" height="82" rx="9" class="diagram-shape"/><path d="M59 85h43M59 104h30M59 123h38" class="diagram-muted-line"/>
+        <circle cx="300" cy="104" r="40" class="diagram-core"/><path d="m281 104 13 13 24-27" class="diagram-accent-line"/>
+        <rect x="480" y="63" width="80" height="82" rx="9" class="diagram-shape"/><path d="M499 85h43M499 104h30M499 123h38" class="diagram-accent-line"/>
+        <path d="M80 145v35h440v-35" class="diagram-return"/><text x="300" y="205" text-anchor="middle" class="diagram-svg-label">SOURCE URL + OBSERVATION TIME + LINEAGE</text>
+      </>}
+    </svg>
+    <ol class="diagram-nodes">
+      {diagram.nodes.map((node) => <li><span>{node.tag}</span><strong>{node.label}</strong><small>{node.detail}</small></li>)}
+    </ol>
+  </div>
+  <figcaption><strong>{diagram.title}</strong><span>{diagram.note}</span></figcaption>
+</figure>

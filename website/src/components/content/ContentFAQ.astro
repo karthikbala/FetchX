@@ -1,0 +1,9 @@
+---
+import type { ContentFAQ } from '../../data/marketing-content';
+interface Props { items: ContentFAQ[] }
+const { items } = Astro.props;
+---
+<section class="content-section content-faq" aria-labelledby="faq-heading">
+  <div class="content-section-heading"><span class="content-kicker">THE DETAILS MATTER</span><h2 id="faq-heading">A few useful answers.</h2></div>
+  <div>{items.map((item) => <details><summary>{item.question}<span aria-hidden="true">+</span></summary><p>{item.answer}</p></details>)}</div>
+</section>

@@ -1,0 +1,17 @@
+---
+import Layout from '../layouts/Layout.astro';
+import ContentCTA from '../components/content/ContentCTA.astro';
+import { guides, marketingPages, contentAuthor } from '../data/marketing-content';
+import '../styles/content.css';
+const meta = marketingPages.find((page) => page.path === '/resources')!;
+---
+<Layout title={meta.title} description={meta.description} active="resources" breadcrumbs={[{ name: 'Home', path: '/' }, { name: 'Resources', path: '/resources' }]}>
+  <div class="content-page container">
+    <header class="content-hub-hero"><span class="content-kicker">THE FETCHX FIELD NOTES</span><h1>Know the web.<br/><span>Build with confidence.</span></h1><p class="content-lead">Practical explanations of source access, browser behavior and the boundary between a response and useful data.</p><div class="content-hub-meta"><span>{contentAuthor}</span><span>Draft collection · 2 November 2026</span></div></header>
+    <section class="content-guide-grid" aria-label="Engineering guides">
+      {guides.map((guide, i) => <a class="content-guide-card" href={'/guides/' + guide.slug}><div class={'content-card-diagram card-diagram-' + i} aria-hidden="true"><span class="card-diagram-node">{['REQUEST', 'PROXY', 'HTML', 'SOURCE'][i]}</span><i></i><span class="card-diagram-core">{['?', 'API', 'DOM', 'AI'][i]}</span><i></i><span class="card-diagram-node">{['DECISION', 'RESULT', 'DATA', 'CONTEXT'][i]}</span></div><div class="content-guide-card-body"><span class="content-kicker">{guide.category} / {guide.readTime.toUpperCase()}</span><h2>{guide.name}</h2><p>{guide.description}</p><span class="content-text-link">Read the guide <span aria-hidden="true">↗</span></span></div></a>)}
+    </section>
+    <section class="content-resource-docs"><div><span class="content-kicker">ALREADY WRITING CODE?</span><h2>Go straight<br/>to the contract.</h2></div><div><a href="/docs/fetch"><strong>HTTP fetch API</strong><span>Request fields, native responses and accounting.</span><b aria-hidden="true">↗</b></a><a href="/docs/workflow-fetch"><strong>Browser workflows</strong><span>Reviewed recipes, interactions and captures.</span><b aria-hidden="true">↗</b></a><a href="/docs/recovery"><strong>Recovery and idempotency</strong><span>Look up retained results and handle uncertainty.</span><b aria-hidden="true">↗</b></a></div></section>
+    <ContentCTA/>
+  </div>
+</Layout>

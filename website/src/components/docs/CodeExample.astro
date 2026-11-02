@@ -1,0 +1,39 @@
+---
+import { Code } from 'astro:components';
+import Icon from '../Icon.astro';
+import type { DocSnippet } from '../../data/api-docs';
+
+interface Props {
+  id: string;
+  title: string;
+  snippets: DocSnippet[];
+}
+
+const { id, title, snippets } = Astro.props;
+---
+<figure class="docs-code" data-doc-code>
+  <figcaption class="docs-code-heading">
+    <span>{title}</span>
+    <button class="docs-copy" type="button" data-doc-copy aria-label={`Copy ${title}`}>
+      <Icon name="copy" size={14}/><span data-copy-label>Copy</span>
+    </button>
+  </figcaption>
+  {snippets.length > 1 && <div class="docs-code-tabs" data-doc-tabs aria-label={`${title} language`}>
+    {snippets.map((snippet, index) => <button
+      type="button"
+      id={`${id}-tab-${index}`}
+      data-doc-tab
+      data-panel={`${id}-panel-${index}`}
+    >{snippet.label}</button>)}
+  </div>}
+  {snippets.map((snippet, index) => <div
+    class="docs-code-panel"
+    id={`${id}-panel-${index}`}
+    data-doc-panel
+    data-code-label={snippet.label}
+  >
+    <span class="docs-code-language">{snippet.label}</span>
+    <Code code={snippet.code} lang={snippet.language} theme="github-dark"/>
+  </div>)}
+  <span class="docs-sr-only" data-copy-status role="status" aria-live="polite"></span>
+</figure>

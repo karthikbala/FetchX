@@ -1,0 +1,8 @@
+---
+import DocsPage from '../../components/docs/DocsPage.astro';
+import { docPages } from '../../data/api-docs';
+
+const page = docPages.find(item => item.slug === '');
+if (!page) throw new Error('Quickstart documentation is missing');
+---
+<DocsPage page={page}/>

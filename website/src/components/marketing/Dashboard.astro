@@ -1,0 +1,18 @@
+---
+import Icon from '../Icon.astro';
+const rows=[
+ {key:'price-watch-018',source:'store.example',route:'datacenter / US',state:'Completed',status:'200',className:'complete'},
+ {key:'listing-sync-042',source:'property.example',route:'direct',state:'Source blocked',status:'403',className:'blocked'},
+ {key:'agent-read-006',source:'source.example',route:'direct',state:'Completed',status:'200',className:'complete'},
+ {key:'catalog-run-011',source:'catalog.example',route:'datacenter / US',state:'In progress',status:'—',className:'pending'},
+];
+---
+<figure class="mkt-dashboard" aria-labelledby="dashboard-caption">
+  <div class="mkt-dashboard-chrome"><div class="mkt-dashboard-wordmark"><span class="mkt-dashboard-x">X</span> FetchX <span>/</span><span>Console</span></div><span class="mkt-tag mkt-tag-preview">DESIGN PREVIEW</span></div>
+  <div class="mkt-dashboard-body"><aside class="mkt-dashboard-sidebar" aria-hidden="true"><span class="mkt-dashboard-project"><span class="mkt-project-icon">D</span> Demo project <Icon name="chevron" size={11}/></span><span class="mkt-sidebar-label">WORKSPACE</span><span class="mkt-sidebar-active"><Icon name="grid" size={15}/> Overview</span><span><Icon name="route" size={15}/> Requests</span><span><Icon name="layers" size={15}/> Profiles</span><span><Icon name="code" size={15}/> API keys</span><span class="mkt-sidebar-bottom"><span class="mkt-dot"></span> Development</span></aside>
+    <div class="mkt-dashboard-main"><div class="mkt-dashboard-heading"><div><span class="mkt-micro">WORKSPACE / OVERVIEW</span><h3>Every request has a story.</h3></div><span class="mkt-dashboard-date">Sample activity <Icon name="chevron" size={12}/></span></div><div class="mkt-dashboard-metrics"><div><span>REQUESTS SHOWN</span><strong>4 <small>sample operations</small></strong><div class="mkt-mini-bars" aria-hidden="true">{[28,40,33,58,45,71,60,86,68,78,60,92,73,88,100].map(height=><i style={`--bar-height:${height}%`}></i>)}</div></div><div><span>ROUTE VISIBILITY</span><strong>Explicit <small>class + country</small></strong><span class="mkt-metric-caption"><span class="mkt-route-dot"></span> Inspect the selected route</span></div><div><span>RECOVERY</span><strong>By key <small>saved operation</small></strong><span class="mkt-metric-caption"><Icon name="lock" size={12}/> Retained evidence</span></div></div>
+      <div class="mkt-dashboard-table-title"><strong>Recent requests</strong><span>Illustrative activity <Icon name="arrow" size={12}/></span></div><div class="mkt-dashboard-table-wrap" tabindex="0" aria-label="Sample requests. Scroll horizontally to see all fields."><table class="mkt-dashboard-table"><thead><tr><th scope="col">Request key</th><th scope="col">Source</th><th scope="col">Route</th><th scope="col">State</th><th scope="col">Source HTTP</th></tr></thead><tbody>{rows.map(row=><tr><td>{row.key}</td><td>{row.source}</td><td>{row.route}</td><td><span class:list={['mkt-request-state',`mkt-state-${row.className}`]}><span></span>{row.state}</span></td><td>{row.status}</td></tr>)}</tbody></table></div><div class="mkt-dashboard-insight"><Icon name="file" size={15}/><p><strong>HTTP 200 is one part of the picture.</strong> Source response, retained content and application acceptance belong together.</p></div>
+    </div>
+  </div>
+  <figcaption id="dashboard-caption">Product interface concept with synthetic activity. Console design preview.</figcaption>
+</figure>

@@ -1,58 +1,56 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import Icon from '../components/Icon.astro';
-import DataSculpture from '../components/DataSculpture.astro';
-import MotionControl from '../components/MotionControl.astro';
-import SampleExplorer from '../components/SampleExplorer.astro';
+import HeroPipeline from '../components/marketing/HeroPipeline.astro';
+import ApiDemo from '../components/marketing/ApiDemo.astro';
+import Architecture from '../components/marketing/Architecture.astro';
+import Dashboard from '../components/marketing/Dashboard.astro';
+import Faq from '../components/marketing/Faq.astro';
 import Pricing from '../components/Pricing.astro';
 import Closing from '../components/Closing.astro';
-import CodeWindow from '../components/CodeWindow.astro';
+import '../styles/marketing.css';
+const problems = [
+ {number:'01',icon:'lock',title:'Blocked requests',text:'Bring source access, challenge handling and response evidence into one workflow.'},
+ {number:'02',icon:'code',title:'JavaScript pages',text:'Use reviewed browser recipes when the content needs more than an HTTP request.'},
+ {number:'03',icon:'globe',title:'Geo-specific content',text:'Choose the proxy class and country your approved source profile allows.'},
+ {number:'04',icon:'layers',title:'Session continuity',text:'Keep stateful browser work within a reviewed recipe and its session boundaries.'},
+ {number:'05',icon:'route',title:'Uncertain outcomes',text:'Recover a saved operation by key and inspect the evidence before acting again.'},
+];
+const faqs = [
+ ['What is FetchX?', 'FetchX is a Web Scraping API and Web Unblocker for developers, data teams and AI agents. Its access engine combines approved source profiles, explicit routing, retained response evidence and reviewed browser workflows. This site previews the broader product direction.'],
+ ['Can I send any URL to the API?', 'Your project has approved destination profiles. Each profile defines allowed sources, methods and routes. Choose the exact profile ID and version supplied for your project, then use a permitted URL and route.'],
+ ['How do HTTP fetching and browser rendering work?', 'The documented /v2/fetch endpoint handles HTTP fetching. Reviewed browser recipes use /v1/fetch on an appropriately configured gateway. Browser availability and challenge handling depend on your project configuration and the source.'],
+ ['What happens if a connection drops?', 'Persist your request and idempotency key before dispatch. Use the original key to look up the saved operation and inspect its state and retry guidance. A lookup reads retained evidence without fetching the source again.'],
+ ['Does a successful request mean I have the right data?', 'Check the API outcome, source status, final URL and returned content. FetchX reports application_acceptance as not_evaluated for HTTP fetching; your application decides whether the content satisfies its requirements.'],
+ ['Can I start using the plans shown here?', 'Prices and advertised credit allowances are commercial proposals. When account access is configured, Start building opens signup with email verification. Your workspace shows the actual allocation set by the operator. Signing up or selecting a plan does not purchase a plan or start an automatic subscription; paid access requires approval.'],
+];
 ---
-<Layout>
- <section class="hero container">
-  <div class="hero-copy">
-   <div class="eyebrow hero-eyebrow"><span class="status-dot"></span> MANAGED WEB DATA <span class="eyebrow-rule"></span></div>
-   <h1>The web data<br/>your business<br/>needs. <span class="hero-delivered">Delivered.<svg viewBox="0 0 370 18" aria-hidden="true"><path d="M3 12Q175 0 365 9"/></svg></span></h1>
-   <p class="hero-description">Tell us the websites, fields and update schedule. FetchX manages collection and quality checks, then delivers structured data your team can use.</p>
-   <div class="hero-actions"><a href="/pilot" class="button button-ink">Request a pilot <Icon name="diagonal" size={19}/></a><a href="/samples" class="button button-quiet">Explore sample data <Icon name="arrow" size={18}/></a></div>
-   <p class="hero-footnote">Pilots from <strong>$99</strong><span>·</span>Scope agreed before work begins</p>
-  </div>
-  <div class="hero-visual"><DataSculpture/><MotionControl/></div>
- </section>
- <div class="attributes container"><span class="attributes-label">BUILT AROUND YOUR DATA</span><span><Icon name="layers" size={18}/>Defined fields</span><span><Icon name="file" size={18}/>CSV and JSON</span><span><Icon name="clock" size={18}/>Agreed refresh schedules</span><span><Icon name="globe" size={18}/>Source references</span></div>
+<Layout title="FetchX — Unlock the web. With one API." description="FetchX brings proxy routing, browser rendering and challenge handling into one API for developers, data teams and AI agents.">
+ <div class="mkt">
+  <section class="mkt-hero mkt-container">
+   <div class="mkt-hero-copy"><p class="mkt-eyebrow"><span class="mkt-dot"></span> WEB SCRAPING API & WEB UNBLOCKER</p><h1>Unlock the web.<br/><span>With one API.</span></h1><p class="mkt-hero-description">FetchX brings proxy routing, browser rendering and challenge handling into one API for developers, data teams and AI agents.</p><div class="mkt-actions"><a class="mkt-button mkt-button-primary" href="/signup">Start building <Icon name="arrow" size={18}/></a><a class="mkt-button mkt-button-secondary" href="/docs">Explore the API <Icon name="code" size={18}/></a></div><div class="mkt-hero-note"><span class="mkt-micro">LESS INFRASTRUCTURE.</span><span>More room to build.</span></div></div>
+   <div class="mkt-hero-visual"><HeroPipeline/></div>
+  </section>
+  <div class="mkt-capabilities mkt-container"><span class="mkt-micro">ONE ACCESS LAYER</span><span><Icon name="route" size={16}/> Proxy routing</span><span><Icon name="code" size={16}/> Browser workflows</span><span><Icon name="lock" size={16}/> Project controls</span><span><Icon name="file" size={16}/> Response evidence</span></div>
 
- <section id="solutions" class="section container solutions-section">
-  <div class="section-heading"><div><span class="eyebrow">01 / THE POSSIBILITIES</span><h2>Bring outside data into<br/>everyday decisions.</h2></div><p>Useful information is everywhere.<br/>Bring the pieces your team needs together.</p></div>
-  <div class="solution-rows">
-   <a class="solution-row" href="/samples?dataset=commerce"><span class="solution-number mono">01</span><div class="solution-title"><Icon name="shop" size={27}/><h3>Commerce</h3></div><p>Track prices, availability and product details.<br/>Build a clearer picture of your market.</p><div class="solution-data"><span class="mono">EVERYDAY CARRY TOTE</span><div><strong>$48.00</strong><span class="status-pill">In stock</span></div></div><span class="circle-arrow"><Icon name="diagonal" size={20}/></span></a>
-   <a class="solution-row" href="/samples?dataset=property"><span class="solution-number mono">02</span><div class="solution-title"><Icon name="house" size={27}/><h3>Property</h3></div><p>Follow listing inventory, asking prices and<br/>the attributes that matter to your team.</p><div class="solution-data"><span class="mono">DUBAI · DEMO–101</span><div><strong>146 <small>m²</small></strong><span class="status-pill">Available</span></div></div><span class="circle-arrow"><Icon name="diagonal" size={20}/></span></a>
-   <a class="solution-row" href="/samples?dataset=logistics"><span class="solution-number mono">03</span><div class="solution-title"><Icon name="route" size={27}/><h3>Logistics</h3></div><p>Bring shipment milestones and operational<br/>status into a consistent view.</p><div class="solution-data"><span class="mono">DEMO SHIPMENT · 001</span><div><strong>Singapore</strong><span class="status-pill">Arrived</span></div></div><span class="circle-arrow"><Icon name="diagonal" size={20}/></span></a>
-  </div>
-  <p class="section-caption">Dataset previews are illustrative. We qualify your actual sources before agreeing a scope.</p>
- </section>
+  <section class="mkt-section mkt-container" id="api"><div class="mkt-section-heading"><div><span class="mkt-eyebrow">01 / THE DEVELOPER EXPERIENCE</span><h2>A familiar request.<br/><span class="mkt-muted">A clearer result.</span></h2></div><p>Choose an approved source profile. Send a request. Get the response and the context to decide what happens next.</p></div><ApiDemo/></section>
 
- <section class="sample-section section" id="sample-data"><div class="container">
-  <div class="section-heading"><div><span class="eyebrow">02 / MAKE IT TANGIBLE</span><h2>Scattered pages.<br/><span class="muted-heading">Consistent records.</span></h2></div><div><p>A little structure changes everything.<br/>Explore what your delivered data could look like.</p><a href="/samples" class="text-link">Explore the samples <Icon name="arrow" size={18}/></a></div></div>
-  <SampleExplorer/>
-  <div class="sample-bottom-note"><span><Icon name="check" size={15}/> Source references included</span><span><Icon name="check" size={15}/> Fields agreed with you</span><span><Icon name="check" size={15}/> Downloads without a sign-up</span></div>
- </div></section>
+  <section class="mkt-problems-section"><div class="mkt-container"><div class="mkt-section-heading"><div><span class="mkt-eyebrow">02 / THE WEB HAS SHARP EDGES</span><h2>Your next feature shouldn’t<br/>be proxy infrastructure.</h2></div><p>Put the access work behind an API, so your application can focus on what the data makes possible.</p></div><div class="mkt-problems">{problems.map(problem=><article><div class="mkt-problem-top"><Icon name={problem.icon} size={23}/><span>{problem.number}</span></div><h3>{problem.title}</h3><p>{problem.text}</p></article>)}</div></div></section>
 
- <section id="how-it-works" class="section container process-section">
-  <div class="section-heading"><div><span class="eyebrow">03 / A CLEAR PATH FORWARD</span><h2>Start with a source.<br/>Finish with a usable dataset.</h2></div><a href="/pilot" class="text-link">Let’s scope your pilot <Icon name="arrow" size={18}/></a></div>
-  <div class="process-grid">
-   <article class="process-step"><div class="step-top"><span class="step-number">01</span><div class="step-line"></div><Icon name="arrow" size={18}/></div><h3>Show us what you need.</h3><p>Share your sources, required fields and the questions your team wants to answer.</p><span class="step-deliverable"><span class="tiny-dot"></span> An agreed pilot scope</span></article>
-   <article class="process-step"><div class="step-top"><span class="step-number">02</span><div class="step-line"></div><Icon name="arrow" size={18}/></div><h3>Put the data to work.</h3><p>Review a paid pilot dataset. Check the fields, coverage and fit for your workflow.</p><span class="step-deliverable"><span class="tiny-dot"></span> Your first CSV or JSON delivery</span></article>
-   <article class="process-step"><div class="step-top"><span class="step-number">03</span><div class="step-line"></div><Icon name="check" size={18}/></div><h3>Make it a regular thing.</h3><p>When the data works for you, agree a refresh schedule and recurring delivery plan.</p><span class="step-deliverable"><span class="tiny-dot"></span> A defined recurring engagement</span></article>
-  </div>
- </section>
+  <section class="mkt-section mkt-container" id="platform"><div class="mkt-section-heading"><div><span class="mkt-eyebrow">03 / UNDER THE SURFACE</span><h2>One access layer.<br/><span class="mkt-muted">Room for what’s next.</span></h2></div><p>A practical access engine today. A modular direction for browser workflows and a proposed intelligence layer.</p></div><Architecture/></section>
 
- <section class="managed-section container">
-  <div class="managed-copy"><span class="eyebrow">LESS INFRASTRUCTURE. MORE INSIGHT.</span><h2>You define the data.<br/>We manage<br/><span>the collection.</span></h2><p>From source setup to delivery preparation, FetchX takes care of the collection work within your agreed engagement.</p><div class="managed-list"><span><Icon name="check" size={17}/> Source setup and maintenance</span><span><Icon name="check" size={17}/> Agreed field and format checks</span><span><Icon name="check" size={17}/> Delivery ready for your workflow</span></div></div>
-  <div class="record-visual"><div class="record-label mono"><span class="tiny-dot"></span> EVERY RECORD HAS CONTEXT</div><div class="record-card"><div class="record-card-heading"><span class="record-icon"><Icon name="file" size={23}/></span><div><strong>One record. A clear origin.</strong><span>Illustrative product record</span></div><Icon name="check" size={18}/></div><div class="record-code mono"><div><span>product_id</span><b>"FX–001"</b></div><div><span>title</span><b>"Everyday carry tote"</b></div><div><span>price</span><b>48.00</b></div><div><span>currency</span><b>"USD"</b></div><div class="record-highlight"><span>source_url</span><b>"store.example/products/tote"</b><i></i></div><div class="record-highlight"><span>collected_at</span><b>"2026-10-28T09:00:00Z"</b><i></i></div></div><div class="record-card-bottom"><Icon name="layers" size={14}/> An agreed schema. A consistent structure.</div></div><div class="record-annotation"><span class="annotation-line"></span><Icon name="diagonal" size={16}/><p>Know where it came from.<br/>And when it was collected.</p></div><p class="record-footnote">Missing-field handling is defined during onboarding.</p></div>
- </section>
+  <section class="mkt-dashboard-section"><div class="mkt-container"><div class="mkt-section-heading"><div><span class="mkt-eyebrow">04 / THE CONTROL ROOM</span><h2>See the request.<br/>Understand the result.</h2></div><div><span class="mkt-tag mkt-tag-preview">CONSOLE DESIGN PREVIEW</span><p>An illustration of request activity, routes and usage with synthetic data. Open the workspace to access your projects when the service is configured.</p></div></div><Dashboard/><a class="mkt-text-link mkt-dashboard-demo-link" href="/app">Open workspace <Icon name="arrow" size={16}/></a></div></section>
 
- <section class="section container pricing-section"><div class="section-heading"><div><span class="eyebrow">04 / A PRACTICAL STARTING POINT</span><h2>Start small.<br/>Expand when the data works.</h2></div><a href="/pricing" class="text-link">Full pricing & inclusions <Icon name="arrow" size={18}/></a></div><Pricing/></section>
+  <section class="mkt-section mkt-container" id="use-cases"><div class="mkt-section-heading"><div><span class="mkt-eyebrow">05 / BUILT INTO YOUR WORKFLOW</span><h2>The web is a source.<br/><span class="mkt-muted">What will you build?</span></h2></div><a class="mkt-text-link" href="/developers">Build with FetchX <Icon name="arrow" size={17}/></a></div><div class="mkt-use-cases">
+   <a class="mkt-use-case" href="/use-cases/ai-agents"><div class="mkt-use-case-art mkt-agent-art" aria-hidden="true"><span class="mkt-art-label">RETRIEVAL / 01</span><div class="mkt-agent-prompt"><Icon name="code" size={18}/><span>Read the source.</span><i></i></div><div class="mkt-agent-result"><span>source.context</span><i></i><i></i><i></i><b><Icon name="check" size={12}/> ready to inspect</b></div></div><div class="mkt-use-case-content"><span class="mkt-micro">AI & AUTOMATION</span><h3>Give your agent<br/>a way into the web.</h3><p>Bring source content into retrieval, research and agent workflows with explicit access controls.</p><span class="mkt-use-case-link">Explore AI agents <Icon name="diagonal" size={18}/></span></div></a>
+   <a class="mkt-use-case" href="/use-cases/price-monitoring"><div class="mkt-use-case-art mkt-price-art" aria-hidden="true"><span class="mkt-art-label">MARKET SIGNAL / 02</span><div class="mkt-chart-grid"></div><svg viewBox="0 0 320 130"><path d="M0 95 35 95 35 70 80 70 80 82 120 82 120 47 170 47 170 62 215 62 215 28 270 28 270 40 320 40"/><circle cx="215" cy="28" r="4"/></svg><div class="mkt-price-marker">price.changed <span>↓</span></div></div><div class="mkt-use-case-content"><span class="mkt-micro">COMMERCE & RETAIL</span><h3>Turn price changes<br/>into market signals.</h3><p>Feed your own monitoring pipeline with product pages, availability and source-level evidence.</p><span class="mkt-use-case-link">Explore price monitoring <Icon name="diagonal" size={18}/></span></div></a>
+   <a class="mkt-use-case" href="/use-cases/real-estate"><div class="mkt-use-case-art mkt-property-art" aria-hidden="true"><span class="mkt-art-label">PROPERTY DATA / 03</span><div class="mkt-map-grid"></div><span class="mkt-map-pin mkt-map-pin-one"><Icon name="house" size={17}/></span><span class="mkt-map-pin mkt-map-pin-two"><Icon name="house" size={14}/></span><span class="mkt-map-pin mkt-map-pin-three"><Icon name="house" size={14}/></span><div class="mkt-property-label"><span>listing.reference</span><b>Source connected <Icon name="arrow" size={12}/></b></div></div><div class="mkt-use-case-content"><span class="mkt-micro">PROPERTY & RESEARCH</span><h3>Build a clearer view<br/>of the property market.</h3><p>Connect listing and public property sources to your own matching, validation and analysis.</p><span class="mkt-use-case-link">Explore real estate <Icon name="diagonal" size={18}/></span></div></a>
+  </div><p class="mkt-small-note">Illustrative workflows. Source access and data validation are defined for your project.</p></section>
 
- <section class="technical-section"><div class="container technical-inner"><div class="technical-copy"><span class="eyebrow"><span class="tiny-dot"></span> FOR YOUR ENGINEERING TEAM</span><h2>A useful dataset.<br/>An API when<br/><span>you need one.</span></h2><p>Qualified workflows can also connect to your existing systems. We’ll scope API access and custom integrations around your requirements.</p><a class="button button-lime" href="/developers">Explore the technical side <Icon name="arrow" size={19}/></a><a class="source-link" href="https://github.com/karthikbala/FetchX" target="_blank" rel="noreferrer">Explore the source code <Icon name="diagonal" size={15}/></a></div><CodeWindow/></div></section>
- <Closing/>
+  <section class="mkt-pricing-section mkt-container" id="pricing"><div class="mkt-section-heading"><div><span class="mkt-eyebrow">06 / A PLAN FOR YOUR NEXT BUILD</span><h2>Start exploring.<br/><span class="mkt-muted">Scale with a plan.</span></h2></div><a class="mkt-text-link" href="/pricing">Compare the plans <Icon name="arrow" size={17}/></a></div><Pricing compact/></section>
+
+  <section class="mkt-section mkt-container mkt-faq-section"><div><span class="mkt-eyebrow">07 / A FEW MORE DETAILS</span><h2>Good questions.<br/><span class="mkt-muted">Clear answers.</span></h2><p class="mkt-faq-intro">Get to know the API, the access model and where the product is headed.</p><a class="mkt-text-link" href="/docs">Go deeper in the docs <Icon name="arrow" size={16}/></a></div><Faq items={faqs}/></section>
+  <Closing/>
+ </div>
+ <script>import '../scripts/marketing.ts';</script>
 </Layout>

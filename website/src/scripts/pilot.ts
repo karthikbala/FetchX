@@ -10,14 +10,14 @@ const progress=document.querySelector<HTMLElement>('.form-progress')!;
 const verifyStatus=form.querySelector<HTMLElement>('.verification-status')!;
 const submit=form.querySelector<HTMLButtonElement>('[type="submit"]')!;
 const submitLabel=form.querySelector<HTMLElement>('[data-submit-label]')!;
-const plans:Record<string,string>={pilot:'PILOT · FROM $99 ONCE',managed:'MANAGED · FROM $199 / MONTH',scale:'SCALE · FROM $999 / MONTH'};
+const plans:Record<string,string>={pilot:'SOURCE EVALUATION',managed:'RECURRING INTEGRATION',scale:'SCALE EVALUATION'};
 const requestedPlan=new URLSearchParams(location.search).get('plan')||'pilot';
 const plan=Object.hasOwn(plans,requestedPlan)?requestedPlan:'pilot';
-form.querySelector('[data-offer]')!.textContent=`SELECTED OFFER: ${plans[plan]}`;
+form.querySelector('[data-offer]')!.textContent=`TECHNICAL ENQUIRY: ${plans[plan]}`;
 let requestId=crypto.randomUUID();let token='';let widgetId:string|undefined;let verificationLoading=false;let sending=false;let lastAttempt='';
 function value(name:string){return (form.elements.namedItem(name) as HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement).value.trim();}
 function showError(message:string,field?:string){error.textContent=message;error.hidden=false;if(field){const target=form.elements.namedItem(field);if(target instanceof HTMLElement){if(first.contains(target))setStep(1,false);target.setAttribute('aria-invalid','true');target.focus();}}else error.scrollIntoView({block:'nearest'});}
-function syncSubmit(){submit.disabled=sending||!token;submitLabel.textContent=sending?'Saving your request…':'Send pilot request';}
+function syncSubmit(){submit.disabled=sending||!token;submitLabel.textContent=sending?'Saving your request…':'Send enquiry';}
 function clearToken(message='Please complete verification again.'){token='';verifyStatus.textContent=message;syncSubmit();}
 function mountVerification(){
  if(widgetId!==undefined || verificationLoading)return;

@@ -1,0 +1,11 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import ProductPage from '../../components/content/ProductPage.astro';
+import { productPages } from '../../data/marketing-content';
+import '../../styles/content.css';
+export function getStaticPaths() {
+  return productPages.map((page) => ({ params: { slug: page.slug }, props: { page } }));
+}
+const { page } = Astro.props;
+---
+<Layout title={page.title} description={page.description} active="products" breadcrumbs={[{ name: 'Home', path: '/' }, { name: page.name, path: '/products/' + page.slug }]}><ProductPage page={page}/></Layout>

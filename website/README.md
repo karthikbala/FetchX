@@ -1,6 +1,8 @@
 # FetchX marketing website
 
-An isolated Astro static website with Cloudflare Pages Functions for qualified pilot enquiries. It does not call or deploy the crawling gateway. The selected dark presentation uses self-hosted fonts, original vector illustrations, controlled animation and fictional sample records.
+An Astro website for the FetchX web scraping and unblocking API. The graphite, lime and cyan design uses self-hosted fonts and original execution diagrams. The account workspace connects to the FetchX gateway through a same-origin Pages Function; technical enquiries retain their separate intake handler.
+
+This remains a **non-indexed review build**. Signup, projects, scoped API keys, native HTTP requests and usage use the configured backend. An unavailable backend produces an explicit unavailable state, never simulated account activity. Paid pricing and the intelligence layer remain proposals. See [self-service setup](../docs/self-service-backend.md) and [the launch backlog](../docs/website-redesign.md).
 
 ## Local development and verification
 
@@ -14,16 +16,26 @@ npm test
 npm run build
 ```
 
-The development site is at `http://127.0.0.1:4327`. Astro 7 runs it in the background; use `npx astro dev status` / `npx astro dev stop` to manage it. `npm run test:browser` starts an isolated local Pages server and runs both browser suites. To inspect manually, use `npm run pages:dev` at `http://127.0.0.1:4328` before:
+The development site is at `http://127.0.0.1:4327`. Astro 7 runs it in the background; use `npx astro dev status` / `npx astro dev stop` to manage it. `npm run test:browser` starts an isolated local Pages server and runs site, documentation, product-journey and enquiry checks. To inspect manually, use `npm run pages:dev` at `http://127.0.0.1:4328` before:
 
 ```sh
 node tests/ui/site-check.mjs
+node tests/ui/docs-check.mjs
+node tests/ui/product-check.mjs
 node tests/ui/form-check.mjs
 ```
 
 Set `TEST_BASE_URL` and `TEST_OUTPUT_DIR` to override the browser scripts' local URL and report directory. The form checks inject synthetic verification and API fixtures only in the test browser. No production handler has a test bypass. Vitest uses an ephemeral local Workers runtime and D1 database, blocks unexpected network calls, and tests validation, bot rejection, deduplication, races, storage failure, mail failure, retries and expiry. No paid providers are used.
 
-Seven marketing pages are `/`, `/samples`, `/pricing`, `/pilot`, `/developers`, `/privacy`, `/terms`; `/404.html` handles missing pages. Samples have matching table, JSON and CSV records and never make provider requests. The developer endpoint is explicitly a provisioned placeholder.
+With a built preview running, `TEST_BASE_URL=http://127.0.0.1:4331 node ops/performance-check.mjs` audits the homepage, API product page and resources with mobile Lighthouse. It writes local JSON reports and fails if performance falls below 90. Run it without competing browser checks for consistent lab measurements; production field measurements remain a launch task.
+
+The marketing site includes the homepage, four `/products/*` pages, three `/use-cases/*` pages, four `/guides/*` articles, `/resources`, `/developers`, `/pricing`, `/about` and `/contact`. Existing `/samples`, `/pilot`, `/privacy` and `/terms` routes remain available. Product and guide content is maintained in `src/data/marketing-content.ts`; `site-pages.ts` drives the sitemap and `/llms.txt`.
+
+The eight API quickstart/reference pages retain their `/docs` URLs and share `src/data/api-docs.ts`. Markdown exports at `/docs/quickstart.md` and `/docs/<slug>.md` are generated from the same content. Examples require a configured gateway and approved profile. `/404.html` handles missing pages.
+
+The product journey starts at `/signup` or `/login` and continues to `/app`, `/app/onboarding`, `/app/playground`, `/app/requests`, `/app/keys` and `/app/billing`. Email verification creates an HttpOnly session. Only the selected project ID and pending operation keys enter session storage; credentials and source inputs do not. Recovery reads retained gateway state with GET and never dispatches source work. Billing shows authoritative allocations and holds; no checkout, automatic upgrade or refill is implemented.
+
+`functions/api/control/[[path]].ts` requires runtime `FETCHX_CONTROL_URL`, secret `FETCHX_CONTROL_SECRET` (the gateway's bridge secret), and the exact website origin in `ALLOWED_ORIGINS`. The remote gateway must use HTTPS. Explicit loopback review additionally requires `SITE_ENV=development` and `FETCHX_CONTROL_ALLOW_LOOPBACK=true`. Never expose these values through `PUBLIC_*` variables. Astro's static/dev server alone cannot run the account proxy; use Pages locally. The protected local review runner and full configuration are documented in [self-service setup](../docs/self-service-backend.md).
 
 ## Hosting and settings
 
@@ -40,6 +52,7 @@ Build variables:
 | Variable | Preview | Production |
 | --- | --- | --- |
 | `PUBLIC_SITE_ENV` | `preview` | `production` |
+| `PUBLIC_PRODUCT_LAUNCH_READY` | `false` | `true` only after approved launch gates |
 | `PUBLIC_TURNSTILE_SITEKEY` | Real preview widget site key | Real production widget site key |
 
 Cloudflare Pages **secrets**, configured separately in each deployment environment:
@@ -52,7 +65,7 @@ Runtime variables: `SITE_ENV`, `ALLOWED_ORIGINS`, `TURNSTILE_HOSTNAMES`, `MAIL_F
 
 Notifications go to `karthik@headrun.ai`, from `FetchX <karthik@headrun.com>`, with the visitor's address in Reply-To. Verify the sales mailbox and Gmail sender authorization before opening intake. Root-domain Google mail records must remain unchanged.
 
-An absent site key leaves the form disabled. Missing server secrets fail closed. `PUBLIC_SITE_ENV` defaults to preview: previews emit noindex metadata and disallow robots, and all Pages-hosted domains additionally receive an `X-Robots-Tag` noindex header. Only the intended custom-domain production build is indexable.
+An absent site key leaves the enquiry form disabled. Missing server secrets fail closed. Indexing requires both `PUBLIC_SITE_ENV=production` and `PUBLIC_PRODUCT_LAUNCH_READY=true`. Otherwise pages emit noindex metadata and robots disallow crawling. All Pages-hosted domains additionally receive an `X-Robots-Tag` noindex header. Signup and workspace pages stay non-indexed even in a launch build. Confirm actual hosting crawler controls separately before publication.
 
 ## Intake and failure handling
 
@@ -64,7 +77,7 @@ An absent site key leaves the form disabled. Missing server secrets fail closed.
 
 Notifications use an atomic sender lease, a stable Message-ID and a stored immutable message body. Gmail does not provide an idempotency key for sends: uncertain or interrupted sends are held for manual reconciliation and never replayed automatically. Confirmed rejections may be retried.
 
-Application logs contain event names and enquiry references, not form fields, tokens, secrets or raw IP addresses. No public admin, database-read or scraping endpoint exists.
+Intake application logs contain event names and enquiry references, not form fields, tokens, secrets or raw IP addresses. Account API access is separately authenticated and project-scoped; the website exposes no anonymous fetch or database-read endpoint.
 
 ## Private operator commands
 
@@ -106,7 +119,7 @@ npx wrangler pages deploy dist --project-name fetchx-marketing --branch staging
 
 The Pages project already exists. Do not create a replacement project via a CLI migration to Workers. Keep the approved Pages/external-DNS architecture.
 
-After preview review, real Turnstile configuration, authorized Google Workspace sender and verified sales mailbox, build with `PUBLIC_SITE_ENV=production` and the production site key, then deploy with `--branch main`. Use Pages secrets for private runtime values. Public site keys are intentionally embedded in the client build.
+Public launch additionally requires working self-service signup, verified advertised capabilities, approved commercial terms and all P0 checks in the launch backlog. Only then build with `PUBLIC_SITE_ENV=production`, `PUBLIC_PRODUCT_LAUNCH_READY=true` and the production site key, and deploy with `--branch main` under release authorization. Keep the launch flag false for design review. Use Pages secrets for private runtime values. Public site keys are intentionally embedded in the client build.
 
 Associate `fetchx.ai` in Pages and configure the apex DNS record in its Cloudflare zone using the exact target returned by Cloudflare. Preserve existing records and the HeadRun domain.
 

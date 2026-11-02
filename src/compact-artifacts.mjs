@@ -2,6 +2,7 @@
 // Compare the complete decrypted value before replacement, including billing and time.
 import {readFile,readdir,open,rename,unlink} from 'node:fs/promises';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {isDeepStrictEqual} from 'node:util';
 import {Sealer} from './crypto.mjs';
 
@@ -25,7 +26,7 @@ export async function compactArtifacts(config){
  return result;
 }
 
-if(process.argv[1]===new URL(import.meta.url).pathname){
+if(process.argv[1]===fileURLToPath(import.meta.url)){
  if(process.argv[2]!=='--service-stopped')throw Error('stop_gateway_before_compaction');
  const config=JSON.parse(await readFile(process.env.GATEWAY_CONFIG??'/run/secrets/gateway.json','utf8'));
  console.log(JSON.stringify(await compactArtifacts(config)));
