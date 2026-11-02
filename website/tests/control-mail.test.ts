@@ -29,10 +29,52 @@ describe('private control verification mail relay',()=>{
   expect(mime).not.toContain(secret);expect(mime).not.toContain(config.GOOGLE_REFRESH_TOKEN);
  });
 
- it.each(['GET','HEAD','PUT','OPTIONS'])('rejects method %s without dispatch',async method=>{
+ it.each(['HEAD','PUT','OPTIONS'])('rejects method %s without dispatch',async method=>{
   const upstream=successful();vi.stubGlobal('fetch',upstream);
   const result=await handleControlMail(request(undefined,{},method),config);
-  expect(result.status).toBe(405);expect(result.headers.get('Allow')).toBe('POST');expect(upstream).not.toHaveBeenCalled();
+  expect(result.status).toBe(405);expect(result.headers.get('Allow')).toBe('GET, POST');expect(upstream).not.toHaveBeenCalled();
+ });
+
+ it('checks private OAuth readiness without constructing or sending a message',async()=>{
+  const upstream=successful();vi.stubGlobal('fetch',upstream);
+  const result=await handleControlMail(request(undefined,{},'GET'),config);
+  expect(result.status).toBe(200);expect(await result.json()).toEqual({ready:true});
+  expect(result.headers.get('Cache-Control')).toBe('no-store');
+  expect(upstream).toHaveBeenCalledTimes(1);expect(String(upstream.mock.calls[0][0])).toBe('https://oauth2.googleapis.com/token');
+ });
+
+ it.each([
+  {'X-FetchX-Control-Mail-Secret':'wrong-secret'},
+  {Origin:'https://fetchx.example'},
+  {'Sec-Fetch-Site':'same-origin'},
+ ])('rejects unauthorized or browser-originated readiness checks before OAuth',async headers=>{
+  const upstream=successful();vi.stubGlobal('fetch',upstream);
+  const result=await handleControlMail(request(undefined,headers as unknown as Record<string,string>,'GET'),config);
+  expect(result.status).toBe(headers['X-FetchX-Control-Mail-Secret']?401:403);expect(upstream).not.toHaveBeenCalled();
+ });
+
+ it.each([
+  ['invalid_grant','mail_auth_invalid_grant'],
+  ['invalid_client','mail_auth_invalid_client'],
+  ['sensitive unrecognized provider error','mail_auth_failed'],
+ ])('allowlists readiness authentication errors (%s) without provider details',async(error,expected)=>{
+  const upstream=vi.fn(async()=>json({error,error_description:'private provider detail '+secret,access_token:config.GOOGLE_REFRESH_TOKEN},400));vi.stubGlobal('fetch',upstream);
+  const result=await handleControlMail(request(undefined,{},'GET'),config);
+  expect(result.status).toBe(503);expect(await result.json()).toEqual({ready:false,error:expected});expect(upstream).toHaveBeenCalledTimes(1);
+ });
+
+ it.each(['network','invalid-json','oversized','wrong-type','bad-token'])('bounds readiness failures and never calls Gmail after %s',async mode=>{
+  const upstream=vi.fn(async()=>{
+   if(mode==='network')throw new Error('private provider detail');
+   if(mode==='invalid-json')return new Response('{',{headers:{'Content-Type':'application/json'}});
+   if(mode==='oversized')return json({error:'invalid_grant',error_description:'x'.repeat(17000)},400);
+   if(mode==='wrong-type')return new Response('private provider detail',{status:400,headers:{'Content-Type':'text/plain'}});
+   return json({access_token:'token\r\nHeader: injection'});
+  });vi.stubGlobal('fetch',upstream);
+  const result=await handleControlMail(request(undefined,{},'GET'),config);
+  expect(result.status).toBe(503);
+  const text=await result.text();expect(text).not.toContain(secret);expect(text).not.toContain('private provider detail');expect(text).not.toContain('token');
+  expect(upstream).toHaveBeenCalledTimes(1);
  });
 
  it.each(['','wrong-secret','x'.repeat(32),'x'.repeat(257)])('rejects missing or incorrect private authentication (%s)',async supplied=>{

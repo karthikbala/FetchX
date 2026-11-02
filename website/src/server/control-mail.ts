@@ -65,28 +65,48 @@ function message(data:Verification,from:string):string {
  return btoa(mime).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 }
 
+type MailAuthResult={ok:true;token:string}|{ok:false;error:string};
+const authErrors=new Set(['invalid_grant','invalid_client','unauthorized_client','access_denied','invalid_scope','unsupported_grant_type']);
+async function mailAuth(env:ControlMailEnv,diagnostic:boolean):Promise<MailAuthResult> {
+ const credentials=new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID!,client_secret:env.GOOGLE_CLIENT_SECRET!,refresh_token:env.GOOGLE_REFRESH_TOKEN!,grant_type:'refresh_token'});
+ const signal=AbortSignal.timeout(10000);
+ let response:Response;
+ try{response=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:credentials,redirect:'error',signal});}
+ catch{return {ok:false,error:'mail_provider_unreachable'};}
+ if(!response.ok){
+  if(diagnostic){
+   try{const result=await providerJson(response,signal);if(typeof result.error==='string'&&authErrors.has(result.error))return {ok:false,error:'mail_auth_'+result.error};}catch{}
+  }else void response.body?.cancel().catch(()=>{});
+  return {ok:false,error:'mail_auth_failed'};
+ }
+ try{
+  const token=(await providerJson(response,signal)).access_token;
+  if(typeof token!=='string'||!token||token.length>8192||/[^\x21-\x7e]/.test(token))return {ok:false,error:'mail_auth_invalid_response'};
+  return {ok:true,token};
+ }catch{return {ok:false,error:'mail_auth_invalid_response'};}
+}
+
 export async function handleControlMail(request:Request,env:ControlMailEnv):Promise<Response> {
  const url=new URL(request.url);
  if(url.pathname!=='/api/control-mail'||url.search)return failure(404,'not_found');
- if(request.method!=='POST')return reply(405,{error:'method_not_allowed'},{Allow:'POST'});
+ if(!['GET','POST'].includes(request.method))return reply(405,{error:'method_not_allowed'},{Allow:'GET, POST'});
  if(!validSecret(env.FETCHX_CONTROL_MAIL_SECRET)||env.FETCHX_CONTROL_MAIL_SECRET===env.FETCHX_CONTROL_SECRET||!sender(env.MAIL_FROM)||![env.GOOGLE_CLIENT_ID,env.GOOGLE_CLIENT_SECRET,env.GOOGLE_REFRESH_TOKEN].every(value=>typeof value==='string'&&value.trim().length>0))return failure(503,'mail_unavailable');
  const supplied=request.headers.get('X-FetchX-Control-Mail-Secret');
  if(!validSecret(supplied)||!await authorized(supplied,env.FETCHX_CONTROL_MAIL_SECRET))return failure(401,'unauthorized');
  if(request.headers.has('Origin')||request.headers.has('Sec-Fetch-Site'))return failure(403,'forbidden');
+ if(request.method==='GET'){
+  // Private operator probe: refresh authorization only; never construct or send mail.
+  const auth=await mailAuth(env,true);
+  return auth.ok?reply(200,{ready:true}):reply(503,{ready:false,error:auth.error});
+ }
  if(!/^application\/json(?:\s*;\s*charset=utf-8)?\s*$/i.test(request.headers.get('Content-Type')??'')||!['','identity'].includes(request.headers.get('Content-Encoding')??''))return failure(415,'request_invalid');
  if(Number(request.headers.get('Content-Length')??0)>INPUT_LIMIT)return failure(413,'request_too_large');
  let data:Verification|null;
  try{data=verification(JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:false}).decode(await readBody(request.body,INPUT_LIMIT,AbortSignal.timeout(3000)))));}catch(error){return failure(error instanceof BodyFailure&&error.code==='size'?413:400,'request_invalid');}
  if(!data)return failure(400,'request_invalid');
- const credentials=new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID!,client_secret:env.GOOGLE_CLIENT_SECRET!,refresh_token:env.GOOGLE_REFRESH_TOKEN!,grant_type:'refresh_token'});
- let token:unknown;
- try{
-  const signal=AbortSignal.timeout(10000);
-  const response=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:credentials,redirect:'error',signal});
-  if(!response.ok){void response.body?.cancel().catch(()=>{});return failure(503,'mail_unavailable');}
-  token=(await providerJson(response,signal)).access_token;
-  if(typeof token!=='string'||!token||token.length>8192||/[^\x21-\x7e]/.test(token))return failure(503,'mail_unavailable');
- }catch{return failure(503,'mail_unavailable');}
+ const auth=await mailAuth(env,false);
+ if(!auth.ok)return failure(503,'mail_unavailable');
+ const token=auth.token;
  try{
   const signal=AbortSignal.timeout(10000);
   // One attempt only. Gmail cannot establish idempotency after an ambiguous send.
