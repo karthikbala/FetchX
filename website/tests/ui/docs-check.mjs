@@ -37,8 +37,13 @@ try {
   await page.setViewportSize({ width: 360, height: 800 });
   const menu = page.locator('[data-doc-menu]');
   await menu.locator('summary').click();
-  await menu.locator('nav a[href="/docs/fetch"]').click();
+  // A click can finish at navigation commit while the new HTML is still parsing.
+  await Promise.all([
+    page.waitForURL(base + '/docs/fetch', { waitUntil: 'domcontentloaded' }),
+    menu.locator('nav a[href="/docs/fetch"]').click(),
+  ]);
   assert.equal(new URL(page.url()).pathname, '/docs/fetch');
+  await page.locator('article h1').waitFor({ state: 'visible' });
   assert.ok(await page.locator('article h1').isVisible());
 
   const staticPage = await browser.newPage({ javaScriptEnabled: false });
