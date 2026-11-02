@@ -6,6 +6,14 @@ const out=process.env.TEST_OUTPUT_DIR||'../../../outputs/launch-review';
 await fs.mkdir(out,{recursive:true});
 const browser=await chromium.launch({headless:true});
 const checks=[],errors=[];
+async function fixtureSitekey(page,sitekey){
+ await page.route('**/pilot?*',async route=>{
+  const response=await route.fetch();let body=await response.text();
+  assert.match(body,/data-sitekey(?:="[^"]*")?(?=[\s>])/);
+  body=body.replace(/data-sitekey(?:="[^"]*")?(?=[\s>])/,'data-sitekey="'+sitekey+'"');
+  await route.fulfill({response,body});
+ });
+}
 async function fillData(page){
  await page.locator('#websites').fill('abc.com');await page.locator('#fields').fill('Title, price, availability, source reference');
  await page.locator('#frequency').selectOption('Weekly');await page.locator('#volume').selectOption('501–5,000 records');
@@ -13,7 +21,7 @@ async function fillData(page){
  await page.locator('#name').fill('Synthetic Tester');await page.locator('#company').fill('Example Company');await page.locator('#email').fill('test@example.com');
 }
 {
- const page=await browser.newPage();await page.goto(base+'/pilot?plan=scale');
+ const page=await browser.newPage();await fixtureSitekey(page,'');await page.goto(base+'/pilot?plan=scale');
  assert.match(await page.locator('[data-offer]').textContent(),/SCALE/);
  await page.getByRole('button',{name:'Continue',exact:true}).click();assert.equal(await page.locator('[data-step="1"]').isVisible(),true);
  await fillData(page);assert.equal(await page.getByRole('button',{name:'Send enquiry'}).isDisabled(),true);
@@ -22,7 +30,7 @@ async function fillData(page){
 for(const scenario of ['success','storage-failure','network-failure','validation-failure']){
  const page=await browser.newPage({viewport:{width:360,height:900}});const submissions=[];let failures=scenario==='success'?0:1;
  page.on('pageerror',e=>errors.push(e.message));
- await page.route('**/pilot?*',async route=>{const response=await route.fetch();let body=await response.text();body=body.replace(/data-sitekey(?:="")?(?=[\s>])/,'data-sitekey="synthetic-ui-test-key"');await route.fulfill({response,body});});
+ await fixtureSitekey(page,'synthetic-ui-test-key');
  await page.route('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit',async route=>route.fulfill({contentType:'application/javascript',body:`window.turnstile={render(el,options){window.testVerification=options;setTimeout(()=>options.callback('synthetic-token-'+Math.random()),0);return 'test-widget';},reset(){setTimeout(()=>window.testVerification.callback('synthetic-token-'+Math.random()),0);},remove(){}};`}));
  await page.route('**/api/pilot',async route=>{
   submissions.push(route.request().postDataJSON());
@@ -34,6 +42,7 @@ for(const scenario of ['success','storage-failure','network-failure','validation
   await route.fulfill({status:201,json:{ok:true,reference:'FX-12345678-1234-4123-8123-123456789ABC'}});
  });
  await page.goto(base+'/pilot?plan=managed');await fillData(page);await page.waitForFunction(()=>window.testVerification?.action==='pilot');
+ assert.equal(await page.evaluate(()=>window.testVerification.sitekey),'synthetic-ui-test-key');
  await page.getByRole('button',{name:'Send enquiry'}).click();
  if(scenario!=='success'){
   await page.locator('.form-error').waitFor({state:'visible'});assert.equal(await page.locator('.form-result').isVisible(),false);
