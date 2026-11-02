@@ -1,4 +1,6 @@
-import {isResidential,residentialPolicy,selectedRoute,routePlan,providerProxy,reserveResidential,settleResidential} from './residential.mjs';
+import {isResidential,residentialPolicy,selectedRoute,routePlan,providerProxy,reserveResidential,settleResidential,operationResidentialTraffic} from './residential.mjs';
+import {residentialTrafficCharge} from './customer-traffic.mjs';
+import {estimateRoutePricing} from './v2-pricing.mjs';
 import {residentialRequest} from './residential-transport.mjs';
 import {CaptchaSolver,validateCaptchaProfile} from './captcha.mjs';
 import {validateRecipe} from './browser-recipes.mjs';
@@ -110,7 +112,8 @@ export class Gateway {
     await this.store.pool.query("UPDATE workflows SET route='scrapedo' WHERE id=$1",[id]);
     response=await this.attempt(current,opId,input,'scrapedo','fallback_'+category);
    }
-   const result={id:opId,workflow:id,...(response.captcha?{captcha:response.captcha}:{}),...(response.extracted!==undefined?{extracted:response.extracted}:{}),...(response.screenshot_base64?{screenshot:{content_type:'image/png',body_base64:response.screenshot_base64}}:{}),...(input.browser?{browser_recipe:input.browser.recipe,actions_completed:response.actionsCompleted??0,action_step:response.actionStep??null}:{}),provider:response.provider,...(isResidential(p)?{browser_tier:response.browserTier??null,browser_version:response.browserVersion??null,browser_phase:response.browserPhase??null,browser_failure_code:response.browserFailureCode??null,wire_bytes:response.wireBytes??null,billing_basis:'reserved_bandwidth_unreconciled'}:{}),proxy_class:['evomi','dataimpulse'].includes(response.provider)?'residential':response.provider==='oxylabs'?'dedicated_datacenter':p.fallbackSuper?'residential':'datacenter',country:p.country,status:response.status??null,provider_status:response.providerStatus??null,headers:response.headers??{},cookies:response.cookies??[],body_base64:response.body.toString('base64'),captured_at:new Date().toISOString(),fallback_blocked:response.fallbackBlocked??null,credits:response.provider==='scrapedo'?(response.credits??null):null,proxy_cost_basis:response.provider==='oxylabs'?'existing_subscription_included_usage':['evomi','dataimpulse'].includes(response.provider)?'bandwidth_reservation':'metered',error:response.error??null};
+   const result={id:opId,workflow:id,...(response.captcha?{captcha:response.captcha}:{}),...(response.extracted!==undefined?{extracted:response.extracted}:{}),...(response.screenshot_base64?{screenshot:{content_type:'image/png',body_base64:response.screenshot_base64}}:{}),...(input.browser?{browser_recipe:input.browser.recipe,actions_completed:response.actionsCompleted??0,action_step:response.actionStep??null}:{}),provider:response.provider,...(isResidential(p)?{browser_tier:response.browserTier??null,browser_version:response.browserVersion??null,browser_engine:response.browserEngine??(p.execution==='browser'?(p.browserEngine??'cloakbrowser'):null),browser_phase:response.browserPhase??null,browser_failure_code:response.browserFailureCode??null,wire_bytes:response.wireBytes??null,customer_traffic:await operationResidentialTraffic(this.store.pool,opId),billing_basis:'reserved_bandwidth_unreconciled'}:{}),proxy_class:['evomi','dataimpulse'].includes(response.provider)?'residential':response.provider==='oxylabs'?'dedicated_datacenter':p.fallbackSuper?'residential':'datacenter',country:p.country,status:response.status??null,provider_status:response.providerStatus??null,headers:response.headers??{},cookies:response.cookies??[],body_base64:response.body.toString('base64'),captured_at:new Date().toISOString(),fallback_blocked:response.fallbackBlocked??null,credits:response.provider==='scrapedo'?(response.credits??null):null,proxy_cost_basis:response.provider==='oxylabs'?'existing_subscription_included_usage':['evomi','dataimpulse'].includes(response.provider)?'bandwidth_reservation':'metered',error:response.error??null};
+   if(response.accounting)result.accounting=response.accounting;
    const encrypted=this.sealer.seal(result,{compress:true}),path=join(this.config.artifactDir,opId+'.bin');
    await mkdir(this.config.artifactDir,{recursive:true,mode:0o700});await writeFile(path+'.tmp',encrypted,{mode:0o600});await rename(path+'.tmp',path);recordArtifact(this.config,encrypted.length);
    await this.store.tx(async c=>{await c.query("UPDATE operations SET state=$2,result_path=$3,error=$4 WHERE id=$1",[opId,response.error?'failed':'captured',path,response.error??null]);await c.query("UPDATE workflows w SET state='closed' WHERE id=$1 AND state='closing' AND NOT EXISTS(SELECT 1 FROM operations o WHERE o.workflow=w.id AND o.state IN ('running','reserved'))",[id]);});
@@ -128,7 +131,7 @@ export class Gateway {
    const next=(w.config.routeIndex??0)+1;
    if(next>=Math.min(routePlan(w.config).length,w.config.maxRouteAttempts??4))return response;
    const config={...w.config,routeIndex:next,residentialSession:randomBytes(5).toString('hex')},route=selectedRoute(config);
-   try{providerProxy(this.config,config,route.provider);if(route.tier)await this.browserTierCheck(this.config,route.tier);}catch(e){return {...response,fallbackBlocked:e.code??'route_unavailable'};}
+   try{providerProxy(this.config,config,route.provider);if(route.tier)await this.browserTierCheck(this.config,route.tier,{engine:config.browserEngine??'cloakbrowser'});}catch(e){return {...response,fallbackBlocked:e.code??'route_unavailable'};}
    await this.store.tx(async c=>{
     const current=await this.owned(w.project,w.id,c);if(current.state!=='open')fail('workflow_closed',409);
     await c.query('DELETE FROM browser_state WHERE workflow=$1',[w.id]);
@@ -140,9 +143,11 @@ export class Gateway {
  }
  async attempt(w,opId,input,provider,routingReason='sticky_session'){
   const p=w.config,aid=randomUUID(),reserved=provider==='scrapedo'?p.fallbackMaxCost:0;
-  if(isResidential(p)&&p.execution==='browser')await this.browserTierCheck(this.config,selectedRoute(p).tier);
+  if(isResidential(p)&&p.execution==='browser')await this.browserTierCheck(this.config,selectedRoute(p).tier,{engine:p.browserEngine??'cloakbrowser'});
   if(provider==='scrapedo'&&(!Number.isInteger(p.providerSession)||p.providerSession<0||p.providerSession>1000000))fail('provider_session_invalid',500);
-  let delay,admitted=false;const admissionDeadline=Math.min(+new Date(w.expires_at),Date.now()+15000);
+  const pricingRoute={class:'datacenter',provider:'configured_datacenter',country:p.country,proxy_id:w.proxy_id};
+  const price=()=>{const now_ms=Date.now();return estimateRoutePricing({config:this.config,project:w.project,profile:p,route:pricingRoute,reserved_tunnel_bytes:0,now_ms,duration_ms:Math.max(0,+new Date(w.expires_at)-now_ms)});};
+  let delay,pricingDecision,admitted=false;const admissionDeadline=Math.min(+new Date(w.expires_at),Date.now()+15000);
   const queuedAt=await enqueueAdmission(this.store,this.config,{id:aid,operation:opId,project:w.project,provider,deadline:admissionDeadline});
   try{
   for(;;){try{delay=await this.store.tx(async c=>{
@@ -170,7 +175,8 @@ export class Gateway {
    await c.query('UPDATE workflows SET requests=requests+1 WHERE id=$1',[w.id]);
    await c.query('INSERT INTO attempts(id,operation,workflow,provider,reserved_credits,queued_at,routing_reason) VALUES($1,$2,$3,$4,$5,$6,$7)',[aid,opId,w.id,provider,reserved,queuedAt,routingReason]);
    if(isResidential(p))await reserveResidential(c,this.config,w,aid,provider);
-   await c.query("INSERT INTO ledger(attempt,event,credits) VALUES($1,'reserve',$2)",[aid,reserved]);
+   pricingDecision=provider==='oxylabs'&&Object.hasOwn(this.config,'datacenterFixedFeePool')?price():null;
+   await c.query("INSERT INTO ledger(attempt,event,credits,detail) VALUES($1,'reserve',$2,$3)",[aid,reserved,pricingDecision?{pricing_decision:pricingDecision}:null]);
    await completeAdmission(c,w.project,aid);
    return start-Date.now();
   });admitted=true;break;}catch(e){if(e.code!=='capacity_wait'||Date.now()>=admissionDeadline)throw e;await new Promise(r=>setTimeout(r,100));}}
@@ -189,21 +195,24 @@ export class Gateway {
    if(attempt?.state!=='reserved')return 'attempt_not_dispatchable';
    const sources=['source:'+w.profile.split('.').slice(0,2).join('.'),'origin:'+new URL(input.url).hostname,'egress:'+w.proxy_id];
    const cooling=(await c.query('SELECT 1 FROM source_limits WHERE source=ANY($1) AND cooldown_until>now()',[sources])).rowCount;
-   const reason=current.state!=='open'||new Date(current.expires_at)<=new Date()?'workflow_closed':cooling?'source_cooldown':null;
+   const currentPrice=pricingDecision?.binding?price():null;
+   const pricingChanged=currentPrice&&(Date.now()>=pricingDecision.dispatch_deadline_ms||currentPrice.estimated_micro_usd!==0||JSON.stringify(currentPrice.pricing)!==JSON.stringify(pricingDecision.pricing)||JSON.stringify(currentPrice.binding)!==JSON.stringify(pricingDecision.binding));
+   const reason=current.state!=='open'||new Date(current.expires_at)<=new Date()?'workflow_closed':cooling?'source_cooldown':pricingChanged?'pricing_attestation_unavailable':null;
    if(reason){
     await c.query("UPDATE attempts SET state='cancelled',credits=$2,error=$3,finished_at=clock_timestamp(),outcome_category='cancelled' WHERE id=$1",[aid,provider==='scrapedo'?0:null,reason]);
+    if(isResidential(p))await c.query("UPDATE residential_usage SET accounted_bytes=0,estimated_micro_usd=0,state='cancelled_before_dispatch',observed_proxy_bytes=CASE WHEN customer_traffic IS NOT NULL THEN 0 ELSE observed_proxy_bytes END,customer_traffic=CASE WHEN customer_traffic IS NOT NULL THEN $2::jsonb ELSE NULL END WHERE attempt=$1",[aid,residentialTrafficCharge({status:'no_traffic'})]);
     await c.query("INSERT INTO ledger(attempt,event,credits) VALUES($1,'cancel_before_dispatch',0)",[aid]);
     await c.query('UPDATE workflows SET requests=requests-1 WHERE id=$1',[w.id]);
    }else await c.query("UPDATE attempts SET state='sent',dispatched_at=clock_timestamp() WHERE id=$1",[aid]);
    return reason;
   });
-  if(cancelled&&isResidential(p))await this.store.pool.query("UPDATE residential_usage SET accounted_bytes=0,estimated_micro_usd=0,state='cancelled_before_dispatch' WHERE attempt=$1",[aid]);
   if(cancelled)fail(cancelled,cancelled==='source_cooldown'?429:409);
   let r;
   try{if(isResidential(p)){const state=(await this.store.pool.query('SELECT state FROM browser_state WHERE workflow=$1',[w.id])).rows[0];r=await (this.transport.residential??residentialRequest)(input,w,this.config,state?this.sealer.open(state.state):null,{solve:(candidate,options)=>this.captchaSolver.solve(w,aid,opId,candidate,options),report:verification=>this.captchaSolver.report(w,aid,verification)});}else{const proxy=this.config.proxies.find(x=>x.id===w.proxy_id);r=provider==='oxylabs'?await this.transport.oxylabs(input,proxy,p):await this.transport.scrapedo(input,p.providerSession,p,this.config.scrapeDoToken);}}
   catch(e){r={status:null,providerStatus:null,headers:{},cookies:[],body:Buffer.alloc(0),credits:null,error:e instanceof GatewayError?e.code:provider==='scrapedo'?'metered_outcome_unknown':isResidential(p)?'transport_outcome_unknown':'proxy_connect_failed'};}
   const secrets=[this.config.captcha?.apiKey,...Object.values(this.config.residential?.providers??{}).flatMap(x=>[x.username,x.password]),...Object.values(this.config.browser??{}).filter(x=>typeof x==='object').map(x=>x.licenseKey),this.config.scrapeDoToken,...this.config.proxies.flatMap(x=>{try{const u=new URL(x.url);return [u.password,decodeURIComponent(u.password)];}catch{return [];}})];
   r=redactProviderSecrets(r,secrets);r.provider=provider;if(isResidential(p))r.browserTier=selectedRoute(p).tier;
+  if(pricingDecision)r.accounting={estimated_micro_usd:pricingDecision.estimated_micro_usd,invoice_micro_usd:null,pricing:pricingDecision.pricing};
   const unknown=provider==='scrapedo'&&r.credits===null||isResidential(p)&&r.error==='transport_outcome_unknown';
   if(provider==='scrapedo'&&r.credits>reserved)r.error='cost_overrun';
   await this.store.tx(async c=>{

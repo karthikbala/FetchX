@@ -1,0 +1,32 @@
+---
+import type { UseCasePage } from '../../data/marketing-content';
+import { guides } from '../../data/marketing-content';
+import ContentDiagram from './ContentDiagram.astro';
+import ContentCode from './ContentCode.astro';
+import ContentCTA from './ContentCTA.astro';
+interface Props { page: UseCasePage }
+const { page } = Astro.props;
+const guide = guides.find((entry) => entry.slug === page.relatedGuide)!;
+---
+<div class="content-page container">
+  <section class="content-hero">
+    <div class="content-hero-copy"><span class="content-kicker">BUILT INTO YOUR WORKFLOW / {page.name.toUpperCase()}</span><h1>{page.headline}</h1><p class="content-lead">{page.intro}</p><div class="content-actions"><a class="button button-lime" href="/signup">Start building <span aria-hidden="true">↗</span></a><a class="content-text-link" href="/samples">Explore samples <span aria-hidden="true">→</span></a></div></div>
+    <ContentDiagram diagram={page.diagram}/>
+  </section>
+  <div class="content-challenge"><span class="content-kicker">THE APPLICATION PROBLEM</span><p>{page.challenge}</p></div>
+  <section class="content-section">
+    <div class="content-section-heading"><span class="content-kicker">A PRACTICAL PIPELINE</span><h2>Make every stage count.</h2></div>
+    <div class="content-workflow">{page.workflow.map((step, i) => <article><span class="content-number">{'0' + (i + 1)}</span><h3>{step.title}</h3><p>{step.text}</p></article>)}</div>
+  </section>
+  <section class="content-section content-sample-section">
+    <div><span class="content-kicker">THE APPLICATION RECORD</span><h2>{page.sampleTitle}</h2><p>{page.sampleDescription}</p><span class="content-synthetic">SYNTHETIC DATA / RESERVED EXAMPLE DOMAIN</span><a class="content-text-link" href="/samples">See all sample datasets <span aria-hidden="true">→</span></a></div>
+    <ContentCode title="Illustrative application output" language="json" code={JSON.stringify(page.sample, null, 2)} note="Preserve source_url and collected_at in downstream records. These fields come from the synthetic sample dataset."/>
+  </section>
+  <section class="content-section content-output">
+    <div class="content-section-heading"><span class="content-kicker">YOUR ACCEPTANCE GATE</span><h2>Check the data<br/>before you use it.</h2></div>
+    <div class="content-output-list">{page.acceptance.map((item, i) => <article><span class="content-number">{'0' + (i + 1)}</span><h3>{item.title}</h3><p>{item.text}</p></article>)}</div>
+  </section>
+  <section class="content-section content-integration"><div><span class="content-kicker">CONNECT THE SOURCE</span><h2>Start with one<br/>approved request.</h2><p>Your application owns discovery, parsing, scheduling and delivery. FetchX provides the source response and its transport evidence.</p><ul class="content-doc-links">{page.docs.map((link) => <li><a href={link.href}>{link.label}<span aria-hidden="true">↗</span></a></li>)}</ul></div><ContentCode {...page.code}/></section>
+  <a class="content-related-guide" href={'/guides/' + guide.slug}><div><span class="content-kicker">ENGINEERING GUIDE</span><h2>{guide.name}</h2><p>{guide.description}</p></div><span class="content-guide-arrow" aria-hidden="true">↗</span></a>
+  <ContentCTA title="Bring your sources. Build your workflow." text="Choose a qualified source, connect the API and define the acceptance rules your application needs."/>
+</div>

@@ -14,7 +14,7 @@ import {connectRelay} from '../src/connect-relay.mjs';
 import http from 'node:http';
 const base={hosts:['source.example'],methods:['GET'],headers:['cookie'],country:'US',maxConcurrent:1,maxRequests:12,maxInputBytes:1024,maxResponseBytes:1024,maxBytes:20000,ttlSeconds:120,minIntervalMs:0,maxFallbackCredits:0,maxAttemptBytes:1000,maxResidentialBytes:4000};
 const provider={enabled:true,username:'private-user',password:'private-pass',maxTotalBytes:100000,microUsdPerGB:1000000};
-const settings={defaultRouting:'residential-v1',residential:{maxDailyBytes:100000,maxTotalBytes:100000,providers:{evomi:{...provider},dataimpulse:{...provider}}}};
+const settings={defaultRouting:'residential-v1',browser:{defaultEngine:'cloakbrowser'},residential:{maxDailyBytes:100000,maxTotalBytes:100000,providers:{evomi:{...provider},dataimpulse:{...provider}}}};
 test('new profile defaults, native/browser ladder and sticky country syntax',()=>{
  const p=residentialPolicy(base,settings);assert.equal(p.routingPolicy,'residential-v1');
  assert.deepEqual(routePlan(p).map(r=>r.provider),['evomi','dataimpulse']);
@@ -40,7 +40,7 @@ test('CONNECT relay rejects private/unknown destinations without upstream access
  const relay=await connectRelay({proxy:{url:'http://unused:secret@127.0.0.1:1'},profile:{hosts:['source.example']},maxBytes:1024,resolve:async()=>[{address:'127.0.0.1'}]});
  try{for(const host of ['source.example:443','evil.example:443','127.0.0.1:443','source.example:80']){
   const status=await new Promise((resolve,reject)=>{const q=http.request(relay.url,{method:'CONNECT',path:host});q.on('connect',(r,s)=>{s.destroy();resolve(r.statusCode);});q.on('error',reject);q.end();});assert.equal(status,403);
- }assert.equal(relay.bytes,0);}finally{await relay.close();}
+ }assert.equal(relay.bytes,0);assert.deepEqual(relay.traffic,{status:'no_traffic',bytes:0});}finally{await relay.close();}
 });
 test('durable residential default, bounded fallback, accounting and browser tier isolation',{skip:!process.env.TEST_DATABASE_URL},async()=>{
  assert.match(new URL(process.env.TEST_DATABASE_URL).pathname,/^\/gateway_test_[A-Za-z0-9]+$/);
@@ -49,27 +49,36 @@ test('durable residential default, bounded fallback, accounting and browser tier
  let mode='fallback';const calls=[],tiers=[];
  const g=new Gateway({store,config,profiles:{native:base,browser:{...base,execution:'browser'}},resolve:async()=>[{address:'93.184.216.34'}],browserTierCheck:async(c,t)=>{tiers.push(t);},transport:{residential:async(input,w)=>{
   calls.push({provider:w.route,tier:routePlan(w.config)[w.config.routeIndex].tier,session:w.config.residentialSession});
-  if(mode==='secret')return {status:200,headers:{},body:Buffer.from(provider.password),wireBytes:50};
+  if(mode==='secret')return {status:200,headers:{},body:Buffer.from(provider.password),wireBytes:50,proxyTraffic:{status:'measured',bytes:42}};
   if(mode==='unknown')throw Error('unclassified');
-  const status=mode==='rate'?429:mode==='denied'?403:mode==='browser'?(w.config.routeIndex===3?200:403):mode==='fallback'&&w.route==='evomi'?403:200;
-  return {status,error:mode==='browser'&&status===403?'browser_capture_failed':mode==='readiness'?'browser_capture_failed':null,headers:{},body:Buffer.from('body'),wireBytes:50};
+  if(mode==='unsent-primary'&&w.route==='evomi')return {status:null,error:'proxy_connect_failed',headers:{},body:Buffer.alloc(0),wireBytes:0,proxyTraffic:{status:'no_traffic',bytes:0}};
+  const status=mode==='rate'?429:mode==='denied'?403:mode==='browser'?(w.config.routeIndex===3?200:403):['fallback','missing-primary'].includes(mode)&&w.route==='evomi'?403:200;
+  return {status,error:mode==='browser'&&status===403?'browser_capture_failed':mode==='readiness'?'browser_capture_failed':null,headers:{},body:Buffer.from('body'),wireBytes:50,...(mode==='missing'||mode==='missing-primary'&&w.route==='evomi'?{}:{proxyTraffic:{status:'measured',bytes:mode==='overrun'?1500:w.route==='evomi'?150:350}})};
  }}});
  let n=0;const workflow=(profile='native')=>g.workflow('a',{profile,idempotency_key:'w'+(++n)}),input={idempotency_key:'one',url:'https://source.example/',main_document:true};
  try{
   const w=await workflow();assert.equal(w.route,'evomi');const result=await g.operation('a',w.id,input);assert.equal(result.provider,'dataimpulse');assert.equal(result.proxy_class,'residential');assert.equal(result.credits,null);assert.equal(result.wire_bytes,50);
+  assert.deepEqual(result.customer_traffic,{currency:'USD',rate_usd_per_gb:2,bytes_per_gb:1000000000,basis:'bidirectional_proxy_bytes',status:'measured',metered_bytes:500,billable_bytes:500,cost_usd:'0.000001000'});
   assert.deepEqual(calls.map(x=>x.provider),['evomi','dataimpulse']);assert.notEqual(calls[0].session,calls[1].session);
   assert.deepEqual(await g.lookup('a',w.id,'one'),result);assert.deepEqual(await g.operation('a',w.id,input),result);assert.equal(calls.length,2);
-  const usage=(await store.pool.query('SELECT * FROM residential_usage ORDER BY created_at')).rows;assert.equal(usage.length,2);assert.ok(usage.every(x=>Number(x.accounted_bytes)===1000&&Number(x.observed_bytes)===50&&x.invoice_micro_usd===null));
+  const usage=(await store.pool.query('SELECT * FROM residential_usage ORDER BY created_at')).rows;assert.equal(usage.length,2);assert.ok(usage.every(x=>Number(x.accounted_bytes)===1000&&Number(x.observed_bytes)===50&&x.invoice_micro_usd===null));assert.deepEqual(usage.map(x=>Number(x.observed_proxy_bytes)),[150,350]);
   mode='denied';await g.operation('a',w.id,{...input,idempotency_key:'two'});assert.equal(calls.length,3);assert.equal(calls.at(-1).provider,'dataimpulse');
   mode='readiness';const ready=await workflow('browser'),readyBefore=calls.length;await g.operation('a',ready.id,input);assert.equal(calls.length,readyBefore+1);
   mode='rate';const rate=await workflow();await g.operation('a',rate.id,input);assert.equal(calls.at(-1).provider,'evomi');assert.equal((await g.read('a',rate.id)).route,'evomi');await store.pool.query('TRUNCATE source_limits');
   mode='browser';const browser=await workflow('browser'),before=calls.length;const rendered=await g.operation('a',browser.id,input);assert.equal(rendered.provider,'dataimpulse');assert.equal(rendered.browser_tier,'paid');assert.deepEqual(calls.slice(before).map(x=>`${x.provider}/${x.tier}`),['evomi/free','dataimpulse/free','evomi/paid','dataimpulse/paid']);
+  assert.equal(rendered.customer_traffic.metered_bytes,1000);assert.equal(rendered.customer_traffic.cost_usd,'0.000002000');
   await assert.rejects(g.operation('a',browser.id,{...input,idempotency_key:'over'}),/residential_budget_exhausted/);
   assert.equal((await residentialStatus(store.pool,config,'b')).usage.length,0);
   const proof={attempt:usage[0].attempt,bytes:50,invoice_micro_usd:1,evidence:'sha256:'+'a'.repeat(64)};assert.deepEqual(await reconcileResidential(store,proof),{replayed:false});assert.deepEqual(await reconcileResidential(store,proof),{replayed:true});await assert.rejects(reconcileResidential(store,{...proof,bytes:51}),/reconciliation_conflict/);
   mode='success';const limited=await workflow();config.residential.maxDailyBytes=1;const count=calls.length;await assert.rejects(g.operation('a',limited.id,input),/residential_budget_exhausted/);assert.equal(calls.length,count);config.residential.maxDailyBytes=100000;
   mode='unknown';const uncertain=await workflow(),priorCalls=calls.length;const ur=await g.operation('a',uncertain.id,input);assert.equal(ur.error,'transport_outcome_unknown');assert.equal(calls.length,priorCalls+1);assert.equal((await store.pool.query('SELECT state FROM attempts WHERE operation=$1',[ur.id])).rows[0].state,'unknown');
+  assert.equal(ur.customer_traffic.status,'unknown');assert.equal(ur.customer_traffic.cost_usd,null);
+  mode='missing';const missing=await g.operation('a',(await workflow()).id,input);assert.equal(missing.customer_traffic.status,'unknown');assert.equal(missing.customer_traffic.cost_usd,null);
+  mode='missing-primary';const missingPrimary=await g.operation('a',(await workflow()).id,input);assert.equal(missingPrimary.provider,'dataimpulse');assert.equal(missingPrimary.customer_traffic.status,'unknown');assert.equal(missingPrimary.customer_traffic.cost_usd,null);
+  mode='unsent-primary';const unsentPrimary=await g.operation('a',(await workflow()).id,input);assert.equal(unsentPrimary.provider,'dataimpulse');assert.equal(unsentPrimary.customer_traffic.metered_bytes,350);assert.equal(unsentPrimary.customer_traffic.cost_usd,'0.000000700');
+  mode='overrun';const overrun=await g.operation('a',(await workflow()).id,input);assert.equal(overrun.customer_traffic.metered_bytes,1500);assert.equal(overrun.customer_traffic.billable_bytes,1000);assert.equal(overrun.customer_traffic.cost_usd,'0.000002000');
   mode='secret';const secret=await workflow();const redacted=await g.operation('a',secret.id,input);assert.equal(redacted.error,'sensitive_provider_response');assert.equal(redacted.body_base64,'');
+  assert.equal(redacted.customer_traffic.metered_bytes,42);
   // Sent work remains reserved through crash recovery; no redispatch.
   const attempt=(await store.pool.query('SELECT attempt FROM residential_usage LIMIT 1')).rows[0].attempt;await store.pool.query("UPDATE attempts SET state='sent' WHERE id=$1",[attempt]);await store.recover();assert.equal((await store.pool.query('SELECT state,accounted_bytes FROM residential_usage WHERE attempt=$1',[attempt])).rows[0].state,'unknown');
  }finally{await store.close();await rm(root,{recursive:true,force:true});}

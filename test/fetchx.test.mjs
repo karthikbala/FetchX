@@ -40,12 +40,13 @@ test('FetchX API isolates projects, replays durably, rejects changed requests an
  const store=new Store(url.href),root=await mkdtemp(join(tmpdir(),'fetchx-test-'));await store.init();
  const provider={enabled:true,username:'provider-user',password:'provider-password',maxTotalBytes:100000,microUsdPerGB:1000000};
  const config={jobs:{enabled:true,maxQueued:5},release:'fetchx-test',defaultRouting:'residential-v1',artifactDir:root,artifactKey:'22'.repeat(32),proxies:[],maxDailyFallbackCredits:0,projects:{a:{profiles:['browser'],tokenHash:sha('a')},b:{profiles:[],tokenHash:sha('b')}},residential:{maxDailyBytes:100000,maxTotalBytes:100000,providers:{evomi:provider,dataimpulse:provider}}};
- let calls=0,blocked=false;const gateway=new Gateway({store,config,profiles:{browser:profile},resolve:async()=>[{address:'93.184.216.34'}],browserTierCheck:async()=>{},transport:{residential:async()=>{calls++;return {status:blocked?403:200,headers:{},body:Buffer.from('result'),wireBytes:20,actionsStarted:true,actionsCompleted:3,extracted:{result:'found'},screenshot_base64:'cG5n'};}}});
+ let calls=0,blocked=false;const gateway=new Gateway({store,config,profiles:{browser:profile},resolve:async()=>[{address:'93.184.216.34'}],browserTierCheck:async()=>{},transport:{residential:async()=>{calls++;return {status:blocked?403:200,headers:{},body:Buffer.from('result'),wireBytes:20,proxyTraffic:{status:'measured',bytes:75},actionsStarted:true,actionsCompleted:3,extracted:{result:'found'},screenshot_base64:'cG5n'};}}});
  const app=server(gateway),auth={authorization:'Bearer a'},payload={profile:'browser',idempotency_key:'durable',url:'https://source.example/',browser:{recipe:'search',values:{query:'test'}}};
  try{
   assert.equal((await app.inject({method:'POST',url:'/v1/fetch',payload})).statusCode,401);
   const profiles=(await app.inject({url:'/v1/profiles',headers:auth})).json();assert.deepEqual(profiles.profiles[0].recipes,['search']);assert.equal(JSON.stringify(profiles).includes('provider-password'),false);
   const first=await app.inject({method:'POST',url:'/v1/fetch',headers:auth,payload});assert.equal(first.statusCode,200,first.body);const result=first.json();assert.equal(result.extracted.result,'found');assert.equal(result.screenshot.content_type,'image/png');assert.equal(result.fallback_blocked,null);
+  assert.equal(result.customer_traffic.cost_usd,'0.000000150');
   assert.deepEqual((await app.inject({method:'POST',url:'/v1/fetch',headers:auth,payload})).json(),result);assert.equal(calls,1);
   assert.deepEqual((await app.inject({url:'/v1/fetch/durable',headers:auth})).json(),result);
   assert.equal((await gateway.read('a',result.workflow)).state,'closed');
@@ -58,7 +59,7 @@ test('FetchX API isolates projects, replays durably, rejects changed requests an
   assert.equal((await app.inject({method:'POST',url:'/v1/jobs',headers:auth,payload:{...jobPayload,url:'https://source.example/changed'}})).statusCode,409);
   assert.equal((await app.inject({url:'/v1/jobs/'+job.id,headers:{authorization:'Bearer b'}})).statusCode,404);
   await app.jobs.recover();assert.equal((await app.jobs.read('a',job.id)).state,'queued');
-  blocked=false;await app.jobs.runOne();assert.equal(calls,3);assert.equal((await app.jobs.read('a',job.id)).result.status,200);
+  blocked=false;await app.jobs.runOne();assert.equal(calls,3);const completedJob=await app.jobs.read('a',job.id);assert.equal(completedJob.result.status,200);assert.deepEqual(completedJob.result.customer_traffic,result.customer_traffic);assert.deepEqual((await app.jobs.read('a',job.id)).result,completedJob.result);assert.equal(calls,3);
   const cancelled=await app.jobs.submit('a',{...payload,idempotency_key:'cancelled'});await app.jobs.cancel('a',cancelled.id);assert.equal(await app.jobs.runOne(),false);
   const interrupted=await app.jobs.submit('a',{...payload,idempotency_key:'interrupted'});await store.pool.query("UPDATE fetch_jobs SET state='running' WHERE id=$1",[interrupted.id]);await app.jobs.recover();assert.equal((await app.jobs.read('a',interrupted.id)).state,'unknown');assert.equal(await app.jobs.runOne(),false);
   await store.pool.query("UPDATE fetch_jobs SET state='running',operation=NULL WHERE id=$1",[job.id]);await app.jobs.recover();assert.equal((await app.jobs.read('a',job.id)).state,'completed');assert.equal(calls,3);

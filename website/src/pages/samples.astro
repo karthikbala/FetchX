@@ -1,9 +1,19 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import SampleExplorer from '../components/SampleExplorer.astro';
-import Icon from '../components/Icon.astro';
-import Closing from '../components/Closing.astro';
+import ContentCTA from '../components/content/ContentCTA.astro';
+import '../styles/content.css';
 ---
-<Layout title="Sample data — FetchX" active="samples">
- <div class="container samples-page"><div class="page-intro"><span class="eyebrow"><span class="tiny-dot"></span> FROM INFORMATION TO SOMETHING USEFUL</span><h1>See what your delivered<br/>data could look like.</h1><p>Different sources. A consistent structure. Explore a few illustrative datasets, switch formats and take a sample with you.</p></div><SampleExplorer full/><div class="samples-explained"><div><Icon name="layers" size={23}/><h2>Your fields. Your schema.</h2><p>These are starting points. We agree the exact fields, formats and missing-field handling for your sources during onboarding.</p></div><div><Icon name="globe" size={23}/><h2>Context comes with it.</h2><p>Source references and collection timestamps help your team understand where each record came from and when it was observed.</p></div><div><Icon name="download" size={23}/><h2>Take a closer look.</h2><p>CSV downloads contain the same fictional records displayed here. No email address, live collection or provider requests are involved.</p></div></div></div><Closing/>
+<Layout title="Synthetic Application Data Examples — FetchX" description="Explore fictional commerce, property and logistics records as examples of application output. Your integration owns parsing, schema and validation." active="samples" breadcrumbs={[{ name: 'Home', path: '/' }, { name: 'Application examples', path: '/samples' }]}>
+  <div class="content-page container samples-page">
+    <header class="content-hub-hero"><span class="content-kicker">SYNTHETIC APPLICATION OUTPUT</span><h1>A response is the start.<br/><span>Your application makes it useful.</span></h1><p class="content-lead">Explore fictional records your application could produce after parsing and validating source responses. Switch between table and JSON, or download the matching CSV.</p><div class="content-hub-meta"><span>Fictional records · Reserved example domains</span><span>Application schemas, not native API responses</span></div></header>
+    <SampleExplorer full/>
+    <section class="content-benefits content-sample-principles" aria-label="How to use these examples">
+      <article><span class="content-number">01</span><h2>Your parser. Your schema.</h2><p>FetchX returns source content and transport evidence. Your integration chooses the fields, parses the response and validates each record before storing or using it.</p></article>
+      <article><span class="content-number">02</span><h2>Keep source context.</h2><p>Carry source URLs and observation times into application records. Collection time describes when a response was observed; it does not establish when the source last changed.</p></article>
+      <article><span class="content-number">03</span><h2>Prototype with safe examples.</h2><p>The CSV files contain the same fictional records shown here. Downloads require no email address and do not trigger live collection or provider requests.</p></article>
+    </section>
+    <section class="content-sample-usecases"><div><span class="content-kicker">PUT THE RECORDS IN CONTEXT</span><h2>Build around<br/>your application.</h2><p>See where fetching ends and application validation begins.</p></div><div><a href="/use-cases/price-monitoring"><strong>Price monitoring</strong><span>Product identity, currency and availability.</span><b aria-hidden="true">↗</b></a><a href="/use-cases/real-estate"><strong>Real estate</strong><span>Property identity, units and source provenance.</span><b aria-hidden="true">↗</b></a><a href="/use-cases/ai-agents"><strong>AI agents</strong><span>Attributed, validated context for your model.</span><b aria-hidden="true">↗</b></a></div></section>
+    <ContentCTA/>
+  </div>
 </Layout>

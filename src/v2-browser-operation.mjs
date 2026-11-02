@@ -4,6 +4,7 @@ import {ID,GatewayError,fail} from './policy.mjs';
 import {sha} from './crypto.mjs';
 import {browserProbePolicy} from './v2-browser-policy.mjs';
 import {safeFailure} from './v2-diagnostics.mjs';
+import {residentialTrafficCharge,finishResidentialTrafficCharge} from './customer-traffic.mjs';
 
 const plain=v=>v&&typeof v==='object'&&!Array.isArray(v);
 const sorted=v=>Array.isArray(v)?v.map(sorted):plain(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;
@@ -48,17 +49,18 @@ export async function browserProbeOperation(v2,project,raw){
   if(Number((await c.query("SELECT count(*) AS n FROM v2_operations WHERE kind='browser_probe' AND state IN ('reserved','running')")).rows[0].n)>=(v2.config.browser?.maxConcurrent??1))fail('browser_capacity',503);
   const stored=Number((await c.query('SELECT COALESCE(sum(octet_length(body)),0) AS n FROM v2_artifacts')).rows[0].n);
   if(stored+Math.ceil((policy.max_decoded_bytes+policy.max_dom_bytes)*1.4)+maximum*131072>(v2.config.v2?.maxArtifactBytes??268435456))fail('artifact_quota',507);
-  const estimate=route.class==='direct'?0:await v2.reserveResidential(c,project,session,route,reservedTunnel);
-  if(raw.max_estimated_micro_usd!==undefined){if(estimate===null)fail('cost_estimate_unavailable',409);if(estimate>raw.max_estimated_micro_usd)fail('cost_ceiling_exceeded',429);}
+  await v2.reserveResidential(c,project,session,route,reservedTunnel);
+  const pricingDecision=v2.pricing(project,profile,route,reservedTunnel,'browser'),estimate=pricingDecision.estimated_micro_usd;
+  if(raw.max_estimated_micro_usd!==undefined){if(estimate===null)fail('cost_estimate_unavailable',409);if(estimate>raw.max_estimated_micro_usd||(pricingDecision.customer_traffic_reservation?.max_estimated_micro_usd??0)>raw.max_estimated_micro_usd)fail('cost_ceiling_exceeded',429);}
   await c.query("INSERT INTO v2_operations(id,project,key_id,key,session_id,input_hash,input,kind) VALUES($1,$2,$3,$4,$5,$6,$7,'browser_probe')",[id,project,v2.config.projects[project].keyId??project,raw.idempotency_key,session.id,hash,v2.sealer.seal(raw)]);
-  await c.query('INSERT INTO v2_ledger(operation,project,session_id,provider,proxy_class,reserved_requests,accounted_requests,reserved_encoded_bytes,accounted_encoded_bytes,reserved_tunnel_bytes,accounted_tunnel_bytes,estimated_micro_usd) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$7,$8,$8,$9)',[id,project,session.id,route.provider,route.class,maximum,reservedBytes,reservedTunnel,estimate]);
-  await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'reserve',$2)",[id,{kind:'browser_network_probe',requests:maximum,max_network_bytes:reservedBytes,reserved_tunnel_bytes:reservedTunnel}]);
+  await c.query('INSERT INTO v2_ledger(operation,project,session_id,provider,proxy_class,reserved_requests,accounted_requests,reserved_encoded_bytes,accounted_encoded_bytes,reserved_tunnel_bytes,accounted_tunnel_bytes,estimated_micro_usd,customer_traffic,customer_traffic_reservation) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$7,$8,$8,$9,$10,$11)',[id,project,session.id,route.provider,route.class,maximum,reservedBytes,reservedTunnel,estimate,route.class==='residential'?residentialTrafficCharge({status:'pending'}):null,pricingDecision.customer_traffic_reservation??null]);
+  await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'reserve',$2)",[id,{kind:'browser_network_probe',requests:maximum,max_network_bytes:reservedBytes,reserved_tunnel_bytes:reservedTunnel,pricing_decision:pricingDecision}]);
   await c.query('UPDATE v2_sessions SET requests=requests+$2,encoded_bytes=encoded_bytes+$3 WHERE id=$1',[session.id,maximum,reservedBytes]);
  });
  if(replay)return v2.operationView(replay);
  const deadline=Math.min(Date.now()+profile.limits.timeout_ms,new Date(session.expires_at).getTime()),result=emptyResult();
  let relay=null,requests=0,dispatched=false,error=null,stage='dns',failure=null,cookieState=null,encodedSum=0,decodedSum=0,domSum=0;
- const artifacts=[],seenKinds=new Set();let admission=Promise.resolve(),callbackFailed=false,parentBlocked=0,runnerStarted=false,outputReceived=false;
+ const artifacts=[],seenKinds=new Set();let admission=Promise.resolve(),callbackFailed=false,parentBlocked=0,runnerStarted=false,outputReceived=false,relayCloseUnknown=false;
  try{
   const first=await v2.destination(raw.url,profile,deadline);v2.headers({method:'GET',headers:{}},profile,first.url);
   const proxy=v2.resolveProxy(route),jar=CookieJar.deserializeSync(v2.sealer.open(session.cookie_jar));
@@ -104,18 +106,19 @@ export async function browserProbeOperation(v2,project,raw){
   const native=artifacts.filter(a=>a.kind==='browser_response'),encodedComplete=native.length>0&&native.length===requests&&native.every(a=>Number.isSafeInteger(a.encoded_bytes));
   Object.assign(result,{status:output.status??null,final_url:output.final_url??null,blocked_requests:output.counts_complete===false?null:Math.max(parentBlocked,output.blocked_requests??0),blocked_reasons:output.blocked_reasons??{},capture_complete:!!output.capture_complete&&!parentBlocked&&!error&&native.length===requests&&seenKinds.has('rendered_dom'),encoded_bytes:encodedComplete?encodedSum:null,decoded_bytes:decodedSum,dom_bytes:domSum});
  }catch(e){error=e instanceof GatewayError?e.code:'browser_probe_internal_unknown';failure=safeFailure(e,stage,{dispatched:dispatched||requests>0});if(runnerStarted&&!outputReceived)result.blocked_requests=null;}
- finally{if(relay)await relay.close();}
- const observed=relay?.bytes??null,networkDispatched=dispatched||relay?.dispatched||false,unknown=!!error&&(networkDispatched||requests>0)&&(callbackFailed||/unknown|incomplete|deadline/.test(error));
+ finally{if(relay){try{await relay.close();}catch(e){relayCloseUnknown=true;error??='browser_relay_close_unknown';failure??=safeFailure(e,'relay_close',{dispatched:dispatched||requests>0});}error??=relay.error??null;}}
+ const rawObserved=relay?.bytes,observed=Number.isSafeInteger(rawObserved)&&rawObserved>=0?rawObserved:null,networkDispatched=dispatched||relay?.dispatched||false,meterIncomplete=relayCloseUnknown||relay?.meter_complete===false||/unknown|incomplete/.test(relay?.error??''),unknown=(networkDispatched||requests>0)&&(meterIncomplete||!!error&&(callbackFailed||/unknown|incomplete|deadline/.test(error)));
  Object.assign(result,{artifacts,physical_requests:requests,tunnel_bytes:observed,provider_status:relay?.provider_status??null,target_connections:relay?.connections??0,capture_complete:result.capture_complete&&!unknown,diagnostics:{stage:error?stage:'completed',failure},network_byte_basis:route.class==='direct'?'bidirectional_origin_tls_stream_excludes_local_connect':'bidirectional_proxy_tunnel_includes_connect'});
  await v2.store.tx(async c=>{
   const ledger=(await c.query('SELECT * FROM v2_ledger WHERE operation=$1 FOR UPDATE',[id])).rows[0];
   const usedRequests=unknown?maximum:requests,usedEncoded=unknown||result.encoded_bytes===null&&networkDispatched?reservedBytes:result.encoded_bytes??0;
   const heldTunnel=networkDispatched?Math.max(reservedTunnel,route.class==='direct'?0:observed??0):0;
   if(route.class!=='direct'&&observed!==null&&observed>reservedTunnel)error='cost_overrun';
+  const customerTraffic=finishResidentialTrafficCharge(ledger.customer_traffic,{dispatched:networkDispatched,unknown,partial:meterIncomplete,bytes:observed,maxBillableBytes:Number(ledger.customer_traffic_reservation?.reserved_bytes??ledger.reserved_tunnel_bytes)});
   const state=unknown?'unknown':error?'failed':'completed';
   await c.query('UPDATE v2_operations SET state=$2,error=$3,result=$4,summary=$5,finished_at=clock_timestamp() WHERE id=$1',[id,state,error,v2.sealer.seal(result,{compress:true}),{kind:'browser_network_probe',source_http_status:result.status,physical_requests:requests,encoded_bytes:result.encoded_bytes,decoded_bytes:result.decoded_bytes,tunnel_bytes:observed,diagnostics:result.diagnostics}]);
-  await c.query('UPDATE v2_ledger SET state=$2,accounted_requests=$3,accounted_encoded_bytes=$4,observed_tunnel_bytes=$5,accounted_tunnel_bytes=$6,estimated_micro_usd=CASE WHEN $7 THEN estimated_micro_usd ELSE 0 END WHERE operation=$1',[id,unknown?'unknown':networkDispatched?'unreconciled':'cancelled_before_dispatch',usedRequests,usedEncoded,observed,heldTunnel,networkDispatched]);
-  await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'finish',$2)",[id,{kind:'browser_network_probe',state,error,physical_requests:requests,network_dispatched:networkDispatched,observed_network_bytes:observed}]);
+  await c.query('UPDATE v2_ledger SET state=$2,accounted_requests=$3,accounted_encoded_bytes=$4,observed_tunnel_bytes=$5,accounted_tunnel_bytes=$6,estimated_micro_usd=CASE WHEN $7 THEN estimated_micro_usd ELSE 0 END,customer_traffic=$8 WHERE operation=$1',[id,unknown?'unknown':networkDispatched?'unreconciled':'cancelled_before_dispatch',usedRequests,usedEncoded,observed,heldTunnel,networkDispatched,customerTraffic]);
+  await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'finish',$2)",[id,{kind:'browser_network_probe',state,error,physical_requests:requests,network_dispatched:networkDispatched,observed_network_bytes:observed,...(customerTraffic?{customer_traffic:customerTraffic}:{})}]);
   await c.query('UPDATE v2_sessions SET requests=requests-$2+$3,encoded_bytes=encoded_bytes-$4+$5 WHERE id=$1',[session.id,ledger.reserved_requests,usedRequests,ledger.reserved_encoded_bytes,usedEncoded]);
   if(cookieState&&!unknown)await c.query('UPDATE v2_sessions SET cookie_jar=$2 WHERE id=$1',[session.id,v2.sealer.seal(cookieState)]);
  });

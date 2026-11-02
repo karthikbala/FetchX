@@ -1,0 +1,25 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import ContentCode from '../../components/content/ContentCode.astro';
+import ContentCTA from '../../components/content/ContentCTA.astro';
+import { guides, contentDate, contentAuthor } from '../../data/marketing-content';
+import '../../styles/content.css';
+export function getStaticPaths() {
+  return guides.map((page) => ({ params: { slug: page.slug }, props: { page } }));
+}
+const { page } = Astro.props;
+---
+<Layout title={page.title} description={page.description} active="resources" breadcrumbs={[{ name: 'Home', path: '/' }, { name: 'Resources', path: '/resources' }, { name: page.name, path: '/guides/' + page.slug }]} article={{ headline: page.name, datePublished: contentDate, dateModified: contentDate }}>
+  <div class="content-page container">
+    <header class="content-guide-hero"><a class="content-kicker content-back" href="/resources">← RESOURCES / {page.category}</a><h1>{page.name}</h1><p class="content-lead">{page.description}</p><div class="content-byline"><span>{contentAuthor}</span><span><time datetime={contentDate}>2 November 2026</time></span><span>{page.readTime}</span><span class="content-draft">DRAFT / DESIGN PREVIEW</span></div></header>
+    <div class="content-article-layout">
+      <aside class="content-toc"><span class="content-kicker">ON THIS PAGE</span><nav aria-label="Guide sections"><a href="#direct-answer">The direct answer</a>{page.sections.map((section) => <a href={'#' + section.id}>{section.title}</a>)}</nav><a class="content-text-link" href="/docs">API documentation <span aria-hidden="true">↗</span></a></aside>
+      <article class="content-article">
+        <section class="content-answer" id="direct-answer"><span class="content-kicker">THE DIRECT ANSWER</span><p>{page.answer}</p></section>
+        {page.sections.map((section) => <section id={section.id} class="content-article-section"><h2>{section.title}</h2>{section.paragraphs.map((paragraph) => <p>{paragraph}</p>)}{section.bullets && <ul>{section.bullets.map((bullet) => <li>{bullet}</li>)}</ul>}{section.table && <div class="content-table-wrap" role="region" aria-label={section.title + ' comparison'} tabindex="0"><table><thead><tr>{section.table.headers.map((header) => <th scope="col">{header}</th>)}</tr></thead><tbody>{section.table.rows.map((row) => <tr>{row.map((cell, i) => i === 0 ? <th scope="row">{cell}</th> : <td>{cell}</td>)}</tr>)}</tbody></table></div>}{section.code && <ContentCode {...section.code}/>} {section.sources && <p class="content-source-links"><span>Primary documentation:</span> {section.sources.map((source, i) => <><a href={source.href}>{source.label}</a>{i < section.sources!.length - 1 && <span aria-hidden="true"> · </span>}</>)}</p>}</section>)}
+        <section class="content-article-next"><span class="content-kicker">PUT IT INTO PRACTICE</span><ul>{page.related.map((link) => <li><a href={link.href}>{link.label}<span aria-hidden="true">↗</span></a></li>)}</ul></section>
+      </article>
+    </div>
+    <ContentCTA/>
+  </div>
+</Layout>

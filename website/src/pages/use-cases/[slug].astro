@@ -1,0 +1,11 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import UseCasePage from '../../components/content/UseCasePage.astro';
+import { useCasePages } from '../../data/marketing-content';
+import '../../styles/content.css';
+export function getStaticPaths() {
+  return useCasePages.map((page) => ({ params: { slug: page.slug }, props: { page } }));
+}
+const { page } = Astro.props;
+---
+<Layout title={page.title} description={page.description} active="use-cases" breadcrumbs={[{ name: 'Home', path: '/' }, { name: page.name, path: '/use-cases/' + page.slug }]}><UseCasePage page={page}/></Layout>

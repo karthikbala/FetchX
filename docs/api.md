@@ -16,6 +16,14 @@ Persist the key before calling. `POST /v1/fetch` creates a sticky workflow, exec
 
 The response includes `id`, `workflow`, `status` (source HTTP status), `provider_status`, `provider`, `country`, `headers`, `body_base64`, `captured_at`, `error`, `fallback_blocked` and accounting metadata. Browser responses include `browser_tier` and `browser_version`. API HTTP 200 means a retained result is available: inspect its source status/error and validate its content before accepting a record.
 
+New residential captures report `customer_traffic.cost_usd` at $2 per
+1,000,000,000 bytes through Evomi or DataImpulse. This exact decimal string
+prices traffic in both directions across the operation's attempts, including
+an authorized fallback. A fully measured failed attempt can contribute to the
+total. If an attempt's traffic is uncertain, the charge is null. A completed
+job exposes the same object under `result.customer_traffic`. Idempotent replay
+returns the saved capture. See the [meter and example](fetch-api.md#residential-traffic-charges).
+
 Optional request fields are `method`, `headers`, `body_base64`, `main_document`, `resource_type`, `zipcode` (legacy profiles) and `browser`. Browser captures require GET and `main_document:true` (the fetch facade defaults it to true). Rendering is selected by the reviewed profile, not by an unreviewed caller flag. Use the existing workflow API for multi-operation sessions; each capture restores cookies/localStorage, not in-memory JavaScript state.
 
 ## Browser recipes
@@ -64,6 +72,21 @@ One worker executes jobs under the gateway's database ownership lock. Queued wor
 New native profiles: Evomi, then DataImpulse. Browser profiles: Evomi/free, DataImpulse/free, Evomi/paid, DataImpulse/paid. Fallback is qualified, bounded and restricted to the first eligible operation. Paid browser builds require a valid paid entitlement; the free trial is not perpetual. No binaries, trial keys or subscriptions are included in this repository. Scrape.do/Oxylabs adapters remain available for explicitly configured legacy routes.
 
 Residential usage is reserved before dispatch. Local byte counters are not provider invoices; failed or uncertain attempts retain reservations until authoritative reconciliation. FetchX does not promise success-only billing. Status and diagnostics remain at `/v1/status` and `/v1/operations/:id/diagnostics`.
+
+For native Oxylabs routes matching the optional operator-owned
+`datacenterFixedFeePool` policy documented in [API v2](api-v2.md#included-datacenter-traffic-pricing),
+new v1 operation captures also include additive
+`accounting:{estimated_micro_usd:0,invoice_micro_usd:null,pricing:{...}}` with
+`pricing.basis:"operator_fixed_fee_pool"` and
+`pricing.customer_traffic_charge_micro_usd:0`. The original decision is saved in
+the private reserve ledger event and rechecked before transport dispatch. This
+does not allocate a subscription or infer an invoice. Lookup/replay retains the
+saved capture; historical captures gain no inferred price. Existing `credits`
+and workflow billing credit summaries keep their original Scrape.do meaning.
+Other provider attempts and paid fallback do not inherit an Oxylabs zero charge.
+An invalid/mismatched installed policy returns unavailable accounting without a
+customer zero charge; v1 has no dollar cost-ceiling input. Source/profile/project
+and byte restrictions remain unchanged.
 
 ## Remaining capability work
 

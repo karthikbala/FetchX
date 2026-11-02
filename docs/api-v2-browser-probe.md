@@ -111,6 +111,12 @@ at least that allowance and triggers a cost hold if it exceeds the reservation.
 Residential reservations intersect existing v1/v2 historical allowance and stay
 held pending authoritative reconciliation.
 
+New residential probes expose the [customer traffic charge](fetch-api.md#residential-traffic-charges)
+under `accounting.customer_traffic`. The charge covers measured proxy traffic
+for the whole probe at $2 per decimal GB. A missing page artifact can leave
+`capture_complete:false` even when the relay measured every byte. An incomplete
+traffic measurement leaves `cost_usd` null.
+
 ## Evidence variants
 
 Both variants have these common fields:

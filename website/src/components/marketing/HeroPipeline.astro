@@ -1,0 +1,17 @@
+---
+import Icon from '../Icon.astro';
+import Brand from '../Brand.astro';
+import MotionControl from '../MotionControl.astro';
+---
+<figure class="mkt-pipeline" aria-labelledby="pipeline-caption">
+  <div class="mkt-pipeline-grid" aria-hidden="true"></div>
+  <div class="mkt-pipeline-header"><span class="mkt-dot"></span><span>SAMPLE EXECUTION</span><span class="mkt-pipeline-id">FX / 001</span></div>
+  <div class="mkt-pipeline-input"><span class="mkt-micro">01 / YOUR REQUEST</span><div><span class="mkt-method">POST</span><code>/v2/fetch</code><Icon name="arrow" size={17}/></div><span class="mkt-pipeline-url">https://source.example/data</span></div>
+  <div class="mkt-pipeline-connector" aria-hidden="true"><span></span></div>
+  <div class="mkt-pipeline-core"><div class="mkt-core-mark"><Brand compact/></div><div><strong>FetchX access engine</strong><span>Approved profile · explicit route</span></div><span class="mkt-core-light" aria-hidden="true"></span></div>
+  <div class="mkt-pipeline-routes"><div><span class="mkt-route-dot"></span><span>ROUTE</span><b>direct</b></div><div><span class="mkt-route-dot"></span><span>FETCH</span><b>HTTP</b></div><div><span class="mkt-route-dot"></span><span>RETAIN</span><b>evidence</b></div></div>
+  <div class="mkt-pipeline-connector mkt-connector-bottom" aria-hidden="true"><span></span></div>
+  <div class="mkt-pipeline-output"><div class="mkt-output-heading"><span class="mkt-micro">02 / RESPONSE</span><span class="mkt-output-status"><Icon name="check" size={12}/> completed</span></div><div class="mkt-output-code"><span><i>"status"</i>: <b>200</b>,</span><span><i>"text"</i>: <em>"ok"</em>,</span><span><i>"application_acceptance"</i>:</span><span class="mkt-code-indent"><em>"not_evaluated"</em></span></div><div class="mkt-output-footer"><Icon name="lock" size={12}/><span>Saved result. Recover by key.</span><span class="mkt-dot"></span></div></div>
+  <figcaption id="pipeline-caption">A synthetic HTTP request, from source to response.</figcaption>
+  <div class="mkt-pipeline-motion"><MotionControl/></div>
+</figure>

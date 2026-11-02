@@ -2,9 +2,11 @@
 
 **One API for fetching, rendering and interacting with public web pages.**
 
-FetchX is a self-hosted crawling gateway built around Evomi residential proxies and CloakBrowser. Crawlers describe the source and request; FetchX owns proxy selection, browser execution, sticky sessions, bounded fallback, durable recovery and bandwidth budgets.
+FetchX is a self-hosted crawling gateway with a [one-call HTTP API](docs/fetch-api.md) in the Firecrawl/Scrape.do model. Clients explicitly select an approved proxy class and country, inspect source failures, and choose their next request. Oxylabs supplies datacenter IPs; Evomi is the primary residential provider, with DataImpulse as residential backup. New rendered workflows default to Camoufox once installed, pinned and qualified; existing CloakBrowser workflows and explicit engine selections remain supported.
 
-Native requests use **Evomi → DataImpulse**. Browser requests use **Evomi/free → DataImpulse/free → Evomi/paid → DataImpulse/paid**, when configured and entitled. Fallback responds to qualified failures; it does not make four attempts on every page.
+The current Camoufox pairing is **blocked from service execution** with `browser_runtime_unqualified`. Local browser checks have not demonstrated request interception, native service-worker blocking and reliable cookie restoration together. A configuration flag cannot override this gate. Native HTTP and explicitly configured legacy CloakBrowser workflows remain available; see the [qualification findings](docs/browser-engines.md).
+
+The existing v1 native residential default remains **Evomi → DataImpulse**. V2 pins the approved provider and country to a session and does not switch providers after dispatch. Browser requests use **Evomi/free → DataImpulse/free → Evomi/paid → DataImpulse/paid**, when configured and entitled. Fallback responds to qualified failures; it does not make four attempts on every page.
 
 ## What works
 
@@ -23,7 +25,14 @@ FetchX is not yet a complete Scrape.do replacement. It does not include universa
 
 ## Quick start
 
-Requires Node.js 24+, Docker Compose and provider credentials. Browser rendering additionally requires an officially obtained Linux x86-64 CloakBrowser binary. FetchX does not redistribute browser binaries or licenses.
+Requires Node.js 24+, Docker Compose and provider credentials. Browser rendering additionally requires a locally installed, pinned compatible browser. See [browser engines](docs/browser-engines.md) for Camoufox setup and existing CloakBrowser compatibility. FetchX does not redistribute browser binaries or licenses.
+
+Use [`POST /v2/fetch`](docs/fetch-api.md) for one-call HTTP fetching with an explicit
+`proxy.class` and `proxy.country`, an approved `access_profile`, and an idempotency
+key. It returns native status/body, the pinned route, retained hashes, safe failure
+guidance and accounting; `GET /v2/fetch/:key` recovers without source traffic.
+Rendering options are rejected on this HTTP endpoint. Existing v1 rendered recipes
+remain separate.
 
 The additive [v2 HTTP foundation](docs/api-v2.md) also works with a local Node
 process and PostgreSQL, including direct native HTTP, independently requested
@@ -41,6 +50,13 @@ Open `/console` on your private gateway to inspect v2 project usage and recent
 operations with its API key. The key stays in tab memory, and the console is
 read-only: it does not start crawls or grant source access.
 
+The website also has a [self-service account workspace](docs/self-service-backend.md):
+email verification, projects, scoped API keys, a native HTTP playground, retained
+history and request credits. It is disabled until an operator configures the
+gateway bridge, verification mail, reviewed source grants and credit policy.
+New account keys support native HTTP only; existing provisioned workflow tokens
+retain their contracts. Paid subscriptions and automatic refills are not enabled.
+
 ```sh
 git clone https://github.com/karthikbala/FetchX.git
 cd FetchX
@@ -51,7 +67,7 @@ docker compose --env-file ./local/compose.env build
 
 The initializer creates a private configuration, a project token and database credentials. Edit `local/secrets/gateway.json` to configure provider credentials, reviewed source profiles and limits. Providers start disabled when credentials are absent. Optional initializer environment variables: `EVOMI_USERNAME`, `EVOMI_PASSWORD`, `DATAIMPULSE_USERNAME`, `DATAIMPULSE_PASSWORD`.
 
-For browser profiles, put the complete officially obtained browser distribution in `local/browser/free/` and configure `browser.free` with its container `executablePath` (`/opt/gateway-browser/free/chrome`), exact `version`, SHA-256 and `entitlement:"unlicensed"` only for an eligible unlicensed build. Configure paid builds separately, with a valid paid license. Never commit these files. Verify compatibility and entitlement with the vendor.
+For new browser profiles, follow the [Camoufox installation and pinning instructions](docs/browser-engines.md). Existing CloakBrowser configurations retain their reviewed binary/version/hash and entitlement requirements; configure paid builds separately with a valid paid license. Never commit browser distributions or credentials.
 
 On Linux, make the generated secret readable by the service UID:
 
@@ -75,7 +91,7 @@ createdb gateway_test_fetchx
 TEST_DATABASE_URL=postgresql:///gateway_test_fetchx npm test
 ```
 
-Database tests intentionally truncate their disposable database and run serially. Never use a production database. They use fake providers and synthetic fixtures. To include actual local browser interaction tests, set `BROWSER_TEST_EXECUTABLE` to a compatible sandbox-capable Chromium/CloakBrowser executable. Without the database/browser, the relevant integration tests are skipped. CI provisions both.
+Database tests intentionally truncate their disposable database and run serially. Never use a production database. They use fake providers and synthetic fixtures. Set `BROWSER_TEST_EXECUTABLE` to a compatible sandbox-capable Chromium/CloakBrowser executable. For the actual Camoufox diagnostics, also set `CAMOUFOX_TEST_EXECUTABLE`, `CAMOUFOX_TEST_MODEL` and `CAMOUFOX_TEST_SHA256` as described in [browser verification](docs/browser-engines.md). Missing database/browser prerequisites skip their corresponding integration tests. CI provisions the database and Chromium; Camoufox diagnostics require its separately provisioned pinned runtime and model and do not lift the service qualification gate.
 
 ## Repository boundaries
 

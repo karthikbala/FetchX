@@ -12,6 +12,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import {gzipSync,brotliCompressSync} from 'node:zlib';
 import {Store} from '../src/store.mjs';
+import {GatewayError} from '../src/policy.mjs';
 import {Gateway} from '../src/gateway.mjs';
 import {sha} from '../src/crypto.mjs';
 import {server} from '../src/main.mjs';
@@ -99,6 +100,18 @@ test('v2 proxy CONNECT pins IP, confines credentials and meters both tunnel dire
   tunnel.write('ping');const response=await new Promise((r,j)=>{tunnel.once('data',r);tunnel.once('error',j);});
   assert.equal(response.toString(),'pong');assert.match(connectText,/CONNECT 93\.184\.216\.34:443 HTTP\/1.1/);assert.ok(!connectText.includes('source.example'));assert.match(connectText,/Proxy-Authorization: Basic/);assert.equal(meter.provider_status,200);assert.equal(meter.bytes,Buffer.byteLength(connectText)+Buffer.byteLength('HTTP/1.1 200 Connection Established\r\n\r\n')+8);
  }finally{tunnel?.destroy();for(const s of sockets)s.destroy();await new Promise(r=>proxy.close(r));}
+});
+
+test('v2 tunnel meter excludes refused CONNECT and payload writes',async()=>{
+ const sockets=new Set();let received=0;
+ const proxy=net.createServer(socket=>{sockets.add(socket);socket.on('error',()=>{});socket.on('close',()=>sockets.delete(socket));socket.on('data',part=>{received+=part.length;socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');});});
+ await new Promise(resolve=>proxy.listen(0,'127.0.0.1',resolve));const route={url:`http://127.0.0.1:${proxy.address().port}`};let tunnel;
+ try{
+  const rejected={bytes:0,provider_status:null};await assert.rejects(openPinnedTunnel(route,destination,{...limits,max_tunnel_bytes:1},rejected),{code:'tunnel_byte_limit'});assert.equal(rejected.bytes,0);
+  const measured={bytes:0,provider_status:null};tunnel=await openPinnedTunnel(route,destination,limits,measured);const admitted=measured.bytes,sourceReceived=received;tunnel.limit=admitted+1;
+  await assert.rejects(new Promise((resolve,reject)=>{tunnel.once('error',reject);tunnel.write('refused-payload',error=>error?reject(error):resolve());}),{code:'tunnel_byte_limit'});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(measured.bytes,admitted);assert.equal(received,sourceReceived);
+ }finally{tunnel?.destroy();for(const socket of sockets)socket.destroy();await new Promise(resolve=>proxy.close(resolve));}
 });
 
 function baseConfig(root){
@@ -221,4 +234,47 @@ test('v2 project provisioning writes a private key only to a private env and kee
   assert.equal((await stat(envPath)).mode&0o777,0o600);assert.equal(config.projects.studio.tokenHash,sha(token));assert.equal(config.projects.studio.v2_entitlement.mode,'unmetered');assert.ok(!JSON.stringify(result).includes(token));assert.ok(!(await readFile(configPath,'utf8')).includes(token));
   await assert.rejects(provisionV2Project({configPath,envPath,project:'studio',profileKeys:['source@1']}),/project_already_exists/);
  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('v2 geographic DNS shares proxy, durable dispatch and budget with target and replay',{skip:!enabled},async()=>{
+ assert.match(new URL(process.env.TEST_DATABASE_URL).pathname,/^\/gateway_test_[A-Za-z0-9]+$/);
+ const root=await mkdtemp(join(tmpdir(),'fetchx-v2-geodns-')),store=new Store(process.env.TEST_DATABASE_URL);await store.init();
+ await store.pool.query('TRUNCATE v2_registry,v2_ledger_events,v2_artifacts,v2_ledger,v2_operations,v2_sessions,workflows,source_limits RESTART IDENTITY CASCADE');
+ const config=baseConfig(root);config.v2.dns={allowed_hosts:['source.example'],fallback_resolvers:[{id:'approved',endpoint:'https://resolver.example/resolve'}],use_session_proxy:true,timeout_ms:1000};
+ config.v2.accessProfiles['source@1'].limits.max_redirects=1;
+ const gateway=new Gateway({store,config,profiles:{},resolve:async host=>{assert.equal(host,'resolver.example');return [{address:'93.184.216.34'}];}});
+ let mode='success',dnsCalls=0,targetCalls=0,selectedProxy,activeOperation;
+ gateway.v2=new V2Gateway(gateway,{dnsHttp:async(input,dest,limits,{proxy})=>{
+  assert.equal((await store.pool.query('SELECT state FROM v2_operations WHERE id=$1',[activeOperation])).rows[0].state,'running');
+  assert.ok(proxy);if(selectedProxy)assert.equal(proxy,selectedProxy);else selectedProxy=proxy;
+  const type=Number(dest.url.searchParams.get('type'));dnsCalls++;assert.ok(limits.max_tunnel_bytes>0);assert.ok(limits.timeout_ms<=1000);
+  if(mode==='unknown')throw Object.assign(new GatewayError('source_timeout_unknown',502),{observed_tunnel_bytes:17});
+  return {status:200,headers:{},tunnel_bytes:mode==='limit'?16384:mode==='missing-meter'?null:3000,encoded:Buffer.from(JSON.stringify({Status:mode==='failure'?2:0,Question:[{name:'source.example',type}],Answer:mode==='failure'?[]:type===1?[{name:'source.example',type,data:mode==='private'?'127.0.0.1':'93.184.216.34'}]:[]}))};
+ },http:async(input,dest,limits,{proxy})=>{
+  targetCalls++;assert.equal(proxy,selectedProxy);assert.equal(dest.address,'93.184.216.34');
+  assert.equal(limits.max_tunnel_bytes,input.url.endsWith('/redirect')?8192:3884);
+  return {status:input.url.endsWith('/redirect')?302:200,headers:input.url.endsWith('/redirect')?{location:'/final'}:{},encoded:Buffer.from('synthetic'),tunnel_bytes:500};
+ }});
+ // Capture the durable operation ID without changing the dispatch transaction.
+ const execute=gateway.v2.execute.bind(gateway.v2);gateway.v2.execute=async(...args)=>{activeOperation=args[1];return execute(...args);};
+ try{
+  for(mode of ['success','failure','unknown','private','limit','missing-meter']){
+   selectedProxy=null;const beforeDns=dnsCalls,beforeTarget=targetCalls;
+   const session=await gateway.v2.session('a',{idempotency_key:'dns-session-'+mode,access_profile:{id:'source',version:1},transport:'http',proxy:{class:'residential',country:'US',affinity:'session'}});
+   const input={idempotency_key:'dns-operation-'+mode,session_id:session.id,request:{url:'https://source.example/redirect'}};
+   const outcome=await gateway.v2.operation('a',input);
+   assert.equal(outcome.state,mode==='success'?'completed':['unknown','missing-meter'].includes(mode)?'unknown':'failed');
+   assert.equal(outcome.result.physical_requests,mode==='success'?2:0);assert.equal(targetCalls-beforeTarget,mode==='success'?2:0);
+   assert.equal(dnsCalls-beforeDns,mode==='success'?4:mode==='private'?2:1);
+   assert.equal(outcome.result.dns_requests,dnsCalls-beforeDns);
+   assert.equal(outcome.result.tunnel_bytes,mode==='success'?13000:mode==='unknown'?17:mode==='private'?6000:mode==='limit'?16384:mode==='missing-meter'?null:3000);
+   assert.ok(outcome.accounting.estimated_micro_usd>0);
+   const ledger=(await store.pool.query('SELECT * FROM v2_ledger WHERE operation=$1',[outcome.id])).rows[0];
+   assert.equal(Number(ledger.accounted_tunnel_bytes),16384);assert.equal(ledger.state,['unknown','missing-meter'].includes(mode)?'unknown':'unreconciled');
+   assert.equal(ledger.accounted_requests,['success','unknown','missing-meter'].includes(mode)?2:0);
+   const count=dnsCalls;assert.deepEqual(await gateway.v2.operation('a',input),outcome);assert.equal(dnsCalls,count);
+   if(mode==='limit')assert.equal(outcome.error,'tunnel_byte_limit');
+   if(['unknown','missing-meter'].includes(mode))await assert.rejects(gateway.v2.operation('a',{...input,idempotency_key:'dns-new-key-'+mode}),{code:'session_busy_or_unknown'});
+  }
+ }finally{await store.pool.query('TRUNCATE v2_registry,v2_ledger_events,v2_artifacts,v2_ledger,v2_operations,v2_sessions,workflows,source_limits RESTART IDENTITY CASCADE');await store.close();await rm(root,{recursive:true,force:true});}
 });

@@ -1,3 +1,5 @@
+export {};
+
 const root=document.documentElement;
 const controls=[...document.querySelectorAll<HTMLButtonElement>('.motion-control')];
 const reduced=matchMedia('(prefers-reduced-motion: reduce)');
@@ -16,3 +18,22 @@ menu?.addEventListener('click',()=>{const open=nav?.classList.toggle('is-open');
 nav?.querySelectorAll('a').forEach(a=>a.addEventListener('click',closeMenu));
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&nav?.classList.contains('is-open')){closeMenu();menu?.focus();}});
 document.addEventListener('click',e=>{if(!nav?.contains(e.target as Node)&&!menu?.contains(e.target as Node))closeMenu();});
+
+const navGroups = [...document.querySelectorAll<HTMLDetailsElement>('.fx-nav-group')];
+navGroups.forEach(group => group.addEventListener('toggle', () => {
+  if (group.open) navGroups.filter(other => other !== group).forEach(other => { other.open = false; });
+}));
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  navGroups.forEach(group => {
+    if (group.open) {
+      group.open = false;
+      group.querySelector('summary')?.focus();
+    }
+  });
+});
+document.addEventListener('click', event => {
+  navGroups.forEach(group => {
+    if (!group.contains(event.target as Node)) group.open = false;
+  });
+});

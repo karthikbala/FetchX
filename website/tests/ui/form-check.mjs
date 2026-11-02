@@ -16,7 +16,7 @@ async function fillData(page){
  const page=await browser.newPage();await page.goto(base+'/pilot?plan=scale');
  assert.match(await page.locator('[data-offer]').textContent(),/SCALE/);
  await page.getByRole('button',{name:'Continue',exact:true}).click();assert.equal(await page.locator('[data-step="1"]').isVisible(),true);
- await fillData(page);assert.equal(await page.getByRole('button',{name:'Send pilot request'}).isDisabled(),true);
+ await fillData(page);assert.equal(await page.getByRole('button',{name:'Send enquiry'}).isDisabled(),true);
  assert.match(await page.locator('.verification-status').textContent(),/not open yet/);checks.push('Unconfigured preview stays closed; required fields and offer prefill work');await page.close();
 }
 for(const scenario of ['success','storage-failure','network-failure','validation-failure']){
@@ -34,12 +34,12 @@ for(const scenario of ['success','storage-failure','network-failure','validation
   await route.fulfill({status:201,json:{ok:true,reference:'FX-12345678-1234-4123-8123-123456789ABC'}});
  });
  await page.goto(base+'/pilot?plan=managed');await fillData(page);await page.waitForFunction(()=>window.testVerification?.action==='pilot');
- await page.getByRole('button',{name:'Send pilot request'}).click();
+ await page.getByRole('button',{name:'Send enquiry'}).click();
  if(scenario!=='success'){
   await page.locator('.form-error').waitFor({state:'visible'});assert.equal(await page.locator('.form-result').isVisible(),false);
   assert.equal(await page.locator('#email').inputValue(),'test@example.com');
   if(scenario==='validation-failure'){assert.equal(await page.locator('[data-step="1"]').isVisible(),true);await page.locator('#fields').fill('Updated title and price');await page.getByRole('button',{name:'Continue',exact:true}).click();}
-  await page.getByRole('button',{name:'Send pilot request'}).click();
+  await page.getByRole('button',{name:'Send enquiry'}).click();
  }
  await page.locator('.form-result').waitFor({state:'visible'});assert.match(await page.locator('[data-reference]').textContent(),/^FX-/);
  assert.match(await page.locator('[data-followup]').getAttribute('href'),/subject=FetchX/);

@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
+import {PassThrough} from 'node:stream';
 import {mkdtemp,rm,writeFile,chmod} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {browserProbePolicy,browserProbeRuntime,binarySha,BROWSER_PROBE_ARGS} from '../src/v2-browser-policy.mjs';
 import {browserRelay} from '../src/v2-browser-relay.mjs';
+import {openPinnedTunnel} from '../src/v2-http.mjs';
 import {captureBrowserProbe} from '../src/v2-browser-capture.mjs';
 import {Store} from '../src/store.mjs';
 import {Gateway} from '../src/gateway.mjs';
@@ -48,6 +50,43 @@ test('browser proxy relay measures aggregate CONNECT and both encrypted-stream d
   tunnel=await new Promise((resolve,reject)=>{const request=http.request(relay.url,{method:'CONNECT',path:'source.gov:443'});request.on('connect',(response,socket)=>{assert.equal(response.statusCode,200);resolve(socket);});request.on('error',reject);request.end();});
   const reply=new Promise((resolve,reject)=>{tunnel.once('data',resolve);tunnel.once('error',reject);});tunnel.write('five!');assert.equal((await reply).length,5);assert.match(requestText,/CONNECT 93\.184\.216\.34:443/);assert.ok(!requestText.includes('source.gov'));assert.equal(relay.bytes,Buffer.byteLength(requestText)+Buffer.byteLength('HTTP/1.1 200 Connection Established\r\n\r\n')+10);assert.equal(relay.provider_status,200);
  }finally{tunnel?.destroy();await relay.close();for(const socket of sockets)socket.destroy();await new Promise(r=>proxy.close(r));}
+});
+
+test('browser relay close waits for an admitted upstream tunnel meter to settle',async()=>{
+ let entered,release;const started=new Promise(resolve=>{entered=resolve;});
+ const relay=await browserRelay({profile:{origins:['https://source.gov']},resolve:async()=>[{address:'93.184.216.34',family:4}],proxy:{url:'http://fixture-proxy.example:8080'},limits:{max_requests:1,max_network_bytes:4096},deadline:Date.now()+2000,openTunnel:async(proxy,destination,limits,meter)=>{entered();await new Promise(resolve=>{release=resolve;});meter.bytes=127;return new PassThrough();}});
+ const request=http.request(relay.url,{method:'CONNECT',path:'source.gov:443'});request.on('error',()=>{});request.end();
+ try{
+  await started;let closed=false;const closing=relay.close().then(()=>{closed=true;});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(closed,false);release();await closing;assert.equal(relay.bytes,127);assert.equal(relay.meter_complete,true);
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(relay.bytes,127);
+ }finally{request.destroy();release?.();await relay.close();}
+});
+
+test('browser relay marks delayed tunnel failures and asynchronous failed or unsettled writes uncertain',async()=>{
+ const sockets=new Set();
+ const proxy=net.createServer(socket=>{sockets.add(socket);socket.on('error',()=>{});socket.on('close',()=>sockets.delete(socket));socket.once('data',()=>socket.write('HTTP/1.1 200 Connection Established\r\n\r\n'));});
+ await new Promise(resolve=>proxy.listen(0,'127.0.0.1',resolve));
+ try{
+  for(const mode of ['failed-write','pending-write','delayed-connect']){
+   let release,started;const entered=new Promise(resolve=>{started=resolve;});
+   const relay=await browserRelay({profile:{origins:['https://source.gov']},resolve:async()=>[{address:'93.184.216.34',family:4}],proxy:{url:`http://127.0.0.1:${proxy.address().port}`},limits:{max_requests:1,max_network_bytes:4096},deadline:Date.now()+2000,openTunnel:async(...args)=>{
+    if(mode==='delayed-connect'){started();await new Promise(resolve=>{release=resolve;});throw new Error('synthetic delayed CONNECT failure');}
+    const tunnel=await openPinnedTunnel(...args);
+    tunnel.socket.write=(bytes,encoding,callback)=>{started();if(mode==='failed-write')setImmediate(()=>callback(Object.assign(new Error('synthetic async write failure'),{code:'EPIPE'})));else release=()=>callback();return true;};
+    return tunnel;
+   }});
+   let client;const request=http.request(relay.url,{method:'CONNECT',path:'source.gov:443'});request.on('error',()=>{});request.on('connect',(response,socket)=>{client=socket;socket.on('error',()=>{});if(mode!=='delayed-connect')socket.write('pending-payload');});request.end();
+   try{
+    await entered;
+    if(mode==='failed-write'){await new Promise(resolve=>setTimeout(resolve,10));assert.equal(relay.error,'browser_transport_unknown');await relay.close();}
+    else {const closing=relay.close();if(mode==='delayed-connect')release();await closing;}
+    assert.equal(relay.meter_complete,false,mode);
+    if(mode==='delayed-connect')assert.equal(relay.error,'browser_connect_unknown');
+    release?.();await new Promise(resolve=>setImmediate(resolve));assert.equal(relay.meter_complete,false,mode);
+   }finally{client?.destroy();request.destroy();release?.();await relay.close();}
+  }
+ }finally{for(const socket of sockets)socket.destroy();await new Promise(resolve=>proxy.close(resolve));}
 });
 
 test('actual local browser captures native requests/bodies separately from DOM and blocks methods, external/private traffic, sockets and popups',{skip:!process.env.BROWSER_TEST_EXECUTABLE},async()=>{
@@ -106,9 +145,9 @@ test('browser probe API conserves admission/ledger, isolates artifacts, persists
   assert.equal((await app.inject({url:'/v2/artifacts/'+artifact.id,headers:{authorization:'Bearer key-b'}})).statusCode,404);const recent=(await app.inject({url:'/v2/operations',headers})).json();assert.ok(!JSON.stringify(recent).includes('private-source-cookie'));assert.ok(!JSON.stringify(recent).includes('request.headers'));
   mode='methods';const next=await post('/v2/browser-probes',{...payload,idempotency_key:'second'});assert.equal(next.body.state,'completed');assert.ok(receivedCookies.at(-1).some(c=>c.name==='sid'&&c.value==='persisted'));
   mode='parallel';const parallel=await post('/v2/browser-probes',{...payload,idempotency_key:'parallel',max_physical_requests:1});assert.equal(parallel.body.result.physical_requests,1);mode='methods';
-  const paid=await session('paid','residential');const paidResult=await post('/v2/browser-probes',{...payload,idempotency_key:'paid',session_id:paid.id,max_estimated_micro_usd:5});assert.equal(paidResult.body.state,'completed');assert.ok(relayOptions.proxy.url.includes('_session-'));assert.equal(paidResult.body.accounting.reserved_tunnel_bytes,4096);assert.equal(paidResult.body.accounting.estimated_micro_usd,5);assert.equal(paidResult.body.accounting.invoice_micro_usd,null);
+  const paid=await session('paid','residential');const paidResult=await post('/v2/browser-probes',{...payload,idempotency_key:'paid',session_id:paid.id,max_estimated_micro_usd:9});assert.equal(paidResult.body.state,'completed');assert.ok(relayOptions.proxy.url.includes('_session-'));assert.equal(paidResult.body.accounting.reserved_tunnel_bytes,4096);assert.equal(paidResult.body.accounting.estimated_micro_usd,5);assert.equal(paidResult.body.accounting.invoice_micro_usd,null);assert.equal(paidResult.body.accounting.customer_traffic.cost_usd,'0.000001024');assert.equal(paidResult.body.accounting.customer_traffic_reservation.max_estimated_micro_usd,9);
   assert.equal(Number((await store.pool.query("SELECT accounted_tunnel_bytes FROM v2_ledger WHERE provider='evomi'")).rows[0].accounted_tunnel_bytes),4096);
-  config.residential.maxTotalBytes=4097;const runsBeforeCap=runs;assert.equal((await post('/v2/browser-probes',{...payload,idempotency_key:'paid-cap',session_id:paid.id,max_estimated_micro_usd:5})).body.error,'residential_budget_exhausted');assert.equal(runs,runsBeforeCap);config.residential.maxTotalBytes=100000;
+  config.residential.maxTotalBytes=4097;const runsBeforeCap=runs;assert.equal((await post('/v2/browser-probes',{...payload,idempotency_key:'paid-cap',session_id:paid.id,max_estimated_micro_usd:9})).body.error,'residential_budget_exhausted');assert.equal(runs,runsBeforeCap);config.residential.maxTotalBytes=100000;
   const broken=await session('callback-failure');mode='callback-failure';const lostArtifact=await post('/v2/browser-probes',{...payload,idempotency_key:'callback-failure',session_id:broken.id});assert.equal(lostArtifact.body.state,'unknown');assert.equal(lostArtifact.body.result.capture_complete,false);assert.equal(lostArtifact.body.result.artifacts.length,1);
   const lost=await session('lost');mode='unknown';const uncertainInput={...payload,idempotency_key:'unknown',session_id:lost.id};const uncertain=await post('/v2/browser-probes',uncertainInput);assert.equal(uncertain.body.state,'unknown');const before=runs;await recoverV2(store.pool);assert.equal((await post('/v2/browser-probes',uncertainInput)).body.state,'unknown');assert.equal(runs,before);assert.equal((await post('/v2/browser-probes',{...uncertainInput,idempotency_key:'new-unsafe-key'})).body.error,'session_busy_or_unknown');
   await store.pool.query("UPDATE v2_operations SET state='running',result=NULL,summary=NULL WHERE id=$1",[first.body.id]);await recoverV2(store.pool);const partial=await gateway.v2.readOperation('a',first.body.id);assert.equal(partial.result.kind,'browser_network_probe');assert.equal(partial.result.partial,true);assert.equal(partial.result.capture_complete,false);assert.equal(partial.result.physical_requests,null);assert.equal(partial.result.blocked_requests,null);assert.equal(partial.result.artifacts.length,2);

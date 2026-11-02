@@ -10,3 +10,14 @@ https://:version.:project.pages.dev/*
   X-Robots-Tag: noindex, nofollow
 /_astro/*
   Cache-Control: public, max-age=31536000, immutable
+
+/app
+  X-Robots-Tag: noindex, nofollow
+/app/*
+  X-Robots-Tag: noindex, nofollow
+/signup
+  X-Robots-Tag: noindex, nofollow
+/login
+  X-Robots-Tag: noindex, nofollow
+/docs/*.md
+  X-Robots-Tag: noindex

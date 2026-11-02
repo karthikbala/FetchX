@@ -1,2 +1,4 @@
 import type { APIRoute } from 'astro';
-export const GET: APIRoute = () => new Response(import.meta.env.PUBLIC_SITE_ENV==='production'?'User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: https://fetchx.ai/sitemap.xml\n':'User-agent: *\nDisallow: /\n',{headers:{'Content-Type':'text/plain; charset=utf-8'}});
+const launchReady = import.meta.env.PUBLIC_SITE_ENV === 'production' && import.meta.env.PUBLIC_PRODUCT_LAUNCH_READY === 'true';
+const publicRules = 'User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /app\nDisallow: /signup\nDisallow: /login\nSitemap: https://fetchx.ai/sitemap.xml\n';
+export const GET: APIRoute = () => new Response(launchReady ? publicRules : 'User-agent: *\nDisallow: /\n', { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });

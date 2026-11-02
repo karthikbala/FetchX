@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
-RUN node node_modules/playwright-core/cli.js install-deps chromium && rm -rf /var/lib/apt/lists/*
+RUN node node_modules/playwright-core/cli.js install-deps chromium firefox && rm -rf /var/lib/apt/lists/*
 COPY src ./src
 COPY knowledge ./knowledge
 ENV GATEWAY_PYTHON=/opt/venv/bin/python3 NODE_ENV=production

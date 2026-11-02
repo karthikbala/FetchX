@@ -1,0 +1,106 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Icon from '../Icon.astro';
+import CodeExample from './CodeExample.astro';
+import InlineText from './InlineText.astro';
+import { docPages, type DocPage } from '../../data/api-docs';
+import '../../styles/docs.css';
+
+interface Props {
+  page: DocPage;
+}
+
+const { page } = Astro.props;
+const groups = ['Getting started', 'API reference', 'Guides'];
+const pageHref = (slug: string) => slug ? `/docs/${slug}` : '/docs';
+const pageIndex = docPages.findIndex(item => item.slug === page.slug);
+const previous = docPages[pageIndex - 1];
+const next = docPages[pageIndex + 1];
+const searchEntries = docPages.flatMap(item => [
+  { href: pageHref(item.slug), label: item.title, context: item.group, terms: `${item.title} ${item.description} ${item.endpoint ?? ''}` },
+  ...item.sections.map(section => ({
+    href: `${pageHref(item.slug)}#${section.id}`,
+    label: section.title,
+    context: item.title,
+    terms: `${item.title} ${section.title} ${section.blocks.map(block => {
+      if (block.kind === 'text' || block.kind === 'note') return block.text;
+      if (block.kind === 'table') return block.rows.flat().join(' ');
+      if (block.kind === 'code') return block.title;
+      return block.label;
+    }).join(' ')}`,
+  })),
+]);
+---
+<Layout title={`${page.title} — FetchX API docs`} description={page.description} active="docs" breadcrumbs={[{ name: 'Home', path: '/' }, { name: 'API docs', path: '/docs' }, ...(page.slug ? [{ name: page.title, path: pageHref(page.slug) }] : [])]}>
+  <div class="docs-shell container">
+    <div class="docs-masthead">
+      <a href="/docs" class="docs-wordmark"><Icon name="code" size={18}/> Documentation <span>HTTP API</span></a>
+      <a href="/developers" class="docs-back-link">Developer overview <Icon name="arrow" size={14}/></a>
+    </div>
+    <div class="docs-grid">
+      <aside class="docs-sidebar" aria-label="Documentation navigation">
+        <details class="docs-menu" open data-doc-menu>
+          <summary><Icon name="menu" size={17}/><span>Browse documentation</span><Icon name="chevron" size={16}/></summary>
+          <div class="docs-menu-content">
+            <div class="docs-search" data-doc-search>
+              <label for="docs-search-input">Search docs</label>
+              <div class="docs-search-field">
+                <input id="docs-search-input" type="search" placeholder="Find an endpoint…" autocomplete="off" data-doc-search-input aria-controls="docs-search-results"/>
+                <kbd aria-hidden="true">/</kbd>
+              </div>
+              <div id="docs-search-results" class="docs-search-results" hidden data-doc-search-results>
+                <p class="docs-search-status" role="status" data-doc-search-status></p>
+                <ul>{searchEntries.map(entry => <li data-doc-search-entry data-search={entry.terms.toLowerCase()}>
+                  <a href={entry.href}><span>{entry.label}</span><small>{entry.context}</small></a>
+                </li>)}</ul>
+              </div>
+            </div>
+            <nav aria-label="API documentation" data-doc-nav>
+              {groups.map(group => <div class="docs-nav-group">
+                <p>{group}</p>
+                <ul>{docPages.filter(item => item.group === group).map(item => <li>
+                  <a href={pageHref(item.slug)} aria-current={item.slug === page.slug ? 'page' : undefined}>
+                    {item.method && <span class:list={['docs-nav-method', { 'is-post': item.method === 'POST' }]}>{item.method}</span>}
+                    <span>{item.title}</span>
+                    {item.slug === page.slug && <span class="docs-nav-dot" aria-hidden="true"></span>}
+                  </a>
+                </li>)}</ul>
+              </div>)}
+            </nav>
+            <div class="docs-sidebar-help"><span class="tiny-dot"></span><p>Need API access?<br/><a href="/pilot">Scope your integration <Icon name="arrow" size={13}/></a></p></div>
+          </div>
+        </details>
+      </aside>
+      <article class="docs-article" aria-labelledby="docs-page-title">
+        <header class="docs-intro">
+          <p class="docs-breadcrumb">{page.group}<span>/</span><span>{page.title}</span></p>
+          <h1 id="docs-page-title">{page.title}</h1>
+          <p class="docs-description">{page.description}</p>
+          <a class="docs-inline-link" href={`/docs/${page.slug || 'quickstart'}.md`}>View as Markdown <Icon name="download" size={14}/></a>
+          {page.method && page.endpoint && <div class="docs-endpoint"><span class:list={['docs-method', { 'is-post': page.method === 'POST' }]}>{page.method}</span><code>{page.endpoint}</code><span class="docs-endpoint-label">Bearer token</span></div>}
+        </header>
+        {page.sections.map(section => <section class="docs-section" id={section.id}>
+          <h2><a href={`#${section.id}`}>{section.title}<span class="docs-heading-anchor" aria-hidden="true">#</span></a></h2>
+          {section.blocks.map((block, index) => <Fragment>
+            {block.kind === 'text' && <p><InlineText text={block.text}/></p>}
+            {block.kind === 'note' && <aside class="docs-note"><Icon name="file" size={18}/><div><h3>{block.title}</h3><p><InlineText text={block.text}/></p></div></aside>}
+            {block.kind === 'code' && <CodeExample id={`${section.id}-${index}`} title={block.title} snippets={block.snippets}/>}
+            {block.kind === 'table' && <div class="docs-table-wrap" role="region" aria-label={`${section.title} reference table`} tabindex="0"><table><thead><tr>{block.headers.map(header => <th scope="col"><InlineText text={header}/></th>)}</tr></thead><tbody>{block.rows.map(row => <tr>{row.map(cell => <td><InlineText text={cell}/></td>)}</tr>)}</tbody></table></div>}
+            {block.kind === 'link' && <a class="docs-inline-link" href={block.href}>{block.label}<Icon name="arrow" size={15}/></a>}
+          </Fragment>)}
+        </section>)}
+        <nav class="docs-pagination" aria-label="Documentation pages">
+          {previous ? <a href={pageHref(previous.slug)}><span>Previous</span><strong><span aria-hidden="true">←</span> {previous.title}</strong></a> : <span></span>}
+          {next && <a href={pageHref(next.slug)}><span>Next</span><strong>{next.title} <span aria-hidden="true">→</span></strong></a>}
+        </nav>
+        <p class="docs-version-note">Examples use synthetic sources and placeholder credentials. Use the endpoint and approved access profiles provisioned for your project.</p>
+      </article>
+      <aside class="docs-toc" aria-label="On this page">
+        <p>On this page</p>
+        <nav aria-label="Page sections"><ul>{page.sections.map(section => <li><a href={`#${section.id}`} data-doc-toc={section.id}>{section.title}</a></li>)}</ul></nav>
+        <a class="docs-source-link" href="https://github.com/karthikbala/FetchX" target="_blank" rel="noreferrer">View source <Icon name="diagonal" size={13}/></a>
+      </aside>
+    </div>
+  </div>
+  <script>import '../../scripts/docs';</script>
+</Layout>

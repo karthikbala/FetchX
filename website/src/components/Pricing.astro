@@ -1,10 +1,18 @@
 ---
 import Icon from './Icon.astro';
+import '../styles/marketing.css';
+interface Props { compact?: boolean; }
+const {compact=false}=Astro.props;
 const plans=[
- {id:'pilot',name:'Pilot',price:'99',period:'one time',caption:'One source. A clear starting point.',features:['One qualified source','Up to 500 records','One agreed schema','One CSV or JSON delivery'],cta:'Start with a pilot'},
- {id:'managed',name:'Managed',price:'199',period:'per month',caption:'Make the data part of your routine.',features:['One qualified recurring source','Up to 5,000 record deliveries / month','Agreed refresh schedule','CSV or JSON delivery'],cta:'Explore Managed'},
- {id:'scale',name:'Scale',price:'999',period:'per month',caption:'A wider view, built around your team.',features:['Up to three qualified sources','Up to 20,000 record deliveries / month','Agreed collection and delivery plan','Custom integrations scoped separately'],cta:'Let’s talk about Scale'}
+ {id:'free',name:'Free',price:'0',credits:'1,000',period:'trial credits',caption:'Get a feel for the API.',features:['A starting point for evaluation','Confirm source and route access','Explore the request lifecycle'],cta:'Start exploring'},
+ {id:'developer',name:'Developer',price:'29',credits:'50,000',period:'credits / month',caption:'Build your first integration.',features:['For individual developers','A focused application workload','Project-scoped API access'],cta:'Start building'},
+ {id:'growth',name:'Growth',price:'99',credits:'250,000',period:'credits / month',caption:'Give your next idea room.',features:['For growing applications','More room for recurring work','Source and route scoping'],cta:'Choose Growth'},
+ {id:'scale',name:'Scale',price:'299',credits:'1,000,000',period:'credits / month',caption:'Plan for a larger workload.',features:['For data-intensive teams','A larger monthly allowance','Workload planning at onboarding'],cta:'Explore Scale'},
+ {id:'enterprise',name:'Enterprise',price:null,credits:'Custom',period:'usage plan',caption:'Shape a plan for your team.',features:['Custom volume and requirements','Project and access planning','Commercial terms agreed with you'],cta:'Explore Enterprise'},
 ];
 ---
-<div class="pricing-grid">{plans.map(p=><article class:list={['price-card',{featured:p.id==='managed'}]}><div class="plan-head"><span class="plan-name">{p.name}</span>{p.id==='managed'&&<span class="plan-flag">FOR RECURRING DATA</span>}</div><p class="plan-caption">{p.caption}</p><div class="plan-price"><span class="price-from">From</span><div><span class="dollar">$</span><strong>{p.price}</strong><span class="price-period"> / {p.period}</span></div></div><a href={'/pilot?plan='+p.id} class:list={['button',p.id==='managed'?'button-ink':'button-outline']}>{p.cta}<Icon name="arrow" size={18}/></a><ul>{p.features.map(f=><li><Icon name="check" size={16}/><span>{f}</span></li>)}</ul></article>)}</div>
-<p class="pricing-note">All prices in USD. Each refreshed record delivered counts toward your allowance again. Entry pricing applies to straightforward, qualified sources. Complex access, higher frequency and custom integrations are quoted before work begins.</p>
+<div class:list={['mkt-pricing',{ 'mkt-pricing-compact':compact}]}>
+ <div class="mkt-proposal-note"><span class="mkt-dot"></span><span>COMMERCIAL PROPOSAL</span><p>Proposed prices and allowances. Create an account to view configured trial access; paid plans require approval.</p></div>
+ <div class="mkt-pricing-grid">{plans.map(plan=><article class:list={['mkt-plan',{'mkt-plan-featured':plan.id==='growth'}]}><div class="mkt-plan-top"><h3>{plan.name}</h3>{plan.id==='growth'&&<span class="mkt-plan-flag">ROOM TO GROW</span>}</div><p class="mkt-plan-caption">{plan.caption}</p><div class="mkt-plan-price">{plan.price!==null?<><span>$</span><strong>{plan.price}</strong><small>{plan.id==='free'?'/ trial':'/ mo'}</small></>:<strong class="mkt-plan-custom">Let’s talk.</strong>}</div><div class="mkt-plan-credits"><strong>{plan.credits}</strong><span>{plan.period}</span></div><a class:list={['mkt-button',plan.id==='growth'?'mkt-button-primary':'mkt-button-secondary']} href={`/signup?plan=${plan.id}`}>{plan.cta}<Icon name="arrow" size={15}/></a>{!compact&&<ul>{plan.features.map(feature=><li><Icon name="check" size={13}/><span>{feature}</span></li>)}</ul>}</article>)}</div>
+ <p class="mkt-pricing-note">Prices in USD. Proposed credits are a usage unit; they are not a fixed number of requests. Route, browser work and other agreed factors can affect credit use. Plan buttons open signup. They do not purchase, upgrade or activate a subscription. Your workspace shows its actual configured credit allocation. <a href="/pricing#credits">How credits work <Icon name="arrow" size={12}/></a></p>
+</div>

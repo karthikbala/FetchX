@@ -10,6 +10,8 @@ const code = `<span class="c-comment">// Endpoint provisioned during onboarding.
       <span class="c-green">'Content-Type'</span>: <span class="c-green">'application/json'</span>
     },
     body: JSON.stringify({
+      profile: <span class="c-green">'example.http'</span>,
+      idempotency_key: <span class="c-green">'example-read-001'</span>,
       url: <span class="c-green">'https://your-source.example'</span>
     })
   }

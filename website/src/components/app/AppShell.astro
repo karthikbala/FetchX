@@ -1,0 +1,41 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Brand from '../Brand.astro';
+import Icon from '../Icon.astro';
+import { viewTitles, type PreviewView } from '../../data/product-preview';
+import '../../styles/product-preview.css';
+const { view = 'overview' } = Astro.props as { view?: PreviewView };
+const page = viewTitles[view];
+const links = [
+  { view: 'overview', label: 'Overview', href: '/app', icon: 'grid' },
+  { view: 'playground', label: 'Playground', href: '/app/playground', icon: 'code' },
+  { view: 'requests', label: 'Requests', href: '/app/requests', icon: 'layers' },
+  { view: 'keys', label: 'API keys', href: '/app/keys', icon: 'lock' },
+  { view: 'billing', label: 'Credits & usage', href: '/app/billing', icon: 'file' },
+];
+---
+<Layout title={`${page.eyebrow.toLowerCase().replace(/(^|\s)\S/g, value => value.toUpperCase())} — FetchX`} description={page.description} appMode={true} noindex={true}>
+  <div class="product-preview pp-app" data-product-preview data-view={view}>
+    <div class="pp-preview-bar"><span><span class="pp-live-dot"></span> FetchX workspace <span class="pp-preview-detail" data-service-status>Checking service availability…</span></span><button type="button" data-refresh-workspace>Refresh <Icon name="route" size={14}/></button></div>
+    <div class="pp-app-grid">
+      <aside class="pp-sidebar" id="app-sidebar" aria-label="Workspace navigation"><a href="/" class="pp-brand" aria-label="FetchX home"><Brand/></a>
+        <div class="pp-project-switch"><label for="workspace-project">PROJECT</label><select id="workspace-project" data-project-select disabled><option value="">Loading projects…</option></select><button type="button" class="pp-text-link" data-open-project disabled>+ Create project</button></div>
+        <span class="pp-nav-label">WORKSPACE</span><nav aria-label="Product navigation">{links.map(link => <a href={link.href} aria-current={view === link.view ? 'page' : undefined}><Icon name={link.icon} size={19}/>{link.label}</a>)}</nav>
+        <a class:list={['pp-onboarding-nav', view === 'onboarding' && 'is-current']} href="/app/onboarding"><Icon name="check" size={18}/><span>Getting started<small data-onboarding-count>Awaiting your project</small></span><Icon name="arrow" size={16}/></a>
+        <div class="pp-sidebar-bottom"><div class="pp-credit-label"><span>Project credits</span><span data-credit-fraction>—</span></div><div class="pp-meter"><span data-credit-meter style="width:0%"></span></div><a href="/app/billing" class="pp-upgrade">View balance <Icon name="arrow" size={15}/></a><a href="/docs" class="pp-doc-link"><Icon name="file" size={17}/> API documentation <Icon name="diagonal" size={14}/></a><div class="pp-account"><span class="pp-avatar">F</span><span>Verified account<small data-user-email>Not signed in</small></span></div><button class="pp-text-link pp-signout" data-logout hidden>Sign out</button></div>
+      </aside>
+      <div class="pp-main-column"><header class="pp-topbar"><div><button class="pp-menu-button" data-app-menu aria-expanded="false" aria-controls="app-sidebar" aria-label="Open workspace navigation"><Icon name="menu"/></button><span class="pp-breadcrumb"><span data-project-name>Your project</span> / {view === 'keys' ? 'API keys' : view === 'overview' ? 'Overview' : view[0].toUpperCase() + view.slice(1)}</span></div><a href="/docs" class="pp-topbar-docs">Read the docs <Icon name="diagonal" size={14}/></a></header>
+        <div class="pp-content"><div class="pp-page-heading"><div><p class="pp-eyebrow">{page.eyebrow}</p><h1>{page.title}</h1><p>{page.description}</p></div></div>
+          <p class="pp-inline-error pp-live-error" data-page-error role="alert" hidden></p>
+          <section class="pp-card pp-workspace-gate" data-workspace-gate aria-live="polite"><h2 data-gate-title>Opening your workspace…</h2><p data-gate-description>Checking the service and your session.</p><a href="/login" class="pp-button pp-button-primary" data-login-link hidden>Verify your email</a><button type="button" class="pp-button pp-button-primary" data-open-project hidden>Create your first project</button></section>
+          <div data-workspace-content hidden><slot/></div><noscript><p>Enable JavaScript to use the workspace.</p></noscript>
+        </div><footer class="pp-app-footer"><span>Project access and usage come from FetchX.</span><span>Source acceptance belongs to your application.</span></footer>
+      </div>
+    </div>
+    <div class="pp-toast" role="status" aria-live="polite" data-toast hidden></div>
+    <dialog class="pp-dialog" data-project-dialog aria-labelledby="project-title"><h2 id="project-title">Create a project.</h2><p>Access profiles and trial eligibility are assigned by the service.</p><form data-create-project><label class="pp-field">Project name<input name="name" maxlength="80" required autocomplete="off"/></label><p class="pp-inline-error" data-project-error role="alert"></p><div class="pp-dialog-actions"><button type="button" class="pp-button pp-button-secondary" data-close-project>Cancel</button><button type="submit" class="pp-button pp-button-primary">Create project</button></div></form></dialog>
+    <dialog class="pp-dialog" data-key-dialog aria-labelledby="key-title"><h2 id="key-title">Save your API key.</h2><p>This secret is shown once. Keep it in your server environment.</p><code class="pp-key-secret" data-key-secret>Concealed</code><div class="pp-dialog-actions"><button type="button" class="pp-button pp-button-secondary" data-copy-key>Copy key</button><button type="button" class="pp-button pp-button-primary" data-close-key>I saved it · conceal</button></div></dialog>
+    <dialog class="pp-dialog pp-request-dialog" data-request-dialog aria-labelledby="request-title"><h2 id="request-title">Retained request.</h2><p data-request-detail-status></p><pre class="pp-code pp-live-output" tabindex="0" role="region" aria-label="Retained response text" data-request-detail></pre><button type="button" class="pp-button pp-button-secondary" data-close-request>Close</button></dialog>
+    <dialog class="pp-dialog" data-confirm-dialog aria-labelledby="confirm-title"><form method="dialog"><h2 id="confirm-title">Confirm action</h2><p data-confirm-description></p><div class="pp-dialog-actions"><button class="pp-button pp-button-secondary" value="cancel">Cancel</button><button class="pp-button pp-button-primary" value="confirm" data-confirm-action>Continue</button></div></form></dialog>
+  </div><script>import '../../scripts/product-preview';</script>
+</Layout>

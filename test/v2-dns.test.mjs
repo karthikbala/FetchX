@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {createSourceResolver,parseDnsJson} from '../src/v2-dns.mjs';
 import {pinnedDestination} from '../src/v2-http.mjs';
 import {safeFailure,safeCauseCode} from '../src/v2-diagnostics.mjs';
+import {GatewayError} from '../src/policy.mjs';
 
 const host='source.example',profile={origins:['https://source.example']};
 const settings={allowed_hosts:[host],fallback_resolvers:[{id:'approved-dns',endpoint:'https://resolver.example/resolve'}],system_timeout_ms:100,timeout_ms:100};
@@ -56,4 +57,56 @@ test('v2 resolver rejects malformed/unchecked DNS and bounds slow system/fallbac
  for(const patch of [{CD:true},{TC:true},{Question:[{name:'unrelated.example',type:1}]},{Question:[{name:23,type:1}]},{Answer:[null]},{Answer:[{name:'unrelated.example',type:1,data:'93.184.216.34'}]},{extended_dns_errors:{}}])assert.throws(()=>parseDnsJson({...value,...patch},host,1),{code:'source_dns_invalid_response'});
  const slow=createSourceResolver({...settings,fallback_resolvers:[]},{systemLookup:async()=>new Promise(()=>{})});const start=Date.now();await assert.rejects(slow(host,{all:true}),{code:'source_dns_timeout'});assert.ok(Date.now()-start<1000);
  const slowFallback=createSourceResolver(settings,{systemLookup,http:async()=>new Promise(()=>{})});await assert.rejects(slowFallback(host,{all:true}),{code:'source_dns_timeout'});
+});
+
+test('v2 fallback classifies native HTTPS deadlines and socket timeouts as DNS timeouts',async()=>{
+ for(const error of [new GatewayError('source_timeout_unknown',502),dnsError('ETIMEDOUT')]){
+  const resolver=createSourceResolver(settings,{systemLookup,http:async()=>{throw error;}});
+  await assert.rejects(resolver(host,{all:true}),failure=>{
+   assert.equal(failure.code,'source_dns_timeout');
+   assert.equal(failure.cause_code,error.code==='ETIMEDOUT'?'ETIMEDOUT':null);
+   assert.equal(safeFailure(failure,'dns').request_dispatched,false);
+   assert.equal(failure.dns_diagnostics.attempts.at(-1).resolver_id,'approved-dns');
+   return true;
+  });
+ }
+});
+
+function proxyContext(){
+ const context={proxy:{url:'http://synthetic-us-proxy.example:8080'},deadline:Date.now()+1000,bytes:0,dispatches:0,uncertain:false};
+ context.remainingTunnel=()=>1000-context.bytes;
+ context.beforeDispatch=async()=>{context.dispatches++;};
+ context.observe=(bytes,{uncertain})=>{context.bytes+=bytes;context.uncertain||=uncertain;};
+ return context;
+}
+
+test('v2 exact-host session DNS uses one immutable proxy and sequential shared limits',async()=>{
+ const context=proxyContext(),calls=[];
+ const resolver=createSourceResolver({...settings,use_session_proxy:true},{systemLookup:async name=>{assert.equal(name,'resolver.example');return [{address:'93.184.216.34'}];},http:async(input,dest,limits,{proxy})=>{
+  assert.equal(proxy,context.proxy);assert.equal(context.dispatches,calls.length+1);assert.equal(limits.max_tunnel_bytes,1000-calls.length*100);assert.ok(limits.timeout_ms<=100);calls.push(dest.url.searchParams.get('type'));
+  return {...jsonReply(dest),tunnel_bytes:100};
+ }});
+ const result=await pinnedDestination('https://source.example/data',profile,(host,options)=>resolver(host,options,context));
+ assert.deepEqual(calls,['1','28']);assert.equal(context.bytes,200);assert.equal(result.dns_diagnostics.session_proxy_used,true);
+});
+
+test('v2 proxied DNS keeps public checks and never repeats failed paid resolution',async()=>{
+ for(const mode of ['private','servfail','unknown']){
+  const context=proxyContext();let calls=0;
+  const resolver=createSourceResolver({...settings,use_session_proxy:true,fallback_resolvers:[...settings.fallback_resolvers,{id:'second',endpoint:'https://second.example/resolve'}]},{systemLookup:async()=>[{address:'93.184.216.34'}],http:async(input,dest)=>{
+   calls++;
+   if(mode==='unknown')throw Object.assign(new GatewayError('source_timeout_unknown',502),{observed_tunnel_bytes:17});
+   return {...jsonReply(dest,mode==='servfail'?{Status:2}:{Answer:[{name:host,type:Number(dest.url.searchParams.get('type')),data:dest.url.searchParams.get('type')==='1'?'10.0.0.1':'::1'}]}),tunnel_bytes:100};
+  }});
+  await assert.rejects(pinnedDestination('https://source.example/data',profile,(host,options)=>resolver(host,options,context)),{code:mode==='private'?'destination_rejected':mode==='servfail'?'source_dns_servfail':'source_dns_timeout'});
+  assert.equal(calls,mode==='private'?2:1);assert.equal(context.bytes,mode==='private'?200:mode==='unknown'?17:100);assert.equal(context.uncertain,mode==='unknown');
+ }
+});
+
+test('v2 session DNS opt-in leaves disabled, direct and unapproved hosts on system DNS',async()=>{
+ for(const [config,context,name]of [[settings,proxyContext(),host],[{...settings,use_session_proxy:true},undefined,host],[{...settings,use_session_proxy:true},proxyContext(),'other.example']]){
+  let lookups=0;const resolver=createSourceResolver(config,{systemLookup:async actual=>{lookups++;assert.equal(actual,name);return [{address:'93.184.216.34'}];},http:async()=>assert.fail('unexpected DoH dispatch')});
+  await resolver(name,{all:true},context);assert.equal(lookups,1);assert.equal(context?.dispatches??0,0);
+ }
+ assert.throws(()=>createSourceResolver({...settings,use_session_proxy:'yes'}),{code:'dns_configuration_invalid'});
 });
