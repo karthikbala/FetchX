@@ -15,6 +15,7 @@ const errors = [], external = [], checks = [], accessibility = [], calls = [];
 page.on('pageerror', error => errors.push(error.message));
 page.on('request', request => { if (!request.url().startsWith(base) && !request.url().startsWith('data:')) external.push(request.url()); });
 let signedIn = false, enabled = true, responseState = 'completed', recoveryMissing = false;
+let logoutFailure = false, logoutPause = null;
 const user = { id: '11111111-1111-4111-8111-111111111111', email: 'private-fixture@example.test' };
 const projectId = 'cp_22222222-2222-4222-8222-222222222222';
 const projects = [], keys = [], operations = [], envelopes = new Map();
@@ -38,7 +39,7 @@ await context.route('**/api/control/**', async route => {
   if (path === '/session') return signedIn ? send(session()) : fail('unauthorized', 'Verify your email to continue.', 401);
   if (!signedIn) return fail('unauthorized', 'A verified session is required.', 401);
   if (method !== 'GET') assert.equal(request.headers()['x-csrf-token'], 'synthetic-csrf-ui-fixture', 'Authenticated mutations need CSRF');
-  if (path === '/auth/logout') { signedIn = false; return send({ logged_out: true }); }
+  if (path === '/auth/logout') { if (logoutPause) await logoutPause; if (logoutFailure) return fail('logout_unavailable', 'Sign out is temporarily unavailable. Try again.', 503); signedIn = false; return send({ logged_out: true }); }
   if (path === '/projects' && method === 'POST') { const project = safeProject(body.name); projects.push(project); return send({ project }, 201); }
   if (path === '/projects') return send({ projects });
   const match = /^\/projects\/([^/]+)(.*)$/.exec(path);
@@ -81,6 +82,10 @@ try {
   await expect(page.locator('[data-signup-stage="2"]')).toBeVisible(); assert.equal(projects.length, 0, 'Email verification must not create a project');
   await page.locator('[data-signup-project] input').fill('Private project fixture'); await page.locator('[data-signup-project] button').click();
   await expect(page.locator('[data-signup-stage="3"]')).toBeVisible(); assert.equal(keys.length, 0, 'Project creation must not create a key');
+  const signupName = page.locator('[data-signup-key] input[name="name"]');
+  await expect(signupName).toHaveValue(''); await signupName.focus();
+  assert.equal(await signupName.evaluate(node => getComputedStyle(node, '::placeholder').opacity), '0');
+  await signupName.fill('My fixture key'); await signupName.blur(); await signupName.focus(); await expect(signupName).toHaveValue('My fixture key');
   await page.locator('[data-signup-key] input[value="usage:read"]').uncheck(); await page.locator('[data-signup-key] button').click();
   await expect(page.locator('[data-signup-secret]')).toContainText(token()); assert.ok(!keys[0].scopes.includes('usage:read'));
   await page.locator('[data-signup-copy]').click(); assert.equal(await page.evaluate(() => navigator.clipboard.readText()), token());
@@ -127,7 +132,7 @@ try {
 
   await page.goto(base + '/app/requests'); await expect(page.locator('[data-request-id]')).toHaveCount(2); await page.locator('[data-request-id]').first().click(); await expect(page.locator('[data-request-dialog]')).toBeVisible(); await expect(page.locator('[data-request-detail]')).toContainText('source_timeout_unknown'); await expect(page.locator('[data-request-detail]')).toHaveAttribute('tabindex', '0'); await expect(page.locator('[data-request-detail]')).toHaveAccessibleName('Retained response text'); await audit('retained request details'); await page.keyboard.press('Escape');
   await page.locator('[data-request-filter]').selectOption('completed'); await expect(page.locator('[data-request-id]')).toHaveCount(1); await page.locator('[data-request-search]').fill('no-match'); await expect(page.locator('[data-request-id]')).toHaveCount(0);
-  await page.goto(base + '/app/keys'); await expect(page.locator('[data-key-secret]')).toHaveText('Concealed'); await page.locator('[data-create-key] input[name="name"]').fill('Fixture server key'); await page.locator('[data-create-key] button[type="submit"]').click(); await expect(page.locator('[data-key-dialog]')).toBeVisible(); await audit('key reveal');
+  await page.goto(base + '/app/keys'); await expect(page.locator('[data-key-secret]')).toHaveText('Concealed'); const keyName = page.locator('[data-create-key] input[name="name"]'); await expect(keyName).toHaveValue(''); await page.locator('h1').click(); assert.equal(await keyName.evaluate(node => getComputedStyle(node, '::placeholder').opacity), '1'); await keyName.focus(); assert.equal(await keyName.evaluate(node => getComputedStyle(node, '::placeholder').opacity), '0'); await keyName.fill('Fixture server key'); await keyName.blur(); await keyName.focus(); await expect(keyName).toHaveValue('Fixture server key'); await page.locator('[data-create-key] button[type="submit"]').click(); await expect(page.locator('[data-key-dialog]')).toBeVisible(); await audit('key reveal');
   // Observe the DOM at close() entry: waiting for the queued close event would
   // allow a hidden dialog to retain its secret and miss the regression.
   await page.evaluate(() => {
@@ -154,15 +159,39 @@ try {
   for (const route of ['/signup', '/login', '/app', '/app/onboarding', '/app/playground', '/app/requests', '/app/keys', '/app/billing']) {
     const response = await page.goto(base + route); assert.equal(response.status(), 200); await expect(page.locator('h1')).toHaveCount(1); await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'noindex,nofollow');
     if (route.startsWith('/app')) await expect(page.locator('[data-workspace-content]')).toBeVisible();
-    for (const width of [360, 768, 1024, 1440]) { await page.setViewportSize({ width, height: 1000 }); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), route + ' overflows at ' + width); }
+    else { await expect(page.locator('[data-auth-existing] [data-user-email]')).toHaveText(user.email); await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible(); }
+    for (const width of [320, 360, 375, 768, 1024, 1440]) { await page.setViewportSize({ width, height: 1000 }); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), route + ' overflows at ' + width); if (route.startsWith('/app')) { const signout = page.getByRole('button', { name: 'Sign out', exact: true }); await expect(page.locator('.pp-topbar [data-user-email]')).toHaveText(user.email); await expect(signout).toBeInViewport(); await expect(page.locator('[data-app-menu]')).toHaveAttribute('aria-expanded', 'false'); } }
     await audit(route); if (route === '/app') await page.screenshot({ path: out + '/live-workspace-overview.png', fullPage: true });
   }
+  const originalProjectName = projects[0].name; projects[0].name = 'Long-project-name-'.repeat(10);
+  await page.goto(base + '/app'); await expect(page.locator('[data-project-name]')).toHaveText(projects[0].name);
+  for (const width of [320, 375, 768, 1024, 1440]) { await page.setViewportSize({ width, height: 800 }); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Long project name overflows at ' + width); await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeInViewport(); }
+  projects[0].name = originalProjectName;
   await page.setViewportSize({ width: 360, height: 800 }); await page.locator('[data-app-menu]').click(); await expect(page.locator('[data-app-menu]')).toHaveAttribute('aria-expanded', 'true'); await page.keyboard.press('Escape'); await expect(page.locator('[data-app-menu]')).toHaveAttribute('aria-expanded', 'false');
   const persisted = await storage(); for (const secret of [user.email, 'Private project', 'Second private', 'fxk_', 'synthetic-csrf', 'private-path', 'source text fixture']) assert.ok(!persisted.includes(secret), 'Sensitive value persisted: ' + secret);
-  checks.push('Authoritative usage/latency/held balance, read-only billing, project creation/switching, eight routes, four widths, mobile navigation and storage allowlist');
+  checks.push('Authoritative usage/latency/held balance, read-only billing, project creation/switching, eight routes, six widths, mobile navigation and storage allowlist');
 
   await page.goto(base + '/app/playground'); await expect(page.locator('[data-workspace-content]')).toBeVisible(); responseState = 'network_error'; await page.locator('[data-new-request]').click(); await page.locator('[data-confirm-action]').click(); await page.locator('[data-request-url]').fill('https://approved.example/network-case'); await page.locator('[data-run-request]').click(); await expect(page.locator('[data-response-state]')).toHaveText('Unknown'); const networkPosts = fetchPosts; await page.reload(); await expect(page.locator('[data-response-state]')).toHaveText('Pending recovery'); await page.locator('[data-recover-result]').click(); await expect(page.locator('[data-response-state]')).toHaveText('Unknown'); assert.equal(fetchPosts, networkPosts);
   checks.push('Interrupted network response retains its original key and recovers with GET; missing lookup cannot discard an uncertain operation');
+  // A failed logout retains the authenticated UI; a pending request cannot be duplicated.
+  await page.setViewportSize({ width: 360, height: 800 });
+  const signout = page.getByRole('button', { name: 'Sign out', exact: true });
+  await expect(signout).toBeInViewport();
+  let releaseLogout; logoutPause = new Promise(resolve => { releaseLogout = resolve; }); logoutFailure = true;
+  const logoutCount = calls.filter(call => call.path === '/auth/logout').length;
+  await signout.click(); await expect(page.getByRole('button', { name: 'Signing out…', exact: true })).toBeDisabled();
+  await expect(page.locator('[data-logout]')).toHaveAttribute('aria-busy', 'true');
+  await page.locator('[data-logout]').evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  assert.equal(calls.filter(call => call.path === '/auth/logout').length, logoutCount + 1);
+  releaseLogout(); await expect(page.locator('[data-page-error]')).toContainText('Sign out is temporarily unavailable');
+  await expect(signout).toBeEnabled(); await expect(page.locator('[data-user-email]')).toHaveText(user.email);
+  assert.equal(new URL(page.url()).pathname, '/app/playground'); assert.equal(signedIn, true);
+  logoutPause = null; logoutFailure = false;
+  await signout.click(); await expect(page).toHaveURL(base + '/login'); await expect(page.locator('[data-signup-email] button')).toBeEnabled();
+  await page.goto(base + '/app'); await expect(page.locator('[data-gate-title]')).toHaveText('Sign in to continue.'); await expect(page.locator('[data-session-account]')).toBeHidden();
+  signedIn = true; await page.goto(base + '/login'); await expect(page.locator('[data-auth-existing] [data-user-email]')).toHaveText(user.email);
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await expect(page.locator('[data-signup-email] button')).toBeEnabled(); assert.equal(signedIn, false);
+  checks.push('Key samples clear on focus without clearing typed names; signed-in identity and signout visible across widths; pending logout blocks duplicate requests, failure retains session, successful workspace/auth logout returns to sign-in');
   enabled = false; await page.goto(base + '/signup'); await expect(page.locator('[data-page-error]')).toContainText('not configured'); await expect(page.locator('[data-signup-email] button')).toBeDisabled(); await page.goto(base + '/app'); await expect(page.locator('[data-gate-title]')).toHaveText('Workspace unavailable.'); await expect(page.locator('[data-workspace-content]')).toBeHidden();
   checks.push('Unconfigured service fails honestly with no synthetic account, usage or request success');
   assert.deepEqual(external, []); assert.deepEqual(errors, []);

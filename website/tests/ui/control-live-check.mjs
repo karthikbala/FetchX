@@ -140,6 +140,7 @@ async function run(){
  const created=await perform('POST','/projects',()=>page.locator('[data-signup-project] button').click()),project=(await safeJSON(created)).project;
  checked(created.ok()&&/^cp_[a-f0-9-]{36}$/.test(project?.id),'project_creation_invalid');
  await visible('[data-signup-stage="3"]');await storage(project.id);
+ await page.locator('[data-signup-key] input[name="name"]').fill('Native acceptance key');
  const keyResponse=await perform('POST',`/projects/${project.id}/keys`,()=>page.locator('[data-signup-key] button[type="submit"]').click()),key=await safeJSON(keyResponse);
  checked(keyResponse.ok()&&/^fxk_[A-Za-z0-9_-]{43}$/.test(key.token)&&key.key?.id,'key_creation_invalid');privateValues.push(key.token);
  await visible('[data-signup-reveal]');checked((await page.locator('[data-signup-secret]').textContent())===key.token,'initial_key_reveal_invalid');await storage(project.id);await auditBoth();
