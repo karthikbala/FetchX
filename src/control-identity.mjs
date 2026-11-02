@@ -3,11 +3,12 @@ import {fail} from './policy.mjs';
 import {createControlMail} from './control-mail.mjs';
 import {grantInitialCredits} from './control-credits.mjs';
 import {createControlGoogle,googleConfiguration} from './control-google.mjs';
+import {createControlGithub,githubConfiguration,githubSettings,githubAuthorizationUrl} from './control-github.mjs';
 
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const PROJECT=/^cp_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const SCOPES=Object.freeze(['fetch:read','fetch:write','usage:read','profiles:read']);
-const TTL=600,SESSION_TTL=7*86400,GOOGLE_TTL=300;
+const TTL=600,SESSION_TTL=7*86400,GOOGLE_TTL=300,GITHUB_TTL=300;
 const plain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const canonical=value=>JSON.stringify(sort(value));
@@ -43,13 +44,19 @@ export async function initControlIdentity(pool){await pool.query(`
  CREATE INDEX IF NOT EXISTS control_google_challenges_expiry ON control_google_challenges(expires_at);
  CREATE INDEX IF NOT EXISTS control_google_challenges_binding ON control_google_challenges(binding_hash);
  CREATE TABLE IF NOT EXISTS control_google_identities(issuer text NOT NULL CHECK(issuer='https://accounts.google.com'),subject text NOT NULL CHECK(char_length(subject) BETWEEN 1 AND 255),user_id uuid NOT NULL UNIQUE REFERENCES control_users(id),created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(issuer,subject));
+ CREATE TABLE IF NOT EXISTS control_github_challenges(id uuid PRIMARY KEY,state_hash text NOT NULL UNIQUE CHECK(state_hash ~ '^[a-f0-9]{64}$'),binding_hash text NOT NULL CHECK(binding_hash ~ '^[a-f0-9]{64}$'),client_id text NOT NULL,redirect_uri text NOT NULL,mode text NOT NULL CHECK(mode IN ('login','link')),user_id uuid REFERENCES control_users(id),session_id uuid REFERENCES control_sessions(id),expires_at timestamptz NOT NULL,consumed_at timestamptz,created_at timestamptz NOT NULL DEFAULT now(),CHECK((mode='login' AND user_id IS NULL AND session_id IS NULL) OR (mode='link' AND user_id IS NOT NULL AND session_id IS NOT NULL)));
+ CREATE INDEX IF NOT EXISTS control_github_challenges_expiry ON control_github_challenges(expires_at);
+ CREATE INDEX IF NOT EXISTS control_github_challenges_binding ON control_github_challenges(binding_hash);
+ CREATE TABLE IF NOT EXISTS control_github_identities(subject text PRIMARY KEY CHECK(subject ~ '^[1-9][0-9]{0,15}$'),user_id uuid NOT NULL UNIQUE REFERENCES control_users(id),created_at timestamptz NOT NULL DEFAULT now());
  `);}
 
 export class ControlIdentity{
- constructor({store,config,mail,google}){Object.assign(this,{store,config});this.mail=mail??createControlMail(config);this.google=google??createControlGoogle();}
+ constructor({store,config,mail,google,github}){Object.assign(this,{store,config});this.mail=mail??createControlMail(config);this.google=google??createControlGoogle();this.github=github??createControlGithub();}
  get mailConfigured(){return this.mail?.configured===true&&typeof this.mail.sendCode==='function';}
  googleStatus(){return googleConfiguration(this.config);}
  googleSettings(){const value=this.googleStatus();if(!value.enabled)fail('google_disabled',503);return value;}
+ githubStatus(){return githubConfiguration(this.config);}
+ githubSettings(){const value=githubSettings(this.config);if(!value)fail('github_disabled',503);return value;}
  enabled(){return this.config.controlPlane?.enabled===true;}
  settings(){
   const control=this.config.controlPlane;if(!this.enabled())fail('control_unavailable',503);
@@ -80,6 +87,69 @@ export class ControlIdentity{
   if(!allowed)fail('rate_limited',429);
  }
  ip(value){if(typeof value!=='string'||!value||value.length>128)fail('client_address_invalid');return value;}
+ async authMethods(userId){
+  this.settings();if(typeof userId!=='string'||!UUID.test(userId))fail('unauthorized',401);
+  return {github:!!(await this.store.pool.query('SELECT 1 FROM control_github_identities WHERE user_id=$1',[userId])).rowCount};
+ }
+ githubVerifier(state,binding){return createHmac('sha256',this.settings().bridgeSecret).update(`github-pkce\0${state}\0${binding}`).digest('base64url');}
+ async githubContext(c,{mode,sessionToken,csrfVerified},challenge){
+  const session=tokenValid(sessionToken,'fxs')?(await c.query('SELECT s.id,s.user_id,s.expires_at,u.email FROM control_sessions s JOIN control_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp() FOR SHARE OF s',[hash(sessionToken)])).rows[0]:null;
+  if(mode==='login'){if(session)fail('github_session_conflict',409);return null;}
+  if(!session||challenge&&(session.id!==challenge.session_id||session.user_id!==challenge.user_id))fail('github_session_conflict',409);
+  if(csrfVerified!==true)fail('csrf_rejected',403);return session;
+ }
+ async requestGithubStart({mode,ip,binding,sessionToken,csrfVerified=false}){
+  this.settings();const github=this.githubSettings();ip=this.ip(ip);
+  if(!['login','link'].includes(mode))fail('request_invalid');
+  await this.rate([['github-start-ip',ip,20,900]]);
+  const id=randomUUID(),state=randomBytes(32).toString('base64url'),token=tokenFor('fxh');
+  const row=await this.store.tx(async c=>{
+   const session=await this.githubContext(c,{mode,sessionToken,csrfVerified});
+   if(tokenValid(binding,'fxh'))await c.query('UPDATE control_github_challenges SET consumed_at=COALESCE(consumed_at,clock_timestamp()) WHERE binding_hash=$1 AND consumed_at IS NULL',[this.digest('github-binding',binding)]);
+   await c.query("DELETE FROM control_github_challenges WHERE expires_at<clock_timestamp()-interval '1 day'");
+   return (await c.query("INSERT INTO control_github_challenges(id,state_hash,binding_hash,client_id,redirect_uri,mode,user_id,session_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,clock_timestamp()+$9*interval '1 second') RETURNING expires_at",[id,this.digest('github-state',state),this.digest('github-binding',token),github.clientId,github.redirectUri,mode,session?.user_id??null,session?.id??null,GITHUB_TTL])).rows[0];
+  });
+  return {authorization_url:githubAuthorizationUrl(github,{state,verifier:this.githubVerifier(state,token)}),expires_in:GITHUB_TTL,binding:token,expires_at:row.expires_at};
+ }
+ async completeGithub({code,state,error,binding,ip,sessionToken,csrfVerified=false}){
+  this.settings();const github=this.githubSettings();ip=this.ip(ip);
+  await this.rate([['github-complete-ip',ip,60,900]]);
+  if(typeof state!=='string'||! /^[A-Za-z0-9_-]{43}$/.test(state)||!tokenValid(binding,'fxh')||!(error==='access_denied'&&code===undefined||error===undefined&&typeof code==='string'&&/^[A-Za-z0-9_-]{1,512}$/.test(code)))fail('github_verification_invalid',401);
+  const context={sessionToken,csrfVerified},bindingHash=this.digest('github-binding',binding);
+  // Commit consumption before the code exchange. A timeout, provider rejection,
+  // concurrent callback or database error can never replay source work.
+  const challenge=await this.store.tx(async c=>{
+   const row=(await c.query('SELECT *,expires_at>clock_timestamp() AS current FROM control_github_challenges WHERE state_hash=$1 FOR UPDATE',[this.digest('github-state',state)])).rows[0];
+   if(!row||row.consumed_at||!row.current||!equalDigest(row.binding_hash,bindingHash)||row.client_id!==github.clientId||row.redirect_uri!==github.redirectUri)return null;
+   await this.githubContext(c,{...context,mode:row.mode},row);
+   await c.query('UPDATE control_github_challenges SET consumed_at=clock_timestamp() WHERE id=$1',[row.id]);return row;
+  });
+  if(!challenge)fail('github_verification_invalid',401);
+  if(error)fail('github_cancelled');
+  const claims=await this.github.verify(code,{...github,verifier:this.githubVerifier(state,binding)});
+  if(!claims||typeof claims.subject!=='string'||! /^[1-9][0-9]{0,15}$/.test(claims.subject)||!Number.isSafeInteger(Number(claims.subject)))fail('github_verification_invalid',401);
+  const email=emailAddress(claims.email),token=challenge.mode==='link'?sessionToken:tokenFor('fxs');
+  return this.store.tx(async c=>{
+   const session=await this.githubContext(c,{...context,mode:challenge.mode},challenge);
+   await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,170021))',[this.digest('github-subject',claims.subject)]);
+   const linked=(await c.query('SELECT u.id,u.email FROM control_github_identities g JOIN control_users u ON u.id=g.user_id WHERE g.subject=$1',[claims.subject])).rows[0];
+   let user=linked;
+   if(challenge.mode==='link'){
+    await c.query('SELECT id FROM control_users WHERE id=$1 FOR UPDATE',[session.user_id]);
+    const existing=(await c.query('SELECT subject FROM control_github_identities WHERE user_id=$1',[session.user_id])).rows[0];
+    if(linked&&linked.id!==session.user_id||existing&&existing.subject!==claims.subject)fail('github_identity_conflict',409);
+    if(!existing)await c.query('INSERT INTO control_github_identities(subject,user_id) VALUES($1,$2)',[claims.subject,session.user_id]);
+    user={id:session.user_id,email:session.email};
+   }else if(!user){
+    await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,170019))',[this.digest('email',email)]);
+    if((await c.query('SELECT id FROM control_users WHERE email=$1',[email])).rowCount)fail('github_account_link_required',409);
+    user=(await c.query('INSERT INTO control_users(id,email) VALUES($1,$2) RETURNING *',[randomUUID(),email])).rows[0];
+    await c.query('INSERT INTO control_github_identities(subject,user_id) VALUES($1,$2)',[claims.subject,user.id]);
+   }
+   const expires=challenge.mode==='link'?session.expires_at:(await c.query("INSERT INTO control_sessions(id,user_id,token_hash,expires_at) VALUES($1,$2,$3,clock_timestamp()+$4*interval '1 second') RETURNING expires_at",[randomUUID(),user.id,hash(token),SESSION_TTL])).rows[0].expires_at;
+   return {user:userView(user),session:{token,expires_at:expires},mode:challenge.mode};
+  });
+ }
  async requestGoogleChallenge({ip,binding}){
   this.settings();const google=this.googleSettings();ip=this.ip(ip);
   await this.rate([['google-challenge-ip',ip,20,900]]);

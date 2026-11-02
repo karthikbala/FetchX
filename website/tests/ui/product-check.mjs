@@ -159,7 +159,7 @@ try {
   for (const route of ['/signup', '/login', '/app', '/app/onboarding', '/app/playground', '/app/requests', '/app/keys', '/app/billing']) {
     const response = await page.goto(base + route); assert.equal(response.status(), 200); await expect(page.locator('h1')).toHaveCount(1); await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'noindex,nofollow');
     if (route.startsWith('/app')) await expect(page.locator('[data-workspace-content]')).toBeVisible();
-    else { await expect(page.locator('[data-auth-existing] [data-user-email]')).toHaveText(user.email); await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible(); }
+    else { await expect(page.locator('[data-auth-account] [data-user-email]')).toHaveText(user.email); await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible(); }
     for (const width of [320, 360, 375, 768, 1024, 1440]) { await page.setViewportSize({ width, height: 1000 }); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), route + ' overflows at ' + width); if (route.startsWith('/app')) { const signout = page.getByRole('button', { name: 'Sign out', exact: true }); await expect(page.locator('.pp-topbar [data-user-email]')).toHaveText(user.email); await expect(signout).toBeInViewport(); await expect(page.locator('[data-app-menu]')).toHaveAttribute('aria-expanded', 'false'); } }
     await audit(route); if (route === '/app') await page.screenshot({ path: out + '/live-workspace-overview.png', fullPage: true });
   }
@@ -189,7 +189,7 @@ try {
   logoutPause = null; logoutFailure = false;
   await signout.click(); await expect(page).toHaveURL(base + '/login'); await expect(page.locator('[data-signup-email] button')).toBeEnabled();
   await page.goto(base + '/app'); await expect(page.locator('[data-gate-title]')).toHaveText('Sign in to continue.'); await expect(page.locator('[data-session-account]')).toBeHidden();
-  signedIn = true; await page.goto(base + '/login'); await expect(page.locator('[data-auth-existing] [data-user-email]')).toHaveText(user.email);
+  signedIn = true; await page.goto(base + '/login'); await expect(page.locator('[data-auth-account] [data-user-email]')).toHaveText(user.email);
   await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await expect(page.locator('[data-signup-email] button')).toBeEnabled(); assert.equal(signedIn, false);
   checks.push('Key samples clear on focus without clearing typed names; signed-in identity and signout visible across widths; pending logout blocks duplicate requests, failure retains session, successful workspace/auth logout returns to sign-in');
   enabled = false; await page.goto(base + '/signup'); await expect(page.locator('[data-page-error]')).toContainText('not configured'); await expect(page.locator('[data-signup-email] button')).toBeDisabled(); await page.goto(base + '/app'); await expect(page.locator('[data-gate-title]')).toHaveText('Workspace unavailable.'); await expect(page.locator('[data-workspace-content]')).toBeHidden();

@@ -8,8 +8,12 @@ export interface ControlEnv {
 }
 const COOKIE='fetchx_session';
 const GOOGLE_COOKIE='fetchx_google';
+const GITHUB_COOKIE='fetchx_github';
 const SESSION=/^fxs_[A-Za-z0-9_-]{43}$/;
 const GOOGLE_BINDING=/^fxg_[A-Za-z0-9_-]{43}$/;
+const GITHUB_BINDING=/^fxh_[A-Za-z0-9_-]{43}$/;
+const GITHUB_CALLBACK='/api/control/auth/github/callback';
+const GITHUB_ERRORS=new Set(['github_disabled','github_unavailable','github_verification_invalid','github_cancelled','github_account_link_required','github_identity_conflict','github_session_conflict','github_email_verification_required']);
 const PROJECT='cp_[a-fA-F0-9-]{36}';
 const UUID='[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}';
 export const CONTROL_REQUEST_LIMIT=96*1024;
@@ -21,7 +25,7 @@ const error=(status:number,code:string,message:string)=>response(status,{error:{
 const loopback=(url:URL)=>/^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i.test(url.hostname)||url.hostname.endsWith('.localhost');
 function allowedMethods(path:string):string[]|null {
  if(['/status','/session'].includes(path))return ['GET'];
- if(['/auth/code','/auth/verify','/auth/logout','/auth/google/challenge','/auth/google/verify'].includes(path))return ['POST'];
+ if(['/auth/code','/auth/verify','/auth/logout','/auth/google/challenge','/auth/google/verify','/auth/github/start','/auth/github/complete'].includes(path))return ['POST'];
  if(path==='/projects')return ['GET','POST'];
  if(new RegExp(`^/projects/${PROJECT}$`).test(path))return ['GET'];
  if(new RegExp(`^/projects/${PROJECT}/keys$`).test(path))return ['GET','POST'];
@@ -51,22 +55,61 @@ function requestCookie(value:string|null,name:string,pattern:RegExp):string|null
 function responseCookie(value:string,secure:boolean,name:string):string|null {
  const parts=value.split(';').map(v=>v.trim()),pair=parts.shift()??'';
  if(!pair.startsWith(name+'='))return null;
- const token=pair.slice(name.length+1),google=name===GOOGLE_COOKIE;
- if(token!==''&&!(google?GOOGLE_BINDING:SESSION).test(token))return null;
+ const token=pair.slice(name.length+1),binding=name===GOOGLE_COOKIE||name===GITHUB_COOKIE;
+ if(token!==''&&!(name===GOOGLE_COOKIE?GOOGLE_BINDING:name===GITHUB_COOKIE?GITHUB_BINDING:SESSION).test(token))return null;
  const out=[pair,'Path=/api/control','HttpOnly','SameSite=Lax'];if(secure)out.push('Secure');
  if(!token)out.push('Max-Age=0','Expires=Thu, 01 Jan 1970 00:00:00 GMT');
  else {
   const expires=parts.find(v=>/^Expires=/i.test(v));
   let time:number|undefined;
   if(expires){time=Date.parse(expires.slice(8));if(!Number.isFinite(time))return null;}
-  if(google){time=Math.min(time??Date.now()+300_000,Date.now()+300_000);out.push('Max-Age='+Math.max(0,Math.min(300,Math.floor((time-Date.now())/1000))));}
+  if(binding){time=Math.min(time??Date.now()+300_000,Date.now()+300_000);out.push('Max-Age='+Math.max(0,Math.min(300,Math.floor((time-Date.now())/1000))));}
   if(time!==undefined)out.push('Expires='+new Date(time).toUTCString());
  }
  return out.join('; ');
 }
 
+// This is the only cross-site navigation exception. OAuth parameters remain on
+// the server and never enter a page, browser storage, logs or a redirect target.
+async function githubCallback(request:Request,env:ControlEnv):Promise<Response> {
+ const incoming=new URL(request.url);
+ const secure=!(env.SITE_ENV==='development'&&env.FETCHX_CONTROL_ALLOW_LOOPBACK==='true'&&loopback(incoming));
+ const redirect=(destination:string,completed?:Response)=>{
+  const output=new Response(null,{status:303,headers:{...headers,Location:destination,'Referrer-Policy':'no-referrer'}});
+  for(const cookie of completed?.headers.getSetCookie()??[])if(cookie.startsWith(COOKIE+'='))output.headers.append('Set-Cookie',cookie);
+  output.headers.append('Set-Cookie',responseCookie(GITHUB_COOKIE+'=',secure,GITHUB_COOKIE)!);
+  return output;
+ };
+ const failed=(code='github_verification_invalid')=>redirect('/login?github='+code);
+ if(!(env.ALLOWED_ORIGINS??'').split(',').map(v=>v.trim()).includes(incoming.origin))return failed();
+ if(request.method!=='GET')return response(405,{error:{code:'method_not_allowed',message:'This method is not supported.'}},{Allow:'GET','Referrer-Policy':'no-referrer'});
+ if(incoming.search.length>4096)return failed();
+ const parameters=[...incoming.searchParams],state=incoming.searchParams.get('state'),code=incoming.searchParams.get('code'),denied=incoming.searchParams.get('error');
+ const keys=parameters.map(([key])=>key);
+ // GitHub's optional error_description/error_uri are ignored, never forwarded.
+ if(parameters.length>4||new Set(keys).size!==keys.length||keys.some(key=>!['code','state','error','error_description','error_uri'].includes(key))||parameters.some(([,value])=>value.length>1024)||!state||!/^[A-Za-z0-9_-]{43}$/.test(state))return failed();
+ const cancelled=denied==='access_denied'&&code===null;
+ if(!cancelled&&(denied!==null||!code||!/^[A-Za-z0-9_-]{1,512}$/.test(code)||keys.some(key=>key==='error_description'||key==='error_uri')))return failed();
+ const forwarded=new Headers({'Origin':incoming.origin,'Sec-Fetch-Site':'same-origin','Accept':'application/json'});
+ const cookie=request.headers.get('Cookie');if(cookie)forwarded.set('Cookie',cookie);
+ const ip=request.headers.get('CF-Connecting-IP');if(ip)forwarded.set('CF-Connecting-IP',ip);
+ if(requestCookie(cookie,COOKIE,SESSION)){
+  const current=await handleControl(new Request(incoming.origin+'/api/control/session',{headers:forwarded}),env);
+  if(current.ok){const session=await current.json() as {csrf_token?:unknown};if(typeof session.csrf_token==='string'&&/^[A-Za-z0-9_-]{43}$/.test(session.csrf_token))forwarded.set('X-CSRF-Token',session.csrf_token);}
+ }
+ forwarded.set('Content-Type','application/json');
+ const completed=await handleControl(new Request(incoming.origin+'/api/control/auth/github/complete',{method:'POST',headers:forwarded,body:JSON.stringify(cancelled?{error:'access_denied',state}:{code,state})}),env);
+ const payload=await completed.json() as {error?:{code?:unknown};user?:{id?:unknown;email?:unknown};csrf_token?:unknown;projects?:unknown;mode?:unknown;auth_methods?:{github?:unknown}};
+ if(!completed.ok){const code=payload.error?.code;return failed(typeof code==='string'&&GITHUB_ERRORS.has(code)?code:completed.status>=500?'github_unavailable':'github_verification_invalid');}
+ if(!payload.user||typeof payload.user.id!=='string'||typeof payload.user.email!=='string'||typeof payload.csrf_token!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(payload.csrf_token)||!Array.isArray(payload.projects)||payload.auth_methods?.github!==true||payload.mode!=='login'&&payload.mode!=='link')return failed('github_unavailable');
+ const sessions=completed.headers.getSetCookie().filter(value=>value.startsWith(COOKIE+'='));
+ if(sessions.length!==1||!SESSION.test(sessions[0].split(';')[0].slice(COOKIE.length+1)))return failed('github_unavailable');
+ return redirect(payload.mode==='link'?'/login?github=linked':payload.projects.length?'/app':'/signup',completed);
+}
+
 export async function handleControl(request:Request,env:ControlEnv):Promise<Response> {
  const incoming=new URL(request.url),path=incoming.pathname.slice('/api/control'.length);
+ if(incoming.pathname===GITHUB_CALLBACK)return githubCallback(request,env);
  if(!incoming.pathname.startsWith('/api/control/'))return error(404,'not_found','This account endpoint does not exist.');
  const methods=allowedMethods(path);if(!methods)return error(404,'not_found','This account endpoint does not exist.');
  if(!methods.includes(request.method))return response(405,{error:{code:'method_not_allowed',message:'This method is not supported.'}},{Allow:methods.join(', ')});
@@ -77,7 +120,7 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
  if(!(env.ALLOWED_ORIGINS??'').split(',').map(v=>v.trim()).includes(incoming.origin))return error(403,'origin_rejected','Submit this request from the FetchX website.');
  const development=env.SITE_ENV==='development'&&env.FETCHX_CONTROL_ALLOW_LOOPBACK==='true'&&loopback(incoming);
  if(!env.FETCHX_CONTROL_URL||!env.FETCHX_CONTROL_SECRET){
-  if(path==='/status')return response(503,{enabled:false,mail_configured:false,api_base_url:null,capabilities:{native_http:false,render:false,routes:[]}});
+  if(path==='/status')return response(503,{enabled:false,mail_configured:false,github:{enabled:false},api_base_url:null,capabilities:{native_http:false,render:false,routes:[]}});
   return error(503,'control_disabled','Account access is currently unavailable.');
  }
  let upstream:URL;
@@ -94,6 +137,7 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
   const forwarded=new Headers({'Accept':'application/json','Origin':incoming.origin,'X-FetchX-Control-Secret':env.FETCHX_CONTROL_SECRET});
   const cookies=[requestCookie(request.headers.get('Cookie'),COOKIE,SESSION)];
   if(path==='/auth/google/challenge'||path==='/auth/google/verify')cookies.push(requestCookie(request.headers.get('Cookie'),GOOGLE_COOKIE,GOOGLE_BINDING));
+  if(path==='/auth/github/start'||path==='/auth/github/complete')cookies.push(requestCookie(request.headers.get('Cookie'),GITHUB_COOKIE,GITHUB_BINDING));
   const cookie=cookies.filter(Boolean).join('; ');if(cookie)forwarded.set('Cookie',cookie);
   const csrf=request.headers.get('X-CSRF-Token');if(csrf){if(!/^[A-Za-z0-9_-]{43}$/.test(csrf))return error(403,'csrf_rejected','This request could not be authorized.');forwarded.set('X-CSRF-Token',csrf);}
   const ip=request.headers.get('CF-Connecting-IP');if(ip&&/^[a-fA-F0-9:.]{3,64}$/.test(ip))forwarded.set('X-FetchX-Client-IP',ip);
@@ -114,7 +158,7 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
   let payload:unknown;try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:false}).decode(bytes));if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error();}catch{return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
   const output=response(result.status,payload);
   const returnedCookies=result.headers.getSetCookie();
-  for(const name of [COOKIE,...(path.startsWith('/auth/google/')?[GOOGLE_COOKIE]:[])]){
+  for(const name of [COOKIE,...(path.startsWith('/auth/google/')?[GOOGLE_COOKIE]:[]),...(path.startsWith('/auth/github/')?[GITHUB_COOKIE]:[])]){
    const values=returnedCookies.filter(value=>value.startsWith(name+'='));
    if(values.length!==1)continue;
    const cookie=responseCookie(values[0],!development,name);if(cookie)output.headers.append('Set-Cookie',cookie);

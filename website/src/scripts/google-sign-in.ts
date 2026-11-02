@@ -62,6 +62,7 @@ export function mountGoogleSignIn(options: {
   let expiry: ReturnType<typeof setTimeout> | undefined, observer: ResizeObserver | undefined;
   let challengeId = '';
   container.hidden = false;
+  error.hidden = true; error.textContent = ''; reload.hidden = true;
   status.textContent = 'Loading Google sign-in…';
   function fail(message: string) {
     if (!active) return;

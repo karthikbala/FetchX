@@ -16,12 +16,14 @@ npm test
 npm run build
 ```
 
-The development site is at `http://127.0.0.1:4327`. Astro 7 runs it in the background; use `npx astro dev status` / `npx astro dev stop` to manage it. `npm run test:browser` starts an isolated local Pages server and runs site, documentation, product-journey and enquiry checks. To inspect manually, use `npm run pages:dev` at `http://127.0.0.1:4328` before:
+The development site is at `http://127.0.0.1:4327`. Astro 7 runs it in the background; use `npx astro dev status` / `npx astro dev stop` to manage it. `npm run test:browser` starts an isolated local Pages server and runs site, documentation, product-journey, Google/GitHub sign-in and enquiry checks. To inspect manually, use `npm run pages:dev` at `http://127.0.0.1:4328` before:
 
 ```sh
 node tests/ui/site-check.mjs
 node tests/ui/docs-check.mjs
 node tests/ui/product-check.mjs
+node tests/ui/google-check.mjs
+node tests/ui/github-check.mjs
 node tests/ui/form-check.mjs
 ```
 
@@ -33,7 +35,9 @@ The marketing site includes the homepage, four `/products/*` pages, three `/use-
 
 The eight API quickstart/reference pages retain their `/docs` URLs and share `src/data/api-docs.ts`. Markdown exports at `/docs/quickstart.md` and `/docs/<slug>.md` are generated from the same content. Examples require a configured gateway and approved profile. `/404.html` handles missing pages.
 
-The product journey starts at `/signup` or `/login` and continues to `/app`, `/app/onboarding`, `/app/playground`, `/app/requests`, `/app/keys` and `/app/billing`. Email verification creates an HttpOnly session. Only the selected project ID and pending operation keys enter session storage; credentials and source inputs do not. Recovery reads retained gateway state with GET and never dispatches source work. Billing shows authoritative allocations and holds; no checkout, automatic upgrade or refill is implemented.
+The product journey starts at `/signup` or `/login` and continues to `/app`, `/app/onboarding`, `/app/playground`, `/app/requests`, `/app/keys` and `/app/billing`. Configured GitHub, Google and email sign-in create an HttpOnly session. Only the selected project ID and pending operation keys enter session storage; credentials and source inputs do not. Recovery reads retained gateway state with GET and never dispatches source work. Billing shows authoritative allocations and holds; no checkout, automatic upgrade or refill is implemented.
+
+GitHub sign-in appears only when `/api/control/status` advertises `github.enabled`. It uses a dedicated gateway OAuth application with only `user:email`, PKCE and the exact callback `https://fetchx.ai/api/control/auth/github/callback`. Its client secret and provider tokens stay in the gateway. The Pages callback is the sole cross-site GET exception: it validates bounded query parameters, forwards private JSON through the existing bridge, obtains the current session CSRF for explicit linking, clears the short-lived HttpOnly binding, and returns a fixed no-store, no-referrer redirect. It never renders provider descriptions or identity tokens. An existing FetchX email requires signing in through the existing method and choosing **Connect GitHub** in the signed-in account panel. Linking preserves the account's projects and credentials. Disabled GitHub leaves Google and email available. `tests/github-proxy.test.ts` and `tests/ui/github-check.mjs` use synthetic fixtures only; browser fixtures do not establish a live GitHub authorization or production configuration.
 
 `functions/api/control/[[path]].ts` requires runtime `FETCHX_CONTROL_URL`, secret `FETCHX_CONTROL_SECRET` (the gateway's bridge secret), and the exact website origin in `ALLOWED_ORIGINS`. The remote gateway must use HTTPS. Explicit loopback review additionally requires `SITE_ENV=development` and `FETCHX_CONTROL_ALLOW_LOOPBACK=true`. Never expose these values through `PUBLIC_*` variables. Astro's static/dev server alone cannot run the account proxy; use Pages locally. The protected local review runner and full configuration are documented in [self-service setup](../docs/self-service-backend.md).
 
