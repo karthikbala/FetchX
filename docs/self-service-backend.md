@@ -8,7 +8,7 @@ Implementation is local until release authorization. No paid source calls, produ
 
 ## Shared implementation contract
 
-Operator configuration lives in `config.controlPlane`. `enabled` defaults false. An enabled service needs `origins` (exact website origins), a private `bridgeSecret` of at least 32 bytes, `sessionSecure` (true outside explicit loopback development), a `projectTemplate` and a reviewed `creditPolicy`. Mail is an explicitly configured Gmail OAuth transport or an injected local-test adapter; codes never appear in HTTP responses.
+Operator configuration lives in `config.controlPlane`. `enabled` defaults false. An enabled service needs `origins` (exact website origins), a private `bridgeSecret` of at least 32 bytes, `sessionSecure` (true outside explicit loopback development), a `projectTemplate` and a reviewed `creditPolicy`. Mail is an explicitly configured private Pages relay, direct Gmail OAuth transport or injected local-test adapter; codes never appear in HTTP responses.
 
 `projectTemplate` has `id`, `v2_access_profiles`, `v2_entitlement` and optional `v2_discovery_policy`; it grants no v1 profiles. All grants come from operator configuration, never request fields. Persist a canonical template hash and fail closed if the template changes until an operator migration explicitly approves the change. New project identifiers use `cp_` plus a UUID. Configuration projections contain no plaintext credentials and no legacy `tokenHash`.
 
@@ -74,11 +74,9 @@ Add this section to an existing private gateway configuration, replacing placeho
       "maxEstimatedMicroUsdPerOperation": 0
     },
     "mail": {
-      "transport": "gmail",
-      "from": "verified-sender@YOUR_DOMAIN",
-      "clientId": "PRIVATE_OAUTH_CLIENT_ID",
-      "clientSecret": "PRIVATE_OAUTH_CLIENT_SECRET",
-      "refreshToken": "PRIVATE_GMAIL_SEND_REFRESH_TOKEN"
+      "transport": "pages",
+      "url": "https://YOUR_WEBSITE_HOST/api/control-mail",
+      "secret": "REPLACE_WITH_SEPARATE_PRIVATE_RANDOM_MAIL_SECRET_AT_LEAST_32_BYTES"
     }
   }
 }
@@ -92,11 +90,18 @@ Configure the Pages environment separately:
 | --- | --- |
 | `FETCHX_CONTROL_URL` | HTTPS gateway origin; optional `/control` suffix |
 | `FETCHX_CONTROL_SECRET` | Same private bridge secret, stored as a Pages secret |
+| `FETCHX_CONTROL_MAIL_SECRET` | Separate random ASCII secret, 32–256 bytes, matching gateway `controlPlane.mail.secret`; store as a Pages secret |
 | `ALLOWED_ORIGINS` | Exact website origins, comma-separated; gateway must allow each too |
 | `SITE_ENV` | `preview` or `production` remotely |
 | `FETCHX_CONTROL_ALLOW_LOOPBACK` | Omit remotely; `true` only for explicit local development |
 
 Do not put gateway/mail/bridge secrets in client code, build-time `PUBLIC_*` variables, command arguments or logs. The bridge sends no customer Bearer key upstream. It forwards the authenticated session and trusted client IP, bounds requests/responses, and does not retry POSTs or follow redirects. Production cookie security cannot be disabled using a browser field.
+
+The `pages` mail transport reuses the website's approved Gmail authorization without copying Gmail credentials to the gateway. Pages requires its existing private `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN` secrets and validated `MAIL_FROM` (the approved FetchX sender). The configured mail URL must be an HTTPS DNS host on the default port with exactly `/api/control-mail`, without credentials, query or fragment. The dedicated mail secret must differ from the account bridge secret. A missing or invalid URL/secret leaves gateway mail unconfigured.
+
+`/api/control-mail` is a private server-to-server POST endpoint, separate from the browser `/api/control/*` allowlist. It requires `X-FetchX-Control-Mail-Secret`, rejects browser-originated requests and accepts only an email, eight-digit code, UUID challenge and unexpired canonical ISO timestamp no more than eleven minutes ahead (including clock skew). The sender and verification message template are fixed by server code/configuration; arbitrary recipients lists, subjects and bodies are rejected. Requests and responses are bounded and uncached. Mail payloads and credentials are never logged by application code. Neither hop follows redirects or retries an uncertain send. It does not create enquiry records. Deploying the function alone does not enable mail: configure the matching dedicated secret privately on both services.
+
+The existing direct Gmail transport remains supported for gateways with separately authorized credentials: `controlPlane.mail` may instead contain `transport: "gmail"`, `from` (a bare verified sender email), `clientId`, `clientSecret` and `refreshToken`. Do not copy the website's Gmail credentials to use that option.
 
 Codes have eight digits, expire after ten minutes and allow five attempts. Request limits are three codes per email and twenty per IP in fifteen minutes; verification attempts have separate limits. A resend invalidates the previous challenge. Login and signup deliberately share the same accepted response. A failed or uncertain mail send invalidates that challenge without revealing whether an account exists or blindly resending mail. Sessions expire after seven days. Configure and independently verify real inbox delivery before remote rollout.
 
