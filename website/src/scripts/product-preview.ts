@@ -1,6 +1,7 @@
 // The workspace uses the same-origin control plane. Only project IDs and pending
 // operation keys cross page boundaries; credentials and source inputs stay in memory.
 import { mountGoogleSignIn } from './google-sign-in';
+import { consumeGithubResult, mountGithubSignIn } from './github-sign-in';
 type Json = Record<string, any>;
 type Project = { id: string; name: string; status: string; created_at?: string };
 type Profile = { id: string; version: number; origins: string[]; paths?: string[]; methods: string[]; proxy_classes: string[]; countries: string[]; route_reservations?: Json[] };
@@ -27,6 +28,11 @@ async function initWorkspace(root: HTMLElement) {
   let confirmCallback: (() => void) | null = null;
   let lastFocus: HTMLElement | null = null;
   let disposeGoogle: (() => void) | undefined;
+  let disposeGithub: (() => void) | undefined;
+  let githubInProgress = false;
+  let leavingPage = false;
+  let githubControls: { control: HTMLInputElement | HTMLButtonElement; disabled: boolean }[] = [];
+  const githubResult = authPage ? consumeGithubResult() : null;
   try { sessionStorage.removeItem('fetchx-product-preview-v1'); } catch { /* Clear obsolete preview state when storage is available. */ }
 
   function textAll(selector: string, value: unknown) { qa(selector).forEach(node => { node.textContent = String(value ?? '—'); }); }
@@ -80,7 +86,7 @@ async function initWorkspace(root: HTMLElement) {
   }
   async function busy(form: HTMLFormElement, action: () => Promise<void>, errorSelector = '[data-page-error]') {
     if (form.dataset.busy) return;
-    const controls = [...form.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select')];
+    const controls = [...form.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input,button,select'), ...(authPage ? qa<HTMLButtonElement>('[data-github-start],[data-github-connect]') : [])];
     const disabled = controls.map(control => control.disabled);
     mutating++;
     form.dataset.busy = 'true'; form.setAttribute('aria-busy', 'true'); controls.forEach(control => { control.disabled = true; }); updateRunButton(); clearError(errorSelector);
@@ -106,21 +112,53 @@ async function initWorkspace(root: HTMLElement) {
   q<HTMLDialogElement>('[data-confirm-dialog]')?.addEventListener('close', event => { const dialog = event.currentTarget as HTMLDialogElement; const callback = confirmCallback; confirmCallback = null; if (dialog.returnValue === 'confirm') callback?.(); else lastFocus?.focus(); dialog.returnValue = ''; });
   function stage(index: number) { qa('[data-signup-stage]').forEach(node => { node.hidden = Number(node.dataset.signupStage) !== index; }); qa('[data-signup-progress]').forEach(node => { node.classList.toggle('is-current', Number(node.dataset.signupProgress) === index); node.classList.toggle('is-complete', Number(node.dataset.signupProgress) < index); }); q(`[data-signup-stage="${index}"] input`)?.focus(); }
   function scopes(values: FormData) { const selected = values.getAll('scope').map(String); if (!selected.length) throw new ControlError('Select at least one key permission.', 'scopes_required'); return selected; }
-  function acceptSession(data: Json) { csrf = String(data.csrf_token || ''); projects = Array.isArray(data.projects) ? data.projects : []; signedIn = true; textAll('[data-user-email]', data.user?.email || 'Verified account'); qa('[data-logout],[data-session-account]').forEach(node => { node.hidden = false; }); }
+  function acceptSession(data: Json) { csrf = String(data.csrf_token || ''); projects = Array.isArray(data.projects) ? data.projects : []; signedIn = true; textAll('[data-user-email]', data.user?.email || 'Verified account'); qa('[data-logout],[data-session-account],[data-auth-account]').forEach(node => { node.hidden = false; });
+    const account = q('[data-github-account]');
+    const connected = data.auth_methods?.github === true;
+    if (authPage && account && (service.github?.enabled === true || connected)) {
+      account.hidden = false;
+      q('[data-github-connected]')!.hidden = !connected; q('[data-github-connect]')!.hidden = connected;
+      disposeGithub?.(); disposeGithub = connected ? undefined : mountGithubSignIn({ container: account, mode: 'link', request: githubRequest, setBusy: setGithubBusy });
+    }
+  }
   function finishSignIn(data: Json) {
     disposeGoogle?.(); disposeGoogle = undefined;
+    disposeGithub?.(); disposeGithub = undefined;
     acceptSession(data); email = ''; challenge = ''; clearError();
     const code = q<HTMLInputElement>('[data-signup-verify] input'); if (code) code.value = '';
-    if (projects.length) window.location.assign('/app'); else stage(2);
+    if (projects.length && githubResult?.connectRequired) { showExistingAccount(); toast('Signed in. Choose Connect GitHub to connect this account.'); requestAnimationFrame(() => q('[data-github-connect]')?.focus()); }
+    else if (projects.length) window.location.assign('/app'); else stage(2);
   }
+  function showExistingAccount() { qa('[data-signup-stage]').forEach(node => { node.hidden = true; }); q('[data-auth-existing]')!.hidden = false; q('[data-auth-progress]')?.setAttribute('hidden', ''); }
   async function googleRequest(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (path !== '/auth/google/verify') return api(path, { method: 'POST', body });
     if (mutating || signedIn) throw new ControlError('A sign-in is already in progress. Continue with your current sign-in.', 'auth_in_progress');
-    const controls = qa<HTMLInputElement | HTMLButtonElement>('[data-signup-email] input,[data-signup-email] button,[data-signup-verify] input,[data-signup-verify] button,[data-resend-code],[data-change-email]');
+    const controls = qa<HTMLInputElement | HTMLButtonElement>('[data-signup-email] input,[data-signup-email] button,[data-signup-verify] input,[data-signup-verify] button,[data-resend-code],[data-change-email],[data-github-start]');
     const disabled = controls.map(control => control.disabled);
     mutating++; controls.forEach(control => { control.disabled = true; });
     try { return await api(path, { method: 'POST', body }); }
     finally { mutating--; controls.forEach((control, index) => { control.disabled = disabled[index]; }); }
+  }
+  function setGithubBusy(busy: boolean): boolean {
+    if (busy) {
+      if (mutating || signingOut || githubInProgress) return false;
+      githubInProgress = true; mutating++;
+      disposeGoogle?.(); disposeGoogle = undefined;
+      githubControls = qa<HTMLInputElement | HTMLButtonElement>('form input,form button,[data-resend-code],[data-change-email],[data-logout],[data-github-start],[data-github-connect]').map(control => ({ control, disabled: control.disabled }));
+      githubControls.forEach(({ control }) => { control.disabled = true; });
+      q('[data-google-signin]')?.setAttribute('aria-busy', 'true');
+    } else if (githubInProgress) {
+      githubInProgress = false; mutating--;
+      githubControls.forEach(({ control, disabled }) => { control.disabled = disabled; }); githubControls = [];
+      q('[data-google-signin]')?.removeAttribute('aria-busy');
+      if (!signedIn && !leavingPage) enableGoogle();
+    }
+    return true;
+  }
+  function githubRequest(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> { return api(path, { method: 'POST', body }); }
+  function enableGoogle() {
+    const google = service.google, container = q('[data-google-signin]');
+    if (google?.enabled === true && typeof google.client_id === 'string' && container && !disposeGoogle) disposeGoogle = mountGoogleSignIn({ container, clientId: google.client_id, request: googleRequest, onSession: finishSignIn });
   }
   function setProjectOptions() {
     const select = q<HTMLSelectElement>('[data-project-select]'); if (!select) return; select.replaceChildren();
@@ -162,7 +200,7 @@ async function initWorkspace(root: HTMLElement) {
   q('[data-signup-copy]')?.addEventListener('click', () => { if (revealedSecret) void copy(revealedSecret); });
   q('[data-conceal-signup-key]')?.addEventListener('click', () => { concealSecret(); q<HTMLButtonElement>('[data-signup-copy]')!.disabled = true; });
   qa('[data-logout]').forEach(button => button.addEventListener('click', async () => {
-    if (signingOut) return;
+    if (signingOut || githubInProgress) return;
     signingOut = true; clearError();
     const buttons = qa<HTMLButtonElement>('[data-logout]');
     buttons.forEach(node => { node.disabled = true; node.textContent = 'Signing out…'; node.setAttribute('aria-busy', 'true'); });
@@ -367,37 +405,41 @@ async function initWorkspace(root: HTMLElement) {
   menu?.addEventListener('click', () => { const open = menu.getAttribute('aria-expanded') !== 'true'; root.classList.toggle('pp-menu-open', open); menu.setAttribute('aria-expanded', String(open)); menu.setAttribute('aria-label', open ? 'Close workspace navigation' : 'Open workspace navigation'); });
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && root.classList.contains('pp-menu-open')) { closeMenu(); menu?.focus(); } });
   document.addEventListener('click', event => { if (root.classList.contains('pp-menu-open') && !(event.target as Element).closest('.pp-sidebar,[data-app-menu]')) closeMenu(); });
-  window.addEventListener('pagehide', () => { disposeGoogle?.(); concealSecret(); csrf = ''; email = ''; challenge = ''; currentResult = null; textAll('[data-response-output],[data-response-diagnostics],[data-request-detail],[data-generated-code]', ''); });
+  window.addEventListener('pagehide', () => { leavingPage = true; disposeGoogle?.(); disposeGithub?.(); concealSecret(); csrf = ''; email = ''; challenge = ''; currentResult = null; textAll('[data-response-output],[data-response-diagnostics],[data-request-detail],[data-generated-code]', ''); });
   window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
   q('[data-refresh-workspace]')?.addEventListener('click', () => { if (!sending && !mutating) void start(); });
 
   async function start() {
     disposeGoogle?.(); disposeGoogle = undefined;
+    disposeGithub?.(); disposeGithub = undefined;
     ready = false; signedIn = false; csrf = ''; projects = []; project = null; concealSecret(); clearError();
-    qa('[data-logout],[data-session-account]').forEach(node => { node.hidden = true; }); setProjectOptions();
+    qa('[data-logout],[data-session-account],[data-auth-account]').forEach(node => { node.hidden = true; }); setProjectOptions();
     textAll('[data-user-email]', 'Not signed in');
     if (!authPage) gate('Opening your workspace…', 'Checking the service and your session.');
     try {
       service = await api('/status');
       if (!service.enabled) throw new ControlError('Self-service access is not configured on this service. Contact FetchX for access.', 'service_unavailable');
-      textAll('[data-service-status]', service.mail_delivery === 'local_private_mailbox' ? 'Local review · private test mailbox' : service.mail_configured || service.google?.enabled ? 'Connected to the control service' : 'Sign-in is not configured');
+      textAll('[data-service-status]', service.mail_delivery === 'local_private_mailbox' ? 'Local review · private test mailbox' : service.mail_configured || service.google?.enabled || service.github?.enabled ? 'Connected to the control service' : 'Sign-in is not configured');
       textAll('[data-auth-delivery-help]', service.mail_delivery === 'local_private_mailbox' ? 'Local review mode uses a private test mailbox. No email is sent.' : 'We’ll email a one-time code to verify your address.');
       let session: Json | null = null;
       try { session = await api('/session'); } catch (error) { if (!(error instanceof ControlError) || error.status !== 401) throw error; }
       if (session) {
         acceptSession(session);
         if (authPage) {
-          if (projects.length) { qa('[data-signup-stage]').forEach(node => { node.hidden = true; }); q('[data-auth-existing]')!.hidden = false; q('[data-auth-progress]')?.setAttribute('hidden', ''); }
+          if (projects.length) showExistingAccount();
           else stage(2);
         } else { setProjectOptions(); if (projects.length) await selectProject(projects.some(item => item.id === selectedId()) ? selectedId() : projects[0].id); else gate('Create your first project.', 'Your email is verified. Create a project to receive its configured access and allocation.', 'project'); }
       } else if (authPage) {
         const google = service.google;
-        if (!service.mail_configured && !google?.enabled) throw new ControlError('Sign-in is not configured. Contact FetchX to enable account access.', 'auth_unconfigured');
+        if (!service.mail_configured && !google?.enabled && !service.github?.enabled) throw new ControlError('Sign-in is not configured. Contact FetchX to enable account access.', 'auth_unconfigured');
         q<HTMLButtonElement>('[data-signup-email] button')!.disabled = !service.mail_configured;
-        if (!service.mail_configured) textAll('[data-auth-delivery-help]', 'Email codes are unavailable right now. Continue with Google to sign in.');
-        const googleContainer = q('[data-google-signin]');
-        if (google?.enabled === true && typeof google.client_id === 'string' && googleContainer) disposeGoogle = mountGoogleSignIn({ container: googleContainer, clientId: google.client_id, request: googleRequest, onSession: finishSignIn });
-      } else { signedIn = false; setProjectOptions(); gate('Sign in to continue.', 'Use Google or a one-time email code to access your projects.', 'login'); }
+        if (!service.mail_configured) textAll('[data-auth-delivery-help]', 'Email codes are unavailable right now. Choose an available sign-in method above.');
+        const githubContainer = q('[data-github-signin]');
+        if (service.github?.enabled === true && githubContainer) disposeGithub = mountGithubSignIn({ container: githubContainer, mode: 'login', request: githubRequest, setBusy: setGithubBusy });
+        const divider = q('[data-auth-divider]'); if (divider) divider.hidden = !google?.enabled && !service.github?.enabled;
+        enableGoogle();
+      } else { signedIn = false; setProjectOptions(); gate('Sign in to continue.', 'Use GitHub, Google or a one-time email code to access your projects.', 'login'); }
+      if (githubResult) { if (githubResult.success) { if (session?.auth_methods?.github === true) toast(githubResult.message); } else setError(githubResult.message); }
     } catch (error) {
       textAll('[data-service-status]', 'Service unavailable'); setError(error);
       if (!authPage) gate('Workspace unavailable.', 'The configured control service could not be reached. No account, request, or credit data has been simulated.');

@@ -136,6 +136,7 @@ test('real Google identity routes reuse the verified account and atomically bind
   const session=cookies.find(c=>c.startsWith(CONTROL_COOKIE+'=')).split(';')[0];
   assert.ok(cookies.some(c=>c.startsWith(CONTROL_GOOGLE_COOKIE+'=;')&&c.includes('Max-Age=0')));
   assert.equal(accepted.json().user.id,existing.user.id);assert.equal(accepted.json().projects[0].id,project.id);assert.equal(accepted.json().csrf_token,controlCsrf(session.split('=')[1],secret));
+  assert.deepEqual(accepted.json().auth_methods,{github:false});
   assert.ok(!accepted.body.includes(signed));assert.ok(!accepted.body.includes(session.split('=')[1]));assert.ok(!accepted.body.includes(challenge.nonce));
   const authenticated=await send('GET','/session',undefined,session);assert.equal(authenticated.json().user.id,existing.user.id);
   assert.equal((await verify(challenge,signed)).statusCode,401);
