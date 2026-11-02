@@ -13,6 +13,26 @@ beforeEach(()=>{calls=[];upstream=()=>complete();vi.stubGlobal('fetch',vi.fn(asy
 afterEach(()=>{vi.unstubAllGlobals();});
 
 describe('GitHub control bridge and isolated callback',()=>{
+ it('accepts only the exact optional GitHub issuer and never forwards it to the gateway',async()=>{
+  const issuer='https://github.com/login/oauth';
+  const success=await cb(`code=${code}&state=${state}&iss=${encodeURIComponent(issuer)}`);
+  expect(success.headers.get('Location')).toBe('/signup');expect(calls).toHaveLength(1);
+  expect(JSON.parse(String(calls[0].init.body))).toEqual({code,state});
+  expect(calls[0].url).toBe('https://gateway.example/control/auth/github/complete');
+  calls=[];upstream=()=>Response.json({error:{code:'github_cancelled'}},{status:400});
+  const cancelled=await cb(new URLSearchParams({error:'access_denied',state,iss:issuer,error_description:'private',error_uri:'https://private.example'}).toString());
+  expect(cancelled.headers.get('Location')).toBe('/login?github=github_cancelled');expect(calls).toHaveLength(1);
+  expect(JSON.parse(String(calls[0].init.body))).toEqual({error:'access_denied',state});
+  calls=[];
+  for(const rejected of ['',issuer+'/',issuer+'?x=1',issuer+'#fragment','https://github.com.attacker.example/login/oauth','http://github.com/login/oauth','https://GITHUB.COM/login/oauth']){
+   const result=await cb(`code=${code}&state=${state}&iss=${encodeURIComponent(rejected)}`);
+   expect(result.headers.get('Location')).toBe('/login?github=github_verification_invalid');
+  }
+  for(const query of [`code=${code}&state=${state}&iss=${encodeURIComponent(issuer)}&iss=${encodeURIComponent(issuer)}`,`code=${code}&state=short&iss=${encodeURIComponent(issuer)}`,`code=${code}&state=${state}&iss=${encodeURIComponent(issuer)}&unknown=value`]){
+   expect((await cb(query)).headers.get('Location')).toBe('/login?github=github_verification_invalid');
+  }
+  expect(calls).toHaveLength(0);
+ });
  it('allows only same-origin POST start/complete and restricts the binding to those routes',async()=>{
   const headers={Origin:origin,'Sec-Fetch-Site':'same-origin','Content-Type':'application/json',Cookie:`fetchx_session=${session}; fetchx_github=${binding}; fetchx_google=fxg_${'g'.repeat(43)}; unrelated=private`};
   for(const path of ['/auth/github/start','/auth/github/complete']){
