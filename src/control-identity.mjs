@@ -2,11 +2,12 @@ import {createHash,createHmac,randomBytes,randomInt,randomUUID,timingSafeEqual} 
 import {fail} from './policy.mjs';
 import {createControlMail} from './control-mail.mjs';
 import {grantInitialCredits} from './control-credits.mjs';
+import {createControlGoogle,googleConfiguration} from './control-google.mjs';
 
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const PROJECT=/^cp_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const SCOPES=Object.freeze(['fetch:read','fetch:write','usage:read','profiles:read']);
-const TTL=600,SESSION_TTL=7*86400;
+const TTL=600,SESSION_TTL=7*86400,GOOGLE_TTL=300;
 const plain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const canonical=value=>JSON.stringify(sort(value));
@@ -23,6 +24,7 @@ const projectView=row=>({id:row.id,name:row.name,status:row.status,created_at:ro
 const keyView=row=>({id:row.id,project:row.project,name:row.name,prefix:row.prefix,scopes:row.scopes,created_at:row.created_at,last_used_at:row.last_used_at,revoked_at:row.revoked_at});
 const tokenValid=(token,prefix)=>typeof token==='string'&&new RegExp(`^${prefix}_[A-Za-z0-9_-]{43}$`).test(token);
 const tokenFor=prefix=>`${prefix}_${randomBytes(32).toString('base64url')}`;
+const equalDigest=(left,right)=>typeof left==='string'&&typeof right==='string'&&/^[a-f0-9]{64}$/.test(left)&&/^[a-f0-9]{64}$/.test(right)&&timingSafeEqual(Buffer.from(left,'hex'),Buffer.from(right,'hex'));
 
 export async function initControlIdentity(pool){await pool.query(`
  CREATE TABLE IF NOT EXISTS control_users(id uuid PRIMARY KEY,email text NOT NULL UNIQUE,verified_at timestamptz NOT NULL DEFAULT now(),created_at timestamptz NOT NULL DEFAULT now());
@@ -37,11 +39,17 @@ export async function initControlIdentity(pool){await pool.query(`
  CREATE INDEX IF NOT EXISTS control_keys_project_created ON control_keys(project,created_at,id);
  CREATE TABLE IF NOT EXISTS control_rates(bucket text PRIMARY KEY,attempts int NOT NULL CHECK(attempts>0),expires_at timestamptz NOT NULL);
  CREATE INDEX IF NOT EXISTS control_rates_expiry ON control_rates(expires_at);
+ CREATE TABLE IF NOT EXISTS control_google_challenges(id uuid PRIMARY KEY,client_id text NOT NULL,nonce_hash text NOT NULL CHECK(nonce_hash ~ '^[a-f0-9]{64}$'),binding_hash text NOT NULL CHECK(binding_hash ~ '^[a-f0-9]{64}$'),attempts int NOT NULL DEFAULT 0 CHECK(attempts>=0 AND attempts<=5),expires_at timestamptz NOT NULL,consumed_at timestamptz,created_at timestamptz NOT NULL DEFAULT now());
+ CREATE INDEX IF NOT EXISTS control_google_challenges_expiry ON control_google_challenges(expires_at);
+ CREATE INDEX IF NOT EXISTS control_google_challenges_binding ON control_google_challenges(binding_hash);
+ CREATE TABLE IF NOT EXISTS control_google_identities(issuer text NOT NULL CHECK(issuer='https://accounts.google.com'),subject text NOT NULL CHECK(char_length(subject) BETWEEN 1 AND 255),user_id uuid NOT NULL UNIQUE REFERENCES control_users(id),created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(issuer,subject));
  `);}
 
 export class ControlIdentity{
- constructor({store,config,mail}){Object.assign(this,{store,config});this.mail=mail??createControlMail(config);}
+ constructor({store,config,mail,google}){Object.assign(this,{store,config});this.mail=mail??createControlMail(config);this.google=google??createControlGoogle();}
  get mailConfigured(){return this.mail?.configured===true&&typeof this.mail.sendCode==='function';}
+ googleStatus(){return googleConfiguration(this.config);}
+ googleSettings(){const value=this.googleStatus();if(!value.enabled)fail('google_disabled',503);return value;}
  enabled(){return this.config.controlPlane?.enabled===true;}
  settings(){
   const control=this.config.controlPlane;if(!this.enabled())fail('control_unavailable',503);
@@ -72,6 +80,60 @@ export class ControlIdentity{
   if(!allowed)fail('rate_limited',429);
  }
  ip(value){if(typeof value!=='string'||!value||value.length>128)fail('client_address_invalid');return value;}
+ async requestGoogleChallenge({ip,binding}){
+  this.settings();const google=this.googleSettings();ip=this.ip(ip);
+  await this.rate([['google-challenge-ip',ip,20,900]]);
+  const id=randomUUID(),nonce=randomBytes(32).toString('base64url'),token=tokenFor('fxg');
+  const row=await this.store.tx(async c=>{
+   if(tokenValid(binding,'fxg'))await c.query('UPDATE control_google_challenges SET consumed_at=COALESCE(consumed_at,clock_timestamp()) WHERE binding_hash=$1 AND consumed_at IS NULL',[this.digest('google-binding',binding)]);
+   await c.query("DELETE FROM control_google_challenges WHERE expires_at<clock_timestamp()-interval '1 day'");
+   return (await c.query("INSERT INTO control_google_challenges(id,client_id,nonce_hash,binding_hash,expires_at) VALUES($1,$2,$3,$4,clock_timestamp()+$5*interval '1 second') RETURNING expires_at",[id,google.client_id,this.digest('google-nonce',nonce),this.digest('google-binding',token),GOOGLE_TTL])).rows[0];
+  });
+  return {challenge_id:id,nonce,client_id:google.client_id,expires_in:GOOGLE_TTL,binding:token,expires_at:row.expires_at};
+ }
+ async verifyGoogle({challenge_id,credential,binding,ip}){
+  this.settings();const google=this.googleSettings();ip=this.ip(ip);
+  await this.rate([['google-verify-ip',ip,60,900]]);
+  if(typeof challenge_id!=='string'||!UUID.test(challenge_id)||!tokenValid(binding,'fxg')||typeof credential!=='string'||!credential||credential.length>16384)fail('google_verification_invalid',401);
+  const bindingHash=this.digest('google-binding',binding);
+  // Commit the attempt independently so invalid provider assertions cannot reset
+  // the attempt budget by rolling back a later account transaction.
+  const challenge=await this.store.tx(async c=>{
+   const row=(await c.query('SELECT *,expires_at>clock_timestamp() AS current FROM control_google_challenges WHERE id=$1 FOR UPDATE',[challenge_id])).rows[0];
+   if(!row||row.consumed_at||!row.current||row.attempts>=5||!equalDigest(row.binding_hash,bindingHash)||row.client_id!==google.client_id)return null;
+   await c.query('UPDATE control_google_challenges SET attempts=attempts+1 WHERE id=$1',[row.id]);return row;
+  });
+  if(!challenge)fail('google_verification_invalid',401);
+  let claims;
+  try{
+   claims=await this.google.verify(credential,{clientId:google.client_id});
+   if(!claims||typeof claims.nonce!=='string'||!equalDigest(this.digest('google-nonce',claims.nonce),challenge.nonce_hash))fail('google_verification_invalid',401);
+  }catch(error){
+   await this.store.pool.query('UPDATE control_google_challenges SET consumed_at=COALESCE(consumed_at,clock_timestamp()) WHERE id=$1 AND attempts>=5',[challenge_id]);
+   throw error;
+  }
+  const token=tokenFor('fxs');
+  const result=await this.store.tx(async c=>{
+   const row=(await c.query('SELECT *,expires_at>clock_timestamp() AS current FROM control_google_challenges WHERE id=$1 FOR UPDATE',[challenge_id])).rows[0];
+   if(!row||row.consumed_at||!row.current||!equalDigest(row.binding_hash,bindingHash)||row.client_id!==google.client_id)return null;
+   await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,170020))',[this.digest('google-subject',`${claims.issuer}:${claims.subject}`)]);
+   const linked=(await c.query('SELECT u.id,u.email FROM control_google_identities g JOIN control_users u ON u.id=g.user_id WHERE g.issuer=$1 AND g.subject=$2',[claims.issuer,claims.subject])).rows[0];
+   let user=linked;
+   if(!user){
+    if(claims.authoritative!==true)fail('google_email_verification_required',403);
+    const email=emailAddress(claims.email);
+    await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,170019))',[this.digest('email',email)]);
+    user=(await c.query('INSERT INTO control_users(id,email) VALUES($1,$2) ON CONFLICT(email) DO UPDATE SET email=EXCLUDED.email RETURNING *',[randomUUID(),email])).rows[0];
+    const existing=(await c.query('SELECT subject FROM control_google_identities WHERE user_id=$1',[user.id])).rows[0];
+    if(existing)fail('google_identity_conflict',409);
+    await c.query('INSERT INTO control_google_identities(issuer,subject,user_id) VALUES($1,$2,$3)',[claims.issuer,claims.subject,user.id]);
+   }
+   await c.query('UPDATE control_google_challenges SET consumed_at=clock_timestamp() WHERE id=$1',[challenge_id]);
+   const session=(await c.query("INSERT INTO control_sessions(id,user_id,token_hash,expires_at) VALUES($1,$2,$3,clock_timestamp()+$4*interval '1 second') RETURNING expires_at",[randomUUID(),user.id,hash(token),SESSION_TTL])).rows[0];
+   return {user:userView(user),session:{token,expires_at:session.expires_at}};
+  });
+  if(!result)fail('google_verification_invalid',401);return result;
+ }
  async requestCode({email,ip}){
   this.settings();email=emailAddress(email);ip=this.ip(ip);
   if(!this.mailConfigured)fail('mail_unavailable',503);

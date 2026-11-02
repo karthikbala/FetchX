@@ -1,7 +1,7 @@
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {handleControl,CONTROL_REQUEST_LIMIT,CONTROL_RESPONSE_LIMIT,CONTROL_TIMEOUT_MS,type ControlEnv} from '../src/server/control';
 
-const origin='https://fetchx.ai',secret='synthetic-control-secret-32-bytes-minimum',token='fxs_'+'s'.repeat(43);
+const origin='https://fetchx.ai',secret='synthetic-control-secret-32-bytes-minimum',token='fxs_'+'s'.repeat(43),binding='fxg_'+'g'.repeat(43);
 const project='cp_00000000-0000-4000-8000-000000000001';
 const env:ControlEnv={SITE_ENV:'production',ALLOWED_ORIGINS:origin,FETCHX_CONTROL_URL:'https://gateway.example/control',FETCHX_CONTROL_SECRET:secret};
 let calls:{url:string;init:RequestInit}[]=[];
@@ -59,6 +59,50 @@ describe('same-origin control bridge',()=>{
  it('drops invalid and duplicate session cookies and rejects malformed CSRF',async()=>{
   await send('/session',{headers:{Cookie:`fetchx_session=${token}; fetchx_session=${token}`}});expect(new Headers(calls[0].init.headers).get('Cookie')).toBeNull();
   expect((await send('/session',{headers:{'X-CSRF-Token':'bad token'}})).status).toBe(403);expect(calls).toHaveLength(1);
+ });
+ it('allows only the two POST Google routes and forwards their single valid browser binding',async()=>{
+  const cookie=`unrelated=private; fetchx_session=${token}; fetchx_google=${binding}`;
+  await send('/auth/google/challenge',{method:'POST',body:'{}',headers:{Cookie:cookie}});
+  expect(new Headers(calls[0].init.headers).get('Cookie')).toBe(`fetchx_session=${token}; fetchx_google=${binding}`);
+  await send('/auth/google/verify',{method:'POST',body:JSON.stringify({challenge_id:'synthetic',credential:'synthetic-id-token'}),headers:{Cookie:cookie,Authorization:'Bearer private-caller-key'}});
+  expect(calls[1].url).toBe('https://gateway.example/control/auth/google/verify');
+  expect(new Headers(calls[1].init.headers).get('Cookie')).toBe(`fetchx_session=${token}; fetchx_google=${binding}`);
+  expect(new Headers(calls[1].init.headers).get('Authorization')).toBeNull();
+  await send('/session',{headers:{Cookie:cookie}});expect(new Headers(calls[2].init.headers).get('Cookie')).toBe(`fetchx_session=${token}`);
+  expect((await send('/auth/google/verify')).status).toBe(405);
+  expect((await send('/auth/google/token',{method:'POST',body:'{}'})).status).toBe(404);
+  expect((await send('/auth/google/verify?credential=private',{method:'POST',body:'{}'})).status).toBe(400);
+  expect((await send('/auth/google/verify',{method:'POST',body:'{}',headers:{Origin:'https://attacker.example'}})).status).toBe(403);
+  expect(calls).toHaveLength(3);
+ });
+ it('isolates malformed or duplicate Google and session cookies independently',async()=>{
+  await send('/auth/google/challenge',{method:'POST',body:'{}',headers:{Cookie:`fetchx_session=${token}; fetchx_google=${binding}; fetchx_google=bad`}});
+  expect(new Headers(calls[0].init.headers).get('Cookie')).toBe(`fetchx_session=${token}`);
+  await send('/auth/google/verify',{method:'POST',body:'{}',headers:{Cookie:`fetchx_session=${token}; fetchx_google=${binding}; fetchx_google=bad`}});
+  expect(new Headers(calls[1].init.headers).get('Cookie')).toBe(`fetchx_session=${token}`);
+  await send('/auth/google/verify',{method:'POST',body:'{}',headers:{Cookie:`fetchx_session=bad; fetchx_session=${token}; fetchx_google=${binding}`}});
+  expect(new Headers(calls[2].init.headers).get('Cookie')).toBe(`fetchx_google=${binding}`);
+  await send('/auth/google/verify',{method:'POST',body:'{}',headers:{Cookie:'fetchx_google=fxg_bad'}});
+  expect(new Headers(calls[3].init.headers).get('Cookie')).toBeNull();
+ });
+ it('returns both safe Google/session cookies, caps Google expiry, and clears its binding after verification',async()=>{
+  upstream=()=>{const result=Response.json({ok:true});result.headers.append('Set-Cookie',`fetchx_google=${binding}; Domain=attacker.example; Path=/; SameSite=None; Max-Age=999999; Expires=Tue, 01 Jan 2030 00:00:00 GMT`);result.headers.append('Set-Cookie',`fetchx_session=${token}; Path=/; SameSite=None; Expires=Tue, 01 Jan 2030 00:00:00 GMT`);result.headers.append('Set-Cookie','unrelated=private');return result;};
+  const result=await send('/auth/google/challenge',{method:'POST',body:'{}'}),cookies=result.headers.getSetCookie();
+  expect(cookies).toHaveLength(2);
+  const google=cookies.find(cookie=>cookie.startsWith('fetchx_google='))!;
+  expect(google).toContain('Path=/api/control; HttpOnly; SameSite=Lax; Secure');expect(google).not.toContain('Domain=');
+  const maxAge=Number(/Max-Age=(\d+)/.exec(google)?.[1]);expect(maxAge).toBeGreaterThan(0);expect(maxAge).toBeLessThanOrEqual(300);
+  expect(Date.parse(/Expires=([^;]+)/.exec(google)![1])).toBeLessThanOrEqual(Date.now()+300_000);
+  upstream=()=>{const result=Response.json({ok:true});result.headers.append('Set-Cookie','fetchx_google=; Domain=attacker.example; Path=/');result.headers.append('Set-Cookie',`fetchx_session=${token}`);return result;};
+  const verified=await send('/auth/google/verify',{method:'POST',body:'{}'});
+  expect(verified.headers.getSetCookie()).toHaveLength(2);expect(verified.headers.getSetCookie().find(cookie=>cookie.startsWith('fetchx_google='))).toContain('Max-Age=0');
+  expect((await send('/session')).headers.getSetCookie()).toHaveLength(1);
+ });
+ it('drops duplicate or malformed returned cookies without losing the other safe cookie',async()=>{
+  upstream=()=>{const result=Response.json({ok:true});result.headers.append('Set-Cookie',`fetchx_google=${binding}`);result.headers.append('Set-Cookie',`fetchx_google=${binding}`);result.headers.append('Set-Cookie',`fetchx_session=${token}`);return result;};
+  const duplicate=await send('/auth/google/challenge',{method:'POST',body:'{}'});expect(duplicate.headers.getSetCookie()).toHaveLength(1);expect(duplicate.headers.get('Set-Cookie')).toContain('fetchx_session=');
+  upstream=()=>{const result=Response.json({ok:true});result.headers.append('Set-Cookie','fetchx_session=bad');result.headers.append('Set-Cookie',`fetchx_google=${binding}`);return result;};
+  const malformed=await send('/auth/google/challenge',{method:'POST',body:'{}'});expect(malformed.headers.getSetCookie()).toHaveLength(1);expect(malformed.headers.get('Set-Cookie')).toContain('fetchx_google=');
  });
  it('validates JSON and request bounds without forwarding invalid content',async()=>{
   for(const body of ['{"invalid"','[]','null','"string"'])expect((await send('/projects',{method:'POST',body})).status).toBe(400);

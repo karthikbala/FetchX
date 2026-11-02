@@ -7,7 +7,9 @@ export interface ControlEnv {
  SITE_ENV?: string;
 }
 const COOKIE='fetchx_session';
+const GOOGLE_COOKIE='fetchx_google';
 const SESSION=/^fxs_[A-Za-z0-9_-]{43}$/;
+const GOOGLE_BINDING=/^fxg_[A-Za-z0-9_-]{43}$/;
 const PROJECT='cp_[a-fA-F0-9-]{36}';
 const UUID='[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}';
 export const CONTROL_REQUEST_LIMIT=96*1024;
@@ -19,7 +21,7 @@ const error=(status:number,code:string,message:string)=>response(status,{error:{
 const loopback=(url:URL)=>/^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i.test(url.hostname)||url.hostname.endsWith('.localhost');
 function allowedMethods(path:string):string[]|null {
  if(['/status','/session'].includes(path))return ['GET'];
- if(['/auth/code','/auth/verify','/auth/logout'].includes(path))return ['POST'];
+ if(['/auth/code','/auth/verify','/auth/logout','/auth/google/challenge','/auth/google/verify'].includes(path))return ['POST'];
  if(path==='/projects')return ['GET','POST'];
  if(new RegExp(`^/projects/${PROJECT}$`).test(path))return ['GET'];
  if(new RegExp(`^/projects/${PROJECT}/keys$`).test(path))return ['GET','POST'];
@@ -42,17 +44,24 @@ async function boundedBody(body:ReadableStream<Uint8Array>|null,limit:number,sig
  } finally {signal.removeEventListener('abort',abort);reader.releaseLock();}
  const bytes=new Uint8Array(length);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}return bytes;
 }
-function sessionCookie(value:string|null):string|null {
- const parts=(value??'').split(';').map(v=>v.trim()).filter(v=>v.startsWith(COOKIE+'='));
- return parts.length===1&&SESSION.test(parts[0].slice(COOKIE.length+1))?parts[0]:null;
+function requestCookie(value:string|null,name:string,pattern:RegExp):string|null {
+ const parts=(value??'').split(';').map(v=>v.trim()).filter(v=>v.startsWith(name+'='));
+ return parts.length===1&&pattern.test(parts[0].slice(name.length+1))?parts[0]:null;
 }
-function responseCookie(value:string,secure:boolean):string|null {
+function responseCookie(value:string,secure:boolean,name:string):string|null {
  const parts=value.split(';').map(v=>v.trim()),pair=parts.shift()??'';
- if(!pair.startsWith(COOKIE+'='))return null;
- const token=pair.slice(COOKIE.length+1);if(token!==''&&!SESSION.test(token))return null;
+ if(!pair.startsWith(name+'='))return null;
+ const token=pair.slice(name.length+1),google=name===GOOGLE_COOKIE;
+ if(token!==''&&!(google?GOOGLE_BINDING:SESSION).test(token))return null;
  const out=[pair,'Path=/api/control','HttpOnly','SameSite=Lax'];if(secure)out.push('Secure');
  if(!token)out.push('Max-Age=0','Expires=Thu, 01 Jan 1970 00:00:00 GMT');
- else {const expires=parts.find(v=>/^Expires=/i.test(v));if(expires){const date=new Date(expires.slice(8));if(!Number.isFinite(date.getTime()))return null;out.push('Expires='+date.toUTCString());}}
+ else {
+  const expires=parts.find(v=>/^Expires=/i.test(v));
+  let time:number|undefined;
+  if(expires){time=Date.parse(expires.slice(8));if(!Number.isFinite(time))return null;}
+  if(google){time=Math.min(time??Date.now()+300_000,Date.now()+300_000);out.push('Max-Age='+Math.max(0,Math.min(300,Math.floor((time-Date.now())/1000))));}
+  if(time!==undefined)out.push('Expires='+new Date(time).toUTCString());
+ }
  return out.join('; ');
 }
 
@@ -83,7 +92,9 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
  let submitted=false;
  try {
   const forwarded=new Headers({'Accept':'application/json','Origin':incoming.origin,'X-FetchX-Control-Secret':env.FETCHX_CONTROL_SECRET});
-  const cookie=sessionCookie(request.headers.get('Cookie'));if(cookie)forwarded.set('Cookie',cookie);
+  const cookies=[requestCookie(request.headers.get('Cookie'),COOKIE,SESSION)];
+  if(path==='/auth/google/challenge'||path==='/auth/google/verify')cookies.push(requestCookie(request.headers.get('Cookie'),GOOGLE_COOKIE,GOOGLE_BINDING));
+  const cookie=cookies.filter(Boolean).join('; ');if(cookie)forwarded.set('Cookie',cookie);
   const csrf=request.headers.get('X-CSRF-Token');if(csrf){if(!/^[A-Za-z0-9_-]{43}$/.test(csrf))return error(403,'csrf_rejected','This request could not be authorized.');forwarded.set('X-CSRF-Token',csrf);}
   const ip=request.headers.get('CF-Connecting-IP');if(ip&&/^[a-fA-F0-9:.]{3,64}$/.test(ip))forwarded.set('X-FetchX-Client-IP',ip);
   let body:string|undefined;
@@ -102,7 +113,12 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
   const bytes=await boundedBody(result.body,CONTROL_RESPONSE_LIMIT,controller.signal);
   let payload:unknown;try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:false}).decode(bytes));if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error();}catch{return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
   const output=response(result.status,payload);
-  for(const value of result.headers.getSetCookie()){const cookie=responseCookie(value,!development);if(cookie)output.headers.append('Set-Cookie',cookie);}
+  const returnedCookies=result.headers.getSetCookie();
+  for(const name of [COOKIE,...(path.startsWith('/auth/google/')?[GOOGLE_COOKIE]:[])]){
+   const values=returnedCookies.filter(value=>value.startsWith(name+'='));
+   if(values.length!==1)continue;
+   const cookie=responseCookie(values[0],!development,name);if(cookie)output.headers.append('Set-Cookie',cookie);
+  }
   const retry=result.headers.get('Retry-After');if(retry&&/^\d{1,5}$/.test(retry))output.headers.set('Retry-After',retry);
   return output;
  } catch {
