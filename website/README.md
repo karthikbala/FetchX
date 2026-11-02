@@ -58,12 +58,12 @@ Build variables:
 Cloudflare Pages **secrets**, configured separately in each deployment environment:
 
 - `TURNSTILE_SECRET`: corresponding widget secret.
-- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`: an OAuth client and offline Gmail send authorization for the approved HeadRun mailbox.
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`: an OAuth client and offline Gmail send authorization for the FetchX mailbox, or an account explicitly authorized to send as `hello@fetchx.ai`.
 - `HASH_SECRET`: random, stable HMAC key for deduplication and rate-limit hashes. Do not rotate casually while enquiries remain in the database.
 
 Runtime variables: `SITE_ENV`, `ALLOWED_ORIGINS`, `TURNSTILE_HOSTNAMES`, `MAIL_FROM`, `SALES_EMAIL`; these are in Wrangler. Turnstile must return action `pilot` and the exact submitted host. Staging accepts only the stable staging hostname, not arbitrary deployment URLs. Production accepts only `fetchx.ai`.
 
-Notifications go to `karthik@headrun.ai`, from `FetchX <karthik@headrun.com>`, with the visitor's address in Reply-To. Verify the sales mailbox and Gmail sender authorization before opening intake. Root-domain Google mail records must remain unchanged.
+Notifications go to `karthik@headrun.ai`, from `FetchX <hello@fetchx.ai>`, with the visitor's address in Reply-To. Verify the sales mailbox and Gmail sender authorization before opening intake. Root-domain Google mail records must remain unchanged.
 
 An absent site key leaves the enquiry form disabled. Missing server secrets fail closed. Indexing requires both `PUBLIC_SITE_ENV=production` and `PUBLIC_PRODUCT_LAUNCH_READY=true`. Otherwise pages emit noindex metadata and robots disallow crawling. All Pages-hosted domains additionally receive an `X-Robots-Tag` noindex header. Signup and workspace pages stay non-indexed even in a launch build. Confirm actual hosting crawler controls separately before publication.
 
