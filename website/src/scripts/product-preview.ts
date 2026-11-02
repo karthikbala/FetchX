@@ -21,6 +21,7 @@ async function initWorkspace(root: HTMLElement) {
   let csrf = '', projects: Project[] = [], project: Project | null = null, profiles: Profile[] = [], capabilities: Json = {};
   let service: Json = {}, keys: Json[] = [], operations: Json[] = [], usage: Json | null = null, billing: Json | null = null;
   let challenge = '', email = '', revealedSecret = '', currentKey = '', currentResult: Json | null = null;
+  let signingOut = false;
   let signedIn = false, ready = false, sending = false, prepared = true, loadVersion = 0, mutating = 0;
   let toastTimer: ReturnType<typeof setTimeout>;
   let confirmCallback: (() => void) | null = null;
@@ -105,7 +106,7 @@ async function initWorkspace(root: HTMLElement) {
   q<HTMLDialogElement>('[data-confirm-dialog]')?.addEventListener('close', event => { const dialog = event.currentTarget as HTMLDialogElement; const callback = confirmCallback; confirmCallback = null; if (dialog.returnValue === 'confirm') callback?.(); else lastFocus?.focus(); dialog.returnValue = ''; });
   function stage(index: number) { qa('[data-signup-stage]').forEach(node => { node.hidden = Number(node.dataset.signupStage) !== index; }); qa('[data-signup-progress]').forEach(node => { node.classList.toggle('is-current', Number(node.dataset.signupProgress) === index); node.classList.toggle('is-complete', Number(node.dataset.signupProgress) < index); }); q(`[data-signup-stage="${index}"] input`)?.focus(); }
   function scopes(values: FormData) { const selected = values.getAll('scope').map(String); if (!selected.length) throw new ControlError('Select at least one key permission.', 'scopes_required'); return selected; }
-  function acceptSession(data: Json) { csrf = String(data.csrf_token || ''); projects = Array.isArray(data.projects) ? data.projects : []; signedIn = true; textAll('[data-user-email]', data.user?.email || 'Verified account'); qa('[data-logout]').forEach(node => { node.hidden = false; }); }
+  function acceptSession(data: Json) { csrf = String(data.csrf_token || ''); projects = Array.isArray(data.projects) ? data.projects : []; signedIn = true; textAll('[data-user-email]', data.user?.email || 'Verified account'); qa('[data-logout],[data-session-account]').forEach(node => { node.hidden = false; }); }
   function finishSignIn(data: Json) {
     disposeGoogle?.(); disposeGoogle = undefined;
     acceptSession(data); email = ''; challenge = ''; clearError();
@@ -161,9 +162,15 @@ async function initWorkspace(root: HTMLElement) {
   q('[data-signup-copy]')?.addEventListener('click', () => { if (revealedSecret) void copy(revealedSecret); });
   q('[data-conceal-signup-key]')?.addEventListener('click', () => { concealSecret(); q<HTMLButtonElement>('[data-signup-copy]')!.disabled = true; });
   qa('[data-logout]').forEach(button => button.addEventListener('click', async () => {
-    button.setAttribute('disabled', ''); clearError();
+    if (signingOut) return;
+    signingOut = true; clearError();
+    const buttons = qa<HTMLButtonElement>('[data-logout]');
+    buttons.forEach(node => { node.disabled = true; node.textContent = 'Signing out…'; node.setAttribute('aria-busy', 'true'); });
     try { await api('/auth/logout', { method: 'POST', body: {} }); concealSecret(); csrf = ''; signedIn = false; try { sessionStorage.removeItem(selectedStorage); } catch {} window.location.assign('/login'); }
-    catch (error) { setError(error); button.removeAttribute('disabled'); }
+    catch (error) {
+      setError(error); signingOut = false;
+      buttons.forEach(node => { node.disabled = false; node.textContent = 'Sign out'; node.removeAttribute('aria-busy'); });
+    }
   }));
   qa('[data-open-project]').forEach(button => button.addEventListener('click', () => { if (!signedIn) return; lastFocus = document.activeElement as HTMLElement; q<HTMLDialogElement>('[data-project-dialog]')?.showModal(); q<HTMLInputElement>('[data-create-project] input')?.focus(); }));
   q('[data-close-project]')?.addEventListener('click', () => q<HTMLDialogElement>('[data-project-dialog]')?.close());
@@ -367,7 +374,7 @@ async function initWorkspace(root: HTMLElement) {
   async function start() {
     disposeGoogle?.(); disposeGoogle = undefined;
     ready = false; signedIn = false; csrf = ''; projects = []; project = null; concealSecret(); clearError();
-    qa('[data-logout]').forEach(node => { node.hidden = true; }); setProjectOptions();
+    qa('[data-logout],[data-session-account]').forEach(node => { node.hidden = true; }); setProjectOptions();
     textAll('[data-user-email]', 'Not signed in');
     if (!authPage) gate('Opening your workspace…', 'Checking the service and your session.');
     try {
