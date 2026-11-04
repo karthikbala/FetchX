@@ -468,7 +468,9 @@ async function initWorkspace(root: HTMLElement) {
     const bytes = quote.max_transfer_bytes;
     const defaultSize = bytes < decimalMb ? `${bytes / 1000} KB` : `${bytes / decimalMb} MB`;
     const reserved = paidReservation(quote);
-    textAll('[data-transfer-quote]', `Default ${defaultSize}. Reserves up to ${formatCredits(reserved)} ${reserved === 1 ? 'credit' : 'credits'}. The final charge follows measured wire traffic.`);
+    const dailyLimit = paidProfile()?.max_daily_operations;
+    const dailyDisclosure = positiveInteger(dailyLimit) ? ` Daily limit: ${number(dailyLimit)} requests.` : '';
+    textAll('[data-transfer-quote]', `Default ${defaultSize}. Reserves up to ${formatCredits(reserved)} ${reserved === 1 ? 'credit' : 'credits'}. The final charge follows measured wire traffic.${dailyDisclosure}`);
   }
   const currentExecutionCapability = () => activeCapabilities()?.executions.find(item => item.id === execution());
   const routeChoice = () => routeClasses.find(value => value === routeSelect?.value);
