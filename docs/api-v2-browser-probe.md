@@ -1,19 +1,12 @@
 # FetchX v2 qualified browser network probe
 
-This is a bounded navigation/network-observation operation, not a live browser
-lease or an automatic fallback. Runtime and profile approval are independent.
-`features.browser_network_probe` and `browser_probe.available` are false unless
-both are satisfied. The broad `transports.browser` session capability remains
-false. Existing HTTP session/profile APIs stay the default route.
-
-**New probes are currently disabled.** Chromium can follow redirects without
-Playwright's request route handler, so the present implementation cannot prove
-per-hop admission through the pinned relay. Even an otherwise accepted runtime
-returns `browser_probe_redirect_admission_unqualified`; capabilities remain false
-and new probes are refused before browser/source execution. Existing operation
-and artifact reads, including same-key replay, remain available. The following
-contract describes the retained interface; operator qualification alone does not
-enable new probes until redirect handling is corrected and qualified.
+A browser probe navigates to one HTTPS page in an isolated context and records
+bounded network evidence and rendered output. The [Playground](playground.md)
+and `POST /v2/render` use the same runtime and a dedicated Browser session.
+Browser availability depends on platform readiness, the reviewed route and
+the project's ordinary credit allowance. Users do not qualify their own
+runtime. The legacy `POST /v2/browser-probes` contract remains available to
+unmanaged projects with enabled profiles and the standard HTTP session API.
 
 ## Profile, runtime and bounds
 
@@ -24,36 +17,48 @@ An explicit server profile field supplies the request/storage envelope:
 ```
 
 Hard ceilings are 32 admitted target requests, 16 MiB aggregate network bytes,
-8 MiB total retained native decoded bodies, 1 MiB generated DOM and a 2-second
-settling window. Profile/session request and byte ceilings intersect these limits.
+8 MiB total retained native decoded bodies, 1 MiB generated DOM, a 1 MiB viewport
+screenshot and a 2-second settling window. Profile/session request and byte ceilings intersect these limits.
 Public `browser_probe.route_reservations` quotes the whole-probe reservation and
 estimate separately from HTTP quotes. Unpriced routes cannot satisfy a finite
 caller cost ceiling. Discovery can receive the same field only through explicit
 server `v2_discovery_policy.browser_probe` approval of future immutable profiles;
 its GET/HEAD/direct/zero-paid restrictions stay intact.
 
-The initial runtime supports an already installed, pinned, eligible **unlicensed
-free CloakBrowser** build only. Paid/trial tiers and arbitrary installed Chrome
-are not substituted. An operator must explicitly enable `v2.browser_probe.enabled`,
-choose `tier:"free"`, and supply a current `qualification` record:
+The customer-facing Browser deployment uses an installed, pinned Chromium
+build through Playwright. The operator sets `v2.browser_probe.enabled: true`,
+`engine: "chromium"` and `runtime: {executablePath, version, sha256}`. The
+path must identify a local executable. FetchX verifies its SHA-256 before
+marking the platform ready and the worker hashes it again before launch.
+
+The `v2.browser_probe.qualification` record must identify the exact runtime:
 
 ```text
 status: accepted
-kind: pinned-relay-egress-v1
-binary_sha256: exact browser.free hash
-version: exact browser.free version
-entitlement: unlicensed
+kind: pinned-relay-egress-v2
+engine: chromium
+binary_sha256: exact runtime executable hash
+version: exact runtime version
 platform / arch: actual host runtime
 expires_at: future ISO timestamp
 evidence: sha256:<reviewed qualification evidence hash>
 ```
 
-These match `browser.free` and the installed executable's hash/accessibility.
-This is trusted operator evidence, not an automatically created entitlement or
-permission to download a build. Capability checks make no vendor/entitlement
-requests. The worker independently verifies the binary before launch. Missing,
-expired, unqualified or changed evidence fails closed. Current local source
-qualification has no approved free Cloak runtime and remains unavailable.
+Legacy configurations can retain the separate `tier: "free"` and
+`browser.free` pin for an installed keyless CloakBrowser build. For that
+configuration the qualification carries `entitlement: unlicensed` and may
+omit `engine` or identify it as `cloakbrowser`. The legacy path and any
+rights to use its binary are independent of the Chromium deployment.
+
+Qualification evidence covers the pinned binary and service environment,
+including sandboxed launch, TLS and destination pinning, denied redirect
+hops, secondary targets, WebSocket blocking, caps and failure handling.
+Older v1 evidence is insufficient for the current admission path. Capability
+checks read local state. The worker launches the configured executable with
+reviewed flags and the Chromium sandbox enabled. Missing, expired,
+mismatched or unreadable evidence keeps Browser unavailable. A fixture with
+a local development browser verifies mechanics and does not qualify the
+production pin.
 
 ## Operation
 
@@ -63,9 +68,10 @@ Authenticated `POST /v2/browser-probes`:
 {"idempotency_key":"durable-probe-key","session_id":"UUID","url":"https://source.example/","max_physical_requests":8,"max_estimated_micro_usd":0}
 ```
 
-`max_physical_requests`, when supplied, must be 1 through the profile bound. Only
-a URL and ceilings are accepted: no caller scripts, selectors, actions, form
-submissions or browser/CDP handles. Every target request is **GET/HEAD only**,
+`max_physical_requests`, when supplied, must be 1 through the profile bound.
+`wait_ms` can shorten the profile's settling window and `screenshot: true`
+requests a JPEG of the 1280 × 720 viewport. The probe API accepts a navigation
+URL and bounded capture options. Every target request is **GET/HEAD only**,
 even if the broader HTTP profile allows POST. Source-generated POST/GraphQL
 mutations, other methods, unapproved origins/paths, credential headers and excess
 requests are blocked before target HTTP admission. An opaque query or source JS
@@ -74,16 +80,24 @@ does not authorize a mutation.
 The existing session supplies its immutable profile, source cookie jar and sticky
 route. A fresh browser context restores cookies and saves their domain/path/
 security state after a known receipt. localStorage and live server circuits are
-not persisted. There is no provider retry or fallback.
+not persisted. The route remains fixed for the operation. A managed render
+reserves and settles the selected project key's Browser credits with the same
+operation and provider ledger. Uncertain dispatch holds the reservation and
+recovery reads the original operation.
 
 Every target connection uses the private metered relay. DNS answers are fully
 checked, direct sockets or upstream CONNECT use a pinned public IP, and origin
 TLS remains end-to-end with normal certificate verification. No TLS interception
-or certificate exception is introduced. Each request/redirect has independent
-method/path/pacing/expiry/cooldown admission, serialized across parallel events.
-Dispatch is durable before transport begins. WebSockets, service workers,
-downloads, popups, QUIC, proxy bypass and nonproxied WebRTC are disabled/blocked;
-the browser resolver cannot create another source DNS route.
+or certificate exception is introduced. Chromium's request-stage Fetch interception pauses each hop before it dispatches.
+The parent independently checks method, origin, path, DNS answers, pacing and
+cooldown, then records durable dispatch admission and issues one CONNECT
+permit for the pinned hostname. HTTP/1.1 with `Connection: close` avoids
+Chromium's automatic replay of requests on failed reused connections. The main
+document and supported same-frame resources can use the transport. Secondary
+targets, unsupported resource types, service workers, downloads, QUIC, proxy
+bypass and nonproxied WebRTC are restricted. Chromium routes plaintext HTTP and
+WebSockets to a separate local listener that rejects all traffic without an
+outbound connection. Only HTTPS can use an admitted permit.
 
 The usual operation envelope and GET operation/key/artifact routes are reused.
 `result.kind` is required: `browser_network_probe`. Normal results include:
@@ -92,15 +106,16 @@ The usual operation envelope and GET operation/key/artifact routes are reused.
 status, final_url, artifacts, physical_requests,
 physical_requests_basis: admitted_browser_target_attempts,
 blocked_requests, blocked_reasons, capture_complete,
-encoded_bytes: number|null, decoded_bytes, dom_bytes,
+encoded_bytes: number|null, decoded_bytes, dom_bytes, screenshot_bytes,
+main_artifact_id, dom_artifact_id, screenshot_artifact_id,
 tunnel_bytes, target_connections, network_byte_basis
 ```
 
 An admitted attempt does not prove the source received HTTP. Blocked requests
-are unadmitted and do not increment target-request count. Background target
-preconnections can consume network bytes; reservations and target-connection
-counts include them. `decoded_bytes` counts native bodies only; `dom_bytes` is
-separate. `capture_complete:false` identifies blocked, missing or partial capture.
+are unadmitted and do not increment target-request count. Each outbound tunnel
+consumes an admitted permit. `decoded_bytes` counts native bodies only. DOM and
+screenshot sizes are separate. `capture_complete:false` identifies blocked,
+missing or partial capture.
 
 `max_network_bytes` bounds both directions of the encrypted relay stream,
 including request/response headers and TLS. Proxy routes include the upstream
@@ -119,7 +134,7 @@ traffic measurement leaves `cost_usd` null.
 
 ## Evidence variants
 
-Both variants have these common fields:
+All browser variants share these fields:
 
 ```text
 id, operation_id, kind, url, method, status, headers, raw_headers, captured_at,
@@ -136,16 +151,19 @@ bytes are unavailable** and never reconstructed. When available, Playwright's
 request-size observation gives an independent encoded-body length; a null length
 has a null basis. Content-Encoding can still describe the native compression
 while retained body bytes are already decoded. Do not decode them again.
-Unavailable/oversized bodies stay null with an explicit decoding error.
+Redirects retain response metadata with a null body. Other unavailable or
+oversized bodies stay null with a decoding error. `main_document:true`
+identifies a top-level response eligible for the render result.
 
 Request metadata may contain managed source cookies. It stays encrypted/private,
 is omitted from summaries/console, and must be sanitized before model input or
 sharing. `rendered_dom` requires `generated:true` and has no request object. Its
 HTML is generated, with null original/encoded fields, null Content-Encoding and
 null raw headers. It cannot satisfy original-document or source-PDF requirements.
-There are at most 32 native response artifacts plus one DOM artifact. Per-artifact
-tunnel/provider values are null because multiplexed encrypted traffic cannot be
-accurately attributed to a response. Existing HTTP artifact variants are unchanged.
+`browser_screenshot` requires `generated:true` and stores the bounded JPEG in
+`decoded_body_base64`. There are at most 32 native response artifacts, one DOM
+artifact and one optional screenshot. Artifacts are encrypted at rest. The relay
+reports tunnel bytes and provider status for the operation as a whole.
 
 Byte caps are retained/read-body bounds. Worker isolation, browser process
 cleanup and the deadline protect the parent and bound traffic; these are not an

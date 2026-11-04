@@ -1,6 +1,7 @@
 import {sha} from './crypto.mjs';
 import {GatewayError,ID,fail} from './policy.mjs';
 import {hasHtmlChallenge} from './source-challenge.mjs';
+import {ensurePlaygroundProfile,isPlaygroundRef,playgroundMessage} from './control-playground.mjs';
 
 const KIND='public_fetch_request_v1';
 const failureContexts=new WeakMap();
@@ -14,9 +15,14 @@ const keys=k=>({session:'public-fetch.s.'+sha(k).slice(0,32),operation:'public-f
 const registryKey=(project,k)=>sha(canonical([project,k]));
 const lookupUrl=k=>validKey(k)?'/v2/fetch/'+encodeURIComponent(k):null;
 const publicCode=code=>typeof code==='string'&&/^[a-z][a-z0-9_]{0,80}$/.test(code)?code:'internal_error';
+const responseHeaders=new Set(['accept-ranges','cache-control','content-disposition','content-encoding','content-language','content-length','content-type','date','etag','expires','last-modified','pragma','retry-after','vary']);
+export function publicResponseHeaders(headers){
+ return Object.fromEntries(Object.entries(headers??{}).filter(([name,value])=>responseHeaders.has(name.toLowerCase())&&typeof value==='string').map(([name,value])=>[name.toLowerCase(),value.slice(0,2048)]));
+}
 const renderOptions=new Set(['render','browser','javascript','js_render','wait_for','waitFor','screenshot','screenshots','formats','actions','script','selectors','extract','transport']);
 const operationAdmissionCodes=new Set(['operation_invalid','idempotency_key_required','identifier_invalid','cost_ceiling_invalid','idempotency_conflict','session_not_found','access_profile_forbidden','access_profile_configuration','version_immutable','request_invalid','method_rejected','body_rejected','headers_rejected','session_expired','session_busy_or_unknown','session_limit','client_quota_exhausted','capacity_wait','artifact_quota','residential_budget_exhausted','residential_provider_held','residential_budget_unconfigured','residential_rate_unconfigured','residential_provider_unavailable','residential_country_unavailable','cost_estimate_unavailable','cost_ceiling_exceeded','entitlement_configuration']);
-for(const code of ['credit_policy_unreviewed','credit_policy_invalid','credit_route_forbidden','credit_account_unavailable','credit_balance_exhausted','api_key_identity_required','api_key_forbidden','project_inactive','credential_scope_rejected'])operationAdmissionCodes.add(code);
+for(const code of ['credit_policy_unreviewed','credit_policy_invalid','credit_route_forbidden','credit_account_unavailable','credit_balance_exhausted','api_key_identity_required','api_key_forbidden','project_inactive','project_not_found','credential_scope_rejected','country_pool_unavailable','proxy_configuration_invalid','playground_key_selection_required','playground_policy_invalid','playground_policy_version_changed','playground_profile_invalid','playground_profile_limit','playground_destination_rejected','playground_url_invalid','playground_execution_mismatch','playground_route_unreviewed','playground_route_unhealthy','playground_route_mismatch'])operationAdmissionCodes.add(code);
+export const isPublicOperationAdmissionError=error=>error instanceof GatewayError&&operationAdmissionCodes.has(error.code);
 
 function retryEvidence(result){
  const retry=result?.retry;
@@ -100,13 +106,16 @@ function message(code){
   operation_incomplete:'The operation is active or incomplete. Recover the saved operation before any new source work.',
   internal_error:'The gateway could not complete this request. Recover by key before considering new source work.'
  };
- if(messages[code])return messages[code];
+ if(Object.hasOwn(messages,code))return messages[code];
+ if(code.startsWith('playground_'))return playgroundMessage(code);
  if(/forbidden|rejected|invalid|required|mismatch/.test(code))return 'The request is not permitted by the gateway or approved access profile.';
  if(/budget|quota|limit|capacity|ceiling/.test(code))return 'A gateway quota, capacity or spending reservation prevented this request.';
  if(/configuration|unconfigured|unavailable|held/.test(code))return 'The selected route is unavailable or requires an operator configuration change.';
  if(/unknown|incomplete|interrupted/.test(code))return 'The operation outcome is uncertain. Recover the saved operation; do not replay source work.';
  return 'The gateway could not complete this operation. Inspect the retained operation and its safe diagnostics.';
 }
+
+export {publicCode as publicOperationErrorCode,message as publicOperationErrorMessage};
 
 function retryGuidance({key,code,state,method,route,profile,result,admission=false}){
  // safe_to_retry refers only to new source work. Exact same-key POSTs and GET
@@ -171,7 +180,7 @@ export async function publicFetchResponse(v2,project,key,operation,{keyScope='ca
  if(body&&textual&&(!charset||/^(?:utf-8|utf8|us-ascii)$/i.test(charset))){try{text=new TextDecoder('utf-8',{fatal:true}).decode(body);}catch{}}
  const stage=code?.startsWith('source_')&&['source_rate_limited','source_forbidden','source_not_found','source_challenge','source_http_error'].includes(code)?'source_response':result?.diagnostics?.stage??'operation';
  return {success:!code&&operation.state==='completed',state:operation.state,gateway_http_status:200,operation_id:operation.id,session_id:operation.session_id,idempotency_key:key,idempotency_key_scope:keyScope,...(keyScope==='internal_operation'?{internal_idempotency_key:operation.idempotency_key}:{}),routing:route,
-  data:result?{status:result.status??null,final_url:result.final_url??last?.url??null,content_type:contentType,body_base64:last?.decoded_body_base64??null,text,retry_after:result.retry_after??null}:null,
+  data:result?{status:result.status??null,final_url:result.final_url??last?.url??null,content_type:contentType,body_base64:last?.decoded_body_base64??null,text,retry_after:result.retry_after??null,headers:publicResponseHeaders(last?.headers)}:null,
   artifacts:artifacts.map(a=>({id:a.id,kind:a.kind,status:a.status,...(a.attempt===undefined?{}:{attempt:a.attempt}),encoded_sha256:a.encoded_sha256??null,decoded_sha256:a.decoded_sha256??null,encoded_bytes:a.encoded_bytes??null,decoded_bytes:a.decoded_bytes??null,content_encoding:a.content_encoding??null,decoding_error:a.decoding_error??null})),
   diagnostics:result?.diagnostics??null,error:code?{code,message:code==='source_transport_unknown'&&/TLS|SSL|CERT|SELF_SIGNED|ISSUER/.test(result?.diagnostics?.failure?.cause_code??'')?'Source TLS verification or negotiation failed. The transport outcome may be uncertain; recover before any new source work.':message(code),stage}:null,retry:{...retryGuidance({key,code,state:operation.state,method,route,profile:row.policy,result}),...retryEvidence(result),same_key_replay_safe:keyScope==='caller',lookup_url:recoveryUrl},
   usage:{accounting:operation.accounting,native_requests:result?.physical_requests??null,dns_requests:result?.dns_requests??null,encoded_bytes:result?.encoded_bytes??null,decoded_bytes:result?.decoded_bytes??null,tunnel_bytes:result?.tunnel_bytes??null,dns_encoded_bytes:null,dns_decoded_bytes:null,dns_tunnel_bytes:null,byte_basis:result?.retry?'encoded_includes_native_and_metered_session_proxy_dns_when_retry_is_eligible; decoded_is_native_response_bytes; tunnel_includes_native_and_session_proxy_dns; separate_dns_bytes_unavailable':'encoded_and_decoded_are_native_response_bytes; tunnel_includes_native_and_session_proxy_dns; separate_dns_bytes_unavailable'},application_acceptance:'not_evaluated'};
@@ -201,20 +210,23 @@ export class PublicFetchGateway{
    try{return await this.respond(project,input.idempotency_key,await this.v2.lookup(project,names.operation));}
    catch(error){if(!(error instanceof GatewayError)||error.code!=='operation_not_found')throw error;}
   }
-  const profile=await this.v2.profile(project,input.access_profile);
+  const candidate=isPlaygroundRef(input.access_profile)?await ensurePlaygroundProfile(this.v2,project,input.access_profile,input.url,'http',input.proxy,input.method):null;
+  const profile=candidate??await this.v2.profile(project,input.access_profile);
   const request={url:input.url,method:input.method,headers:input.headers,body_base64:input.body_base64};
   this.v2.request(request,profile);
   let session;
   if(input.session_id){
    session=await this.v2.readSession(project,input.session_id);
+   if(session.transport!=='http')fail('capability_unsupported',409);
    if(session.access_profile.id!==input.access_profile.id||session.access_profile.version!==input.access_profile.version)fail('session_profile_conflict',409);
    if(session.proxy.class!==input.proxy.class||session.proxy.country!==input.proxy.country)fail('session_route_conflict',409);
-  }else session=await this.v2.session(project,{idempotency_key:names.session,access_profile:input.access_profile,transport:'http',proxy:{...input.proxy,affinity:'session'}});
+  }else session=await this.v2.session(project,{idempotency_key:names.session,access_profile:input.access_profile,transport:'http',proxy:{...input.proxy,affinity:'session'}},{profile:candidate});
   await this.fingerprint(project,input.idempotency_key,hash,{bind:true});
   let operation;
   try{operation=await this.v2.operation(project,{idempotency_key:names.operation,session_id:session.id,request,...(input.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:input.max_estimated_micro_usd}),...(input.retry===true?{retry:true}:{})},identity);}
   catch(error){
-   if(error&&typeof error==='object')failureContexts.set(error,{key:input.idempotency_key,session_id:session.id,routing:{class:session.proxy.class,country:session.proxy.country,provider:session.proxy.provider},state:error instanceof GatewayError&&operationAdmissionCodes.has(error.code)?'rejected':'unknown',stage:error instanceof GatewayError&&operationAdmissionCodes.has(error.code)?'operation_admission':'operation'});
+   const rejected=isPublicOperationAdmissionError(error);
+   if(error&&typeof error==='object')failureContexts.set(error,{key:input.idempotency_key,session_id:session.id,routing:{class:session.proxy.class,country:session.proxy.country,provider:session.proxy.provider},state:rejected?'rejected':'unknown',stage:rejected?'operation_admission':'operation'});
    throw error;
   }
   return this.respond(project,input.idempotency_key,operation);
@@ -224,8 +236,8 @@ export class PublicFetchGateway{
   if(!await this.fingerprint(project,key))fail('operation_not_found',404);
   return this.respond(project,key,await this.v2.lookup(project,keys(key).operation));
  }
- async lookupOperation(project,id){
-  const operation=await this.v2.readOperation(project,id),internal=/^public-fetch\.o\.[a-f0-9]{32}$/.test(operation.idempotency_key);
+ async lookupOperation(project,id,retained){
+  const operation=retained??await this.v2.readOperation(project,id),internal=/^public-fetch\.o\.[a-f0-9]{32}$/.test(operation.idempotency_key);
   // The fingerprint intentionally stores no caller key. Do not reverse or
   // relabel a hashed internal key as if it were the original caller key.
   return this.respond(project,internal?null:operation.idempotency_key,operation,{keyScope:internal?'internal_operation':'native_operation',recoveryUrl:'/v2/fetch/operations/'+operation.id});

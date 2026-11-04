@@ -15,7 +15,8 @@ import {browserProbeOperation} from './v2-browser-operation.mjs';
 import {estimateRoutePricing} from './v2-pricing.mjs';
 import {residentialTrafficCharge,finishResidentialTrafficCharge} from './customer-traffic.mjs';
 import {distinctNativeRetryRoute,nativeRetryIdentityBinding,pristineNativeRetry,transientNativeTransport,transientNativeResponse,successfulNativeResponse} from './v2-native-retry.mjs';
-import {ControlCredits,recoverControlCredits,reviewedCreditPolicy} from './control-credits.mjs';
+import {ControlCredits,creditWeight,recoverControlCredits,reviewedCreditPolicy} from './control-credits.mjs';
+import {PLAYGROUND_PREFIX,admitPlaygroundRoute,isPlaygroundRef,materializePlaygroundProfile,playgroundOperationProfile,playgroundPolicy,readPlaygroundProfile} from './control-playground.mjs';
 
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const plain=v=>v&&typeof v==='object'&&!Array.isArray(v);
@@ -92,18 +93,29 @@ function operationSummary(result){
  if(!result)return {source_http_status:null,physical_requests:null,encoded_bytes:null,decoded_bytes:null,tunnel_bytes:null,diagnostics:null};
  return {source_http_status:result.status??null,physical_requests:result.physical_requests??null,encoded_bytes:result.encoded_bytes??null,decoded_bytes:result.decoded_bytes??null,tunnel_bytes:result.tunnel_bytes??null,diagnostics:result.diagnostics??null};
 }
+const operationExecution=kind=>kind==='browser_probe'?'browser':'http';
 
 export class V2Gateway{
  constructor(gateway,{http=nativeHttp,dnsHttp=nativeHttp,browserRuntime=browserProbeRuntime,browserRunner=runBrowserProbe,relayFactory=browserRelay}={}){this.gateway=gateway;this.store=gateway.store;this.config=gateway.config;this.sealer=gateway.sealer;this.http=http;this.resolve=createSourceResolver(this.config.v2?.dns,{systemLookup:gateway.resolve,http:dnsHttp});Object.assign(this,{browserRuntime,browserRunner,browserRelay:relayFactory});
   this.controlCredits=gateway.controlCredits??new ControlCredits({store:this.store,config:this.config});
   if(Object.entries(this.config.v2?.accessProfiles??{}).some(([k,p])=>k.startsWith(DISCOVERY_PREFIX)||typeof p?.id==='string'&&p.id.startsWith(DISCOVERY_PREFIX)))fail('discovery_namespace_reserved',503);
+  if(Object.entries(this.config.v2?.accessProfiles??{}).some(([k,p])=>k.startsWith(PLAYGROUND_PREFIX)||typeof p?.id==='string'&&p.id.startsWith(PLAYGROUND_PREFIX)))fail('playground_namespace_reserved',503);
  }
  async capabilities(project){
   const policy=discoveryPolicy(this.config,project),runtime=await this.browserRuntime(this.config),selfService=this.controlCredits.managed(project),creditPolicy=selfService?reviewedCreditPolicy(this.config):null;
   const approved=!!policy.browser_probe?.enabled||(this.config.projects[project]?.v2_access_profiles??[]).some(k=>this.config.v2?.accessProfiles?.[k]?.browser_probe?.enabled===true),available=!selfService&&runtime.available&&approved;
-  return {...V2_CAPABILITIES,...(selfService?{proxy_classes:{direct:true,datacenter:Object.hasOwn(creditPolicy.weights,'datacenter'),residential:false}}:{}),features:{...V2_CAPABILITIES.features,discovery_profiles:policy.enabled,browser_network_probe:available},browser_probe:{available,reason:selfService?'self_service_http_only':!runtime.available?runtime.reason:!approved?'browser_probe_profile_unapproved':null,original_encoded_available:false,max_requests:32,max_decoded_bytes:8388608,max_dom_bytes:1048576,proxy_classes:selfService?[]:['direct','datacenter','residential'],methods:['GET','HEAD'],live_leases:false},discovery_profile_policy:policy.enabled?{enabled:true,max_profiles:policy.max_profiles,max_origins:policy.max_origins,methods:['GET','HEAD'],proxy_classes:['direct'],max_paid_cost_micro_usd:0,limits:policy.limits,...(!selfService&&policy.browser_probe?{browser_probe:policy.browser_probe}:{})}:{enabled:false}};
+  const routes=['direct','datacenter','residential'];
+  const playground=runtime.available&&selfService?playgroundPolicy(this.config)?.routes.browser:null;
+  const render=runtime.available&&(selfService?routes.some(route=>creditWeight(creditPolicy,'browser',route,true)&&(route==='direct'?playground?.direct:playground?.[route].length)):approved);
+  return {...V2_CAPABILITIES,...(selfService?{proxy_classes:Object.fromEntries(routes.map(route=>[route,!!creditWeight(creditPolicy,'http',route)]))}:{}),features:{...V2_CAPABILITIES.features,discovery_profiles:policy.enabled,browser_network_probe:available,browser_render:render},browser_probe:{available,reason:selfService?(render?'managed_render_endpoint_required':'self_service_http_only'):!runtime.available?runtime.reason:!approved?'browser_probe_profile_unapproved':null,original_encoded_available:false,max_requests:32,max_decoded_bytes:8388608,max_dom_bytes:1048576,proxy_classes:selfService?[]:routes,methods:['GET','HEAD'],live_leases:false},discovery_profile_policy:policy.enabled?{enabled:true,max_profiles:policy.max_profiles,max_origins:policy.max_origins,methods:['GET','HEAD'],proxy_classes:['direct'],max_paid_cost_micro_usd:0,limits:policy.limits,...(!selfService&&policy.browser_probe?{browser_probe:policy.browser_probe}:{})}:{enabled:false}};
  }
- async browserProbe(project,raw){if(this.controlCredits.managed(project))fail('self_service_http_only',403);return browserProbeOperation(this,project,raw);}
+ async browserProbe(project,raw,identity){
+  if(this.controlCredits.managed(project)){
+   const policy=reviewedCreditPolicy(this.config);
+   if(!['direct','datacenter','residential'].some(route=>creditWeight(policy,'browser',route,true)))fail('self_service_http_only',403);
+  }
+  return browserProbeOperation(this,project,raw,identity);
+ }
  entitlement(project){
   const e=this.config.projects[project]?.v2_entitlement??{mode:'unmetered'};
   if(!['unmetered','metered'].includes(e.mode))fail('entitlement_configuration',503);
@@ -118,6 +130,7 @@ export class V2Gateway{
  }
  async profile(project,ref){
   const k=refKey(ref);
+  if(isPlaygroundRef(ref))return readPlaygroundProfile(this,project,ref);
   if(ref.id.startsWith(DISCOVERY_PREFIX)){
    const policy=discoveryPolicy(this.config,project);if(!policy.enabled)fail('access_profile_forbidden',403);
    const row=(await this.store.pool.query('SELECT * FROM v2_discovery_profiles WHERE project=$1 AND id=$2 AND version=$3',[project,ref.id,ref.version])).rows[0];
@@ -204,17 +217,23 @@ export class V2Gateway{
   if(route.class==='residential')return providerProxy(this.config,{country:route.country,residentialSession:route.residential_session},route.provider);
   const proxy=this.config.proxies?.find(p=>p.id===route.proxy_id&&p.country===route.country);if(!proxy)fail('proxy_configuration_unavailable',503);this.checkProxy(proxy);return proxy;
  }
- sessionView(row){const r=this.sealer.open(row.route);return {id:row.id,access_profile:{id:row.policy.id,version:row.policy.version},transport:'http',proxy:{class:r.class,country:r.country,affinity:r.affinity,provider:r.provider},state:new Date(row.expires_at)<=new Date()?'expired':row.state,expires_at:row.expires_at,requests:row.requests,encoded_bytes:Number(row.encoded_bytes),state_support:{cookie_jar:true,local_storage:false,live_connection:false}};}
- async session(project,raw){
+ sessionView(row){const r=this.sealer.open(row.route);return {id:row.id,access_profile:{id:row.policy.id,version:row.policy.version},transport:r.transport??'http',proxy:{class:r.class,country:r.country,affinity:r.affinity,provider:r.provider},state:new Date(row.expires_at)<=new Date()?'expired':row.state,expires_at:row.expires_at,requests:row.requests,encoded_bytes:Number(row.encoded_bytes),state_support:{cookie_jar:true,local_storage:false,live_connection:false}};}
+ async session(project,raw,options){return this.#openSession(project,raw,'http',options);}
+ async renderSession(project,raw,options){return this.#openSession(project,raw,'browser',options);}
+ async #openSession(project,raw,transport,{profile}={}){
   if(!exact(raw,['idempotency_key','access_profile','transport','proxy']))fail('session_invalid');key(raw.idempotency_key);
-  if(raw.transport!=='http')fail('capability_unsupported',409);
-  if(this.controlCredits.managed(project))this.controlCredits.quote({route:raw.proxy,transport:raw.transport,estimatedMicroUsd:0});
-  const p=await this.profile(project,raw.access_profile),hash=sha(canonical(raw));
+  if(raw.transport!==transport)fail('capability_unsupported',409);
+  if(profile&&(!isPlaygroundRef(profile)||refKey(profile)!==refKey(raw.access_profile)))fail('access_profile_forbidden',403);
+  const p=profile??await this.profile(project,raw.access_profile),hash=sha(canonical(raw));
+  if(this.controlCredits.managed(project))this.controlCredits.quote({profile:p,route:raw.proxy,transport,estimatedMicroUsd:0});
+  if(transport==='browser'&&!p.browser_probe?.enabled)fail('browser_probe_profile_unapproved',403);
+  if(p.kind==='playground'&&p.playground_execution!==transport)fail('playground_execution_mismatch',403);
   return this.store.tx(async c=>{
    await c.query('SELECT pg_advisory_xact_lock(2002)');
    const old=(await c.query('SELECT * FROM v2_sessions WHERE project=$1 AND key=$2',[project,raw.idempotency_key])).rows[0];
    if(old){if(old.input_hash!==hash)fail('idempotency_conflict',409);return this.sessionView(old);}
    const route=this.route(p,raw.proxy),id=randomUUID();
+   if(transport==='browser')route.transport='browser';
    const row=(await c.query('INSERT INTO v2_sessions(id,project,key,input_hash,policy,route,cookie_jar,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+$8*interval \'1 second\') RETURNING *',[id,project,raw.idempotency_key,hash,p,this.sealer.seal(route),this.sealer.seal(new CookieJar().serializeSync()),p.limits.ttl_seconds])).rows[0];
    return this.sessionView(row);
   });
@@ -276,8 +295,14 @@ export class V2Gateway{
   const hash=sha(canonical(raw));
   const prior=(await this.store.pool.query('SELECT * FROM v2_operations WHERE project=$1 AND key=$2',[project,raw.idempotency_key])).rows[0];
   if(prior){if(prior.input_hash!==hash)fail('idempotency_conflict',409);return this.operationView(prior);}
-  const session=await this.owned(project,raw.session_id),p=await this.profile(project,{id:session.policy.id,version:session.policy.version});
+  const session=await this.owned(project,raw.session_id),ref={id:session.policy.id,version:session.policy.version};
+  const playground=isPlaygroundRef(ref),p=playground?playgroundOperationProfile(this,project,session.policy,raw.request?.url,'http'):await this.profile(project,ref);
   const input=this.request(raw.request,p),recipe=await this.recipe(project,raw.recipe,p);let route=this.sealer.open(session.route);
+  if(route.transport==='browser')fail('capability_unsupported',409);
+  if(playground){
+   this.headers(input,p,new URL(input.url));
+   await admitPlaygroundRoute(this,project,p,{class:route.class,country:route.country,affinity:route.affinity},'http',route);
+  }
   await this.rejectControlCredentials(input.headers);
   const id=randomUUID(),hops=p.limits.max_redirects+1,reservedBytes=p.limits.max_encoded_bytes*hops,reservedTunnel=route.class==='direct'?0:p.limits.max_tunnel_bytes*hops;
   let reused,pricingDecision,retryPlan=raw.retry===true?{requested:true,eligible:false,stop_reason:'retry_ineligible'}:null,reservationRequests=hops;
@@ -307,7 +332,9 @@ export class V2Gateway{
    const estimated=pricingDecision.estimated_micro_usd;
    if(raw.max_estimated_micro_usd!==undefined){if(estimated===null)fail('cost_estimate_unavailable',409);if(estimated>raw.max_estimated_micro_usd||(pricingDecision.customer_traffic_reservation?.max_estimated_micro_usd??0)>raw.max_estimated_micro_usd)fail('cost_ceiling_exceeded',429);}
    await c.query('INSERT INTO v2_operations(id,project,key_id,key,session_id,input_hash,input,recipe) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[id,project,keyId,raw.idempotency_key,session.id,hash,this.sealer.seal(raw),recipe]);
-   await this.controlCredits.reserve(c,{project,operation:id,keyId,route,profile:p,transport:'http',estimatedMicroUsd:estimated});
+   const creditEstimate=playground&&estimated!==null?Math.max(estimated,pricingDecision.customer_traffic_reservation?.max_estimated_micro_usd??0):estimated;
+   await this.controlCredits.reserve(c,{project,operation:id,keyId,userId:identity?.userId,requireSoleKey:identity?.requireSoleKey,route,profile:p,transport:'http',estimatedMicroUsd:creditEstimate});
+   if(playground)await materializePlaygroundProfile(this,c,project,p);
    await c.query('INSERT INTO v2_ledger(operation,project,session_id,provider,proxy_class,reserved_requests,accounted_requests,reserved_encoded_bytes,accounted_encoded_bytes,reserved_tunnel_bytes,accounted_tunnel_bytes,estimated_micro_usd,customer_traffic,customer_traffic_reservation) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$7,$8,$8,$9,$10,$11)',[id,project,session.id,route.provider,route.class,reservationRequests,reservedBytes,reservedTunnel,estimated,route.class==='residential'?residentialTrafficCharge({status:'pending'}):null,pricingDecision.customer_traffic_reservation??null]);
    await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'reserve',$2)",[id,{requests:reservationRequests,encoded_bytes:reservedBytes,tunnel_bytes:reservedTunnel,pricing_decision:pricingDecision,...(retryPlan?{native_retry:{requested:true,eligible:retryPlan.eligible,stop_reason:retryPlan.stop_reason}}:{})}]);
    await c.query('UPDATE v2_sessions SET requests=requests+$2,encoded_bytes=encoded_bytes+$3 WHERE id=$1',[session.id,reservationRequests,reservedBytes]);
@@ -329,9 +356,9 @@ export class V2Gateway{
  }
  assertPricingDispatch(project,context){
   if(!context?.decision?.binding)return;
-  const {profile,route,decision}=context;
+  const {profile,route,decision,transport='http'}=context;
   if(Date.now()>=decision.dispatch_deadline_ms)fail('pricing_dispatch_deadline',409);
-  const current=this.pricing(project,profile,route,0,'http',0);
+  const current=this.pricing(project,profile,route,0,transport,0);
   if(current.estimated_micro_usd!==0||canonical(current.pricing)!==canonical(decision.pricing)||canonical(current.binding)!==canonical(decision.binding))fail('pricing_attestation_unavailable',409);
  }
  async dispatchable(project,id,session,url,pricingContext){
@@ -537,7 +564,7 @@ export class V2Gateway{
    }
   }
   const requestCredits=await this.controlCredits.operation(row.project,row.id);
-  return {id:row.id,key_id:row.key_id,idempotency_key:row.key,session_id:row.session_id,state:row.state,error:row.error??null,access_profile:{id:session.policy.id,version:session.policy.version},recipe:row.recipe?{id:row.recipe.id,version:row.recipe.version}:null,created_at:row.created_at,finished_at:row.finished_at??null,result,accounting:{provider:ledger.provider,reserved_tunnel_bytes:Number(ledger.reserved_tunnel_bytes),observed_tunnel_bytes:ledger.observed_tunnel_bytes===null?null:Number(ledger.observed_tunnel_bytes),estimated_micro_usd:ledger.estimated_micro_usd===null?null:Number(ledger.estimated_micro_usd),invoice_micro_usd:ledger.invoice_micro_usd===null?null:Number(ledger.invoice_micro_usd),basis:ledger.proxy_class==='direct'?'direct_no_provider_invoice':'conservative_bandwidth_reservation_not_invoice',...(requestCredits?{request_credits:requestCredits}:{}),...(pricing?{pricing}:{}),...(ledger.customer_traffic?{customer_traffic:ledger.customer_traffic,customer_traffic_reservation:ledger.customer_traffic_reservation}:{})}};
+  return {id:row.id,key_id:row.key_id,idempotency_key:row.key,session_id:row.session_id,state:row.state,error:row.error??null,execution:operationExecution(row.kind),access_profile:{id:session.policy.id,version:session.policy.version},recipe:row.recipe?{id:row.recipe.id,version:row.recipe.version}:null,created_at:row.created_at,finished_at:row.finished_at??null,result,accounting:{provider:ledger.provider,reserved_tunnel_bytes:Number(ledger.reserved_tunnel_bytes),observed_tunnel_bytes:ledger.observed_tunnel_bytes===null?null:Number(ledger.observed_tunnel_bytes),estimated_micro_usd:ledger.estimated_micro_usd===null?null:Number(ledger.estimated_micro_usd),invoice_micro_usd:ledger.invoice_micro_usd===null?null:Number(ledger.invoice_micro_usd),basis:ledger.proxy_class==='direct'?'direct_no_provider_invoice':'conservative_bandwidth_reservation_not_invoice',...(requestCredits?{request_credits:requestCredits}:{}),...(pricing?{pricing}:{}),...(ledger.customer_traffic?{customer_traffic:ledger.customer_traffic,customer_traffic_reservation:ledger.customer_traffic_reservation}:{})}};
  }
  async readOperation(project,id){const row=(await this.store.pool.query('SELECT * FROM v2_operations WHERE id=$1 AND project=$2',[uuid(id),project])).rows[0];if(!row)fail('operation_not_found',404);return this.operationView(row);}
  async lookup(project,k){const row=(await this.store.pool.query('SELECT * FROM v2_operations WHERE project=$1 AND key=$2',[project,key(k)])).rows[0];if(!row)fail('operation_not_found',404);return this.operationView(row);}
@@ -545,7 +572,7 @@ export class V2Gateway{
  async recentOperations(project,query={}){
   if(!exact(query,['limit'])||query.limit!==undefined&&(typeof query.limit!=='string'||!/^\d{1,2}$/.test(query.limit)))fail('recent_operations_query_invalid');
   const limit=query.limit===undefined?25:Number(query.limit);if(limit<1||limit>50)fail('recent_operations_query_invalid');
-  const rows=(await this.store.pool.query(`SELECT o.id,o.key_id,o.state,o.error,o.created_at,o.finished_at,o.summary,
+  const rows=(await this.store.pool.query(`SELECT o.id,o.key_id,o.kind,o.state,o.error,o.created_at,o.finished_at,o.summary,
    CASE WHEN o.summary IS NULL THEN o.result ELSE NULL END AS legacy_result,
    s.policy->>'id' AS profile_id,s.policy->'version' AS profile_version,s.route,l.provider,l.estimated_micro_usd,l.invoice_micro_usd,
    CASE WHEN o.finished_at IS NOT NULL THEN GREATEST(0,extract(epoch FROM o.finished_at-o.created_at)*1000) ELSE NULL END AS latency_ms
@@ -554,7 +581,7 @@ export class V2Gateway{
   const operations=[];
   for(const row of rows){
    const route=this.sealer.open(row.route),requestCredits=await this.controlCredits.operation(project,row.id);
-   operations.push({id:row.id,key_id:row.key_id,state:row.state,error:row.error,created_at:row.created_at,finished_at:row.finished_at,latency_ms:row.latency_ms===null?null:Number(row.latency_ms),routing:{class:route.class,country:route.country,provider:route.provider},access_profile:{id:row.profile_id,version:row.profile_version},...(row.summary??operationSummary(row.legacy_result?this.sealer.open(row.legacy_result):null)),provider:row.provider,estimated_micro_usd:row.estimated_micro_usd===null?null:Number(row.estimated_micro_usd),invoice_micro_usd:row.invoice_micro_usd===null?null:Number(row.invoice_micro_usd),...(requestCredits?{request_credits:requestCredits}:{})});
+   operations.push({id:row.id,key_id:row.key_id,state:row.state,error:row.error,execution:operationExecution(row.kind),created_at:row.created_at,finished_at:row.finished_at,latency_ms:row.latency_ms===null?null:Number(row.latency_ms),routing:{class:route.class,country:route.country,provider:route.provider},access_profile:{id:row.profile_id,version:row.profile_version},...(row.summary??operationSummary(row.legacy_result?this.sealer.open(row.legacy_result):null)),provider:row.provider,estimated_micro_usd:row.estimated_micro_usd===null?null:Number(row.estimated_micro_usd),invoice_micro_usd:row.invoice_micro_usd===null?null:Number(row.invoice_micro_usd),...(requestCredits?{request_credits:requestCredits}:{})});
   }
   return {operations,scope:'v2_project_recent',limit};
  }
@@ -593,7 +620,10 @@ export function registerV2(app,gateway){
  app.post('/v2/sessions',req=>v2.session(req.project,req.body));
  app.get('/v2/sessions/:id',req=>v2.readSession(req.project,req.params.id));
  app.post('/v2/operations',req=>v2.operation(req.project,req.body,{keyId:req.apiKeyId}));
- app.post('/v2/browser-probes',req=>v2.browserProbe(req.project,req.body));
+ app.post('/v2/browser-probes',req=>{
+  if(v2.controlCredits.managed(req.project))fail('self_service_http_only',403);
+  return v2.browserProbe(req.project,req.body);
+ });
  app.get('/v2/operations',req=>v2.recentOperations(req.project,req.query));
  app.get('/v2/operations/by-key/:key',req=>v2.lookup(req.project,req.params.key));
  app.get('/v2/operations/:id',req=>v2.readOperation(req.project,req.params.id));

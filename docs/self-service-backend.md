@@ -2,7 +2,7 @@
 
 ## Outcome and boundaries
 
-Connect the existing website to verified users, project membership, server-issued keys, native HTTP fetch, retained request history and authoritative usage. The gateway remains the source of truth. Existing configured projects and v1/v2 contracts retain their behavior. New self-service credentials initially support the native HTTP API; browser execution remains independently qualified.
+Connect the existing website to verified users, project membership, server-issued keys, native HTTP fetch, retained request history and authoritative usage. The gateway remains the source of truth. Existing configured projects and v1/v2 contracts retain their behavior. The initial self-service configuration uses native HTTP. Managed keys can also use the [Render API](render-api.md) on a project with an approved browser policy and qualified runtime.
 
 Implementation is local until release authorization. No paid source calls, production migration, email sends or commercial activation are part of verification. Proposed prices are not activated by a user clicking a plan.
 
@@ -82,7 +82,15 @@ Add this section to an existing private gateway configuration, replacing placeho
 }
 ```
 
-The trial count above is an operator example, not the proposed public allowance. Remote source access still needs TLS and reviewed access profiles. No browser, residential, CAPTCHA, unqualified route, checkout or automatic credit refill is granted to these account keys. Datacenter can be added only with a reviewed integer weight and known bounded route cost. Account-key endpoint scopes are enforced independently from profiles and credits. Existing provisioned project tokens retain their v1/v2 access.
+The trial count above is an operator example. This policy enables only direct
+HTTP after operator review. Remote source access still needs TLS and reviewed
+access profiles. Datacenter needs a reviewed integer weight and known bounded
+route cost. The managed-key `fetch:write` scope covers both Fetch and Render.
+Render requires a separate approved browser playground route, a reviewed browser
+credit weight, and a qualified runtime. See the [Render API](render-api.md) for
+admission requirements. Account-key scopes, approved profiles and credit limits
+apply independently. Existing provisioned tokens retain their approved v1 and
+v2 access.
 
 Configure the Pages environment separately:
 
