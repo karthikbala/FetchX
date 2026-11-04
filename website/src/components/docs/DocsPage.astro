@@ -98,7 +98,6 @@ const searchEntries = docPages.flatMap(item => [
       <aside class="docs-toc" aria-label="On this page">
         <p>On this page</p>
         <nav aria-label="Page sections"><ul>{page.sections.map(section => <li><a href={`#${section.id}`} data-doc-toc={section.id}>{section.title}</a></li>)}</ul></nav>
-        <a class="docs-source-link" href="https://github.com/karthikbala/FetchX" target="_blank" rel="noreferrer">View source <Icon name="diagonal" size={13}/></a>
       </aside>
     </div>
   </div>

@@ -646,6 +646,6 @@ export const marketingPages: MarketingPageMeta[] = [
   ...useCasePages.map(({ slug, title, description }) => ({ path: '/use-cases/' + slug, title, description, kind: 'use-case' as const })),
   ...guides.map(({ slug, title, description }) => ({ path: '/guides/' + slug, title, description, kind: 'guide' as const })),
   { path: '/resources', title: 'Resources — Practical Web Data Engineering | FetchX', description: 'Practical guides to web unblocking, proxies, browser rendering and preparing source-attributed web data for AI applications.', kind: 'page' },
-  { path: '/about', title: 'About FetchX — Built by Headrun Technologies', description: 'FetchX is an API-first web access project from Headrun Technologies Private Limited, built around explicit routing, durable evidence and application control.', kind: 'page' },
-  { path: '/contact', title: 'Contact FetchX — Scope Your Source Access', description: 'Discuss your sources, access requirements and application workflow with FetchX. Start a scoped enquiry or contact Headrun Technologies by email.', kind: 'page' },
+  { path: '/about', title: 'About FetchX — Web Access API', description: 'FetchX is a web access API built around explicit routing, durable evidence and application control.', kind: 'page' },
+  { path: '/contact', title: 'Contact FetchX — Scope Your Source Access', description: 'Discuss your sources, access requirements and application workflow with FetchX. Start a scoped enquiry or email the FetchX team.', kind: 'page' },
 ];

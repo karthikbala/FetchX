@@ -1,4 +1,5 @@
 ---
+import { CONTACT_EMAIL } from '../lib/contact';
 import '@fontsource-variable/manrope';
 import '@fontsource/ibm-plex-mono/latin-400.css';
 import '@fontsource/ibm-plex-mono/latin-500.css';
@@ -23,8 +24,8 @@ const descriptions: Record<string, string> = {
   '/pricing': 'Explore proposed FetchX API credit plans, from a free trial to developer and enterprise plans. Understand usage, limits and the commercial preview.',
   '/pilot': 'Discuss source access, integration requirements and a technical evaluation with the FetchX team.',
   '/developers': 'Build with FetchX native HTTP and reviewed browser workflows. Explore API examples, recovery guidance, project access and the interactive product preview.',
-  '/privacy': 'How Headrun Technologies Private Limited handles FetchX website enquiries, security information, service providers and data retention.',
-  '/terms': 'Website terms for FetchX, operated by Headrun Technologies Private Limited. Source qualification, illustrative samples and enquiry terms.',
+  '/privacy': 'How FetchX handles website enquiries, security information, service providers and data retention.',
+  '/terms': 'FetchX website terms for source qualification, illustrative samples, enquiries and workspace access.',
 };
 const path = Astro.url.pathname.replace(/\/$/, '').replace(/\.html$/, '').replace(/\/index$/, '') || '/';
 const {
@@ -36,7 +37,7 @@ const launchReady = import.meta.env.PUBLIC_SITE_ENV === 'production' && import.m
 const privatePage = appMode || path === '/signup' || path === '/login' || path === '/app' || path.startsWith('/app/');
 const indexable = launchReady && !privatePage && !noindex && path !== '/404';
 const canonical = new URL(path, 'https://fetchx.ai').href;
-const organization = { '@type': 'Organization', '@id': 'https://fetchx.ai/#organization', name: 'FetchX', legalName: 'Headrun Technologies Private Limited', url: 'https://fetchx.ai', logo: 'https://fetchx.ai/brand/icon.svg' };
+const organization = { '@type': 'Organization', '@id': 'https://fetchx.ai/#organization', name: 'FetchX', url: 'https://fetchx.ai', logo: 'https://fetchx.ai/brand/icon.svg' };
 const graph: Record<string, unknown>[] = [organization, { '@type': 'WebSite', '@id': 'https://fetchx.ai/#website', url: 'https://fetchx.ai', name: 'FetchX', publisher: { '@id': 'https://fetchx.ai/#organization' } }];
 if (breadcrumbs.length) graph.push({ '@type': 'BreadcrumbList', itemListElement: breadcrumbs.map((item, index) => ({ '@type': 'ListItem', position: index + 1, name: item.name, item: new URL(item.path, 'https://fetchx.ai').href })) });
 if (article) graph.push({ '@type': 'Article', headline: article.headline, datePublished: article.datePublished, dateModified: article.dateModified || article.datePublished, mainEntityOfPage: canonical, author: { '@type': 'Organization', name: 'FetchX engineering', url: 'https://fetchx.ai/about' }, publisher: { '@id': 'https://fetchx.ai/#organization' }, image: 'https://fetchx.ai/brand/social.png' });
@@ -85,10 +86,10 @@ const useCaseLinks = [['AI agents & RAG', '/use-cases/ai-agents'], ['Price monit
       <div class="fx-footer-grid container">
         <div class="fx-footer-brand"><a href="/" class="logo-link" aria-label="FetchX home"><Brand/></a><p>Web access.<br/>Engineered for what’s next.</p><MotionControl/></div>
         <div class="fx-footer-column"><h2>Product</h2>{productLinks.map(([label, href]) => <a href={href}>{label}</a>)}<a href="/pricing">Pricing</a><a href="/app">Workspace preview</a></div>
-        <div class="fx-footer-column"><h2>Build</h2><a href="/docs">API documentation</a><a href="/developers">Developer overview</a><a href="/resources">Guides & resources</a><a href="/llms.txt">For AI readers</a><a href="https://github.com/karthikbala/FetchX" target="_blank" rel="noreferrer">GitHub <Icon name="diagonal" size={12}/></a></div>
-        <div class="fx-footer-column"><h2>Company</h2><a href="/about">About FetchX</a><a href="/contact">Contact us</a><a href="/privacy">Privacy</a><a href="/terms">Website terms</a><a href="mailto:karthik@headrun.ai">karthik@headrun.ai</a></div>
+        <div class="fx-footer-column"><h2>Build</h2><a href="/docs">API documentation</a><a href="/developers">Developer overview</a><a href="/resources">Guides & resources</a><a href="/llms.txt">For AI readers</a></div>
+        <div class="fx-footer-column"><h2>Company</h2><a href="/about">About FetchX</a><a href="/contact">Contact us</a><a href="/privacy">Privacy</a><a href="/terms">Website terms</a><a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a></div>
       </div>
-      <div class="fx-footer-bottom container"><span>© {new Date().getUTCFullYear()} FetchX · Headrun Technologies Private Limited</span><span class="mono">PUBLIC WEB. REAL POSSIBILITIES.<span class="tiny-dot"></span></span></div>
+      <div class="fx-footer-bottom container"><span>© {new Date().getUTCFullYear()} FetchX</span><span class="mono">PUBLIC WEB. REAL POSSIBILITIES.<span class="tiny-dot"></span></span></div>
     </footer>}
     <script>import '../scripts/site.ts';</script>
   </body>

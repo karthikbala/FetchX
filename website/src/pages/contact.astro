@@ -1,4 +1,5 @@
 ---
+import { CONTACT_EMAIL } from '../lib/contact';
 import Layout from '../layouts/Layout.astro';
 import { marketingPages } from '../data/marketing-content';
 import '../styles/content.css';
@@ -9,7 +10,7 @@ const meta = marketingPages.find((page) => page.path === '/contact')!;
     <header class="content-contact-hero"><span class="content-kicker">LET’S TALK SOURCES</span><h1>What are you<br/>trying to build?</h1><p class="content-lead">Tell us about your sources and your application. We can start with the access requirements, expected outputs and a scope you can evaluate.</p></header>
     <div class="content-contact-grid">
       <section class="content-contact-primary"><span class="content-kicker">01 / A CONCRETE STARTING POINT</span><h2>Scope a source<br/>or workflow.</h2><p>Use the existing enquiry form to share a few URLs, the fields you need and your expected frequency. We review the requirements before agreeing any work.</p><a class="button button-lime" href="/pilot">Open the enquiry form <span aria-hidden="true">↗</span></a><p class="content-contact-note">An enquiry does not start a purchase, source request or subscription.</p></section>
-      <section class="content-contact-secondary"><span class="content-kicker">02 / DIRECT CONTACT</span><h2>Send a little context.</h2><p>For technical questions, source qualification or an integration discussion, email:</p><a class="content-contact-email" href="mailto:karthik@headrun.ai">karthik@headrun.ai <span aria-hidden="true">↗</span></a><div class="content-contact-operator"><span class="content-kicker">OPERATED BY</span><p>Headrun Technologies Private Limited<br/>India</p></div></section>
+      <section class="content-contact-secondary"><span class="content-kicker">02 / DIRECT CONTACT</span><h2>Send a little context.</h2><p>For technical questions, source qualification or an integration discussion, email:</p><a class="content-contact-email" href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL} <span aria-hidden="true">↗</span></a></section>
     </div>
     <section class="content-contact-prep"><div><span class="content-kicker">HELP US UNDERSTAND THE WORK</span><h2>A few useful details.</h2></div><ol><li><span class="content-number">01</span><div><h3>The source</h3><p>A domain or example URL, and the page or record you expect to receive.</p></div></li><li><span class="content-number">02</span><div><h3>The application</h3><p>Your required fields, how you validate them and what the data will support.</p></div></li><li><span class="content-number">03</span><div><h3>The operating context</h3><p>Expected volume, refresh cadence and any known browser or country requirements.</p></div></li></ol></section>
     <div class="content-contact-docs"><p>Exploring the integration first?</p><a class="content-text-link" href="/docs">Read the API documentation <span aria-hidden="true">→</span></a></div>

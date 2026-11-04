@@ -67,7 +67,7 @@ Cloudflare Pages **secrets**, configured separately in each deployment environme
 
 Runtime variables: `SITE_ENV`, `ALLOWED_ORIGINS`, `TURNSTILE_HOSTNAMES`, `MAIL_FROM`, `SALES_EMAIL`; these are in Wrangler. Turnstile must return action `pilot` and the exact submitted host. Staging accepts only the stable staging hostname, not arbitrary deployment URLs. Production accepts only `fetchx.ai`.
 
-Notifications go to `karthik@headrun.ai`, from `FetchX <hello@fetchx.ai>`, with the visitor's address in Reply-To. Verify the sales mailbox and Gmail sender authorization before opening intake. Root-domain Google mail records must remain unchanged.
+Notifications go to `hello@fetchx.ai`, from `FetchX <hello@fetchx.ai>`, with the visitor's address in Reply-To. Verify the sales mailbox and Gmail sender authorization before opening intake. Root-domain Google mail records must remain unchanged.
 
 An absent site key leaves the enquiry form disabled. Missing server secrets fail closed. Indexing requires both `PUBLIC_SITE_ENV=production` and `PUBLIC_PRODUCT_LAUNCH_READY=true`. Otherwise pages emit noindex metadata and robots disallow crawling. All Pages-hosted domains additionally receive an `X-Robots-Tag` noindex header. Signup and workspace pages stay non-indexed even in a launch build. Confirm actual hosting crawler controls separately before publication.
 
@@ -125,7 +125,7 @@ The Pages project already exists. Do not create a replacement project via a CLI 
 
 Public launch additionally requires working self-service signup, verified advertised capabilities, approved commercial terms and all P0 checks in the launch backlog. Only then build with `PUBLIC_SITE_ENV=production`, `PUBLIC_PRODUCT_LAUNCH_READY=true` and the production site key, and deploy with `--branch main` under release authorization. Keep the launch flag false for design review. Use Pages secrets for private runtime values. Public site keys are intentionally embedded in the client build.
 
-Associate `fetchx.ai` in Pages and configure the apex DNS record in its Cloudflare zone using the exact target returned by Cloudflare. Preserve existing records and the HeadRun domain.
+Associate `fetchx.ai` in Pages and configure the apex DNS record in its Cloudflare zone using the exact target returned by Cloudflare. Preserve existing records and unrelated domains.
 
 Verify HTTPS, apex/trailing-slash redirects, canonical URLs, robots and sitemap. Submit one clearly labelled real launch enquiry, confirm its reference in private D1 and the verified sales inbox, then reconcile the test record. Confirm production cannot accept requests from other origins or missing verification.
 
