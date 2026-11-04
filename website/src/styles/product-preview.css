@@ -24,6 +24,14 @@
 .pp-google-signin{margin:24px 0 20px;min-width:0}.pp-google-button{width:100%;min-height:40px;display:flex;justify-content:center;overflow:hidden}.pp-google-button>div{max-width:100%}.pp-google-status{color:var(--muted);font-size:12px;min-height:0;margin:0!important}.pp-google-status:not(:empty){margin:0 0 12px!important}.pp-google-error{margin:0 0 10px!important}.pp-google-reload{margin-top:5px}.pp-auth-divider{display:flex;align-items:center;gap:14px;color:var(--muted);font-size:11px;margin-top:23px;white-space:nowrap}.pp-auth-divider:before,.pp-auth-divider:after{content:'';height:1px;background:var(--line);flex:1}.pp-google-signin[aria-busy=true] .pp-google-button{pointer-events:none;opacity:.65}
 .pp-github-signin{margin:24px 0 20px;min-width:0}.pp-github-button{min-height:44px;gap:12px}.pp-auth-provider-help{color:var(--muted);font-size:11px!important;margin:10px 0!important}.pp-auth-divider{margin-bottom:20px}.pp-auth-account{margin-top:25px;padding-top:20px;border-top:1px solid var(--line)}.pp-auth-account>p{margin:0 0 16px}.pp-auth-account [data-github-account]{margin-top:12px}.pp-auth-account [data-github-connected]{color:var(--lime)}.pp-auth-account [data-github-link-status]:not(:empty){margin-top:12px!important}.pp-github-signin [data-github-status]:not(:empty){margin-top:12px!important}
 
+@media(max-width:760px){
+ .pp-sidebar{visibility:hidden}
+ .pp-menu-open .pp-sidebar{visibility:visible}
+ .pp-menu-open:after{pointer-events:auto}
+ .pp-sidebar>.pp-brand{align-self:flex-start}
+ .pp-sidebar>.pp-menu-close{position:absolute;top:16px;right:12px;width:44px;height:44px;z-index:auto}
+}
+
 /* Keep account access visible without opening workspace navigation. */
 .pp-topbar-actions{margin-left:auto;flex-shrink:0;gap:22px!important}.pp-session-account{display:flex;align-items:center;gap:14px;min-width:0}.pp-session-identity{min-width:0;max-width:210px}.pp-session-identity small{display:block;font-size:10px;color:var(--muted);margin-bottom:3px}.pp-session-identity>[data-user-email]{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.pp-session-account .pp-signout{margin:0;min-height:40px;white-space:nowrap;padding:9px 14px;font-size:12px}.pp-auth-email{overflow-wrap:anywhere}.pp-field input[data-key-name]:focus::placeholder{color:transparent;opacity:0}
 @media(max-width:1100px){.pp-topbar-actions .pp-topbar-docs{display:none}.pp-session-identity{max-width:180px}}

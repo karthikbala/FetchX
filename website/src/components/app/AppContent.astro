@@ -79,7 +79,7 @@ const { view } = Astro.props as { view: PreviewView };
       <p class="pp-inline-error" data-response-error role="alert" hidden></p>
       <dl class="pp-result-facts" data-result-facts hidden>
         <div><dt>Source status</dt><dd data-result-source>—</dd></div><div><dt>Route</dt><dd data-result-route>—</dd></div><div><dt>Country</dt><dd data-result-country>—</dd></div>
-        <div><dt>Duration</dt><dd data-result-duration>—</dd></div><div><dt>Decoded bytes</dt><dd data-result-bytes>—</dd></div><div><dt>Credits</dt><dd data-result-credits>—</dd></div>
+        <div data-result-duration-metric hidden><dt>Duration</dt><dd data-result-duration>—</dd></div><div><dt>Decoded bytes</dt><dd data-result-bytes>—</dd></div><div><dt>Credits</dt><dd data-result-credits>—</dd></div>
       </dl>
       <p class="pp-result-operation pp-form-help" data-operation-row hidden>Operation key <code data-operation-key></code></p>
     </div>

@@ -120,13 +120,20 @@ await context.route('**/api/control/**', async route => {
       const result = {
         success: nextRenderState === 'completed', state: nextRenderState, execution: browserMode ? 'browser' : 'http',
         operation_id: '55555555-4444-4444-8444-' + String(renderPosts).padStart(12, '0'), idempotency_key: body.idempotency_key,
-        gateway_http_status: 200, routing: { ...body.proxy, provider: 'fixture' },
+        gateway_http_status: 200, routing: { ...body.proxy, provider: 'fixture' }, access_profile: body.access_profile,
         data: { status: nextRenderState === 'unknown' ? null : 200, text: '<main>Managed source fixture</main>', headers: { 'content-type': 'text/html' } },
         usage: { duration_ms: 145, decoded_bytes: 34, ...(browserMode ? { capture_complete: false, blocked_requests: 2 } : {}), accounting: { request_credits: { credits: browserMode ? 3 : 1, state: nextRenderState === 'unknown' ? 'held' : 'settled', key_id: key.id } } },
         artifacts: body.screenshot ? [{ kind: 'browser_screenshot', content_type: 'image/jpeg', body_base64: testJpeg, url: 'https://leak.invalid/do-not-fetch' }] : [],
         error: nextRenderState === 'unknown' ? { code: 'source_timeout_unknown', message: 'The browser outcome is uncertain.' } : null,
       };
       managedEnvelopes.set(body.idempotency_key, result); return send(result);
+    }
+    if (resource === '/requests' && method === 'GET') {
+      const operations = [...managedEnvelopes.values()].map(result => ({
+        id: result.operation_id, state: result.state, execution: result.execution, routing: result.routing,
+        access_profile: result.access_profile, latency_ms: result.usage.duration_ms, created_at: '2026-11-02T11:00:00Z',
+      }));
+      return send({ operations });
     }
     if (resource.startsWith('/render/') && method === 'GET') {
       renderRecoveries++;
@@ -188,6 +195,8 @@ try {
   await expect(page.locator('[data-request-route] option[value="datacenter"]')).toHaveAttribute('disabled', '');
   await page.locator('[data-request-url]').fill('https://approved.example/private-path'); await page.locator('[data-run-request]').click();
   await expect(page.locator('[data-response-state]')).toHaveText('Completed');
+  await expect(page.locator('[data-result-facts]')).toBeVisible();
+  await expect(page.locator('[data-result-duration-metric]')).toBeHidden();
   await expect(page.locator('[data-response-output]')).toContainText('<img src='); assert.equal(await page.locator('.pp-response-panel img[src]').count(), 0);
   assert.equal(fetchPosts, 1); await expect(page.locator('[data-run-request]')).toBeDisabled();
   await page.locator('[data-inspector-tab="code"]').click();
@@ -272,9 +281,32 @@ try {
   await page.goto(base + '/app'); await expect(page.locator('[data-project-name]')).toHaveText(projects[0].name);
   for (const width of [320, 375, 768, 1024, 1440]) { await page.setViewportSize({ width, height: 800 }); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Long project name overflows at ' + width); await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeInViewport(); }
   projects[0].name = originalProjectName;
-  await page.setViewportSize({ width: 360, height: 800 }); await page.locator('[data-app-menu]').click(); await expect(page.locator('[data-app-menu]')).toHaveAttribute('aria-expanded', 'true'); await page.keyboard.press('Escape'); await expect(page.locator('[data-app-menu]')).toHaveAttribute('aria-expanded', 'false');
+  await page.setViewportSize({ width: 390, height: 800 });
+  const workspaceUrl = page.url();
+  const openNavigation = page.getByRole('button', { name: 'Open workspace navigation', exact: true });
+  const closeNavigation = page.getByRole('button', { name: 'Close workspace navigation', exact: true });
+  const navigation = page.getByRole('complementary', { name: 'Workspace navigation', exact: true });
+  await expect(navigation).toHaveCount(0);
+  await openNavigation.click();
+  await expect(openNavigation).toHaveAttribute('aria-expanded', 'true');
+  await expect(closeNavigation).toBeFocused();
+  await closeNavigation.click();
+  await expect(page).toHaveURL(workspaceUrl);
+  await expect(openNavigation).toBeFocused();
+  await expect(navigation).toHaveCount(0);
+  await openNavigation.click();
+  await page.keyboard.press('Escape');
+  await expect(openNavigation).toHaveAttribute('aria-expanded', 'false');
+  await expect(openNavigation).toBeFocused();
+  await openNavigation.click();
+  await page.mouse.click(380, 400);
+  await expect(openNavigation).toHaveAttribute('aria-expanded', 'false');
+  await expect(openNavigation).toBeFocused();
+  await expect(navigation).toHaveCount(0);
+  await expect(page).toHaveURL(workspaceUrl);
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const persisted = await storage(); for (const secret of [user.email, 'Private project', 'Second private', 'fxk_', 'synthetic-csrf', 'private-path', 'source text fixture']) assert.ok(!persisted.includes(secret), 'Sensitive value persisted: ' + secret);
-  checks.push('Authoritative usage/latency/held balance, read-only billing, project creation/switching, eight routes, six widths, mobile navigation and storage allowlist');
+  checks.push('Authoritative usage/latency/held balance, read-only billing, project creation/switching, eight routes, six widths, mobile close button, Escape, backdrop, focus restoration and storage allowlist');
 
   await page.goto(base + '/app/playground'); await expect(page.locator('[data-workspace-content]')).toBeVisible(); responseState = 'network_error'; await page.locator('[data-new-request]').click(); await page.locator('[data-confirm-action]').click(); await page.locator('[data-request-url]').fill('https://approved.example/network-case'); await page.locator('[data-run-request]').click(); await expect(page.locator('[data-response-state]')).toHaveText('Unknown'); const networkPosts = fetchPosts; await page.reload(); await expect(page.locator('[data-response-state]')).toHaveText('Pending recovery'); await page.locator('[data-recover-result]').click(); await expect(page.locator('[data-response-state]')).toHaveText('Unknown'); assert.equal(fetchPosts, networkPosts);
   const pending = page.locator('[data-pending-operation]');
@@ -368,6 +400,7 @@ try {
   await expect(page.locator('[data-response-note]')).toContainText('Partial capture. 2 requests were blocked.');
   await expect(page.locator('[data-result-country]')).toHaveText('United States (US)');
   await expect(page.locator('[data-result-credits]')).toHaveText('3 used');
+  await expect(page.locator('[data-result-duration-metric]')).toBeVisible();
   await expect(page.locator('[data-result-duration]')).toHaveText('145 ms');
   await expect(page.locator('[data-generated-code]')).toContainText('randomUUID()');
   await page.locator('[data-code-operation]').selectOption('recover');
@@ -455,10 +488,15 @@ try {
   const managedStorage = await storage();
   for (const value of [target, primary.id, secondary.id, 'Managed source fixture', 'en-US', testJpeg]) assert.ok(!managedStorage.includes(value));
   checks.push('Prepared public URL, direct location semantics, searched US proxy, one/multiple/zero eligible keys, Browser artifacts and pagehide cleanup with GET-only recovery, HTTP headers and selected-key attribution without storing source or key data');
+  await page.goto(base + '/app/requests');
+  const history = page.locator('[data-request-list]');
+  await expect(history.getByRole('cell', { name: 'Browser · Datacenter / US', exact: true })).toHaveCount(2);
+  await expect(history.getByRole('cell', { name: 'HTTP · Direct', exact: true })).toBeVisible();
+  await expect(history).not.toContainText('playground:fixture-');
   // An origin-specific rate can be invisible in the project matrix. Resolve the
   // URL first without silently selecting an unavailable route or proxy location.
   targetPriced = true; managedKeys = [primary];
-  await page.reload();
+  await page.goto(base + '/app/playground');
   await page.locator('[data-new-request]').click(); await page.locator('[data-confirm-action]').click();
   await expect(page.locator('input[value="browser"]')).toBeDisabled();
   await urlField.fill(target);

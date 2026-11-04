@@ -19,6 +19,9 @@ const links = [
     <div class="pp-preview-bar"><span><span class="pp-live-dot"></span> FetchX workspace <span class="pp-preview-detail" data-service-status>Checking service availability…</span></span><button type="button" data-refresh-workspace>Refresh <Icon name="route" size={14}/></button></div>
     <div class="pp-app-grid">
       <aside class="pp-sidebar" id="app-sidebar" aria-label="Workspace navigation"><a href="/" class="pp-brand" aria-label="FetchX home"><Brand/></a>
+        <button type="button" class="pp-menu-button pp-menu-close" data-app-menu-close aria-label="Close workspace navigation" hidden>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
         <div class="pp-project-switch"><label for="workspace-project">PROJECT</label><select id="workspace-project" data-project-select disabled><option value="">Loading projects…</option></select><button type="button" class="pp-text-link" data-open-project disabled>+ Create project</button></div>
         <span class="pp-nav-label">WORKSPACE</span><nav aria-label="Product navigation">{links.map(link => <a href={link.href} aria-current={view === link.view ? 'page' : undefined}><Icon name={link.icon} size={19}/>{link.label}</a>)}</nav>
         <a class:list={['pp-onboarding-nav', view === 'onboarding' && 'is-current']} href="/app/onboarding"><Icon name="check" size={18}/><span>Getting started<small data-onboarding-count>Awaiting your project</small></span><Icon name="arrow" size={16}/></a>

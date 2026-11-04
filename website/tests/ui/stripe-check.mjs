@@ -22,7 +22,7 @@ const purchase = status => ({ ...planDetails, plan_id, status, paid_at: '2026-12
 const csrf = 'synthetic-csrf';
 const trialProfile = { id: 'trial', version: 1, origins: ['https://trial.example.com'], methods: ['GET'], proxy_classes: ['direct'], countries: [] };
 const publicRef = { id: 'public-url-http', version: 1 };
-const publicProfile = { ...publicRef, kind: 'public_url_http', origins: [], methods: ['GET', 'HEAD'], proxy_classes: ['datacenter', 'residential'], countries: ['US'], route_reservations: [
+const publicProfile = { ...publicRef, kind: 'public_url_http', origins: [], methods: ['GET', 'HEAD'], proxy_classes: ['datacenter', 'residential'], countries: ['US'], max_daily_operations: 1000, route_reservations: [
   { class: 'datacenter', country: 'US', paid_credit_reservation: { route_class: 'datacenter', block_bytes: 1_000_000, credits_per_block: 1, max_transfer_bytes: 1_000_000, reserved_credits: 1 } },
   { class: 'residential', country: 'US', paid_credit_reservation: { route_class: 'residential', block_bytes: 250_000, credits_per_block: 5, max_transfer_bytes: 250_000, reserved_credits: 5 } },
 ] };
@@ -196,6 +196,7 @@ try {
     const audit = await new AxeBuilder({ page }).include('[data-stripe-billing]').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
     assert.deepEqual(audit.violations, [], `Billing accessibility at ${width}px`);
   }
+  await expect(stripe('plans')).toHaveCSS('display', 'grid');
   await page.screenshot({ path: `${out}/credit-billing-sandbox.png`, fullPage: true });
 
   await buy().click();
@@ -300,6 +301,7 @@ try {
   await page.locator('[data-max-transfer]').fill('1');
   await page.locator('[data-max-credits]').fill('20');
   await expect(page.locator('[data-transfer-quote]')).toContainText('Reserves up to 20 credits.');
+  await expect(page.locator('[data-transfer-quote]')).toContainText('Daily limit: 1,000 requests.');
   await page.locator('[data-request-url]').fill('https://example.com/');
   await page.locator('[data-inspector-tab="code"]').click();
   await expect(page.locator('[data-generated-code]')).toContainText(/"max_transfer_mb":\s*1/);
