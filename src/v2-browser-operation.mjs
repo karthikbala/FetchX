@@ -51,12 +51,12 @@ export async function browserProbeOperation(v2,project,raw,identity){
   if(current.state!=='open'||new Date(current.expires_at)<=new Date())fail('session_expired',409);
   if((await c.query("SELECT 1 FROM v2_operations WHERE session_id=$1 AND ($2 OR state IN ('reserved','running','unknown'))",[session.id,route.transport==='browser'])).rowCount)fail('session_busy_or_unknown',409);
   if(current.requests+maximum>profile.limits.max_requests||Number(current.encoded_bytes)+reservedBytes>profile.limits.max_session_encoded_bytes)fail('session_limit',429);
-  const usage=(await c.query("SELECT count(*)::int AS n FROM v2_operations WHERE project=$1 AND created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'",[project])).rows[0];const entitlement=v2.entitlement(project);if(entitlement.mode==='metered'&&usage.n>=entitlement.max_daily_operations)fail('client_quota_exhausted',429);
+  await v2.checkDailyOperationQuota(c,project);
   const active=(await c.query("SELECT count(*)::int n FROM v2_operations WHERE state IN ('reserved','running')")).rows[0].n+Number((await c.query("SELECT count(*) AS n FROM attempts WHERE state IN ('reserved','sent')")).rows[0].n);
   if(active>=(v2.config.maxConcurrentRequests??4))fail('capacity_wait',503);
   if(Number((await c.query("SELECT count(*) AS n FROM v2_operations WHERE kind='browser_probe' AND state IN ('reserved','running')")).rows[0].n)>=(v2.config.browser?.maxConcurrent??1))fail('browser_capacity',503);
-  const stored=Number((await c.query('SELECT COALESCE(sum(octet_length(body)),0) AS n FROM v2_artifacts')).rows[0].n);
-  if(stored+Math.ceil((policy.max_decoded_bytes+policy.max_dom_bytes+(raw.screenshot?BROWSER_SCREENSHOT_MAX_BYTES:0))*1.4)+maximum*131072>(v2.config.v2?.maxArtifactBytes??268435456))fail('artifact_quota',507);
+  const artifactBytes=Math.ceil((policy.max_decoded_bytes+policy.max_dom_bytes+(raw.screenshot?BROWSER_SCREENSHOT_MAX_BYTES:0))*1.4)+maximum*131072;
+  await v2.reserveArtifactCapacity(c,artifactBytes);
   await v2.reserveResidential(c,project,session,route,reservedTunnel);
   pricingDecision=v2.pricing(project,profile,route,reservedTunnel,'browser',profile.limits.timeout_ms);
   const estimate=pricingDecision.estimated_micro_usd;
@@ -66,7 +66,7 @@ export async function browserProbeOperation(v2,project,raw,identity){
   await v2.controlCredits.reserve(c,{project,operation:id,keyId,userId:identity?.userId,requireSoleKey:identity?.requireSoleKey,route,profile,transport:'browser',estimatedMicroUsd:creditEstimate});
   if(managed)await materializePlaygroundProfile(v2,c,project,profile);
   await c.query('INSERT INTO v2_ledger(operation,project,session_id,provider,proxy_class,reserved_requests,accounted_requests,reserved_encoded_bytes,accounted_encoded_bytes,reserved_tunnel_bytes,accounted_tunnel_bytes,estimated_micro_usd,customer_traffic,customer_traffic_reservation) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$7,$8,$8,$9,$10,$11)',[id,project,session.id,route.provider,route.class,maximum,reservedBytes,reservedTunnel,estimate,route.class==='residential'?residentialTrafficCharge({status:'pending'}):null,pricingDecision.customer_traffic_reservation??null]);
-  await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'reserve',$2)",[id,{kind:'browser_network_probe',requests:maximum,max_network_bytes:reservedBytes,reserved_tunnel_bytes:reservedTunnel,pricing_decision:pricingDecision}]);
+  await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'reserve',$2)",[id,{kind:'browser_network_probe',requests:maximum,max_network_bytes:reservedBytes,reserved_tunnel_bytes:reservedTunnel,artifact_bytes:artifactBytes,pricing_decision:pricingDecision}]);
   await c.query('UPDATE v2_sessions SET requests=requests+$2,encoded_bytes=encoded_bytes+$3 WHERE id=$1',[session.id,maximum,reservedBytes]);
  });
  if(replay)return v2.operationView(replay);

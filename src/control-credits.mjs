@@ -5,6 +5,7 @@ const MAX_CREDITS=1_000_000_000;
 const MAX_WEIGHT=1_000_000;
 const ROUTES=['direct','datacenter','residential'];
 const TRANSPORTS=['http','browser'];
+export const TRIAL_CREDITS_PER_ACCOUNT=1000;
 const plain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const creditAmount=v=>Number.isSafeInteger(v)&&v>=0&&v<=MAX_CREDITS;
 const managed=project=>typeof project==='string'&&project.startsWith('cp_');
@@ -25,6 +26,13 @@ export async function initControlCredits(pool){
    END IF;
   END $$;
   CREATE INDEX IF NOT EXISTS control_credit_project_state ON control_credit_reservations(project,state);
+  CREATE TABLE IF NOT EXISTS control_trial_grant_receipts(
+   user_id uuid NOT NULL REFERENCES control_users(id) ON DELETE CASCADE,
+   target_credits bigint NOT NULL CHECK(target_credits BETWEEN 0 AND 1000),project text NOT NULL,
+   prior_granted bigint NOT NULL CHECK(prior_granted>=0),granted_credits bigint NOT NULL,
+   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),PRIMARY KEY(user_id,target_credits),
+   CHECK(granted_credits=GREATEST(target_credits-prior_granted,0))
+  );
  `);
 }
 
@@ -35,16 +43,61 @@ export async function grantInitialCredits(c,project,amount){
  await c.query('INSERT INTO control_credit_accounts(project,granted_credits) VALUES($1,$2) ON CONFLICT DO NOTHING',[project,amount]);
 }
 
+// Create or top up only the oldest eligible project. The immutable receipt
+// belongs to the verified user and survives removal of the original project.
+export async function grantAccountTrialCredits(c,{userId,targetCredits,templateHash}){
+ if(typeof userId!=='string'||!UUID.test(userId)||!creditAmount(targetCredits)||targetCredits>TRIAL_CREDITS_PER_ACCOUNT||
+  typeof templateHash!=='string'||!/^[a-f0-9]{64}$/.test(templateHash))fail('credit_grant_invalid',503);
+ if(!(await c.query('SELECT id FROM control_users WHERE id=$1 FOR UPDATE',[userId])).rowCount)fail('unauthorized',401);
+ const existing=(await c.query(`SELECT project,prior_granted,granted_credits FROM control_trial_grant_receipts
+  WHERE user_id=$1 AND target_credits=$2`,[userId,targetCredits])).rows[0];
+ if(existing)return {project:existing.project,granted:0,replayed:true};
+ const project=(await c.query(`SELECT id FROM control_projects WHERE user_id=$1 AND template_hash=$2 AND status='active'
+  AND left(id,3)='cp_' ORDER BY created_at,id LIMIT 1 FOR SHARE`,[userId,templateHash])).rows[0]?.id;
+ if(!project)return null;
+ const prior=(await c.query(`SELECT GREATEST(
+  (SELECT COALESCE(sum(a.granted_credits),0) FROM control_credit_accounts a JOIN control_projects p ON p.id=a.project
+   WHERE p.user_id=$1 AND left(p.id,3)='cp_'),
+  (SELECT COALESCE(max(prior_granted+granted_credits),0) FROM control_trial_grant_receipts WHERE user_id=$1)
+ ) AS credits`,[userId])).rows[0].credits;
+ const used=BigInt(prior),target=BigInt(targetCredits);
+ const add=used<target?Number(target-used):0;
+ await grantInitialCredits(c,project,0);
+ if(add>0)await c.query('UPDATE control_credit_accounts SET granted_credits=granted_credits+$2 WHERE project=$1',[project,add]);
+ await c.query(`INSERT INTO control_trial_grant_receipts(user_id,target_credits,project,prior_granted,granted_credits)
+  VALUES($1,$2,$3,$4,$5)`,[userId,targetCredits,project,prior,add]);
+ return {project,granted:add,replayed:false};
+}
+
+export async function migrateAccountTrialCredits(store,{targetCredits,templateHash}){
+ if(targetCredits!==TRIAL_CREDITS_PER_ACCOUNT)fail('credit_grant_invalid',503);
+ let cursor=null,accounts=0,granted=0;
+ for(;;){
+  const {rows}=await store.pool.query(`SELECT DISTINCT p.user_id FROM control_projects p
+   WHERE p.status='active' AND left(p.id,3)='cp_' AND p.template_hash=$1 AND ($3::uuid IS NULL OR p.user_id>$3::uuid)
+   AND NOT EXISTS(SELECT 1 FROM control_trial_grant_receipts r WHERE r.user_id=p.user_id AND r.target_credits=$2)
+   ORDER BY p.user_id LIMIT 250`,[templateHash,targetCredits,cursor]);
+  if(!rows.length)break;
+  for(const {user_id:userId} of rows){
+   const receipt=await store.tx(c=>grantAccountTrialCredits(c,{userId,targetCredits,templateHash}));
+   if(receipt&&!receipt.replayed){accounts++;granted+=receipt.granted;}
+   cursor=userId;
+  }
+ }
+ return {accounts,granted};
+}
+
 export function reviewedCreditPolicy(config){
  const policy=config.controlPlane?.creditPolicy;
  if(config.controlPlane?.enabled!==true||!plain(policy)||policy.reviewed!==true)fail('credit_policy_unreviewed',503);
- if(typeof policy.version!=='string'||!ID.test(policy.version)||!creditAmount(policy.trialCredits)||!validWeights(policy.weights,['direct','datacenter'])||
+ const trialCredits=policy.trialCredits===undefined?TRIAL_CREDITS_PER_ACCOUNT:policy.trialCredits;
+ if(typeof policy.version!=='string'||!ID.test(policy.version)||!creditAmount(trialCredits)||trialCredits>TRIAL_CREDITS_PER_ACCOUNT||!validWeights(policy.weights,['direct','datacenter'])||
   !Object.hasOwn(policy.weights,'direct')||!Number.isSafeInteger(policy.maxEstimatedMicroUsdPerOperation)||policy.maxEstimatedMicroUsdPerOperation<0)fail('credit_policy_invalid',503);
  const mode=policy.modeWeights;
  if(mode!==undefined&&(!plain(mode)||Object.keys(mode).some(key=>!['reviewed','version',...TRANSPORTS].includes(key))||mode.reviewed!==true||
   typeof mode.version!=='string'||!ID.test(mode.version)||mode.version===policy.version||
   TRANSPORTS.some(transport=>mode[transport]!==undefined&&!validWeights(mode[transport],ROUTES))))fail('credit_policy_invalid',503);
- return policy;
+ return trialCredits===policy.trialCredits?policy:{...policy,trialCredits};
 }
 
 export function creditWeight(policy,transport,routeClass,playground=false){
@@ -59,6 +112,19 @@ export async function recoverControlCredits(c){
  // ledger together. All other interrupted reservations remain held.
  await c.query(`UPDATE control_credit_reservations r SET state=CASE WHEN o.error='interrupted_before_dispatch' AND l.state='cancelled_before_dispatch' THEN 'released' ELSE 'held' END,finished_at=clock_timestamp()
   FROM v2_operations o JOIN v2_ledger l ON l.operation=o.id WHERE r.operation=o.id AND r.state='reserved'`);
+}
+
+// Keep the project and key authorization locked through either form of admission.
+export async function lockActiveCreditProject(c,project,keyId,{userId,requireSoleKey}={}){
+ const active=(await c.query('SELECT status FROM control_projects WHERE id=$1 FOR SHARE',[project])).rows[0];
+ if(!active||active.status!=='active')fail('project_inactive',403);
+ if(userId&&!(await c.query('SELECT 1 FROM control_memberships WHERE project=$1 AND user_id=$2 FOR SHARE',[project,userId])).rowCount)
+  fail('project_not_found',404);
+ if(keyId==='console')return;
+ const key=(await c.query(`SELECT revoked_at,scopes FROM control_keys WHERE id=$1 AND project=$2 FOR ${userId?'UPDATE':'SHARE'}`,[keyId,project])).rows[0];
+ if(!key||key.revoked_at||!Array.isArray(key.scopes)||!key.scopes.includes('fetch:write'))fail('api_key_forbidden',403);
+ if(requireSoleKey&&(await c.query("SELECT count(*)::int AS eligible FROM control_keys WHERE project=$1 AND revoked_at IS NULL AND scopes ? 'fetch:write'",[project])).rows[0].eligible!==1)
+  fail('playground_key_selection_required',409);
 }
 
 export class ControlCredits{
@@ -86,16 +152,7 @@ export class ControlCredits{
   if(!managed(project))return null;
   this.keyId(project,{keyId,userId,requireSoleKey});
   const quote=this.quote({profile,route,transport,estimatedMicroUsd});
-  // Lock the project/key before admission so revocation or suspension cannot
-  // race an already authenticated request into new source work.
-  const active=(await c.query('SELECT status FROM control_projects WHERE id=$1 FOR SHARE',[project])).rows[0];
-  if(!active||active.status!=='active')fail('project_inactive',403);
-  if(userId&&!(await c.query('SELECT 1 FROM control_memberships WHERE project=$1 AND user_id=$2 FOR SHARE',[project,userId])).rowCount)fail('project_not_found',404);
-  if(keyId!=='console'){
-   const key=(await c.query(`SELECT revoked_at,scopes FROM control_keys WHERE id=$1 AND project=$2 FOR ${userId?'UPDATE':'SHARE'}`,[keyId,project])).rows[0];
-   if(!key||key.revoked_at||!Array.isArray(key.scopes)||!key.scopes.includes('fetch:write'))fail('api_key_forbidden',403);
-   if(requireSoleKey&&(await c.query("SELECT count(*)::int AS eligible FROM control_keys WHERE project=$1 AND revoked_at IS NULL AND scopes ? 'fetch:write'",[project])).rows[0].eligible!==1)fail('playground_key_selection_required',409);
-  }
+  await lockActiveCreditProject(c,project,keyId,{userId,requireSoleKey});
   const account=(await c.query('SELECT granted_credits FROM control_credit_accounts WHERE project=$1 FOR UPDATE',[project])).rows[0];
   if(!account)fail('credit_account_unavailable',503);
   const prior=(await c.query('SELECT * FROM control_credit_reservations WHERE operation=$1 AND project=$2',[operation,project])).rows[0];

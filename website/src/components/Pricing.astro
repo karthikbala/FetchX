@@ -1,18 +1,25 @@
 ---
 import Icon from './Icon.astro';
+import { creditPackages, formatUsd, formatUsdPerThousand } from '../data/credit-packages';
 import '../styles/marketing.css';
 interface Props { compact?: boolean; }
-const {compact=false}=Astro.props;
-const plans=[
- {id:'free',name:'Free',price:'0',credits:'1,000',period:'trial credits',caption:'Get a feel for the API.',features:['A starting point for evaluation','Confirm source and route access','Explore the request lifecycle'],cta:'Start exploring'},
- {id:'developer',name:'Developer',price:'29',credits:'50,000',period:'credits / month',caption:'Build your first integration.',features:['For individual developers','A focused application workload','Project-scoped API access'],cta:'Start building'},
- {id:'growth',name:'Growth',price:'99',credits:'250,000',period:'credits / month',caption:'Give your next idea room.',features:['For growing applications','More room for recurring work','Source and route scoping'],cta:'Choose Growth'},
- {id:'scale',name:'Scale',price:'299',credits:'1,000,000',period:'credits / month',caption:'Plan for a larger workload.',features:['For data-intensive teams','A larger monthly allowance','Workload planning at onboarding'],cta:'Explore Scale'},
- {id:'enterprise',name:'Enterprise',price:null,credits:'Custom',period:'usage plan',caption:'Shape a plan for your team.',features:['Custom volume and requirements','Project and access planning','Commercial terms agreed with you'],cta:'Explore Enterprise'},
-];
+const { compact = false } = Astro.props;
 ---
-<div class:list={['mkt-pricing',{ 'mkt-pricing-compact':compact}]}>
- <div class="mkt-proposal-note"><span class="mkt-dot"></span><span>COMMERCIAL PROPOSAL</span><p>Proposed prices and allowances. Create an account to view configured trial access; paid plans require approval.</p></div>
- <div class="mkt-pricing-grid">{plans.map(plan=><article class:list={['mkt-plan',{'mkt-plan-featured':plan.id==='growth'}]}><div class="mkt-plan-top"><h3>{plan.name}</h3>{plan.id==='growth'&&<span class="mkt-plan-flag">ROOM TO GROW</span>}</div><p class="mkt-plan-caption">{plan.caption}</p><div class="mkt-plan-price">{plan.price!==null?<><span>$</span><strong>{plan.price}</strong><small>{plan.id==='free'?'/ trial':'/ mo'}</small></>:<strong class="mkt-plan-custom">Let’s talk.</strong>}</div><div class="mkt-plan-credits"><strong>{plan.credits}</strong><span>{plan.period}</span></div><a class:list={['mkt-button',plan.id==='growth'?'mkt-button-primary':'mkt-button-secondary']} href={`/signup?plan=${plan.id}`}>{plan.cta}<Icon name="arrow" size={15}/></a>{!compact&&<ul>{plan.features.map(feature=><li><Icon name="check" size={13}/><span>{feature}</span></li>)}</ul>}</article>)}</div>
- <p class="mkt-pricing-note">Prices in USD. Proposed credits are a usage unit; they are not a fixed number of requests. Route, browser work and other agreed factors can affect credit use. Plan buttons open signup. They do not purchase, upgrade or activate a subscription. Your workspace shows its actual configured credit allocation. <a href="/pricing#credits">How credits work <Icon name="arrow" size={12}/></a></p>
+<div class:list={['mkt-pricing', { 'mkt-pricing-compact': compact }]}>
+  <div class="mkt-proposal-note"><span class="mkt-dot"></span><span>PREPAID CREDITS</span><p>One-time payments. No automatic renewal or scheduled expiration.</p></div>
+  <div class="mkt-pricing-grid">
+    <article class="mkt-plan mkt-plan-trial">
+      <div class="mkt-plan-top"><h3>Free trial</h3></div>
+      <div class="mkt-plan-price"><strong>{formatUsd(0)}</strong></div>
+      <div class="mkt-plan-credits"><strong>1,000 trial credits</strong><span>One-time per eligible account</span></div>
+      <a class="mkt-button mkt-button-secondary" href="/signup">Start free <Icon name="arrow" size={15}/></a>
+    </article>
+    {creditPackages.map(pack => <article class:list={['mkt-plan', { 'mkt-plan-featured': pack.id === 'credits-1000000' }]}>
+      <div class="mkt-plan-top"><h3>{pack.name}</h3></div>
+      <div class="mkt-plan-price"><strong>{formatUsd(pack.amount_minor)}</strong></div>
+      <div class="mkt-plan-credits"><strong>{formatUsdPerThousand(pack.amount_minor, pack.credits)}</strong><span>{pack.saving ? `${pack.saving} lower unit price` : 'Entry pack'}</span></div>
+      <a class:list={['mkt-button', pack.id === 'credits-1000000' ? 'mkt-button-primary' : 'mkt-button-secondary']} href={`/signup?plan=${pack.id}`} aria-label={`Review package for ${pack.name}`}>Review package <Icon name="arrow" size={15}/></a>
+    </article>)}
+  </div>
+  <p class="mkt-pricing-note">Prices in USD. Savings compare the price per 1,000 credits with the $2 pack. Trial credits apply to approved direct or datacenter routes. Sign in to see eligibility, limits, and checkout availability. <a href="/pricing#credits">How credits work <Icon name="arrow" size={12}/></a></p>
 </div>

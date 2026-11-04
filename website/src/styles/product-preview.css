@@ -104,4 +104,113 @@
  .pp-playground-grid .pp-tabs{gap:0 11px}
  .pp-result-facts{grid-template-columns:repeat(2,minmax(0,1fr))}
  .pp-code-toolbar .pp-copy-button{margin-left:0}
+
+.pp-stripe-billing {
+  margin: 20px 0;
+}
+.pp-stripe-heading, .pp-stripe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.pp-stripe-heading h2 {
+  margin: 0;
+}
+.pp-stripe-heading .pp-soft-tag {
+  color: var(--pp-amber);
+}
+.pp-stripe-history, .pp-stripe-notice {
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 14px;
+}
+.pp-stripe-notice p {
+  margin: 0 0 10px;
+}
+.pp-stripe-notice p:empty {
+  margin: 0;
+}
+.pp-stripe-price {
+  color: var(--ink);
+}
+.pp-stripe-history h3 {
+  margin: 0 0 7px;
+  font-size: 15px;
+}
+.pp-stripe-history ul {
+  margin: 0;
+  padding-inline-start: 19px;
+}
+.pp-stripe-history li {
+  color: var(--muted);
+  padding-block: 4px;
+}
+.pp-stripe-plans {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.pp-stripe-plan {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+.pp-stripe-plan-preferred {
+  border-color: #b4dc88a6;
+  background: #b4dc8808;
+}
+.pp-stripe-plan h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.pp-stripe-plan p {
+  margin: 4px 0;
+}
+.pp-stripe-plan .pp-stripe-price {
+  font-size: 18px;
+  font-weight: 700;
+}
+.pp-stripe-plan button {
+  max-width: 100%;
+  margin-top: 14px;
+  white-space: normal;
+  text-align: left;
+}
+
+.pp-transfer-limits {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0 0 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.pp-transfer-limits legend {
+  padding-inline: 5px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.pp-transfer-limits .pp-field {
+  margin-bottom: 10px;
+}
+.pp-transfer-limits .pp-form-help {
+  margin: 0;
+}
+
+@media (max-width: 550px) {
+  .pp-playground-callout, [data-playground-form] .pp-profile-summary {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .pp-playground-callout > .pp-soft-tag {
+    grid-column: 2;
+    justify-self: start;
+  }
+  [data-playground-form] .pp-profile-summary > small {
+    grid-column: 1 / -1;
+  }
 }

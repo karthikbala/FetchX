@@ -12,6 +12,8 @@ import {server,controlKeyScope} from '../src/main.mjs';
 import {controlCsrf} from '../src/control.mjs';
 import {recoverV2,V2Gateway} from '../src/v2.mjs';
 import {fixedFeePoolFingerprint} from '../src/v2-pricing.mjs';
+import {PUBLIC_URL_REF} from '../src/v2-public-url.mjs';
+import {paidResidentialLedgerSql} from '../src/residential.mjs';
 
 test('managed Bearer scopes classify render send and original-key recovery separately',()=>{
  assert.equal(controlKeyScope('POST','/v2/render'),'fetch:write');
@@ -20,6 +22,7 @@ test('managed Bearer scopes classify render send and original-key recovery separ
 });
 
 const datacenter={class:'datacenter',country:'US'};
+const residential={class:'residential',country:'US'};
 const doc=Buffer.from('<main>synthetic rendered DOM</main>');
 const screenshot=Buffer.from([0xff,0xd8,0xff,0xd9]);
 const fixtureArtifact=(kind,url,bytes,extra={})=>({kind,url,status:200,method:'GET',raw_headers:null,
@@ -27,7 +30,7 @@ const fixtureArtifact=(kind,url,bytes,extra={})=>({kind,url,status:200,method:'G
  content_encoding:null,encoded_body_base64:null,encoded_sha256:null,encoded_bytes:null,encoded_size_basis:null,original_encoded_available:false,
  decoded_body_base64:bytes.toString('base64'),decoded_sha256:sha(bytes),decoded_bytes:bytes.length,tunnel_bytes:null,provider_status:null,decoding_error:null,...extra});
 
-test('public and signed-in render retain one scoped operation, bounded artifacts and conservative credits',{skip:!process.env.TEST_DATABASE_URL,timeout:30_000},async t=>{
+test('trial Playground HTTP and render coexist with independently reviewed purchased HTTP and recover without dispatch',{skip:!process.env.TEST_DATABASE_URL,timeout:30_000},async t=>{
  const url=new URL(process.env.TEST_DATABASE_URL);
  assert.match(decodeURIComponent(url.pathname),/^\/gateway_test_[A-Za-z0-9_]+$/);
  const schema='render_e2e_'+randomUUID().replaceAll('-',''),admin=new pg.Pool({connectionString:url.href,max:1});
@@ -43,18 +46,39 @@ test('public and signed-in render retain one scoped operation, bounded artifacts
  const site='https://fetchx.test',bridge='synthetic-render-bridge-secret-over-32-bytes',sessionToken='fxs_'+'r'.repeat(43);
  const proxies=[{id:'fixture-us',provider:'oxylabs',pool_id:'fixture-pool',country:'US',url:'http://fixture-proxy:fixture-password@127.0.0.1:1'}];
  const staticProfile={id:'fixture-static',version:1,origins:['https://sample.example.com'],methods:['GET'],headers:[],proxy_classes:['datacenter'],countries:['US'],browser_probe:{enabled:true}};
- const controlPlane={enabled:true,origins:[site],bridgeSecret:bridge,projectTemplate:{id:'fixture-template',v2_access_profiles:['fixture-static@1'],v2_entitlement:{mode:'metered',max_daily_operations:20}},
-  creditPolicy:{reviewed:true,version:'fixture-credit-v1',trialCredits:4,weights:{direct:1},maxEstimatedMicroUsdPerOperation:0,
-   modeWeights:{reviewed:true,version:'fixture-mode-credit-v2',browser:{datacenter:2}}},
-  playground:{enabled:true,reviewed:true,version:'fixture-playground-v1',maxProfilesPerProject:8,routes:{browser:{datacenter:['US']}}}};
+ const controlPlane={enabled:true,origins:[site],bridgeSecret:bridge,projectTemplate:{id:'fixture-template',v2_access_profiles:['fixture-static@1'],v2_entitlement:{mode:'metered',max_daily_operations:3}},
+  creditPolicy:{reviewed:true,version:'fixture-credit-v1',trialCredits:7,weights:{direct:1},maxEstimatedMicroUsdPerOperation:100_000,
+   modeWeights:{reviewed:true,version:'fixture-mode-credit-v2',http:{residential:3},browser:{datacenter:2}}},
+  playground:{enabled:true,reviewed:true,version:'fixture-playground-v1',maxProfilesPerProject:8,routes:{http:{residential:['US']},browser:{datacenter:['US']}}}};
  const config={release:'render-fixture',artifactDir:root,artifactKey:'6b'.repeat(32),projects:{},proxies,controlPlane,maxDailyFallbackCredits:0,v2:{accessProfiles:{'fixture-static@1':staticProfile}},
-  datacenterFixedFeePool:{schema_version:2,id:'fixture-browser-pricing',reviewed:true,provider:'oxylabs',pool_id:'fixture-pool',countries:['US'],transports:['browser'],
+  residential:{maxTotalBytes:32_000_000,maxDailyBytes:32_000_000,providers:{evomi:{enabled:true,username:'fixture-user',
+   password:'fixture-pass',countries:['US'],maxTotalBytes:32_000_000,microUsdPerGB:2_000_000}}},
+  datacenterFixedFeePool:{schema_version:2,id:'fixture-browser-pricing',reviewed:true,provider:'oxylabs',pool_id:'fixture-pool',countries:['US'],transports:['http','browser'],
    cost_scope:'incremental_traffic_only',fixed_subscription_allocation_micro_usd:null,provenance:{id:'fixture-evidence',sha256:'a'.repeat(64),reviewed_at:'2026-01-01T00:00:00Z'},
    pool_fingerprint_sha256:fixedFeePoolFingerprint(proxies,['US'])}};
+ const {transports,...legacyPool}=config.datacenterFixedFeePool;
+ controlPlane.paidCreditPolicy={reviewed:true,version:'fixture-paid-v1',
+  datacenterPool:{proxyIds:[proxies[0].id],pricing:{...legacyPool,schema_version:1,id:'fixture-paid-pricing'}},
+  residentialBudget:{reviewed:true,provider:'evomi',maxTotalBytes:1_000_000,maxDailyBytes:1_000_000,microUsdPerGB:1_000_000},
+  dns:{reviewed:true,endpoint:'https://resolver.sample.net/resolve',address:'1.1.1.1'},
+  publicUrl:{reviewed:true,maxDailyOperations:2},routes:[
+   {accessProfile:PUBLIC_URL_REF,...datacenter,provider:'oxylabs'},
+   {accessProfile:PUBLIC_URL_REF,...residential,provider:'evomi'}
+  ]};
  const gateway=new Gateway({store,config,profiles:{},resolve:async()=>[{address:'93.184.216.34',family:4}]});
  const {promise:runnerEntered,resolve:notifyRunner}=Promise.withResolvers();
- let runs=0,mode='blocked',relayOptions;
+ let runs=0,mode='blocked',relayOptions,httpCalls=0,dnsCalls=0;
  gateway.v2=new V2Gateway(gateway,{browserRuntime:async()=>({available:true,runtime:{synthetic:true}}),
+  dnsHttp:async(_input,destination)=>{
+   dnsCalls++;
+   const name=destination.url.searchParams.get('name'),type=Number(destination.url.searchParams.get('type'));
+   return {status:200,headers:{},encoded:Buffer.from(JSON.stringify({Status:0,Question:[{name,type}],
+    Answer:type===1?[{name,type,data:'93.184.216.34'}]:[]})),wire_bytes:1000,wire_bytes_lower_bound:1000};
+  },http:async(_input,_destination,_limits,{wireMeter})=>{
+   httpCalls++;
+   return {status:200,headers:{'content-type':'text/plain'},encoded:Buffer.from('synthetic HTTP'),
+    tunnel_bytes:500,...(wireMeter?{wire_bytes:500,wire_bytes_lower_bound:500}:{})};
+  },
   relayFactory:async options=>{
    relayOptions=options;
    return {url:'http://127.0.0.1:1',bytes:512,meter_complete:true,connections:1,provider_status:200,close:async()=>{}};
@@ -85,6 +109,49 @@ test('public and signed-in render retain one scoped operation, bounded artifacts
  const native=(method,path,payload,token)=>app.inject({method,url:path,...(token?{headers:{authorization:'Bearer '+token}}:{}),...(payload===undefined?{}:{payload})});
  const signed=(method,path,payload)=>app.inject({method,url:`/control/projects/${project}${path}`,headers:{origin:site,'x-fetchx-control-secret':bridge,cookie:`fetchx_session=${sessionToken}`,'x-csrf-token':controlCsrf(sessionToken,bridge)},...(payload===undefined?{}:{payload})});
  const source='https://sample.example.com/page?synthetic=1';
+ const details=(await signed('GET','')).json();
+ assert.deepEqual(details.capabilities.paid_http.public_url_access_profile,PUBLIC_URL_REF);
+ assert.equal(details.capabilities.render,true);
+ const paidBody={idempotency_key:'paid-fixture',url:source,access_profile:PUBLIC_URL_REF,proxy:datacenter,max_transfer_mb:.25,max_credits:1};
+ const alternate=await identity.createKey(user,project,{name:'Alternate',scopes:['fetch:write']});
+ assert.equal((await signed('POST','/fetch',paidBody)).json().error.code,'playground_key_selection_required');
+ assert.equal((await signed('POST','/fetch',{...paidBody,key_id:other.id})).json().error.code,'api_key_forbidden');
+ assert.equal((await signed('POST','/fetch',{...paidBody,key_id:writer.id,userId:user})).json().error.code,'request_invalid');
+ assert.equal((await signed('POST','/fetch',{...paidBody,key_id:writer.id,requireSoleKey:false})).json().error.code,'request_invalid');
+ await store.tx(c=>gateway.v2.controlPaidCredits.grantPaidCredits(c,{project,mode:'live',accountId:'acct_fixture',
+  checkoutSessionId:'cs_live_fixture',paymentIntentId:'pi_fixture',credits:10000,amountMinor:200,currency:'usd'}));
+ const paid=await signed('POST','/fetch',{...paidBody,key_id:writer.id});
+ assert.equal(paid.json().success,true,paid.body);
+ assert.equal(paid.json().usage.accounting.paid_credits.used_credits,1);
+ assert.equal(paid.json().usage.accounting.request_credits,undefined);
+ const paidResidential=await signed('POST','/fetch',{...paidBody,idempotency_key:'paid-residential',proxy:residential,max_credits:5,key_id:writer.id});
+ assert.equal(paidResidential.json().success,true,paidResidential.body);
+ assert.equal(paidResidential.json().usage.accounting.paid_credits.used_credits,5);
+ assert.equal((await signed('GET','/fetch/paid-fixture')).json().operation_id,paid.json().operation_id);
+ assert.equal((await signed('GET','/requests/'+paid.json().operation_id)).json().operation_id,paid.json().operation_id);
+ assert.equal((await native('GET','/v2/render/paid-fixture',undefined,reader.token)).statusCode,404);
+ assert.equal((await native('POST','/v2/render',{...paidBody,wait_ms:0},writer.token)).json().error.code,'browser_probe_invalid');
+ assert.deepEqual([httpCalls,dnsCalls,runs],[2,4,0]);
+ await identity.revokeKey(user,project,alternate.id);
+ const trialPrepared=(await signed('POST','/playground/prepare',{execution:'http',proxy:residential,url:source})).json();
+ assert.equal(trialPrepared.ready,true,JSON.stringify(trialPrepared));
+ assert.equal(trialPrepared.quote.credits,3);
+ const trialBody={idempotency_key:'trial-residential',url:trialPrepared.url,access_profile:trialPrepared.access_profile,
+  proxy:residential,max_estimated_micro_usd:trialPrepared.quote.max_estimated_micro_usd};
+ assert.equal((await signed('POST','/fetch',{...trialBody,max_credits:5})).json().error.code,'paid_credit_route_forbidden');
+ const trial=await signed('POST','/fetch',trialBody);
+ assert.equal(trial.json().success,true,trial.body);
+ assert.equal(trial.json().usage.accounting.request_credits.credits,3);
+ assert.equal(trial.json().usage.accounting.paid_credits,undefined);
+ assert.deepEqual([httpCalls,dnsCalls,runs],[3,4,0]);
+ const charged=(await store.pool.query(`SELECT l.operation,l.estimated_micro_usd,${paidResidentialLedgerSql} AS paid,
+  l.reserved_tunnel_bytes FROM v2_ledger l WHERE l.project=$1 AND l.proxy_class='residential'`,[project])).rows;
+ assert.equal(charged.length,2);
+ for(const [result,isPaid,rate] of [[trial,false,2_000_000],[paidResidential,true,1_000_000]]){
+  const row=charged.find(row=>row.operation===result.json().operation_id);
+  assert.equal(row.paid,isPaid);
+  assert.equal(Number(row.estimated_micro_usd),Math.ceil(Number(row.reserved_tunnel_bytes)*rate/1e9));
+ }
  const prepare=await signed('POST','/playground/prepare',{execution:'browser',proxy:datacenter,url:source});
  assert.equal(prepare.statusCode,200,prepare.body);
  const prepared=prepare.json();assert.equal(prepared.ready,true,prepare.body);assert.deepEqual(prepared.quote,{credits:2,max_estimated_micro_usd:0});
@@ -118,7 +185,7 @@ test('public and signed-in render retain one scoped operation, bounded artifacts
  assert.equal((await native('GET','/v2/fetch/operations/'+result.operation_id,undefined,reader.token)).statusCode,409);
  const history=(await signed('GET','/requests')).json();assert.equal(history.operations[0].execution,'browser');assert.equal(history.operations[0].key_id,writer.id);
  const byId=(await signed('GET','/requests/'+result.operation_id)).json();assert.equal(byId.data.text,result.data.text);assert.equal(byId.retry.same_key_replay_safe,false);
- assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_sessions WHERE project=$1',[project])).rows[0].n,1);
+ assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_sessions WHERE project=$1',[project])).rows[0].n,4);
 
  mode='unknown';
  const uncertainBody={...body,idempotency_key:'uncertain'},uncertain=await native('POST','/v2/render',uncertainBody,writer.token);
@@ -130,11 +197,11 @@ test('public and signed-in render retain one scoped operation, bounded artifacts
  const deniedPrepare=(await signed('POST','/playground/prepare',{execution:'browser',proxy:datacenter,url:'https://another.example.com/'})).json();
  assert.equal(deniedPrepare.ready,false);assert.equal(deniedPrepare.errors[0].code,'credit_balance_exhausted');
  const denied=await native('POST','/v2/render',{...body,idempotency_key:'balance-failure',url:deniedPrepare.url,access_profile:deniedPrepare.access_profile},writer.token);
- assert.equal(denied.statusCode,429,denied.body);assert.equal(denied.json().error.code,'credit_balance_exhausted');assert.equal(denied.json().state,'rejected');
+ assert.equal(denied.statusCode,429,denied.body);assert.equal(denied.json().error.code,'client_quota_exhausted');assert.equal(denied.json().state,'rejected');
  assert.equal((await native('GET','/v2/render/balance-failure',undefined,reader.token)).statusCode,404);
- assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_operations WHERE project=$1',[project])).rows[0].n,2);
- assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM control_credit_reservations WHERE project=$1',[project])).rows[0].n,2);
- assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM control_playground_profiles WHERE project=$1',[project])).rows[0].n,1);
+ assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_operations WHERE project=$1',[project])).rows[0].n,5);
+ assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM control_credit_reservations WHERE project=$1',[project])).rows[0].n,3);
+ assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM control_playground_profiles WHERE project=$1',[project])).rows[0].n,2);
  assert.equal(runs,2);
  controlPlane.playground={enabled:false};
  assert.equal((await native('GET',keyPath,undefined,reader.token)).json().operation_id,result.operation_id);

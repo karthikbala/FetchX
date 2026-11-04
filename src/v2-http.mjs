@@ -47,8 +47,9 @@ export function decodeNative(encoded,encoding,limits){
 function meteredWrite(socket,bytes,encoding,meter,callback){
  meter.pending_writes=(meter.pending_writes??0)+1;meter.write_completions??=new Set();let settled=false,resolveWrite;
  const completion=new Promise(resolve=>{resolveWrite=resolve;});meter.write_completions.add(completion);
- const done=error=>{if(settled)return;settled=true;meter.pending_writes--;if(error)meter.incomplete=true;meter.write_completions.delete(completion);resolveWrite();callback(error);};
- try{socket.write(bytes,encoding,done);meter.bytes+=Buffer.byteLength(bytes,encoding);}catch(error){done(error);}
+ const size=Buffer.byteLength(bytes,encoding);
+ const done=error=>{if(settled)return;settled=true;meter.pending_writes--;if(error)meter.incomplete=true;else meter.confirmed_bytes=(meter.confirmed_bytes??0)+size;meter.write_completions.delete(completion);resolveWrite();callback(error);};
+ try{socket.write(bytes,encoding,done);meter.bytes+=size;}catch(error){done(error);}
 }
 
 function observedProxyBytes(proxy,meter){
@@ -65,7 +66,7 @@ class MeteredTunnel extends Duplex{
   socket.on('end',()=>this.push(null));socket.on('error',e=>{this.meter.incomplete=true;this.destroy(e);});
   socket.on('close',()=>this.destroy());
  }
- count(n){this.meter.bytes+=n;if(this.meter.bytes>this.limit){this.destroy(new GatewayError('tunnel_byte_limit',502));return false;}return true;}
+ count(n){observeRead(this.meter,n);if(this.meter.bytes>this.limit){this.destroy(new GatewayError('tunnel_byte_limit',502));return false;}return true;}
  _read(){this.socket.resume();}
  _write(b,encoding,cb){
   // A rejected write never reaches the proxy and must not enter its meter.
@@ -76,15 +77,42 @@ class MeteredTunnel extends Duplex{
  _destroy(error,cb){if(this.meter.pending_writes>0)this.meter.incomplete=true;this.socket.destroy();cb(error);}
 }
 
-export async function openPinnedTunnel(proxy,destination,{timeout_ms,max_tunnel_bytes},meter){
+function observeRead(meter,size){meter.bytes+=size;meter.confirmed_bytes=(meter.confirmed_bytes??0)+size;}
+
+// A paid cutoff can receive one last bounded raw socket read. Reserve that
+// allowance on the provider ledger independently of the customer's ceiling.
+export const PAID_WIRE_READ_BYTES=4096;
+function boundedWireRead(){
+ return {buffer:Buffer.allocUnsafe(PAID_WIRE_READ_BYTES),callback(n,buffer){
+  this.emit('data',Buffer.from(buffer.subarray(0,n)));
+  return !this.destroyed;
+ }};
+}
+
+function openDirectTunnel(destination,{max_tunnel_bytes,signal},meter,connect){
+ return new Promise((resolve,reject)=>{
+  const socket=connect({host:destination.address,port:443,onread:boundedWireRead()});
+  const abort=()=>finish(new GatewayError('source_timeout_unknown',502));
+  const connected=()=>{socket.pause();finish(null,new MeteredTunnel(socket,meter,max_tunnel_bytes));};
+  function finish(error,tunnel){
+   signal.removeEventListener('abort',abort);socket.removeListener('connect',connected);socket.removeListener('error',finish);
+   if(error){socket.destroy();reject(error);}else resolve(tunnel);
+  }
+  socket.once('error',finish);socket.once('connect',connected);
+  if(signal.aborted)abort();else signal.addEventListener('abort',abort,{once:true});
+ });
+}
+
+export async function openPinnedTunnel(proxy,destination,{timeout_ms,max_tunnel_bytes,signal},meter){
  const upstream=new URL(proxy.url);
  if(upstream.protocol!=='http:'||upstream.pathname!=='/'||upstream.search||upstream.hash)fail('proxy_configuration_invalid',503);
  const target=(destination.family===6?'['+destination.address+']':destination.address)+':443';
  return new Promise((resolve,reject)=>{
   let complete=false,connected=false,header=Buffer.alloc(0);
-  const socket=net.connect({host:upstream.hostname,port:Number(upstream.port)||80});
+  const socket=net.connect({host:upstream.hostname,port:Number(upstream.port)||80,...(signal?{onread:boundedWireRead()}:{})});
   const timer=setTimeout(()=>finish(new GatewayError('proxy_connect_unknown',502)),timeout_ms);
-  function finish(error,tunnel){if(complete)return;complete=true;clearTimeout(timer);socket.removeListener('data',ready);socket.removeListener('error',failed);error?(socket.destroy(),reject(error)):resolve(tunnel);}
+  const abort=()=>finish(new GatewayError('proxy_connect_unknown',502));
+  function finish(error,tunnel){if(complete)return;complete=true;clearTimeout(timer);signal?.removeEventListener('abort',abort);socket.removeListener('data',ready);socket.removeListener('error',failed);error?(socket.destroy(),reject(error)):resolve(tunnel);}
   function failed(error){
    // CONNECT is written only after connect. An explicit refusal before that
    // event proves this dial sent neither a proxy request nor target traffic.
@@ -104,7 +132,7 @@ export async function openPinnedTunnel(proxy,destination,{timeout_ms,max_tunnel_
    meteredWrite(socket,request,'utf8',meter,error=>{if(error){const failure=new GatewayError('proxy_connect_unknown',502);failure.cause_code=safeCauseCode(error);finish(failure);}});
   });
   function ready(part){
-   meter.bytes+=part.length;
+   observeRead(meter,part.length);
    const received=header.length+part.length;
    // Keep parsing bounded to the header cap plus one sentinel byte. A proxy
    // rejection may arrive with a large HTML body in the same TCP packet.
@@ -135,18 +163,23 @@ export async function openPinnedTunnel(proxy,destination,{timeout_ms,max_tunnel_
    finish(null,new MeteredTunnel(socket,meter,max_tunnel_bytes));
   }
   socket.on('data',ready);
+  if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
  });
 }
 
-export async function nativeHttp(input,destination,limits,{proxy=null,requestImpl=https.request,openTunnel=openPinnedTunnel,tlsImpl=tls.connect}={}){
- const meter={bytes:0,provider_status:null};let agent;
- if(proxy){
+export async function nativeHttp(input,destination,limits,{proxy=null,wireMeter=false,requestImpl=https.request,openTunnel=openPinnedTunnel,tlsImpl=tls.connect,connectImpl=net.connect}={}){
+ const meter={bytes:0,provider_status:null},controller=wireMeter?new AbortController():null;let agent,tunnel;
+ if(proxy||wireMeter){
   agent=new https.Agent({keepAlive:false});
   agent.createConnection=(options,callback)=>{
-   openTunnel(proxy,destination,limits,meter).then(socket=>{
+   const connectionLimits=controller?{...limits,signal:controller.signal}:limits;
+   const connection=proxy?openTunnel(proxy,destination,connectionLimits,meter):openDirectTunnel(destination,connectionLimits,meter,connectImpl);
+   connection.then(socket=>{
+    tunnel=socket;
+    if(controller?.signal.aborted){socket.destroy();return callback(new GatewayError('source_timeout_unknown',502));}
     const secure=tlsImpl({socket,servername:destination.url.hostname,rejectUnauthorized:true,ALPNProtocols:['http/1.1']});
     callback(null,secure);
-   },callback);
+   }).catch(callback);
   };
  }
  try{
@@ -158,7 +191,7 @@ export async function nativeHttp(input,destination,limits,{proxy=null,requestImp
     const parts=[];
     res.on('data',part=>{
      total+=part.length;
-     if(total>limits.max_encoded_bytes){res.destroy();finish(new GatewayError('encoded_body_limit',502));return;}
+     if(total>limits.max_encoded_bytes){finish(new GatewayError('encoded_body_limit',502));res.destroy();return;}
      parts.push(part);
     });
     res.on('aborted',()=>finish(new GatewayError('source_body_incomplete',502)));
@@ -167,6 +200,16 @@ export async function nativeHttp(input,destination,limits,{proxy=null,requestImp
    });}catch(error){finish(transportFailure(error));return;}
    function finish(error,result){
     if(done)return;done=true;clearTimeout(timer);
+    if(wireMeter){
+     const observed=observedProxyBytes(true,meter),lower=meter.confirmed_bytes??0;
+     const wire={wire_bytes_lower_bound:lower,wire_dispatched:meter.bytes>0||meter.incomplete===true};
+     if(error){
+      if(error.code==='source_transport_unknown'&&/CERT|SSL|TLS|SELF_SIGNED|ISSUER/.test(error.cause_code??''))error.code='source_tls_failed';
+      Object.assign(error,wire,{observed_wire_bytes:observed});
+     }
+     else Object.assign(result,wire,{wire_bytes:observed});
+     controller.abort();tunnel?.destroy();
+    }
     if(error){error.observed_encoded_bytes=total;error.observed_tunnel_bytes=observedProxyBytes(proxy,meter);error.provider_status=meter.provider_status;req?.destroy();reject(error);}else resolve(result);
    }
    req.on('error',e=>finish(transportFailure(e)));

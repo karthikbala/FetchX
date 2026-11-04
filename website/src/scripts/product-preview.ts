@@ -1,12 +1,40 @@
-// The workspace uses the same-origin control plane. Only project IDs and pending
-// operation keys cross page boundaries; credentials and source inputs stay in memory.
+// The workspace uses the same-origin control plane. Project IDs and pending
+// operation recovery details can cross page boundaries. Credentials stay in memory.
 import { mountGoogleSignIn } from './google-sign-in';
 import { consumeGithubResult, mountGithubSignIn } from './github-sign-in';
 import { countries, countryName } from '../data/countries';
 import { operationExecution, operationResource, requestCode, routeClasses, routeLabels, type Execution, type PlaygroundCapabilities, type Preparation, type RouteClass, type SafeKey } from '../data/playground';
+import { mountStripeBilling } from './stripe-billing';
+import { creditPackages, formatCredits } from '../data/credit-packages';
 type Json = Record<string, any>;
 type Project = { id: string; name: string; status: string; created_at?: string };
-type Profile = { id: string; version: number; origins: string[]; paths?: string[]; methods: string[]; proxy_classes: string[]; countries: string[]; route_reservations?: Json[] };
+type Profile = { id: string; version: number; kind?: string; origins: string[]; paths?: string[]; methods: string[]; proxy_classes: string[]; countries: string[]; max_daily_operations?: number | null; route_reservations?: Json[] };
+const publicUrlId = 'public-url-http';
+const publicUrlKind = 'public_url_http';
+const decimalMb = 1_000_000;
+const transferLimitErrors = new Set(['max_transfer_bytes_exceeded', 'encoded_body_limit', 'decoded_body_limit']);
+type PaidQuote = { route_class: string; block_bytes: number; credits_per_block: number; max_transfer_bytes: number; reserved_credits: number };
+const isPublicUrlProfile = (profile?: Profile) => profile?.id === publicUrlId && profile.version === 1 && profile.kind === publicUrlKind;
+const validTransferMb = (value: unknown): value is number => typeof value === 'number' && value >= 0.25 && value <= 20 && Number.isInteger(value * 4);
+const positiveInteger = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+
+function transferSuggestion(result: Json | null) {
+  const details = result?.error?.details, next = details?.next;
+  const paid = result?.usage?.accounting?.paid_credits;
+  if (result?.state !== 'failed' || !transferLimitErrors.has(result.error?.code) || paid?.state !== 'settled' ||
+      next?.requires_new_idempotency_key !== true || !validTransferMb(details.max_transfer_mb) ||
+      !validTransferMb(details.max_allowed_transfer_mb) || !validTransferMb(next.max_transfer_mb) ||
+      next.max_transfer_mb <= details.max_transfer_mb || next.max_transfer_mb > details.max_allowed_transfer_mb ||
+      !positiveInteger(details.reserved_credits) || details.reserved_credits !== paid.reserved_credits ||
+      !positiveInteger(next.max_credits) || !positiveInteger(paid.block_bytes) || !positiveInteger(paid.credits_per_block) ||
+      next.max_credits !== Math.ceil(next.max_transfer_mb * decimalMb / paid.block_bytes) * paid.credits_per_block) return '';
+  return `Suggested limit for a new request is ${next.max_transfer_mb} MB with a ${formatCredits(next.max_credits)}-credit reservation. Use a new operation key.`;
+}
+function validPublicDestination(value: string) {
+  if (value.length > 4096 || /[\s\\#]/.test(value) || !/^https:\/\/[a-z0-9.-]+(?::443)?(?=[/?]|$)/i.test(value)) return false;
+  try { const host = new URL(value).hostname; return host.includes('.') && !/^[\d.]+$/.test(host); }
+  catch { return false; }
+}
 class ControlError extends Error {
   constructor(message: string, public code: string, public status = 0, public payload: Json | null = null) { super(message); }
 }
@@ -17,6 +45,11 @@ async function initWorkspace(root: HTMLElement) {
   const q = <T extends HTMLElement = HTMLElement>(selector: string, parent: ParentNode = root) => parent.querySelector<T>(selector);
   const qa = <T extends HTMLElement = HTMLElement>(selector: string, parent: ParentNode = root) => [...parent.querySelectorAll<T>(selector)];
   const authPage = ['signup', 'login'].includes(root.dataset.view || '');
+  const query = new URLSearchParams(window.location.search);
+  const plan = query.get('plan');
+  const preferredPlan = creditPackages.some(pack => pack.id === plan) ? plan : null;
+  const billingPath = '/app/billing' + (preferredPlan ? '?plan=' + preferredPlan : '');
+  const authDestination = preferredPlan || query.get('view') === 'billing' ? billingPath : '/app';
   const selectedStorage = 'fetchx-selected-project';
   const pendingPrefix = 'fetchx-pending-operations:';
   const validProject = (id: unknown): id is string => typeof id === 'string' && /^cp_[a-f0-9-]{36}$/i.test(id);
@@ -36,6 +69,22 @@ async function initWorkspace(root: HTMLElement) {
   let githubControls: { control: HTMLInputElement | HTMLButtonElement; disabled: boolean }[] = [];
   const githubResult = authPage ? consumeGithubResult() : null;
   try { sessionStorage.removeItem('fetchx-product-preview-v1'); } catch { /* Clear obsolete preview state when storage is available. */ }
+  const billingPanel = q('[data-stripe-billing]');
+  const stripeBilling = billingPanel ? mountStripeBilling(billingPanel, {
+    request: api, refreshAccounting: refreshStripeAccounting, preferredPlan,
+    canInteract: () => signedIn && ready && !signingOut && !leavingPage,
+  }) : null;
+  if (root.dataset.view === 'billing') {
+    const link = q<HTMLAnchorElement>('[data-login-link]');
+    if (link) link.href = '/login?view=billing' + (preferredPlan ? '&plan=' + preferredPlan : '');
+  }
+  if (authPage && authDestination === billingPath) {
+    const switchLink = q<HTMLAnchorElement>('.pp-auth-switch');
+    if (switchLink) switchLink.search = 'view=billing' + (preferredPlan ? '&plan=' + preferredPlan : '');
+    qa<HTMLAnchorElement>('[data-auth-existing] a[href="/app"], [data-signup-stage="2"] a[href="/app"]').forEach(link => { link.href = billingPath; });
+    const finish = q<HTMLAnchorElement>('[data-finish-signup]');
+    if (finish) { finish.href = billingPath; finish.textContent = 'Review project billing'; }
+  }
 
   function textAll(selector: string, value: unknown) { qa(selector).forEach(node => { node.textContent = String(value ?? '—'); }); }
   function setError(error: unknown, selector = '[data-page-error]') {
@@ -128,7 +177,7 @@ async function initWorkspace(root: HTMLElement) {
     acceptSession(data); email = ''; challenge = ''; clearError();
     const code = q<HTMLInputElement>('[data-signup-verify] input'); if (code) code.value = '';
     if (projects.length && githubResult?.connectRequired) { showExistingAccount(); toast('Signed in. Choose Connect GitHub to connect this account.'); requestAnimationFrame(() => q('[data-github-connect]')?.focus()); }
-    else if (projects.length) window.location.assign('/app'); else stage(2);
+    else if (projects.length) window.location.assign(authDestination); else stage(2);
   }
   function showExistingAccount() { qa('[data-signup-stage]').forEach(node => { node.hidden = true; }); q('[data-auth-existing]')!.hidden = false; q('[data-auth-progress]')?.setAttribute('hidden', ''); }
   async function googleRequest(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -202,13 +251,17 @@ async function initWorkspace(root: HTMLElement) {
   q('[data-conceal-signup-key]')?.addEventListener('click', () => { concealSecret(); q<HTMLButtonElement>('[data-signup-copy]')!.disabled = true; });
   qa('[data-logout]').forEach(button => button.addEventListener('click', async () => {
     if (signingOut || githubInProgress) return;
-    signingOut = true; clearError();
+    signingOut = true; stripeBilling?.reset(); clearError();
     const buttons = qa<HTMLButtonElement>('[data-logout]');
     buttons.forEach(node => { node.disabled = true; node.textContent = 'Signing out…'; node.setAttribute('aria-busy', 'true'); });
     try { await api('/auth/logout', { method: 'POST', body: {} }); concealSecret(); csrf = ''; signedIn = false; try { sessionStorage.removeItem(selectedStorage); } catch {} window.location.assign('/login'); }
     catch (error) {
       setError(error); signingOut = false;
       buttons.forEach(node => { node.disabled = false; node.textContent = 'Sign out'; node.removeAttribute('aria-busy'); });
+      if (project && stripeBilling) {
+        if (ready) stripeBilling.setProject(project.id, stripeView());
+        else void selectProject(project.id);
+      }
     }
   }));
   qa('[data-open-project]').forEach(button => button.addEventListener('click', () => { if (!signedIn) return; lastFocus = document.activeElement as HTMLElement; q<HTMLDialogElement>('[data-project-dialog]')?.showModal(); q<HTMLInputElement>('[data-create-project] input')?.focus(); }));
@@ -224,12 +277,12 @@ async function initWorkspace(root: HTMLElement) {
   q<HTMLDialogElement>('[data-request-dialog]')?.addEventListener('close', () => { textAll('[data-request-detail]', ''); lastFocus?.focus(); });
 
   async function selectProject(id: string, created = false) {
-    const selected = projects.find(item => item.id === id); if (!selected) return;
+    const selected = projects.find(item => item.id === id); if (!selected || signingOut) return;
     if (sending || (mutating && !created)) { toast('Wait for the active action before switching projects.'); const select = q<HTMLSelectElement>('[data-project-select]'); if (select && project) select.value = project.id; return; }
-    const version = ++loadVersion; project = selected; ready = false; concealSecret(); q<HTMLDialogElement>('[data-key-dialog]')?.close(); q<HTMLDialogElement>('[data-request-dialog]')?.close(); saveProject(id); setProjectOptions(); clearError(); gate('Loading project…', 'Reading approved profiles, keys, history, and current balances.'); textAll('[data-project-name]', selected.name);
+    const version = ++loadVersion; project = selected; ready = false; stripeBilling?.reset(); concealSecret(); q<HTMLDialogElement>('[data-key-dialog]')?.close(); q<HTMLDialogElement>('[data-request-dialog]')?.close(); saveProject(id); setProjectOptions(); clearError(); gate('Loading project…', 'Reading approved profiles, keys, history, and current balances.'); textAll('[data-project-name]', selected.name);
     resetPlayground();
     const result = await Promise.allSettled([api(projectPath()), api(projectPath('/keys')), api(projectPath('/requests')), api(projectPath('/usage')), api(projectPath('/billing'))]);
-    if (version !== loadVersion) return;
+    if (version !== loadVersion || signingOut || leavingPage) return;
     const detail = result[0];
     if (detail.status !== 'fulfilled') { gate('Project unavailable', 'The service could not load this project. Refresh to try reading it again.'); setError(detail.reason); return; }
     project = detail.value.project; profiles = Array.isArray(detail.value.access_profiles) ? detail.value.access_profiles : []; capabilities = detail.value.capabilities || {};
@@ -241,11 +294,25 @@ async function initWorkspace(root: HTMLElement) {
     if (failures.length) setError('Some project data could not be loaded. ' + failures.map(item => item.status === 'rejected' ? item.reason.message : '').join(' '));
     ready = true; draftOpen = true; currentResult = null; currentKey = pendingKeys().at(-1) || ''; if (currentKey) draftOpen = false;
     renderProfiles(); renderKeys(); renderRequests(); renderUsage(); renderChecklist(); renderResult(null);
+    stripeBilling?.setProject(id, stripeView());
     q('[data-workspace-gate]')!.hidden = true; q('[data-workspace-content]')!.hidden = false; updateRunButton();
   }
   async function refreshKeys() { const id = project?.id; const data = await api(projectPath('/keys')); if (id !== project?.id) return; keys = data.keys || []; renderKeys(); renderChecklist(); }
   async function refreshHistory() { const version = loadVersion; const data = await api(projectPath('/requests')); if (version !== loadVersion) return; operations = data.operations || []; renderRequests(); renderChecklist(); }
   async function refreshAccounting() { const version = loadVersion; const results = await Promise.allSettled([api(projectPath('/usage')), api(projectPath('/billing')), refreshHistory()]); if (version !== loadVersion) return; usage = results[0].status === 'fulfilled' ? results[0].value : null; billing = results[1].status === 'fulfilled' ? results[1].value : null; renderUsage(); if (results.some(result => result.status === 'rejected')) setError('The request result is shown, but some usage or history data could not be refreshed. Use Refresh to read it again.'); }
+  const paymentHeld = () => billing?.paid_credits?.payment_hold === true || usage?.paid_credits?.payment_hold === true;
+  function stripeView() { return billing?.stripe && paymentHeld() ? { ...billing.stripe, payment_hold: true } : billing?.stripe; }
+  async function refreshStripeAccounting(id: string) {
+    const version = loadVersion;
+    const path = '/projects/' + encodeURIComponent(id);
+    const [freshUsage, freshBilling] = await Promise.allSettled([api(path + '/usage'), api(path + '/billing')]);
+    if (id !== project?.id || version !== loadVersion || !signedIn || signingOut || leavingPage) return null;
+    usage = freshUsage.status === 'fulfilled' ? freshUsage.value : null;
+    billing = freshBilling.status === 'fulfilled' ? freshBilling.value : null;
+    renderUsage();
+    if (freshBilling.status === 'rejected') throw new ControlError('FetchX could not refresh billing. Use Refresh to read the project’s purchase history and balances.', 'billing_refresh_failed');
+    return stripeView();
+  }
   function renderKeys() {
     const parent = q('[data-key-list]'); if (!parent) return; parent.replaceChildren();
     if (!keys.length) { parent.append(element('p', 'pp-live-empty', 'No keys returned. Create a scoped API key for your server.')); return; }
@@ -274,7 +341,31 @@ async function initWorkspace(root: HTMLElement) {
     for (const [selector, field] of [['source-successes', 'source_successes'], ['source-failures', 'source_failures'], ['gateway-failures', 'gateway_failures'], ['unknown-outcomes', 'unknown']]) textAll(`[data-${selector}]`, number(outcomes?.[field]));
     const latency = gateway?.latency_ms; textAll('[data-mean-latency]', typeof latency?.mean === 'number' ? `${number(Math.round(latency.mean))} ms` : 'Unavailable'); textAll('[data-p95-latency]', typeof latency?.p95 === 'number' ? `${number(Math.round(latency.p95))} ms` : 'Unavailable');
     qa('[data-credit-meter]').forEach(node => { node.style.width = credits?.granted > 0 ? `${Math.max(0, Math.min(100, (credits.settled + credits.reserved + credits.held) / credits.granted * 100))}%` : '0%'; });
-    const status = billing?.status; textAll('[data-billing-status]', status === 'trial' ? 'Trial access' : status === 'approval_required' ? 'Approval required' : 'Status unavailable'); textAll('[data-billing-description]', status === 'trial' ? 'Your trial allocation is active. Check the playground for available routes and request costs.' : status === 'approval_required' ? 'Contact FetchX for a reviewed credit grant or commercial access.' : 'The service did not return a billing status. Refresh to read it again.');
+    const status = billing?.status;
+    const trial = billing?.trial ?? usage?.trial;
+    const dailyLimit = trial?.max_daily_operations ?? (gateway?.entitlement?.mode === 'metered' ? gateway.entitlement.max_daily_operations : null);
+    const trialRoutes = Array.isArray(trial?.eligible_routes) ? trial.eligible_routes.filter((route: unknown) => route === 'direct' || route === 'datacenter').join(' or ') : '';
+    const trialInfo = q('[data-trial-daily-limit]');
+    if (trialInfo) {
+      trialInfo.hidden = !Number.isSafeInteger(dailyLimit) || dailyLimit < 1;
+      trialInfo.textContent = trialInfo.hidden ? '' : `Project limit for scoped routes: ${number(dailyLimit)} requests per day.`;
+    }
+    textAll('[data-billing-status]', status === 'trial' ? 'Trial access' : status === 'approval_required' ? 'Approval required' : 'Status unavailable');
+    textAll('[data-billing-description]', status === 'trial' ? `Your configured trial allocation is active. Use approved ${trialRoutes || 'trial'} routes. The playground also shows any reviewed trial residential and browser options for this project.` : status === 'approval_required' ? 'This project has no available trial credits. Check your account’s other projects or contact FetchX for help.' : 'The service did not return a billing status. Refresh to read it again.');
+    textAll('[data-billing-policy]', trial?.trial_target === 1_000 && trial.grant_scope === 'account' && trial.grant_frequency === 'once' ? 'Eligible accounts receive 1,000 trial credits once. Paid credits have a separate balance.' : 'Trial credits follow the project’s configured allowance. Paid credits have a separate balance.');
+    const paidCredits = billing?.paid_credits ?? usage?.paid_credits;
+    const unavailable = q('[data-paid-credits-unavailable]');
+    if (unavailable) {
+      unavailable.hidden = !!billing?.stripe;
+      unavailable.textContent = billing ? 'Paid credit checkout is currently unavailable for this project.' : 'FetchX could not check paid credit billing. Use Refresh to try again.';
+    }
+    const paidCreditPanel = q('[data-paid-credits-panel]');
+    if (paidCreditPanel) {
+      paidCreditPanel.hidden = paidCredits?.unit !== 'credits';
+      for (const field of ['available', 'used', 'reserved', 'held']) textAll(`[data-paid-credits-${field}]`, formatCredits(paidCredits?.[field]));
+      q('[data-paid-credits-hold]')!.hidden = !paymentHeld();
+      q('[data-paid-credits-use]')!.hidden = paymentHeld() || !profiles.some(advertisesPublicRoute);
+    }
   }
   function renderChecklist() { const states = [signedIn, Boolean(project), keys.some(key => !key.revoked_at), operations.length > 0]; textAll('[data-onboarding-count]', `${states.filter(Boolean).length} of 4 complete`); ['email','project','key','request'].forEach((name, index) => { const node = q(`[data-checklist-${name}]`); node?.classList.toggle('is-complete', states[index]); const mark = node?.querySelector('.pp-step-check'); if (mark) mark.textContent = states[index] ? '✓' : String(index + 1); }); }
   function renderRequests() {
@@ -310,6 +401,10 @@ async function initWorkspace(root: HTMLElement) {
   q('[data-refresh-history]')?.addEventListener('click', async event => { const button = event.currentTarget as HTMLButtonElement; button.disabled = true; clearError(); try { await refreshHistory(); } catch (error) { setError(error); } finally { button.disabled = false; } });
 
   const requestForm = q<HTMLFormElement>('[data-playground-form]');
+  const walletSelect = q<HTMLSelectElement>('[data-request-wallet]');
+  const transferInput = q<HTMLInputElement>('[data-max-transfer]');
+  const creditCapInput = q<HTMLInputElement>('[data-max-credits]');
+  const purchasedHttp = () => walletSelect?.value === 'paid';
   const requestUrl = q<HTMLInputElement>('[data-request-url]');
   const routeSelect = q<HTMLSelectElement>('[data-request-route]');
   const countrySelect = q<HTMLSelectElement>('[data-request-country]');
@@ -332,14 +427,49 @@ async function initWorkspace(root: HTMLElement) {
   let retainedHeaders: string | null = null;
 
   const hide = (selector: string, hidden: boolean) => { const node = q(selector); if (node) node.hidden = hidden; };
-  const execution = (): Execution => q<HTMLInputElement>('input[name="mode"]:checked')?.value === 'browser' ? 'browser' : 'http';
+  const execution = (): Execution => !purchasedHttp() && q<HTMLInputElement>('input[name="mode"]:checked')?.value === 'browser' ? 'browser' : 'http';
   const baseCapabilities = (): PlaygroundCapabilities | null => {
-    const value = capabilities.playground;
+    const value = purchasedHttp() ? null : capabilities.playground;
     return Array.isArray(value?.executions) && value.executions.length && Array.isArray(value.routes) &&
       !value.executions.every((mode: Json) => mode.reason === 'playground_disabled') ? value : null;
   };
   const activeCapabilities = () => preparedCapabilities || baseCapabilities();
-  const selectedProfile = () => profiles.find(item => `${item.id}@${item.version}` === q<HTMLSelectElement>('[data-request-profile]')?.value);
+  const paidProfile = () => profiles.find(advertisesPublicRoute);
+  const selectedProfile = () => purchasedHttp() ? paidProfile() : profiles.find(item =>
+    item.id !== publicUrlId && item.kind !== publicUrlKind && `${item.id}@${item.version}` === q<HTMLSelectElement>('[data-request-profile]')?.value);
+  function paidQuote(profile: Profile | undefined, route: string, country: string | null): PaidQuote | null {
+    if (capabilities.paid_http?.proxy_classes?.[route] !== true || !capabilities.routes?.includes(route) ||
+        !profile?.proxy_classes.includes(route) || (route !== 'datacenter' && route !== 'residential') || country !== 'US' ||
+        !profile.countries.includes(country)) return null;
+    const quote = profile.route_reservations?.find(item => item.class === route && item.country === country)?.paid_credit_reservation;
+    return quote?.route_class === route &&
+      [quote.block_bytes, quote.credits_per_block, quote.max_transfer_bytes, quote.reserved_credits].every(positiveInteger) ? quote : null;
+  }
+  function advertisesPublicRoute(profile: Profile) {
+    const advertised = capabilities.paid_http?.public_url_access_profile;
+    return capabilities.native_http !== false && isPublicUrlProfile(profile) &&
+      advertised?.id === profile.id && advertised?.version === profile.version &&
+      routeClasses.some(route => paidQuote(profile, route, 'US')) &&
+      profile.methods.some(method => method === 'GET' || method === 'HEAD');
+  }
+  function selectedPaidQuote() {
+    return purchasedHttp() ? paidQuote(paidProfile(), routeSelect?.value || '', countrySelect?.value || null) : null;
+  }
+  function paidReservation(quote: PaidQuote) {
+    return transferInput?.value && validTransferMb(transferInput.valueAsNumber)
+      ? Math.ceil(transferInput.valueAsNumber * decimalMb / quote.block_bytes) * quote.credits_per_block
+      : quote.reserved_credits;
+  }
+  function renderTransferQuote() {
+    const quote = selectedPaidQuote();
+    const limits = q<HTMLFieldSetElement>('[data-paid-transfer]');
+    if (limits) limits.hidden = limits.disabled = !quote;
+    if (!quote) return;
+    const bytes = quote.max_transfer_bytes;
+    const defaultSize = bytes < decimalMb ? `${bytes / 1000} KB` : `${bytes / decimalMb} MB`;
+    const reserved = paidReservation(quote);
+    textAll('[data-transfer-quote]', `Default ${defaultSize}. Reserves up to ${formatCredits(reserved)} ${reserved === 1 ? 'credit' : 'credits'}. The final charge follows measured wire traffic.`);
+  }
   const currentExecutionCapability = () => activeCapabilities()?.executions.find(item => item.id === execution());
   const routeChoice = () => routeClasses.find(value => value === routeSelect?.value);
   const explicitKey = () => project ? preferredKeys.get(project.id) || '' : '';
@@ -366,6 +496,10 @@ async function initWorkspace(root: HTMLElement) {
     }
   }
   function routeAvailability(value: RouteClass) {
+    if (purchasedHttp()) {
+      const available = !!paidQuote(paidProfile(), value, 'US');
+      return { available, reason: available ? null : 'playground_route_unreviewed', countries: available ? ['US'] : [] };
+    }
     const mode = execution(), matrix = activeCapabilities();
     if (matrix) {
       const entry = matrix.routes.find(item => item.class === value);
@@ -379,9 +513,11 @@ async function initWorkspace(root: HTMLElement) {
   }
   function renderProfiles() {
     const select = q<HTMLSelectElement>('[data-request-profile]'); if (!select) return;
-    select.replaceChildren(...profiles.map(profile => new Option(`${profile.id} · v${profile.version}`, `${profile.id}@${profile.version}`)));
-    select.disabled = !profiles.length;
-    hide('[data-request-profile-field]', Boolean(baseCapabilities()) || profiles.length <= 1);
+    const scoped = profiles.filter(profile => profile.id !== publicUrlId && profile.kind !== publicUrlKind);
+    select.replaceChildren(...scoped.map(profile => new Option(`${profile.id} · v${profile.version}`, `${profile.id}@${profile.version}`)));
+    select.disabled = !scoped.length;
+    hide('[data-request-wallet-field]', !paidProfile() && !purchasedHttp());
+    hide('[data-request-profile-field]', purchasedHttp() || Boolean(baseCapabilities()) || scoped.length <= 1);
     renderRequestControls();
     schedulePreparation();
   }
@@ -390,7 +526,9 @@ async function initWorkspace(root: HTMLElement) {
     const matrix = activeCapabilities(), mode = execution(), profile = selectedProfile();
     for (const input of qa<HTMLInputElement>('input[name="mode"]')) {
       const capability = matrix?.executions.find(item => item.id === input.value);
-      input.disabled = matrix ? capability?.available !== true : input.value === 'browser' || capabilities.native_http === false;
+      if (purchasedHttp() && input.value === 'http') input.checked = true;
+      input.disabled = purchasedHttp() ? input.value !== 'http' || !profile
+        : matrix ? capability?.available !== true : input.value === 'browser' || capabilities.native_http === false;
       const description = input.disabled
         ? matrix ? explainAvailability(capability?.reason) : input.value === 'browser' ? 'Unavailable on this service' : 'HTTP service is unavailable'
         : input.value === 'browser' ? 'Rendered page' : 'Source response';
@@ -434,10 +572,12 @@ async function initWorkspace(root: HTMLElement) {
       waitInput.disabled = !hasWait;
       if (hasWait) waitInput.max = String(waitMax);
     }
-    textAll('[data-profile-summary]', matrix
+    textAll('[data-profile-summary]', purchasedHttp()
+      ? 'Public HTTPS destinations on US routes. Measured wire traffic uses purchased credits.'
+      : matrix
       ? preparedRequest?.access_profile ? 'FetchX matched an access policy for this website and execution mode.' : 'FetchX checks the destination and chooses an access policy automatically.'
       : profile ? `Approved destinations: ${profile.origins.join(', ')}${profile.paths?.length ? ' · Paths: ' + profile.paths.join(', ') : ''}` : 'No approved HTTP access profile is configured.');
-    textAll('#request-url-help', matrix ? 'Use a public HTTPS URL.' : 'Use a public HTTPS URL approved by this project’s profile.');
+    textAll('#request-url-help', purchasedHttp() ? 'Use a public HTTPS hostname on port 443 without credentials or fragments.' : matrix ? 'Use a public HTTPS URL.' : 'Use a public HTTPS URL approved by this project’s profile.');
     renderCountries();
     renderKeyChoice();
   }
@@ -471,7 +611,7 @@ async function initWorkspace(root: HTMLElement) {
   }
   function renderKeyChoice() {
     if (!keySelect || !project) return;
-    const managed = Boolean(baseCapabilities()), eligible = keyOptions();
+    const managed = purchasedHttp() || Boolean(baseCapabilities()), eligible = keyOptions();
     hide('[data-request-keys]', !managed);
     if (!managed) return;
     if (!eligible.some(item => item.id === explicitKey())) preferredKeys.delete(project.id);
@@ -508,7 +648,7 @@ async function initWorkspace(root: HTMLElement) {
       const id = project?.id, version = prepareVersion;
       prepareTimer = setTimeout(() => { void prepareRequest(input, id, version, Boolean(draft)); }, 300);
     }
-    updateRunButton(); renderCode();
+    renderTransferQuote(); updateRunButton(); renderCode();
   }
   async function prepareRequest(input: Json, id: string | undefined, version: number, chosenRoute: boolean) {
     const active = () => id === project?.id && version === prepareVersion && !leavingPage;
@@ -539,11 +679,24 @@ async function initWorkspace(root: HTMLElement) {
   function requestIssue() {
     if (!requestUrl?.value.trim()) return 'Enter a URL to check the request.';
     if (requestUrl.validity.typeMismatch) return 'Enter a complete URL, including https://.';
+    if (purchasedHttp() && !validPublicDestination(requestUrl.value.trim())) return 'Use a public HTTPS hostname on port 443 without credentials or fragments.';
+    if (purchasedHttp() && !paidProfile()) return 'Purchased HTTP is unavailable for this project.';
     if (!baseCapabilities() && !selectedProfile()) return 'No approved HTTP profile is configured for this project.';
     if (baseCapabilities() && currentExecutionCapability()?.available !== true) return explainAvailability(currentExecutionCapability()?.reason);
     if (!routeChoice() || !routeAvailability(routeChoice()!).available) return 'Choose an available route.';
     if (routeChoice() !== 'direct' && !countrySelect?.value) return 'Choose a supported country.';
-    if (baseCapabilities() && !keyChoice()) return keyOptions().length ? 'Choose an API key.' : 'A project API key is required.';
+    if ((purchasedHttp() || baseCapabilities()) && !keyChoice()) return keyOptions().length ? 'Choose an API key.' : 'A project API key is required.';
+    if (purchasedHttp()) {
+      const quote = selectedPaidQuote();
+      if (!quote) return 'Choose a reviewed purchased HTTP route.';
+      if (paymentHeld()) return 'Purchased credits are on hold.';
+      if (transferInput?.validity.badInput || transferInput?.value && !validTransferMb(transferInput.valueAsNumber))
+        return 'Enter a transfer ceiling from 0.25 to 20 MB in 0.25 MB steps.';
+      if (creditCapInput?.validity.badInput || creditCapInput?.value && !positiveInteger(creditCapInput.valueAsNumber))
+        return 'Enter a positive whole number for the credit cap.';
+      if (creditCapInput?.value && creditCapInput.valueAsNumber < paidReservation(quote))
+        return 'The credit cap is below the reservation.';
+    }
     if (waitInput && !waitInput.disabled && !waitInput.validity.valid) return `Enter a whole number from 0 to ${waitInput.max} for the browser wait.`;
     if (qa<HTMLInputElement>('[data-request-header]').some(input => !input.disabled && /[\u0000-\u0008\u000a-\u001f\u007f\u0100-\uffff]/u.test(input.value))) return 'Request headers must use printable HTTP characters.';
     return '';
@@ -558,8 +711,12 @@ async function initWorkspace(root: HTMLElement) {
       access_profile: { id: profile.id, version: profile.version },
       url: managed ? preparedRequest?.url || input.url : input.url, proxy: input.proxy,
       ...(typeof maximum === 'number' ? { max_estimated_micro_usd: maximum } : {}),
-      ...(managed && explicitKey() ? { key_id: explicitKey() } : {}),
+      ...((managed || purchasedHttp()) && explicitKey() ? { key_id: explicitKey() } : {}),
     };
+    if (purchasedHttp()) {
+      if (transferInput?.value) body.max_transfer_mb = transferInput.valueAsNumber;
+      if (creditCapInput?.value) body.max_credits = creditCapInput.valueAsNumber;
+    }
     if (input.execution === 'browser') {
       if (screenshotInput?.checked) body.screenshot = true;
       if (waitInput && !waitInput.disabled && waitInput.value !== '') body.wait_ms = waitInput.valueAsNumber;
@@ -586,7 +743,7 @@ async function initWorkspace(root: HTMLElement) {
     const pending = q<HTMLSelectElement>('[data-pending-operation]'); if (pending) pending.disabled = sending || !ready;
     const quote = preparedRequest?.quote;
     const credits = quote?.credits;
-    const estimate = typeof credits === 'number'
+    const estimate = purchasedHttp() ? 'This request uses purchased HTTP credits.' : typeof credits === 'number'
       ? `Reserves up to ${number(credits)} ${credits === 1 ? 'credit' : 'credits'}${quote?.max_estimated_micro_usd != null && quote.max_estimated_micro_usd > 0 ? ' · cost ceiling $' + (quote.max_estimated_micro_usd / 1_000_000).toFixed(6) : ''}.`
       : 'Approved profile limits apply.';
     const quoteText = sending ? 'Waiting for the saved result…' : !draftOpen ? '' : checkingRequest ? 'Checking access, route, and cost…' :
@@ -661,6 +818,14 @@ async function initWorkspace(root: HTMLElement) {
     textAll('[data-response-note]', note + captureNote);
     if (result?.error) setError(result.error.message || result.error.code || 'The operation could not complete.', '[data-response-error]');
     else clearError('[data-response-error]');
+    const suggestion = transferSuggestion(result);
+    textAll('[data-response-transfer]', suggestion);
+    hide('[data-response-transfer]', !suggestion);
+    const paid = result?.usage?.accounting?.paid_credits;
+    hide('[data-response-accounting]', !paid);
+    textAll('[data-response-accounting]', paid
+      ? `Paid credits reserved: ${formatCredits(paid.reserved_credits)}. Paid credits used: ${formatCredits(paid.used_credits)}.${paid.state === 'held' ? ' The reservation remains held.' : ''}`
+      : '');
     const route = result?.routing;
     const duration = result?.usage?.duration_ms ?? result?.duration_ms;
     const bytes = result?.usage?.decoded_bytes ?? result?.usage?.encoded_bytes;
@@ -689,6 +854,8 @@ async function initWorkspace(root: HTMLElement) {
   }
   function newRequest() {
     draftOpen = true; currentKey = ''; submittedRequest = null;
+    if (transferInput) transferInput.value = '';
+    if (creditCapInput) creditCapInput.value = '';
     const codeOperation = q<HTMLSelectElement>('[data-code-operation]'); if (codeOperation) codeOperation.value = 'send';
     clearError('[data-fetch-error]'); renderResult(null); schedulePreparation(); requestUrl?.focus();
   }
@@ -761,6 +928,18 @@ async function initWorkspace(root: HTMLElement) {
     if (resetMatrix) { preparedCapabilities = null; renderRequestControls(); }
     schedulePreparation();
   }
+  walletSelect?.addEventListener('change', () => {
+    preparedCapabilities = null; preparedKeys = null; preferredCountry = ''; hasRouteChoice = false;
+    if (routeSelect) routeSelect.value = '';
+    if (countrySearch) countrySearch.value = '';
+    if (transferInput) transferInput.value = '';
+    if (creditCapInput) creditCapInput.value = '';
+    hide('[data-request-profile-field]', purchasedHttp() || Boolean(baseCapabilities()) || (q<HTMLSelectElement>('[data-request-profile]')?.options.length ?? 0) <= 1);
+    renderRequestControls(); changeDraft();
+  });
+  for (const input of [transferInput, creditCapInput]) input?.addEventListener('input', () => {
+    renderTransferQuote(); updateRunButton(); renderCode();
+  });
   q('[data-request-profile]')?.addEventListener('change', () => { renderRequestControls(); changeDraft(); });
   qa('input[name="mode"]').forEach(input => input.addEventListener('change', () => {
     if (countrySearch) countrySearch.value = '';
@@ -769,6 +948,10 @@ async function initWorkspace(root: HTMLElement) {
   routeSelect?.addEventListener('change', () => {
     hasRouteChoice = true;
     if (countrySearch) countrySearch.value = '';
+    if (purchasedHttp()) {
+      if (transferInput) transferInput.value = '';
+      if (creditCapInput) creditCapInput.value = '';
+    }
     renderCountries(); changeDraft();
   });
   countrySearch?.addEventListener('input', () => { renderCountries(); changeDraft(); });
@@ -828,14 +1011,25 @@ async function initWorkspace(root: HTMLElement) {
   menu?.addEventListener('click', () => { const open = menu.getAttribute('aria-expanded') !== 'true'; root.classList.toggle('pp-menu-open', open); menu.setAttribute('aria-expanded', String(open)); menu.setAttribute('aria-label', open ? 'Close workspace navigation' : 'Open workspace navigation'); });
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && root.classList.contains('pp-menu-open')) { closeMenu(); menu?.focus(); } });
   document.addEventListener('click', event => { if (root.classList.contains('pp-menu-open') && !(event.target as Element).closest('.pp-sidebar,[data-app-menu]')) closeMenu(); });
-  window.addEventListener('pagehide', () => { leavingPage = true; disposeGoogle?.(); disposeGithub?.(); concealSecret(); csrf = ''; email = ''; challenge = ''; clearPreparation(); currentResult = null; submittedRequest = null; retainedScreenshot = null; retainedHeaders = null; requestForm?.reset(); q('[data-browser-screenshot]')?.removeAttribute('src'); textAll('[data-response-output],[data-response-headers],[data-response-diagnostics],[data-request-detail],[data-generated-code]', ''); });
+  window.addEventListener('pagehide', () => {
+    leavingPage = true;
+    ++loadVersion;
+    stripeBilling?.reset();
+    disposeGoogle?.(); disposeGithub?.(); concealSecret();
+    csrf = ''; email = ''; challenge = '';
+    clearPreparation();
+    currentResult = null; submittedRequest = null; retainedScreenshot = null; retainedHeaders = null;
+    requestForm?.reset();
+    q('[data-browser-screenshot]')?.removeAttribute('src');
+    textAll('[data-response-output],[data-response-headers],[data-response-diagnostics],[data-request-detail],[data-generated-code]', '');
+  });
   window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
-  q('[data-refresh-workspace]')?.addEventListener('click', () => { if (!sending && !mutating) void start(); });
+  q('[data-refresh-workspace]')?.addEventListener('click', () => { if (!sending && !mutating && !signingOut) void start(); });
 
   async function start() {
     disposeGoogle?.(); disposeGoogle = undefined;
     disposeGithub?.(); disposeGithub = undefined;
-    ready = false; signedIn = false; csrf = ''; projects = []; project = null; concealSecret(); clearError();
+    loadVersion++; ready = false; signedIn = false; csrf = ''; projects = []; project = null; stripeBilling?.reset(); concealSecret(); clearError();
     qa('[data-logout],[data-session-account],[data-auth-account]').forEach(node => { node.hidden = true; }); setProjectOptions();
     textAll('[data-user-email]', 'Not signed in');
     if (!authPage) gate('Opening your workspace…', 'Checking the service and your session.');

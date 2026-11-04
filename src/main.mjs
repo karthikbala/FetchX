@@ -18,8 +18,10 @@ import {isPublicRenderRequest,publicRenderFailure,registerPublicRender} from './
 import {safeFailure} from './v2-diagnostics.mjs';
 import {publicConsoleRequest,registerConsole} from './console.mjs';
 import {ControlIdentity} from './control-identity.mjs';
-import {ControlCredits} from './control-credits.mjs';
+import {ControlCredits,TRIAL_CREDITS_PER_ACCOUNT,migrateAccountTrialCredits,reviewedCreditPolicy} from './control-credits.mjs';
+import {ControlPaidCredits} from './control-paid-credits.mjs';
 import {isControlRequest,registerControl} from './control.mjs';
+import {ControlStripe,isStripeWebhookRequest,registerStripeWebhook} from './control-stripe.mjs';
 
 // New self-service credentials have an explicit endpoint allowlist. Existing
 // provisioned project tokens retain their established v1/v2 contract.
@@ -31,16 +33,21 @@ export function controlKeyScope(method,url){
  if(method==='GET'&&(path==='/v2/operations'||/^\/v2\/render\/[^/]+$/.test(path)||/^\/v2\/(?:fetch|operations|artifacts)\/[^/]+(?:\/[^/]+)?$/.test(path)))return 'fetch:read';
  return null;
 }
-export function server(gateway){
+export function server(gateway,{stripeFetch,stripeAutoProcess=true}={}){
  if(gateway.config.controlPlane?.enabled===true){
   gateway.controlIdentity??=new ControlIdentity({store:gateway.store,config:gateway.config,mail:gateway.controlMail});
   gateway.controlCredits??=new ControlCredits({store:gateway.store,config:gateway.config});
  }
  const app=Fastify({logger:false,bodyLimit:24*1024*1024,requestTimeout:90000});
+ const paidCredits=gateway.controlPaidCredits??new ControlPaidCredits({store:gateway.store,config:gateway.config});
+ gateway.controlPaidCredits=paidCredits;
+ const stripe=new ControlStripe({store:gateway.store,config:gateway.config,paidCredits,
+  paidCreditReady:(project,options)=>app.v2.paidCreditReady(project,options),fetchStripe:stripeFetch});
+ app.decorate('stripe',stripe);
  app.addHook('onRequest',async(req,reply)=>{
   if(req.url==='/healthz')return;
   if(publicConsoleRequest(req))return;
-  if(isControlRequest(req))return;
+  if(isControlRequest(req)||isStripeWebhookRequest(req))return;
   const unauthorized=()=>{
    const error=new GatewayError('unauthorized',401);
    return reply.code(401).send(isPublicRenderRequest(req)?publicRenderFailure(error,{key:req.params?.key}):isPublicFetchRequest(req)?publicFetchFailure(error):{error:'unauthorized'});
@@ -89,7 +96,8 @@ export function server(gateway){
  registerPublicFetch(app);
  registerPublicRender(app);
  registerConsole(app);
- registerControl(app,gateway,{identity:gateway.controlIdentity,credits:gateway.controlCredits});
+ registerControl(app,gateway,{identity:gateway.controlIdentity,credits:gateway.controlCredits,paidCredits,stripe});
+ registerStripeWebhook(app,stripe,{autoProcess:stripeAutoProcess});
  return app;
 }
 if(process.argv[1]===fileURLToPath(import.meta.url)){
@@ -102,6 +110,11 @@ if(process.argv[1]===fileURLToPath(import.meta.url)){
  const recovery=await gateway.recoverCaptures();
  if(recovery.invalid)process.stderr.write('capture_recovery_invalid\n');
  const app=server(gateway);
+ if(config.controlPlane?.enabled===true&&config.controlPlane.creditPolicy?.reviewed===true&&
+  (config.controlPlane.creditPolicy.trialCredits??TRIAL_CREDITS_PER_ACCOUNT)===TRIAL_CREDITS_PER_ACCOUNT){
+  const trial=reviewedCreditPolicy(config);
+  await migrateAccountTrialCredits(store,{targetCredits:trial.trialCredits,templateHash:gateway.controlIdentity.template().hash});
+ }
  await app.jobs.recover();
  if(config.jobs?.enabled)app.jobs.start();
  const expiry=setInterval(()=>store.expire().catch(()=>{}),30000);expiry.unref();

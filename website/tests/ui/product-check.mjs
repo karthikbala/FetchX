@@ -25,7 +25,7 @@ const credits = () => ({ granted: 20, available: 20 - fetchPosts, settled: respo
 const session = () => ({ user, csrf_token: 'synthetic-csrf-ui-fixture', projects });
 const safeProject = name => ({ id: projects.length ? 'cp_33333333-3333-4333-8333-333333333333' : projectId, name, status: 'active', created_at: '2026-11-02T10:00:00Z' });
 let managedProjectId = '', managedKeys = [], renderPosts = 0, renderRecoveries = 0, prepareCalls = 0;
-let nextRenderState = 'completed', targetPriced = false, preparePause = null;
+let nextRenderState = 'completed', targetPriced = false, preparePause = null, recoveryPause = null;
 const managedEnvelopes = new Map();
 const testJpeg = await (async () => {
   const fixture = await context.newPage(); await fixture.setViewportSize({ width: 8, height: 8 });
@@ -130,6 +130,7 @@ await context.route('**/api/control/**', async route => {
     }
     if (resource.startsWith('/render/') && method === 'GET') {
       renderRecoveries++;
+      if (recoveryPause) await recoveryPause;
       const result = managedEnvelopes.get(decodeURIComponent(resource.slice(8)));
       return result ? send(result) : fail('operation_not_found', 'No retained render was found.', 404);
     }
@@ -395,11 +396,44 @@ try {
   await page.locator('[data-inspector-tab="code"]').click();
   await expect(page.locator('[data-response-error]')).toContainText('browser outcome is uncertain');
   const managedPosts = renderPosts;
+  const pendingRenderKey = calls.findLast(call => call.method === 'POST' && call.path.endsWith('/render')).body.idempotency_key;
+  const pagehide = () => page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+  const expectClearedCapture = async () => {
+    await expect(urlField).toHaveValue('');
+    await expect(page.locator('[data-response-output]')).toBeEmpty();
+    await expect(page.locator('[data-response-headers]')).toBeEmpty();
+    await expect(page.locator('[data-response-diagnostics]')).toBeEmpty();
+    await expect(page.locator('[data-generated-code]')).toBeEmpty();
+    assert.equal(await page.locator('[data-browser-screenshot]').getAttribute('src'), null);
+    assert.ok((await storage()).includes(pendingRenderKey));
+  };
+  await expect(page.locator('[data-browser-screenshot]')).toHaveAttribute('src', /^data:image\/jpeg;base64,/);
+  await expect(page.locator('[data-response-headers]')).toContainText('text/html');
+  await expect(page.locator('[data-generated-code]')).toContainText('private=do-not-store');
+  await pagehide();
+  await expectClearedCapture();
+  await page.reload();
+  await expect(page.locator('[data-response-state]')).toHaveText('Pending recovery');
+  const { promise, resolve } = Promise.withResolvers();
+  recoveryPause = promise;
+  try {
+    await page.locator('[data-recover-result]').click();
+    await expect.poll(() => renderRecoveries).toBe(1);
+    await pagehide();
+    const response = page.waitForResponse(response => response.url().endsWith('/render/' + pendingRenderKey));
+    resolve();
+    await (await response).finished();
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    await expectClearedCapture();
+  } finally {
+    resolve();
+    recoveryPause = null;
+  }
   await page.reload();
   await expect(page.locator('[data-response-state]')).toHaveText('Pending recovery');
   await page.locator('[data-recover-result]').click();
   await expect(page.locator('[data-response-state]')).toHaveText('Unknown');
-  assert.equal(renderRecoveries, 1); assert.equal(renderPosts, managedPosts);
+  assert.equal(renderRecoveries, 2); assert.equal(renderPosts, managedPosts);
   managedKeys.push(secondary);
   nextRenderState = 'completed';
   await page.reload();
@@ -420,7 +454,7 @@ try {
   assert.equal(nativeCall.body.screenshot, undefined);
   const managedStorage = await storage();
   for (const value of [target, primary.id, secondary.id, 'Managed source fixture', 'en-US', testJpeg]) assert.ok(!managedStorage.includes(value));
-  checks.push('Prepared public URL, direct location semantics, searched US proxy, one/multiple/zero eligible keys, Browser artifacts and recovery, HTTP headers and selected-key attribution without storing source or key data');
+  checks.push('Prepared public URL, direct location semantics, searched US proxy, one/multiple/zero eligible keys, Browser artifacts and pagehide cleanup with GET-only recovery, HTTP headers and selected-key attribution without storing source or key data');
   // An origin-specific rate can be invisible in the project matrix. Resolve the
   // URL first without silently selecting an unavailable route or proxy location.
   targetPriced = true; managedKeys = [primary];
