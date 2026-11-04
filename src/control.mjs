@@ -1,5 +1,6 @@
 import {createHmac,createHash,timingSafeEqual} from 'node:crypto';
 import {GatewayError,fail} from './policy.mjs';
+import {TRIAL_CREDITS_PER_ACCOUNT,reviewedCreditPolicy} from './control-credits.mjs';
 import {PublicFetchGateway,publicFetchFailure} from './v2-public-fetch.mjs';
 import {googleConfiguration} from './control-google.mjs';
 import {githubConfiguration} from './control-github.mjs';
@@ -58,6 +59,14 @@ function message(code){
  if(code==='unauthorized'||code==='session_invalid')return 'Sign in to continue.';
  if(code==='bridge_rejected'||code==='origin_rejected'||code==='csrf_rejected')return 'This request could not be authorized.';
  if(code==='control_disabled'||code==='control_configuration_invalid')return 'Account access is currently unavailable.';
+ if(code==='stripe_checkout_disabled')return 'Checkout is unavailable for this project.';
+ if(code==='stripe_checkout_already_open')return 'This project already has an open checkout.';
+ if(code==='stripe_checkout_unconfirmed'||code==='stripe_provider_unconfirmed')return 'Stripe could not confirm the request. Recover it with the original request key.';
+ if(code==='stripe_checkout_reconciliation_required')return 'The saved Stripe request needs operator reconciliation.';
+ if(code==='stripe_checkout_conflict')return 'Use the original plan and request key to recover this checkout.';
+ if(code==='paid_credit_route_unavailable')return 'Paid credits are unavailable until this project has a ready public HTTP route.';
+ if(code==='paid_credit_capacity_unavailable')return 'This credit pack is unavailable at current capacity.';
+ if(code==='paid_credit_payment_hold')return 'Paid credits are on hold pending payment review.';
  if(/rate|limit/.test(code))return 'This request exceeds an account limit. Try again later.';
  if(/not_found|forbidden|membership/.test(code))return 'This resource is unavailable for this account.';
  if(/code|challenge/.test(code))return 'The verification code could not be accepted. Request a new code if needed.';
@@ -75,13 +84,25 @@ function input(req,keys){if(!/^application\/json(?:\s*;|$)/i.test(req.headers['c
 function query(req,keys=[]){if(!exact(req.query??{},keys))fail('request_invalid');}
 const pathId=(value,re)=>{if(typeof value!=='string'||!re.test(value))fail('identifier_invalid');return value;};
 function routes(config){return ['direct','datacenter'].filter(r=>Object.hasOwn(config.creditPolicy?.weights??{},r));}
+function trialTerms(v2,project,config){
+ if(config.creditPolicy?.reviewed!==true||(config.creditPolicy.trialCredits??TRIAL_CREDITS_PER_ACCOUNT)!==TRIAL_CREDITS_PER_ACCOUNT)return null;
+ const {trialCredits}=reviewedCreditPolicy({controlPlane:config});
+ return {trial_target:trialCredits,grant_scope:'account',grant_frequency:'once',
+  eligible_routes:routes(config),max_daily_operations:v2.entitlement(project).max_daily_operations};
+}
 async function capabilities(v2,project,config){
  const value=await v2.capabilities(project),allowed=routes(config);
- return {...value,native_http:true,render:false,routes:allowed,transports:{...value.transports,http:true,browser:false},proxy_classes:{direct:allowed.includes('direct'),datacenter:allowed.includes('datacenter'),residential:false},features:{...value.features,browser_network_probe:false},browser_probe:{available:false,reason:'self_service_http_only'}};
+ for(const cls of ['datacenter','residential']){
+  if(value.paid_http?.proxy_classes?.[cls]===true&&value.proxy_classes?.[cls]===true&&!allowed.includes(cls))allowed.push(cls);
+ }
+ return {...value,native_http:true,render:false,routes:allowed,transports:{...value.transports,http:true,browser:false},
+  proxy_classes:{direct:allowed.includes('direct'),datacenter:allowed.includes('datacenter'),residential:allowed.includes('residential')},
+  features:{...value.features,browser_network_probe:false},browser_probe:{available:false,reason:'self_service_http_only'}};
 }
-async function profiles(v2,project,config){
- const allowed=routes(config),value=await v2.profiles(project);
- return value.access_profiles.map(({browser_probe,...p})=>({...p,proxy_classes:p.proxy_classes.filter(c=>allowed.includes(c)),route_reservations:p.route_reservations?.filter(r=>allowed.includes(r.class)),...(browser_probe?{browser_probe:{enabled:false}}:{})}));
+async function profiles(v2,project,allowed){
+ const value=await v2.profiles(project);
+ return value.access_profiles.map(({browser_probe,...p})=>({...p,proxy_classes:p.proxy_classes.filter(c=>allowed.includes(c)),
+  route_reservations:p.route_reservations?.filter(r=>allowed.includes(r.class)),...(browser_probe?{browser_probe:{enabled:false}}:{})}));
 }
 function recovery(value,project,{key,id}={}){
  if(!value?.retry)return value;
@@ -96,17 +117,19 @@ async function history(v2,project,raw){
   access_profile:pick(r.access_profile,['id','version']),routing:pick(r.routing,['class','country','provider']),
   ...(r.request_credits?{request_credits:pick(r.request_credits,['credits','state','key_id','policy_version','unit'])}:{})})),limit,scope:'v2_project_recent'};
 }
-async function usage(v2,credits,project){
+async function usage(v2,credits,project,config){
  const gateway=await v2.usage(project),account=await credits.usage(project);
  const row=(await v2.store.pool.query(`SELECT count(*)::int AS completed_operations,
   avg(EXTRACT(EPOCH FROM (finished_at-created_at))*1000)::float8 AS mean,
   percentile_cont(0.5) WITHIN GROUP(ORDER BY EXTRACT(EPOCH FROM (finished_at-created_at))*1000)::float8 AS p50,
   percentile_cont(0.95) WITHIN GROUP(ORDER BY EXTRACT(EPOCH FROM (finished_at-created_at))*1000)::float8 AS p95
   FROM v2_operations WHERE project=$1 AND finished_at IS NOT NULL`,[project])).rows[0];
- return {gateway:{...gateway,latency_ms:row??{completed_operations:0,mean:null,p50:null,p95:null}},credits:account};
+ const trial=trialTerms(v2,project,config);
+ return {gateway:{...gateway,latency_ms:row??{completed_operations:0,mean:null,p50:null,p95:null}},credits:account,
+  ...(gateway.paid_credits?{paid_credits:gateway.paid_credits}:{}),...(trial?{trial}:{})};
 }
 
-export function registerControl(app,gateway,{identity=gateway.controlIdentity,credits=gateway.controlCredits??app.v2?.controlCredits}={}){
+export function registerControl(app,gateway,{identity=gateway.controlIdentity,credits=gateway.controlCredits??app.v2?.controlCredits,paidCredits,stripe}={}){
  const config=gateway.config.controlPlane??{},v2=app.v2,fetch=app.publicFetch??new PublicFetchGateway(v2);
  app.register(async control=>{
   control.setErrorHandler((error,req,reply)=>{const result=controlFailure(error);reply.code(result.status).send(result.body);});
@@ -183,21 +206,40 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,cr
   route('POST','/auth/logout',async(req,reply)=>{query(req);input(req,[]);const auth=await authenticated(req);await identity.revokeSession(auth.token);setCookie(reply,null,config);return {logged_out:true};});
   route('GET','/projects',async req=>{query(req);const auth=await authenticated(req);return {projects:(await identity.projects(auth.user.id)).map(safeProject)};});
   route('POST','/projects',async req=>{query(req);const body=input(req,['name']),auth=await authenticated(req);return {project:safeProject(await identity.createProject(auth.user.id,body))};});
-  route('GET','/projects/:id',async req=>{query(req);const auth=await member(req);return {project:safeProject(auth.project),capabilities:await capabilities(v2,auth.id,config),access_profiles:await profiles(v2,auth.id,config)};});
+  route('GET','/projects/:id',async req=>{
+   query(req);const auth=await member(req),available=await capabilities(v2,auth.id,config);
+   return {project:safeProject(auth.project),capabilities:available,access_profiles:await profiles(v2,auth.id,available.routes)};
+  });
   route('GET','/projects/:id/keys',async req=>{query(req);const auth=await member(req);return {keys:(await identity.keys(auth.user.id,auth.id)).map(safeKey)};});
   route('POST','/projects/:id/keys',async req=>{query(req);const body=input(req,['name','scopes']),auth=await member(req),result=await identity.createKey(auth.user.id,auth.id,body);return {key:safeKey(result),token:result.token};});
   route('POST','/projects/:id/keys/:key/rotate',async req=>{query(req);input(req,[]);const auth=await member(req),result=await identity.rotateKey(auth.user.id,auth.id,pathId(req.params.key,UUID));return {key:safeKey(result),token:result.token};});
   route('DELETE','/projects/:id/keys/:key',async req=>{query(req);if(req.body!==undefined)input(req,[]);const auth=await member(req);await identity.revokeKey(auth.user.id,auth.id,pathId(req.params.key,UUID));return {revoked:true};});
   route('POST','/projects/:id/fetch',async(req,reply)=>{
    query(req);const auth=await member(req);
-   try{input(req,['idempotency_key','access_profile','url','proxy','session_id','method','headers','body_base64','max_estimated_micro_usd','retry','render','browser','javascript','js_render','wait_for','waitFor','screenshot','screenshots','formats','actions','script','selectors','extract','transport']);return recovery(await fetch.fetch(auth.id,req.body,{keyId:'console'}),auth.id,{key:req.body.idempotency_key});}
+   try{input(req,['idempotency_key','access_profile','url','proxy','session_id','method','headers','body_base64','max_estimated_micro_usd','max_transfer_mb','max_credits','retry','render','browser','javascript','js_render','wait_for','waitFor','screenshot','screenshots','formats','actions','script','selectors','extract','transport']);return recovery(await fetch.fetch(auth.id,req.body,{keyId:'console'}),auth.id,{key:req.body.idempotency_key});}
    catch(error){const value=publicFetchFailure(error,{key:req.body?.idempotency_key});return reply.code(value.gateway_http_status).send(recovery(value,auth.id,{key:value.idempotency_key}));}
   });
   route('GET','/projects/:id/fetch/:key',async(req,reply)=>{query(req);const auth=await member(req);try{return recovery(await fetch.lookup(auth.id,req.params.key),auth.id,{key:req.params.key});}catch(error){const value=publicFetchFailure(error,{key:req.params.key});return reply.code(value.gateway_http_status).send(recovery(value,auth.id,{key:value.idempotency_key}));}});
   route('GET','/projects/:id/requests',async req=>{const auth=await member(req);return history(v2,auth.id,req.query??{});});
   route('GET','/projects/:id/requests/:operationId',async(req,reply)=>{query(req);const auth=await member(req),id=pathId(req.params.operationId,UUID);try{return recovery(await fetch.lookupOperation(auth.id,id),auth.id,{id});}catch(error){const value=publicFetchFailure(error);return reply.code(value.gateway_http_status).send(recovery(value,auth.id,{id}));}});
-  route('GET','/projects/:id/usage',async req=>{query(req);const auth=await member(req);return usage(v2,credits,auth.id);});
-  route('GET','/projects/:id/billing',async req=>{query(req);const auth=await member(req),account=await credits.usage(auth.id);return {status:Number(account.available??account.available_credits??0)>0?'trial':'approval_required',credits:account,commercial_enabled:false};});
+  route('GET','/projects/:id/usage',async req=>{query(req);const auth=await member(req);return usage(v2,credits,auth.id,config);});
+  route('GET','/projects/:id/billing',async req=>{
+   query(req);const auth=await member(req);
+   const [account,payment,paid]=await Promise.all([credits.usage(auth.id),stripe?.billing(auth.id),paidCredits?.usage(auth.id)]);
+   const trial=trialTerms(v2,auth.id,config);
+   return {status:Number(account.available??account.available_credits??0)>0?'trial':'approval_required',credits:account,
+    commercial_enabled:payment?.mode==='live'&&(payment.can_checkout||payment.can_resume_checkout===true||payment.purchases.length>0),...(payment?{stripe:payment}:{}),
+    ...(paid&&(payment||paid.granted>0||paid.payment_hold)?{paid_credits:paid}:{}),...(trial?{trial}:{})};
+  });
+  route('POST','/projects/:id/billing/stripe/checkout',async req=>{
+   query(req);const auth=await member(req),body=input(req,['plan_id','idempotency_key']);
+   if(!stripe)fail('stripe_checkout_disabled',404);
+   return stripe.checkout({project:auth.id,planId:body.plan_id,key:body.idempotency_key,origin:req.headers.origin});
+  });
+  route('GET','/projects/:id/billing/stripe/checkout/:key',async req=>{
+   query(req);const auth=await member(req);if(!stripe)fail('stripe_checkout_disabled',404);
+   return stripe.status(auth.id,req.params.key);
+  });
   control.all('/*',async()=>fail('not_found',404));
  },{prefix:'/control'});
  return app;

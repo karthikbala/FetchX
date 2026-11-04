@@ -9,6 +9,8 @@ import {initRouteHealth} from './route-health.mjs';
 import {initV2,recoverV2} from './v2.mjs';
 import {initControlIdentity} from './control-identity.mjs';
 import {initControlCredits} from './control-credits.mjs';
+import {initControlStripe} from './control-stripe.mjs';
+import {initControlPaidCredits} from './control-paid-credits.mjs';
 export class Store {
  constructor(url){this.url=url;this.pool=new pg.Pool({connectionString:url,max:8});}
  async acquireRunnerLock(onLost){
@@ -43,7 +45,7 @@ export class Store {
  CREATE INDEX IF NOT EXISTS attempts_held_operation ON attempts(operation) WHERE state='unknown' OR error IN ('cost_overrun','provider_account_rejected','sensitive_provider_response');
  `);
  await initCaptcha(this.pool);await initJobs(this.pool);await initResidential(this.pool);await initAdmission(this.pool);await initDiagnostics(this.pool);await initRouteHealth(this.pool);await initV2(this.pool);
- await initControlIdentity(this.pool);await initControlCredits(this.pool);
+ await initControlIdentity(this.pool);await initControlCredits(this.pool);await initControlPaidCredits(this.pool);await initControlStripe(this.pool);
  }
  async recover(){// Never resubmit sent work. Reserved work has provably not reached transport.
   await this.tx(async c=>{

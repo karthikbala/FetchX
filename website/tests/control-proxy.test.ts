@@ -37,6 +37,24 @@ describe('same-origin control bridge',()=>{
   expect((await send(`/projects/${project}/requests?limit=51`)).status).toBe(400);expect((await send(`/projects/${project}/requests?limit=2&limit=3`)).status).toBe(400);expect(calls).toHaveLength(0);
   expect((await send(`/projects/${project}/requests?limit=50`)).status).toBe(200);expect(calls[0].url).toContain('?limit=50');
  });
+ it('allows only the project-scoped Stripe checkout methods',async()=>{
+  const stripe=`/projects/${project}/billing/stripe`,key='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const checkout=JSON.stringify({plan_id:'developer',idempotency_key:key});
+  for(const path of ['/billing/stripe/checkout','/webhooks/stripe',`${stripe}/refund`,`${stripe}/checkout/${key.toUpperCase()}`,`${stripe}/checkout/${key}/extra`,`${stripe}/checkout/${key}%2Fextra`])expect((await send(path)).status).toBe(404);
+  expect((await send(`${stripe}/checkout`)).status).toBe(405);
+  expect((await send(`${stripe}/portal`,{method:'POST',body:checkout})).status).toBe(404);
+  expect((await send(`${stripe}/checkout/${key}`,{method:'POST',body:checkout})).status).toBe(405);
+  expect((await send(`${stripe}/checkout/${key}?extra=1`)).status).toBe(400);
+  expect((await send(`${stripe}/checkout`,{method:'POST',body:checkout,headers:{Origin:'https://other.example'}})).status).toBe(403);
+  expect((await send(`${stripe}/checkout`,{method:'POST',body:checkout,headers:{'X-CSRF-Token':'invalid'}})).status).toBe(403);
+  expect(calls).toHaveLength(0);
+  expect((await send(`${stripe}/checkout`,{method:'POST',body:checkout})).status).toBe(200);
+  expect((await send(`${stripe}/checkout/${key}`)).status).toBe(200);
+  expect(calls.map(({url,init})=>[url,init.method,init.body])).toEqual([
+   [`https://gateway.example/control${stripe}/checkout`,'POST',checkout],
+   [`https://gateway.example/control${stripe}/checkout/${key}`,'GET',undefined],
+  ]);
+ });
  it('returns an explicit disabled state with no configured upstream',async()=>{
   const missing={...env,FETCHX_CONTROL_URL:undefined};
   const status=await send('/status',{env:missing});expect(status.status).toBe(503);expect(await status.json()).toMatchObject({enabled:false,mail_configured:false});expect((await send('/session',{env:missing})).status).toBe(503);expect(calls).toHaveLength(0);
