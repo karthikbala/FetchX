@@ -530,7 +530,8 @@ async function initWorkspace(root: HTMLElement) {
       input.disabled = purchasedHttp() ? input.value !== 'http' || !profile
         : matrix ? capability?.available !== true : input.value === 'browser' || capabilities.native_http === false;
       const description = input.disabled
-        ? matrix ? explainAvailability(capability?.reason) : input.value === 'browser' ? 'Unavailable on this service' : 'HTTP service is unavailable'
+        ? purchasedHttp() && input.value === 'browser' ? 'Purchased credits support HTTP only'
+          : matrix ? explainAvailability(capability?.reason) : input.value === 'browser' ? 'Unavailable on this service' : 'HTTP service is unavailable'
         : input.value === 'browser' ? 'Rendered page' : 'Source response';
       textAll(`[data-execution-help="${input.value}"]`, description);
     }
