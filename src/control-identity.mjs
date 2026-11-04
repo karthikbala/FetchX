@@ -2,6 +2,7 @@ import {createHash,createHmac,randomBytes,randomInt,randomUUID,timingSafeEqual} 
 import {fail} from './policy.mjs';
 import {createControlMail} from './control-mail.mjs';
 import {grantInitialCredits} from './control-credits.mjs';
+import {initPlayground} from './control-playground.mjs';
 import {createControlGoogle,googleConfiguration} from './control-google.mjs';
 import {createControlGithub,githubConfiguration,githubSettings,githubAuthorizationUrl} from './control-github.mjs';
 
@@ -48,7 +49,9 @@ export async function initControlIdentity(pool){await pool.query(`
  CREATE INDEX IF NOT EXISTS control_github_challenges_expiry ON control_github_challenges(expires_at);
  CREATE INDEX IF NOT EXISTS control_github_challenges_binding ON control_github_challenges(binding_hash);
  CREATE TABLE IF NOT EXISTS control_github_identities(subject text PRIMARY KEY CHECK(subject ~ '^[1-9][0-9]{0,15}$'),user_id uuid NOT NULL UNIQUE REFERENCES control_users(id),created_at timestamptz NOT NULL DEFAULT now());
- `);}
+ `);
+ await initPlayground(pool);
+}
 
 export class ControlIdentity{
  constructor({store,config,mail,google,github}){Object.assign(this,{store,config});this.mail=mail??createControlMail(config);this.google=google??createControlGoogle();this.github=github??createControlGithub();}

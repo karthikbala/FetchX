@@ -12,9 +12,9 @@ const ref=v=>exact(v,['id','version'])&&identifier(v.id)&&Number.isSafeInteger(v
 const instant=v=>typeof v==='string'&&/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/.test(v)&&Number.isFinite(Date.parse(v))&&[new Date(Date.parse(v)).toISOString(),new Date(Date.parse(v)).toISOString().replace('.000Z','Z')].includes(v);
 const fields=['schema_version','id','reviewed','provider','pool_id','country','project','access_profiles','transport','cost_scope','fixed_subscription_allocation_micro_usd','valid_from','expires_at','provenance','pool_fingerprint_sha256'];
 function validGrant(g){
- return exact(g,fields)&&g.schema_version===1&&identifier(g.id)&&g.reviewed===true&&g.provider==='oxylabs'&&identifier(g.pool_id)&&typeof g.country==='string'&&/^[A-Z]{2}$/.test(g.country)&&identifier(g.project)&&
+ return exact(g,fields)&&(g.schema_version===1&&g.transport==='http'||g.schema_version===2&&['http','browser'].includes(g.transport))&&identifier(g.id)&&g.reviewed===true&&g.provider==='oxylabs'&&identifier(g.pool_id)&&typeof g.country==='string'&&/^[A-Z]{2}$/.test(g.country)&&identifier(g.project)&&
   Array.isArray(g.access_profiles)&&g.access_profiles.length>0&&g.access_profiles.length<=100&&g.access_profiles.every(ref)&&new Set(g.access_profiles.map(r=>`${r.id}@${r.version}`)).size===g.access_profiles.length&&
-  g.transport==='http'&&g.cost_scope==='incremental_traffic_only'&&g.fixed_subscription_allocation_micro_usd===null&&instant(g.valid_from)&&instant(g.expires_at)&&Date.parse(g.expires_at)>Date.parse(g.valid_from)&&
+  g.cost_scope==='incremental_traffic_only'&&g.fixed_subscription_allocation_micro_usd===null&&instant(g.valid_from)&&instant(g.expires_at)&&Date.parse(g.expires_at)>Date.parse(g.valid_from)&&
   exact(g.provenance,['id','sha256','reviewed_at'])&&identifier(g.provenance.id)&&digest(g.provenance.sha256)&&instant(g.provenance.reviewed_at)&&Date.parse(g.provenance.reviewed_at)<=Date.parse(g.valid_from)&&Date.parse(g.valid_from)-Date.parse(g.provenance.reviewed_at)<=MAX_VALIDITY_MS&&Date.parse(g.expires_at)-Date.parse(g.valid_from)<=MAX_VALIDITY_MS&&digest(g.pool_fingerprint_sha256);
 }
 
@@ -35,7 +35,8 @@ const unavailable=reason=>({estimated_micro_usd:null,pricing:{status:'unavailabl
 const poolPolicyFields=['schema_version','id','reviewed','provider','pool_id','countries','cost_scope','fixed_subscription_allocation_micro_usd','provenance','pool_fingerprint_sha256'];
 const countries=v=>Array.isArray(v)&&v.length>0&&v.length<=250&&v.every(c=>typeof c==='string'&&/^[A-Z]{2}$/.test(c))&&new Set(v).size===v.length;
 function validPoolPolicy(p){
- return exact(p,poolPolicyFields)&&p.schema_version===1&&identifier(p.id)&&p.reviewed===true&&p.provider==='oxylabs'&&identifier(p.pool_id)&&countries(p.countries)&&p.cost_scope==='incremental_traffic_only'&&p.fixed_subscription_allocation_micro_usd===null&&
+ const scope=p?.schema_version===1?exact(p,poolPolicyFields):p?.schema_version===2&&exact(p,[...poolPolicyFields,'transports'])&&Array.isArray(p.transports)&&p.transports.length>0&&new Set(p.transports).size===p.transports.length&&p.transports.every(t=>['http','browser'].includes(t));
+ return scope&&identifier(p.id)&&p.reviewed===true&&p.provider==='oxylabs'&&identifier(p.pool_id)&&countries(p.countries)&&p.cost_scope==='incremental_traffic_only'&&p.fixed_subscription_allocation_micro_usd===null&&
   exact(p.provenance,['id','sha256','reviewed_at'])&&identifier(p.provenance.id)&&digest(p.provenance.sha256)&&instant(p.provenance.reviewed_at)&&digest(p.pool_fingerprint_sha256);
 }
 
@@ -58,9 +59,8 @@ export function fixedFeePoolFingerprint(proxies,assignedCountries){
 function estimateFixedFeePool({config,route,transport,now_ms,duration_ms}){
  const p=config.datacenterFixedFeePool;
  if(!validPoolPolicy(p)||!Number.isSafeInteger(now_ms)||!Number.isSafeInteger(duration_ms)||duration_ms<0||!Number.isSafeInteger(now_ms+duration_ms)||Date.parse(p.provenance.reviewed_at)>now_ms)return unavailable('fixed_fee_pool_policy_invalid');
- // Production v2 browser execution is currently unqualified. Do not inherit an
- // HTTP price as a browser grant or weaken that independent capability gate.
- if(transport!=='http'||!p.countries.includes(route.country))return unavailable('fixed_fee_pool_scope_mismatch');
+ const transports=p.schema_version===1?['http']:p.transports;
+ if(!transports.includes(transport)||!p.countries.includes(route.country))return unavailable('fixed_fee_pool_scope_mismatch');
  const fingerprint=fixedFeePoolFingerprint(config.proxies,p.countries),members=Array.isArray(config.proxies)?config.proxies.filter(m=>p.countries.includes(m?.country)):[];
  if(!fingerprint||fingerprint!==p.pool_fingerprint_sha256||members.some(m=>m.provider!==p.provider||m.pool_id!==p.pool_id)||config.proxies.some(m=>m?.pool_id===p.pool_id&&!p.countries.includes(m.country))||route.proxy_id!==undefined&&!members.some(m=>m.id===route.proxy_id&&m.country===route.country))return unavailable('pool_binding_mismatch');
  return {estimated_micro_usd:0,pricing:{status:'valid',basis:'operator_fixed_fee_pool',provider:p.provider,cost_scope:p.cost_scope,fixed_subscription_allocation_micro_usd:null,invoice_micro_usd:null,customer_traffic_charge_micro_usd:0,policy_id:p.id},dispatch_deadline_ms:now_ms+duration_ms,binding:{pool_fingerprint_sha256:fingerprint,policy_id:p.id,policy_sha256:sha(JSON.stringify(ordered(p))),provenance:{...p.provenance}}};

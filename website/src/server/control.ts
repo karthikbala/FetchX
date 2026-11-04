@@ -32,8 +32,8 @@ function allowedMethods(path:string):string[]|null {
  if(new RegExp(`^/projects/${PROJECT}/keys$`).test(path))return ['GET','POST'];
  if(new RegExp(`^/projects/${PROJECT}/keys/${UUID}/rotate$`).test(path))return ['POST'];
  if(new RegExp(`^/projects/${PROJECT}/keys/${UUID}$`).test(path))return ['DELETE'];
- if(new RegExp(`^/projects/${PROJECT}/fetch$`).test(path))return ['POST'];
- if(new RegExp(`^/projects/${PROJECT}/fetch/[A-Za-z0-9_.:-]{1,160}$`).test(path))return ['GET'];
+ if(new RegExp(`^/projects/${PROJECT}/(?:fetch|render|playground/prepare)$`).test(path))return ['POST'];
+ if(new RegExp(`^/projects/${PROJECT}/(?:fetch|render)/(?:[A-Za-z0-9_.:-]|%3[Aa]){1,160}$`).test(path))return ['GET'];
  if(new RegExp(`^/projects/${PROJECT}/(?:requests|usage|billing)$`).test(path))return ['GET'];
  if(new RegExp(`^/projects/${PROJECT}/requests/${UUID}$`).test(path))return ['GET'];
  return null;

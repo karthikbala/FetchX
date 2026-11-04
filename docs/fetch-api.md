@@ -5,8 +5,9 @@ country using an approved access profile. It is a native HTTP facade over the
 existing v2 session/operation APIs. It follows a one-call request/response model;
 it is not a drop-in Firecrawl or Scrape.do protocol implementation.
 
-Every endpoint requires `Authorization: Bearer <project-token>`. Project tokens,
-profiles, sessions, idempotency keys and artifacts remain isolated by project.
+Every endpoint requires a project credential in `Authorization: Bearer <token>`.
+Managed `fxk_` keys need `fetch:write` for submission and `fetch:read` for recovery.
+Profiles, sessions, idempotency keys and artifacts remain isolated by project.
 Use authenticated TLS or a private listener.
 
 ## Request
@@ -58,9 +59,9 @@ same fixed-fee datacenter pool before session state is established.
 This endpoint supports HTTP only. `render`, `browser`, `formats`, browser actions,
 scripts, extraction options and other unsupported browser/render parameters return
 `capability_unsupported` before dispatch. Unknown parameters are rejected.
-Reviewed v1 rendered recipes remain separate. V2 browser probes remain disabled;
-this endpoint does not enable them. The intended new Camoufox engine is currently
-blocked from service execution by a [runtime qualification gate](browser-engines.md).
+Use the [v2 Render API](render-api.md) for a one-shot browser navigation when
+your gateway, project and access profile permit it. Reviewed v1 browser recipes
+use the [v1 workflow API](api.md).
 
 ## Response and status
 
@@ -144,6 +145,11 @@ they never claim that the source was untouched. Errors contain stable codes,
 reviewed messages and a stage, not raw exception strings. `diagnostics` preserves
 the native safe diagnostics, including failure stage, reviewed cause code,
 `request_dispatched` and DNS resolver provenance when retained.
+
+`data.headers` contains allowlisted response metadata from the final retained
+source response, such as content type, cache directives, and `Retry-After`.
+Cookies, authorization, proxy and private headers are excluded from this
+projection. Use [the render endpoint](render-api.md) for generated browser HTML.
 
 For newly retained non-200 proxy CONNECT failures, safe diagnostics also preserve
 the remote `provider_status`, CONNECT `failure_code` and explicit proxy dispatch

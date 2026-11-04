@@ -14,6 +14,7 @@ import {gatewayStatus} from './status.mjs';
 import {operationDiagnostics,recordOutcome} from './diagnostics.mjs';
 import {registerV2} from './v2.mjs';
 import {isPublicFetchRequest,publicFetchFailure,registerPublicFetch} from './v2-public-fetch.mjs';
+import {isPublicRenderRequest,publicRenderFailure,registerPublicRender} from './v2-public-render.mjs';
 import {safeFailure} from './v2-diagnostics.mjs';
 import {publicConsoleRequest,registerConsole} from './console.mjs';
 import {ControlIdentity} from './control-identity.mjs';
@@ -26,8 +27,8 @@ export function controlKeyScope(method,url){
  const path=url.split('?')[0];
  if(method==='GET'&&['/v2/capabilities','/v2/access-profiles','/v2/recipes'].includes(path))return 'profiles:read';
  if(method==='GET'&&path==='/v2/usage')return 'usage:read';
- if(method==='POST'&&path==='/v2/fetch')return 'fetch:write';
- if(method==='GET'&&(path==='/v2/operations'||/^\/v2\/(?:fetch|operations|artifacts)\/[^/]+(?:\/[^/]+)?$/.test(path)))return 'fetch:read';
+ if(method==='POST'&&['/v2/fetch','/v2/render'].includes(path))return 'fetch:write';
+ if(method==='GET'&&(path==='/v2/operations'||/^\/v2\/render\/[^/]+$/.test(path)||/^\/v2\/(?:fetch|operations|artifacts)\/[^/]+(?:\/[^/]+)?$/.test(path)))return 'fetch:read';
  return null;
 }
 export function server(gateway){
@@ -40,21 +41,26 @@ export function server(gateway){
   if(req.url==='/healthz')return;
   if(publicConsoleRequest(req))return;
   if(isControlRequest(req))return;
+  const unauthorized=()=>{
+   const error=new GatewayError('unauthorized',401);
+   return reply.code(401).send(isPublicRenderRequest(req)?publicRenderFailure(error,{key:req.params?.key}):isPublicFetchRequest(req)?publicFetchFailure(error):{error:'unauthorized'});
+  };
   const token=/^Bearer (\S+)$/i.exec(req.headers.authorization??'')?.[1];
-  if(!token)return reply.code(401).send(isPublicFetchRequest(req)?publicFetchFailure(new GatewayError('unauthorized',401)):{error:'unauthorized'});
+  if(!token)return unauthorized();
   if(token.startsWith('fxk_')){
-   if(!gateway.controlIdentity)return reply.code(401).send(isPublicFetchRequest(req)?publicFetchFailure(new GatewayError('unauthorized',401)):{error:'unauthorized'});
+   if(!gateway.controlIdentity)return unauthorized();
    const principal=await gateway.controlIdentity.authenticateKey(token),scope=controlKeyScope(req.method,req.url);
    if(!scope||!principal.scopes.includes(scope))throw new GatewayError('api_key_scope_forbidden',403);
    req.project=principal.project;req.apiKeyId=principal.key_id;return;
   }
   const hash=Buffer.from(sha(token),'hex');
   for(const [id,p]of Object.entries(gateway.config.projects))if(typeof p.tokenHash==='string'&&/^[a-f0-9]{64}$/i.test(p.tokenHash)&&timingSafeEqual(hash,Buffer.from(p.tokenHash,'hex'))){req.project=id;return;}
-  reply.code(401).send(isPublicFetchRequest(req)?publicFetchFailure(new GatewayError('unauthorized',401)):{error:'unauthorized'});
+  return unauthorized();
  });
  app.setErrorHandler((error,req,reply)=>{
   const clientError=error.validation||error.statusCode===400||error.statusCode===413||error.statusCode===415;
   const status=error instanceof GatewayError?error.status:clientError?(error.statusCode??400):500;
+  if(isPublicRenderRequest(req))return reply.code(status).send(publicRenderFailure(error,{key:req.body?.idempotency_key??req.params?.key,status}));
   if(isPublicFetchRequest(req))return reply.code(status).send(publicFetchFailure(error,{key:req.body?.idempotency_key??req.params?.key,status}));
   reply.code(status).send({error:error instanceof GatewayError?error.code:clientError?'request_invalid':'internal_error',...(error instanceof GatewayError&&error.details?{details:error.details}:{}),...(req.url.startsWith('/v2/')?{diagnostics:safeFailure(error,'request_admission')}:{} )});
  });
@@ -81,6 +87,7 @@ export function server(gateway){
  app.post('/v1/operations/:id/outcome',route,req=>recordOutcome(gateway.store.pool,req.project,req.params.id,req.body));
  registerV2(app,gateway);
  registerPublicFetch(app);
+ registerPublicRender(app);
  registerConsole(app);
  registerControl(app,gateway,{identity:gateway.controlIdentity,credits:gateway.controlCredits});
  return app;

@@ -7,7 +7,7 @@ import {mkdtemp,rm,writeFile,chmod} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {browserProbePolicy,browserProbeRuntime,binarySha,BROWSER_PROBE_ARGS} from '../src/v2-browser-policy.mjs';
+import {browserProbePolicy,browserProbeRuntime,binarySha,BROWSER_PROBE_ARGS,BROWSER_PROBE_QUALIFICATION_KIND,browserProxyArg,browserProbeLaunchOptions} from '../src/v2-browser-policy.mjs';
 import {browserRelay} from '../src/v2-browser-relay.mjs';
 import {openPinnedTunnel} from '../src/v2-http.mjs';
 import {captureBrowserProbe} from '../src/v2-browser-capture.mjs';
@@ -25,9 +25,48 @@ test('browser probe policy/runtime fail closed without exact local build, free e
   const path=join(root,'synthetic-not-a-browser');await writeFile(path,'not executed');await chmod(path,0o700);const hash=await binarySha(path);
   const config={browser:{free:{executablePath:path,sha256:hash,version:'synthetic',entitlement:'unlicensed'}},v2:{browser_probe:{enabled:true,tier:'free'}}};assert.equal((await browserProbeRuntime(config)).available,false);
   config.v2.browser_probe.qualification={status:'accepted',kind:'pinned-relay-egress-v1',binary_sha256:hash,version:'synthetic',entitlement:'unlicensed',platform:process.platform,arch:process.arch,evidence:'sha256:'+'a'.repeat(64),expires_at:'2020-01-01'};assert.equal((await browserProbeRuntime(config)).available,false);
-  config.v2.browser_probe.qualification.expires_at='2099-01-01';config.browser.free.entitlement='trial';assert.equal((await browserProbeRuntime(config)).available,false);
-  config.browser.free.entitlement='unlicensed';assert.deepEqual(await browserProbeRuntime(config),{available:false,reason:'browser_probe_redirect_admission_unqualified'});
+  config.v2.browser_probe.qualification.expires_at='2099-01-01';
+  assert.deepEqual(await browserProbeRuntime(config),{available:false,reason:'browser_probe_runtime_unqualified'});
+  config.v2.browser_probe.qualification.kind=BROWSER_PROBE_QUALIFICATION_KIND;
+  config.browser.free.entitlement='trial';assert.equal((await browserProbeRuntime(config)).available,false);
+  config.browser.free.entitlement='paid';assert.equal((await browserProbeRuntime(config)).available,false);
+  config.browser.free.entitlement='unlicensed';
+  const ready=await browserProbeRuntime(config);
+  assert.equal(ready.available,true);assert.equal(ready.runtime.sha256,hash);assert.equal(ready.runtime.executablePath,path);
   await writeFile(path,'changed');assert.equal((await browserProbeRuntime(config)).reason,'browser_probe_build_mismatch');
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('explicit Chromium runtime binds the exact engine, executable and platform without requiring Cloak credentials',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'probe-chromium-runtime-'));
+ try{
+  const executablePath=join(root,'synthetic-chromium');
+  await writeFile(executablePath,'only a configuration fixture');await chmod(executablePath,0o700);
+  const sha256=await binarySha(executablePath),version='151.0.7922.34',runtime={executablePath,sha256,version};
+  const expires_at=new Date(Date.now()+60000).toISOString();
+  const qualification={status:'accepted',kind:BROWSER_PROBE_QUALIFICATION_KIND,engine:'chromium',binary_sha256:sha256,version,platform:process.platform,arch:process.arch,evidence:'sha256:'+'a'.repeat(64),expires_at};
+  const probe={enabled:true,engine:'chromium',runtime,qualification};
+  const config={v2:{browser_probe:probe}};
+  for(const patch of [{engine:undefined},{engine:'cloakbrowser'},{arch:'other'},{version:'151.0.7922.35'},{binary_sha256:'0'.repeat(64)},{expires_at:'2000-01-01T00:00:00Z'}]){
+   assert.deepEqual(await browserProbeRuntime({v2:{browser_probe:{...probe,qualification:{...qualification,...patch}}}}),{available:false,reason:'browser_probe_runtime_unqualified'});
+  }
+  assert.equal((await browserProbeRuntime({v2:{browser_probe:{...probe,runtime:undefined}}})).available,false);
+  assert.equal((await browserProbeRuntime({v2:{browser_probe:{...probe,tier:'free'}}})).available,false);
+  const ready=await browserProbeRuntime(config);
+  assert.deepEqual(ready,{available:true,runtime:{engine:'chromium',...runtime,expires_at}});
+  const args={relay:'http://127.0.0.1:30000',denyRelay:'http://127.0.0.1:30001',cacheDir:root,deadline:Date.now()+1000};
+  const options=await browserProbeLaunchOptions(ready.runtime,args);
+  assert.equal(options.executablePath,executablePath);
+  assert.equal(options.chromiumSandbox,true);
+  assert.equal(options.host,'127.0.0.1');
+  assert.equal(options.env.XDG_CONFIG_HOME,root);
+  assert.equal(options.env.XDG_CACHE_HOME,root);
+  assert.ok(options.args.includes(browserProxyArg(args.relay,args.denyRelay)));
+  assert.ok(options.args.includes('--disable-quic'));
+  assert.equal(options.args.some(arg=>arg.startsWith('--fingerprint')),false);
+  await assert.rejects(browserProbeLaunchOptions(ready.runtime,{...args,relay:'https://outside.example:443'}),{code:'browser_probe_runtime_unqualified'});
+  await writeFile(executablePath,'mutated');
+  assert.equal((await browserProbeRuntime(config)).reason,'browser_probe_build_mismatch');
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
@@ -92,9 +131,9 @@ test('browser relay marks delayed tunnel failures and asynchronous failed or uns
 test('actual local browser captures native requests/bodies separately from DOM and blocks methods, external/private traffic, sockets and popups',{skip:!process.env.BROWSER_TEST_EXECUTABLE},async()=>{
  const {chromium}=await import('playwright-core');let tripwireCalls=0;const tripwire=http.createServer((req,res)=>{tripwireCalls++;res.end('must not be reached');});tripwire.on('upgrade',(req,socket)=>{tripwireCalls++;socket.destroy();});await new Promise(r=>tripwire.listen(0,'127.0.0.1',r));
  const relay=await browserRelay({profile:{origins:[]},limits:{max_requests:4,max_network_bytes:65536},deadline:Date.now()+15000});
- const browser=await chromium.launch({executablePath:process.env.BROWSER_TEST_EXECUTABLE,headless:true,chromiumSandbox:true,proxy:{server:relay.url},args:[...BROWSER_PROBE_ARGS]});
+ const browser=await chromium.launch({executablePath:process.env.BROWSER_TEST_EXECUTABLE,headless:true,chromiumSandbox:true,ignoreDefaultArgs:['--disable-popup-blocking'],args:[...BROWSER_PROBE_ARGS,browserProxyArg(relay.url,relay.deny_url)]});
  try{
-  const artifacts=[],admitted=[];const html=`<!doctype html><div id="data">waiting</div><script>document.cookie='probe=one; Path=/; Secure; SameSite=Lax';fetch('/data').then(r=>r.json()).then(v=>document.querySelector('#data').textContent=v.value);fetch('/mutation',{method:'POST',body:'mutation Unsafe { write }'}).catch(()=>{});fetch('https://blocked.gov/data').catch(()=>{});fetch('http://127.0.0.1:${tripwire.address().port}/private').catch(()=>{});try{new WebSocket('ws://127.0.0.1:${tripwire.address().port}/socket')}catch{};window.open('https://blocked.gov/popup');navigator.serviceWorker.register('/sw.js').catch(()=>{});</script>`;
+  const artifacts=[],admitted=[];const html=`<!doctype html><link rel="icon" href="data:,"><div id="data">waiting</div><script>document.cookie='probe=one; Path=/; Secure; SameSite=Lax';fetch('/data').then(r=>r.json()).then(v=>document.querySelector('#data').textContent=v.value);fetch('/mutation',{method:'POST',body:'mutation Unsafe { write }'}).catch(()=>{});fetch('https://blocked.gov/data').catch(()=>{});fetch('http://127.0.0.1:${tripwire.address().port}/private').catch(()=>{});try{new WebSocket('ws://127.0.0.1:${tripwire.address().port}/socket')}catch{};window.open('https://blocked.gov/popup');navigator.serviceWorker.register('/sw.js').catch(()=>{});</script>`;
   const result=await captureBrowserProbe(browser,{url:'https://source.gov/',timeout_ms:8000,deadline:Date.now()+10000,cookies:[]},{max_requests:8,max_network_bytes:65536,max_decoded_bytes:65536,max_dom_bytes:65536,settle_ms:350},{
    admit:async request=>{assert.ok(['GET','HEAD'].includes(request.method));const u=new URL(request.url);if(u.origin!=='https://source.gov')throw Object.assign(new Error(),{code:'destination_rejected'});admitted.push(request);},
    dispatch:async(route,request)=>route.fulfill({status:200,contentType:request.url.endsWith('/data')?'application/json':'text/html',body:request.url.endsWith('/data')?'{"value":"native-data-arrived"}':html}),
@@ -106,7 +145,7 @@ test('actual local browser captures native requests/bodies separately from DOM a
  }finally{await browser.close();await relay.close();await new Promise(r=>tripwire.close(r));}
 });
 
-function makeArtifact(kind,url,body,request=null){return {kind,url,method:'GET',status:200,headers:{'content-type':kind==='rendered_dom'?'text/html':'application/json'},raw_headers:null,captured_at:new Date().toISOString(),content_encoding:kind==='rendered_dom'?null:'gzip',decoded_body_base64:body.toString('base64'),decoded_sha256:sha(body),decoded_bytes:body.length,encoded_body_base64:null,encoded_sha256:null,original_encoded_available:false,encoded_bytes:null,encoded_size_basis:null,tunnel_bytes:null,provider_status:null,decoding_error:null,...(kind==='rendered_dom'?{generated:true}:{request})};}
+function makeArtifact(kind,url,body,request=null){return {kind,url,method:'GET',status:200,headers:{'content-type':kind==='rendered_dom'?'text/html':kind==='browser_screenshot'?'image/jpeg':'application/json'},raw_headers:null,captured_at:new Date().toISOString(),content_encoding:kind==='rendered_dom'?null:'gzip',decoded_body_base64:body.toString('base64'),decoded_sha256:sha(body),decoded_bytes:body.length,encoded_body_base64:null,encoded_sha256:null,original_encoded_available:false,encoded_bytes:null,encoded_size_basis:null,tunnel_bytes:null,provider_status:null,decoding_error:null,...(kind==='browser_response'?{request,main_document:true}:{generated:true})};}
 
 test('browser probe API conserves admission/ledger, isolates artifacts, persists cookies, and never replays uncertain work',{skip:!process.env.TEST_DATABASE_URL},async()=>{
  assert.match(new URL(process.env.TEST_DATABASE_URL).pathname,/^\/gateway_test_[A-Za-z0-9_]+$/);
@@ -121,6 +160,7 @@ test('browser probe API conserves admission/ledger, isolates artifacts, persists
   if(mode==='unknown')throw new Error('private stack must not leak');
   if(mode==='methods')for(const method of ['POST','PUT','PATCH','DELETE'])await assert.rejects(hooks.admit({...request,method,body_base64:Buffer.from('mutation').toString('base64'),redirect_depth:0}),{code:'method_rejected'});
   await hooks.artifact(makeArtifact('browser_response',input.url,Buffer.from('{"native":true}'),request));const dom=makeArtifact('rendered_dom',input.url,Buffer.from('<html>generated</html>'));if(mode==='callback-failure')dom.decoded_sha256='0'.repeat(64);await hooks.artifact(dom);
+  if(input.screenshot)await hooks.artifact(makeArtifact('browser_screenshot',input.url,Buffer.from([0xff,0xd8,0xff,0xd9])));
   return {status:200,final_url:input.url,error:null,capture_complete:true,physical_requests:1,blocked_requests:0,blocked_reasons:{},encoded_bytes:null,decoded_bytes:15,dom_bytes:22,cookies:[{name:'sid',value:'persisted',domain:'source.gov',path:'/',secure:true,httpOnly:true,sameSite:'Lax',expires:-1}]};
  }});
  const app=server(gateway),headers={authorization:'Bearer key-a'};const post=async(url,payload,auth=headers)=>{const r=await app.inject({method:'POST',url,headers:auth,payload});return {status:r.statusCode,body:r.json()};};
@@ -132,17 +172,24 @@ test('browser probe API conserves admission/ledger, isolates artifacts, persists
   config.browser={free:{executablePath:executable,sha256:binaryHash,version:'synthetic',entitlement:'unlicensed'}};
   config.v2.browser_probe={enabled:true,tier:'free',qualification:{status:'accepted',kind:'pinned-relay-egress-v1',binary_sha256:binaryHash,version:'synthetic',entitlement:'unlicensed',platform:process.platform,arch:process.arch,evidence:'sha256:'+'a'.repeat(64),expires_at:'2099-01-01'}};
   const fixtureRuntime=gateway.v2.browserRuntime;gateway.v2.browserRuntime=browserProbeRuntime;
-  const unavailable=(await app.inject({url:'/v2/capabilities',headers})).json();assert.equal(unavailable.features.browser_network_probe,false);assert.equal(unavailable.browser_probe.reason,'browser_probe_redirect_admission_unqualified');
-  for(const url of ['https://source.gov/redirect','https://source.gov/fetch-redirect','https://source.gov/xhr-redirect'])assert.equal((await post('/v2/browser-probes',{...payload,url})).body.error,'browser_probe_redirect_admission_unqualified');
+  const unavailable=(await app.inject({url:'/v2/capabilities',headers})).json();assert.equal(unavailable.features.browser_network_probe,false);assert.equal(unavailable.browser_probe.reason,'browser_probe_runtime_unqualified');
+  for(const url of ['https://source.gov/redirect','https://source.gov/fetch-redirect','https://source.gov/xhr-redirect'])assert.equal((await post('/v2/browser-probes',{...payload,url})).body.error,'browser_probe_runtime_unqualified');
   assert.equal(runs,0);assert.equal(relayOptions,undefined);assert.equal(Number((await store.pool.query('SELECT count(*) AS n FROM v2_operations')).rows[0].n),0);
   gateway.v2.browserRuntime=fixtureRuntime;
   qualified=false;assert.equal((await post('/v2/browser-probes',payload)).body.error,'browser_probe_runtime_unqualified');assert.equal(runs,0);qualified=true;
   assert.equal((await post('/v2/browser-probes',{...payload,max_physical_requests:4})).body.error,'browser_request_ceiling_rejected');
-  const first=await post('/v2/browser-probes',payload);assert.equal(first.status,200);assert.equal(first.body.state,'completed');assert.equal(first.body.result.kind,'browser_network_probe');assert.equal(first.body.result.encoded_bytes,null);assert.equal(first.body.result.physical_requests,1);assert.equal(first.body.result.dom_bytes,22);assert.equal(first.body.accounting.reserved_tunnel_bytes,0);assert.equal(first.body.accounting.observed_tunnel_bytes,512);
+  assert.equal((await post('/v2/browser-probes',{...payload,wait_ms:1})).body.error,'browser_wait_ceiling_rejected');
+  const first=await post('/v2/browser-probes',payload);assert.equal(first.status,200);assert.equal(first.body.state,'completed');assert.equal(first.body.result.kind,'browser_network_probe');assert.equal(first.body.result.encoded_bytes,null);assert.equal(first.body.result.physical_requests,1);assert.equal(first.body.result.dom_bytes,22);assert.equal(first.body.result.main_artifact_id,first.body.result.artifacts[0].id);assert.equal(first.body.accounting.reserved_tunnel_bytes,0);assert.equal(first.body.accounting.observed_tunnel_bytes,512);
   gateway.v2.browserRuntime=browserProbeRuntime;assert.deepEqual((await post('/v2/browser-probes',payload)).body,first.body);assert.equal(runs,1);gateway.v2.browserRuntime=fixtureRuntime;
   assert.equal((await post('/v2/browser-probes',{...payload,url:'https://source.gov/changed'})).body.error,'idempotency_conflict');
   const artifact=(await app.inject({url:'/v2/artifacts/'+first.body.result.artifacts[0].id,headers})).json();assert.equal(artifact.kind,'browser_response');assert.equal(artifact.encoded_body_base64,null);assert.equal(artifact.original_encoded_available,false);assert.ok(artifact.request.headers.cookie.includes('private-source-cookie'));
   assert.equal((await app.inject({url:'/v2/artifacts/'+artifact.id,headers:{authorization:'Bearer key-b'}})).statusCode,404);const recent=(await app.inject({url:'/v2/operations',headers})).json();assert.ok(!JSON.stringify(recent).includes('private-source-cookie'));assert.ok(!JSON.stringify(recent).includes('request.headers'));
+  const shot=await post('/v2/browser-probes',{...payload,idempotency_key:'capture-shot',screenshot:true,wait_ms:0});
+  assert.equal(shot.body.state,'completed');assert.equal(shot.body.result.screenshot_bytes,4);
+  const jpeg=(await app.inject({url:'/v2/artifacts/'+shot.body.result.screenshot_artifact_id,headers})).json();
+  assert.equal(jpeg.kind,'browser_screenshot');assert.equal(jpeg.generated,true);assert.equal(jpeg.decoded_body_base64,'/9j/2Q==');
+  const storedScreenshot=(await store.pool.query('SELECT body FROM v2_artifacts WHERE id=$1',[jpeg.id])).rows[0].body;
+  assert.equal(storedScreenshot.includes(Buffer.from(jpeg.decoded_body_base64)),false);
   mode='methods';const next=await post('/v2/browser-probes',{...payload,idempotency_key:'second'});assert.equal(next.body.state,'completed');assert.ok(receivedCookies.at(-1).some(c=>c.name==='sid'&&c.value==='persisted'));
   mode='parallel';const parallel=await post('/v2/browser-probes',{...payload,idempotency_key:'parallel',max_physical_requests:1});assert.equal(parallel.body.result.physical_requests,1);mode='methods';
   const paid=await session('paid','residential');const paidResult=await post('/v2/browser-probes',{...payload,idempotency_key:'paid',session_id:paid.id,max_estimated_micro_usd:9});assert.equal(paidResult.body.state,'completed');assert.ok(relayOptions.proxy.url.includes('_session-'));assert.equal(paidResult.body.accounting.reserved_tunnel_bytes,4096);assert.equal(paidResult.body.accounting.estimated_micro_usd,5);assert.equal(paidResult.body.accounting.invoice_micro_usd,null);assert.equal(paidResult.body.accounting.customer_traffic.cost_usd,'0.000001024');assert.equal(paidResult.body.accounting.customer_traffic_reservation.max_estimated_micro_usd,9);
