@@ -89,8 +89,6 @@
 .docs-toc li + li { margin-top: 3px; }
 .docs-toc nav a { display: block; color: var(--muted); font-size: 12px; line-height: 1.8; padding: 5px 0 5px 13px; border-left: 1px solid transparent; margin-left: -1px; }
 .docs-toc nav a:hover, .docs-toc nav a[aria-current=location] { color: var(--lime); border-left-color: var(--lime); }
-.docs-source-link { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line); }
-.docs-source-link:hover { color: var(--ink); }
 .docs-pagination { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin-top: 45px; padding-top: 26px; border-top: 1px solid var(--line); }
 .docs-pagination > a { display: block; border: 1px solid var(--line); border-radius: 6px; padding: 14px; }
 .docs-pagination > a:hover { background: var(--soft); border-color: #6b8556; }
