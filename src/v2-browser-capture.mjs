@@ -3,6 +3,7 @@ import {GatewayError} from './policy.mjs';
 import {BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
 
 const REQUEST_TYPES=new Set(['document','script','stylesheet','image','font','xhr','fetch']);
+const NETWORK_HOP_LIMIT=128,NETWORK_HOP_WAIT_MS=250;
 const BLOCK_REASONS=new Set(['method_rejected','resource_type_blocked','browser_request_limit','frame_blocked','capture_window_closed','destination_rejected','endpoint_rejected','endpoint_method_rejected','headers_rejected','credential_scope_rejected','source_cooldown','source_pacing_deadline','session_expired','redirect_limit','redirect_origin_rejected','dns_deadline']);
 const safeBrowserError=error=>/net::(ERR_[A-Z_]+)/.exec(error?.message??'')?.[1]??(error?.name==='TimeoutError'?'browser_probe_deadline':'browser_probe_capture_failed');
 const redirectResponse=(status,location)=>[301,302,303,307,308].includes(status)&&!!location;
@@ -28,7 +29,7 @@ function fixtureRoute(send,requestId){
 // redirect admission. Playwright remains responsible for navigation and capture.
 export async function captureBrowserProbe(browser,input,policy,hooks){
  let context,page,root,cdp,mainResponse=null,stopped=false,decoded=0,encoded=0,encodedComplete=true,domBytes=0,screenshotBytes=0,blocked=0,admitted=0,admitting=0,error=null;
- const blockedReasons={},pending=new Set(),accepted=new Map(),redirects=new Map();
+ const blockedReasons={},pending=new Set(),accepted=new Map(),redirects=new Map(),networkHops=new Map(),networkParents=new Map(),networkWaiters=new Map();
  const block=reason=>{blocked++;blockedReasons[reason]=(blockedReasons[reason]??0)+1;};
  const track=promise=>{const task=promise.catch(()=>{error??='browser_probe_artifact_unknown';});pending.add(task);task.finally(()=>pending.delete(task)).catch(()=>{});};
  function takeAccepted(request){
@@ -36,6 +37,23 @@ export async function captureBrowserProbe(browser,input,policy,hooks){
   const metadata=queue?.shift();
   if(queue?.length===0)accepted.delete(k);
   return metadata;
+ }
+ async function takeNetworkHop(id){
+  if(!id||networkWaiters.has(id))return null;
+  if(!networkHops.has(id)){
+   if(networkWaiters.size>=NETWORK_HOP_LIMIT)return null;
+   // Network and Fetch can deliver the matching events in either order.
+   let timer;
+   try{
+    await new Promise(resolve=>{
+     networkWaiters.set(id,resolve);
+     timer=setTimeout(resolve,Math.min(NETWORK_HOP_WAIT_MS,remaining(input)));
+    });
+   }finally{clearTimeout(timer);networkWaiters.delete(id);}
+  }
+  const hop=networkHops.get(id);
+  networkHops.delete(id);
+  return hop;
  }
  try{
   context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,ignoreHTTPSErrors:false,permissions:[],viewport:{width:1280,height:720},deviceScaleFactor:1});
@@ -61,9 +79,19 @@ export async function captureBrowserProbe(browser,input,policy,hooks){
   await send('Target.setAutoAttach',{autoAttach:true,waitForDebuggerOnStart:true,flatten:true});
   cdp.on('Page.windowOpen',()=>block('popup_blocked'));
   cdp.on('Network.webSocketCreated',()=>block('websocket_blocked'));
+  // Chromium can create a new Fetch interception job on a cross-origin
+  // redirect without a redirectedRequestId. Network preserves the request
+  // id and previous response across that boundary.
+  cdp.on('Network.requestWillBeSent',({requestId,request,frameId,redirectResponse})=>{
+   if(frameId!==mainFrameId||!/^https?:/.test(request.url))return;
+   networkHops.delete(requestId);
+   networkHops.set(requestId,{url:request.url,method:request.method,from:redirectResponse?.url??null});
+   if(networkHops.size>NETWORK_HOP_LIMIT)networkHops.delete(networkHops.keys().next().value);
+   networkWaiters.get(requestId)?.();
+  });
   cdp.on('Fetch.authRequired',({requestId})=>track(send('Fetch.continueWithAuth',{requestId,authChallengeResponse:{response:'CancelAuth'}})));
   cdp.on('Fetch.requestPaused',event=>track((async()=>{
-   const {requestId,request,frameId,redirectedRequestId,responseStatusCode,responseErrorReason,responseHeaders=[]}=event;
+   const {requestId,networkId,request,frameId,redirectedRequestId,responseStatusCode,responseErrorReason,responseHeaders=[]}=event;
    const resourceType=event.resourceType.toLowerCase();
    try{
     if(responseStatusCode!==undefined||responseErrorReason!==undefined){
@@ -77,14 +105,20 @@ export async function captureBrowserProbe(browser,input,policy,hooks){
     if(!['GET','HEAD'].includes(request.method)||request.hasPostData||request.postData)throw new GatewayError('method_rejected');
     if(!REQUEST_TYPES.has(resourceType))throw new GatewayError('resource_type_blocked');
     if(admitted+admitting>=policy.max_requests)throw new GatewayError('browser_request_limit');
-    const prior=redirects.get(redirectedRequestId);
-    if(redirectedRequestId&&!prior)throw new GatewayError('redirect_limit');
+    const hop=await takeNetworkHop(networkId);
+    if(!hop||hop.url!==request.url||hop.method!==request.method)throw new GatewayError('redirect_limit');
+    if(stopped||Date.now()>=input.deadline)throw new GatewayError('capture_window_closed');
+    if(admitted+admitting>=policy.max_requests)throw new GatewayError('browser_request_limit');
+    const prior=networkParents.get(networkId);
+    if((hop.from??null)!==(prior?.url??null)||(redirectedRequestId&&redirects.get(redirectedRequestId)!==prior))throw new GatewayError('redirect_limit');
     const depth=prior?prior.depth+1:0;
     const requestMetadata={url:request.url,method:request.method,headers:request.headers,body_base64:null,resource_type:resourceType};
     admitting++;
     try{await hooks.admit({...requestMetadata,redirect_depth:depth,redirected_from:prior?.url??null});admitted++;}finally{admitting--;}
     if(stopped||Date.now()>=input.deadline)throw new GatewayError('capture_window_closed');
-    redirects.set(requestId,{url:request.url,depth});
+    const parent={url:request.url,depth};
+    redirects.set(requestId,parent);
+    networkParents.set(networkId,parent);
     const k=key(request.method,request.url);
     const queue=accepted.get(k)??[];queue.push(requestMetadata);accepted.set(k,queue);
     if(hooks.dispatch)await hooks.dispatch(fixtureRoute(send,requestId),requestMetadata);
@@ -157,5 +191,10 @@ export async function captureBrowserProbe(browser,input,policy,hooks){
   }
   const cookies=await context.cookies();
   return {status:mainResponse?.status??null,final_url:mainResponse?.url??null,physical_requests:admitted,blocked_requests:blocked,blocked_reasons:blockedReasons,counts_complete:true,capture_complete:!!domBytes&&!error&&blocked===0&&pending.size===0&&accepted.size===0,encoded_bytes:encodedComplete?encoded:null,decoded_bytes:decoded,dom_bytes:domBytes,screenshot_bytes:screenshotBytes,error,cookies};
- }finally{stopped=true;await context?.close().catch(()=>{});await root?.detach().catch(()=>{});}
+ }finally{
+  stopped=true;
+  for(const resolve of networkWaiters.values())resolve();
+  await context?.close().catch(()=>{});
+  await root?.detach().catch(()=>{});
+ }
 }

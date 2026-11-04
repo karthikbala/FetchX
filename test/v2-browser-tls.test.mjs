@@ -134,10 +134,17 @@ test('real Chromium admits every TLS redirect before dispatch and renders over o
   assert.equal(result.blocked_reasons.method_rejected,1);
   assert.equal(result.blocked_reasons.credential_scope_rejected,1);
   assert.equal(result.blocked_reasons.websocket_blocked,1);
-  for(const path of ['/document','/forbidden-fetch','/forbidden-xhr','/forbidden-cross','/forbidden-private']){
+  for(const [path,prior] of Object.entries({
+   '/document':'/start',
+   '/forbidden-fetch':'/redirect-fetch',
+   '/forbidden-xhr':'/redirect-xhr',
+   // Chromium 151 drops the Fetch parent ID for these cross-origin hops.
+   '/forbidden-cross':'/redirect-cross',
+   '/forbidden-private':'/redirect-private'
+  })){
    const hop=attempts.find(a=>new URL(a.url).pathname===path);
    assert.equal(hop?.redirect_depth,1,path);
-   assert.ok(hop.redirected_from.startsWith(origin+'/'),path);
+   assert.equal(hop.redirected_from,origin+prior,path);
   }
   assert.deepEqual(hits.map(h=>h.path).sort(),['/blocked-navigation','/data','/document','/redirect-cross','/redirect-fetch','/redirect-private','/redirect-xhr','/start']);
   assert.ok(hits.every(hit=>hit.connection==='close'));
