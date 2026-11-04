@@ -1,9 +1,9 @@
 import {ID,fail} from './policy.mjs';
 import {lockActiveCreditProject} from './control-credits.mjs';
+import {PAID_WIRE_READ_BYTES} from './paid-wire-limits.mjs';
 
 const BYTES_PER_MB=1_000_000;
 const MAX_TRANSFER_BYTES=20*BYTES_PER_MB;
-export const PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES=50_000;
 const TARIFF_VERSION='paid-http-v1';
 const PACKAGES=new Map([[200,10_000],[800,50_000],[2000,150_000],[10000,1_000_000]]);
 const TARIFFS=new Map([
@@ -11,6 +11,10 @@ const TARIFFS=new Map([
  ['datacenter',{block_bytes:BYTES_PER_MB,credits_per_block:1}],
  ['residential',{block_bytes:250_000,credits_per_block:5}]
 ]);
+const residentialTariff=TARIFFS.get('residential');
+export const PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES=Math.ceil(
+ (residentialTariff.block_bytes+PAID_WIRE_READ_BYTES)/residentialTariff.credits_per_block
+);
 const ACCOUNT=/^acct_[A-Za-z0-9_]{1,200}$/;
 const SESSION=/^cs_live_[A-Za-z0-9_]{1,200}$/;
 const INTENT=/^pi_[A-Za-z0-9_]{1,200}$/;
@@ -156,7 +160,7 @@ const remainingSql=`GREATEST(g.credits-COALESCE((
  FROM paid_credit_allocations a JOIN paid_credit_reservations r ON r.operation=a.operation
  WHERE a.grant_id=g.id),0),0)`;
 // A pending or held reservation can still become spendable. Include it in
-// outstanding sales obligations at the maximum residential bytes per credit.
+// outstanding sales obligations at the padded default residential bytes per credit.
 export const outstandingPaidCreditLiabilitySql=`SELECT COALESCE(sum(GREATEST(g.credits-COALESCE((
  SELECT sum(LEAST(a.credits,GREATEST(r.used_credits-a.offset_credits,0)))
  FROM paid_credit_allocations a JOIN paid_credit_reservations r ON r.operation=a.operation

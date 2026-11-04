@@ -92,7 +92,7 @@ test('paid credit purchases, allocation, settlement and recovery are durable and
    await assert.rejects(grant({...early,project:b.project}),{code:'paid_credit_grant_conflict'});
    const scoped=await grant({...early,project:b.project,accountId:'acct_other'});
    assert.equal(scoped,true);assert.equal((await paid.usage(b.project)).available,10_000);
-   assert.equal(await outstanding(),1_000_000_000n);
+   assert.equal(await outstanding(),1_016_400_000n);
    assert.equal(await revoke(live),true);
    assert.equal(await grant(live),false);
    assert.deepEqual(await paid.usage(a.project),{unit:'credits',granted:10_000,available:0,reserved:0,used:0,held:0,revoked_unused:10_000,payment_hold:false});
@@ -154,7 +154,7 @@ test('paid credit purchases, allocation, settlement and recovery are durable and
    assert.equal((await finish(a.project,noTraffic,{dispatched:false})).settlement_basis,'verified_no_dispatch');
    const proven=await finish(a.project,atCap,{dispatched:true,unknown:true,confirmedAtCap:true});
    assert.equal(proven.settlement_basis,'confirmed_cap');assert.equal(proven.used_credits,10);assert.equal(proven.billable_bytes,500_000);
-   assert.equal(await outstanding(),before-500_000n);
+   assert.equal(await outstanding(),before-508_200n);
    const saved=await allocate(a,quote('direct',1));
    await assert.rejects(reserve(a.project,saved,{...quote('direct'),reserved_credits:0}),{code:'paid_credit_reservation_invalid'});
    assert.equal((await finish(a.project,saved,{dispatched:true,measuredBytes:0})).used_credits,0);

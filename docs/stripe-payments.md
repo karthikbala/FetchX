@@ -11,7 +11,7 @@ FetchX sells one-time prepaid credit packs. Paid balances carry forward without 
 | `credits-150000` | $20 | 2,000 | 150,000 |
 | `credits-1000000` | $100 | 10,000 | 1,000,000 |
 
-A pack funds eligible public HTTP routes. Checkout verifies a ready route and approved residential capacity. The sales check budgets up to 50,000 residential bytes per credit across the selected pack, pending or uncertain live checkouts and existing unspent paid credits, including credits reserved or held. A project can buy only an eligible pack and have one pending Checkout per Stripe mode. Admission checks provider budgets and source restrictions when each request runs.
+A pack funds eligible public HTTP routes. Checkout verifies a ready route and approved residential capacity. The sales check budgets 50,820 residential provider bytes per credit across the selected pack, pending or uncertain live checkouts, and existing unspent paid credits, including credits reserved or held. That figure includes read padding for a default request. The customer tariff covers 250,000 bytes per five-credit block, equivalent to 50,000 bytes per credit within that block. Larger transfer ceilings with low measured usage, uncertain dispatches, and refunds can leave provider holds that require additional headroom and provider reconciliation. A project can buy only an eligible pack and have one pending Checkout per Stripe mode. Admission checks provider budgets and source restrictions when each request runs.
 
 ## Cloudflare payment Worker
 

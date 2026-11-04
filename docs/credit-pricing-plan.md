@@ -45,8 +45,12 @@ explicit quote and ceiling; no unlimited add-on is implied.
    private-network rejection, project isolation, and conservative provider caps.
 3. Stripe owner wires the credit ledger into signed payment fulfillment and
    preserves uncertain-Checkout recovery, exact account/mode/Price checks,
-   refunds, disputes, and sales-capacity accounting. One credit represents at
-   most 50,000 bytes of residential supplier liability for capacity checks.
+   refunds, disputes, and sales-capacity accounting. Sales checks allow 50,820
+   residential provider bytes per credit for the padded default request. The
+   customer tariff is 250,000 bytes per five-credit block, equivalent to 50,000
+   bytes per credit within that block. Larger transfer ceilings with low measured
+   usage, uncertain dispatches, and refunds can leave provider holds that require
+   additional headroom and provider reconciliation.
 4. Website owner updates the packages, rate/discount explanation, trial versus
    paid balances, purchase history, transfer controls, and actionable limit
    errors. Availability comes from backend capabilities, not marketing flags.

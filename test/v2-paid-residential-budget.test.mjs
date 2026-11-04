@@ -66,6 +66,7 @@ test('paid residential capacity and pending Checkout stay separate from both leg
   http:async(_input,_destination,_limits,{wireMeter})=>{
    if(!wireMeter){legacyV2Dispatches++;return {status:200,headers:{},encoded:Buffer.from('legacy-v2'),tunnel_bytes:25};}
    paidDispatches++;
+   if(paidMode==='success')return {status:200,headers:{},encoded:Buffer.from('paid success'),wire_bytes:1000,wire_bytes_lower_bound:1000};
    if(paidMode==='refund')throw Error('fixture gateway failure');
    throw Object.assign(new GatewayError('source_timeout_unknown',502),{wire_dispatched:true,observed_wire_bytes:null,wire_bytes_lower_bound:10});
   }
@@ -100,9 +101,19 @@ test('paid residential capacity and pending Checkout stay separate from both leg
   assert.equal(Number(firstLegacy.estimated_micro_usd),99);
   assert.equal((await legacyV2('legacy-v2-first')).usage.accounting.estimated_micro_usd,198);
 
+  const budget=config.controlPlane.paidCreditPolicy.residentialBudget;
+  budget.maxDailyBytes=1_000_000;
+  budget.maxTotalBytes=500_000_000;
+  await assert.rejects(checkout(0,plans[0]),{code:'paid_credit_capacity_unavailable'});
+  budget.maxTotalBytes=508_200_000;
+  assert.equal((await checkout(0,plans[0])).state,'creating');
+  assert.deepEqual(await stripe.salesObligations(store.pool),{pendingLiabilityBytes:508_200_000n,outstandingLiabilityBytes:0n});
+  await store.pool.query("UPDATE control_stripe_orders SET state='expired' WHERE project=$1",[buyerIds[0]]);
+  Object.assign(budget,paidBudget);
+
   for(const {credits} of plans)assert.equal(await v2.paidCreditReady(paidProject,{publicOnly:true,purchaseCredits:credits}),true);
   for(let i=0;i<3;i++)assert.equal((await checkout(i,plans[i])).state,'creating');
-  assert.equal((await stripe.salesObligations(store.pool)).pendingLiabilityBytes,10_500_000_000n);
+  assert.equal((await stripe.salesObligations(store.pool)).pendingLiabilityBytes,10_672_200_000n);
   await assert.rejects(checkout(3,plans[3]),{code:'paid_credit_capacity_unavailable'});
   await store.pool.query("UPDATE control_stripe_orders SET state='expired' WHERE project=ANY($1)",[buyerIds]);
 
@@ -132,7 +143,7 @@ test('paid residential capacity and pending Checkout stay separate from both leg
   const unknown=await paid('paid-unknown');
   assert.equal(unknown.usage.accounting.paid_credits.state,'held');
   assert.equal(unknown.usage.accounting.paid_credits.reserved_credits,5);
-  assert.deepEqual(await stripe.salesObligations(store.pool),{pendingLiabilityBytes:50_000_000_000n,outstandingLiabilityBytes:500_000_000n});
+  assert.deepEqual(await stripe.salesObligations(store.pool),{pendingLiabilityBytes:50_820_000_000n,outstandingLiabilityBytes:508_200_000n});
   const providerHolds=(await store.pool.query('SELECT state,accounted_tunnel_bytes FROM v2_ledger WHERE operation=ANY($1)',[[refunded.operation_id,unknown.operation_id]])).rows;
   assert.equal(providerHolds.length,2);
   assert.ok(providerHolds.every(row=>row.state==='unknown'&&Number(row.accounted_tunnel_bytes)===paidHoldBytes));
@@ -154,5 +165,24 @@ test('paid residential capacity and pending Checkout stay separate from both leg
   assert.equal(v1Dispatches,2);
   assert.equal(legacyV2Dispatches,1);
   assert.equal(paidDispatches,2);
+
+  // Scale the newly funded balance to two default requests without running an entire pack.
+  const redeemProject=buyerIds[1];
+  await store.pool.query(`INSERT INTO paid_credit_grants(project,account_id,mode,checkout_session_id,payment_intent_id,credits,amount_minor,currency)
+   VALUES($1,'acct_fixture','live','cs_live_redeemfixture','pi_redeemfixture',10,200,'usd')`,[redeemProject]);
+  assert.equal((await stripe.salesObligations(store.pool)).outstandingLiabilityBytes,508_708_200n);
+  budget.maxTotalBytes=budget.maxDailyBytes=2*paidHoldBytes+508_200;
+  paidMode='success';
+  for(const [key,outstanding] of [['redeem-first',508_454_100n],['redeem-second',508_200_000n]]){
+   const result=await fetch.fetch(redeemProject,{idempotency_key:key,url:'https://paid-budget.sample.net/',proxy:route},identity);
+   assert.equal(result.state,'completed');
+   assert.equal(result.usage.accounting.paid_credits.used_credits,5);
+   assert.equal(result.usage.accounting.paid_credits.max_transfer_bytes,250_000);
+   const {rows:[ledger]}=await store.pool.query('SELECT state,accounted_tunnel_bytes FROM v2_ledger WHERE operation=$1',[result.operation_id]);
+   assert.deepEqual(ledger,{state:'unreconciled',accounted_tunnel_bytes:String(paidHoldBytes)});
+   assert.equal((await stripe.salesObligations(store.pool)).outstandingLiabilityBytes,outstanding);
+  }
+  assert.equal((await v2.controlPaidCredits.usage(redeemProject)).available,0);
+  assert.equal(paidDispatches,4);
  }finally{await store.close();await rm(dir,{recursive:true,force:true});}
 });

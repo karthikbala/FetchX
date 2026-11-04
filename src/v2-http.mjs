@@ -6,6 +6,9 @@ import {lookup} from 'node:dns/promises';
 import {gunzipSync,brotliDecompressSync,inflateSync} from 'node:zlib';
 import {checkedURL,GatewayError,fail} from './policy.mjs';
 import {safeCauseCode,safeProxyReason} from './v2-diagnostics.mjs';
+import {PAID_WIRE_READ_BYTES} from './paid-wire-limits.mjs';
+
+export {PAID_WIRE_READ_BYTES};
 
 function transportFailure(error){const failure=error instanceof GatewayError?error:new GatewayError('source_transport_unknown',502);failure.cause_code=safeCauseCode(error);return failure;}
 
@@ -79,9 +82,6 @@ class MeteredTunnel extends Duplex{
 
 function observeRead(meter,size){meter.bytes+=size;meter.confirmed_bytes=(meter.confirmed_bytes??0)+size;}
 
-// A paid cutoff can receive one last bounded raw socket read. Reserve that
-// allowance on the provider ledger independently of the customer's ceiling.
-export const PAID_WIRE_READ_BYTES=4096;
 function boundedWireRead(){
  return {buffer:Buffer.allocUnsafe(PAID_WIRE_READ_BYTES),callback(n,buffer){
   this.emit('data',Buffer.from(buffer.subarray(0,n)));
