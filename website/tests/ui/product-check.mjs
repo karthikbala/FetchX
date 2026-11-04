@@ -271,7 +271,23 @@ try {
   await page.goto(base + '/app'); await expect(page.locator('[data-project-name]')).toHaveText(projects[0].name);
   for (const width of [320, 375, 768, 1024, 1440]) { await page.setViewportSize({ width, height: 800 }); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Long project name overflows at ' + width); await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeInViewport(); }
   projects[0].name = originalProjectName;
-  await page.setViewportSize({ width: 360, height: 800 }); await page.locator('[data-app-menu]').click(); await expect(page.locator('[data-app-menu]')).toHaveAttribute('aria-expanded', 'true'); await page.keyboard.press('Escape'); await expect(page.locator('[data-app-menu]')).toHaveAttribute('aria-expanded', 'false');
+  await page.setViewportSize({ width: 390, height: 800 });
+  const workspaceUrl = page.url();
+  const openNavigation = page.getByRole('button', { name: 'Open workspace navigation', exact: true });
+  const closeNavigation = page.getByRole('button', { name: 'Close workspace navigation', exact: true });
+  const navigation = page.getByRole('complementary', { name: 'Workspace navigation', exact: true });
+  await expect(navigation).toHaveCount(0);
+  await openNavigation.click();
+  await expect(openNavigation).toHaveAttribute('aria-expanded', 'true');
+  await closeNavigation.click();
+  await expect(page).toHaveURL(workspaceUrl);
+  await expect(openNavigation).toBeFocused();
+  await expect(navigation).toHaveCount(0);
+  await openNavigation.click();
+  await page.keyboard.press('Escape');
+  await expect(openNavigation).toHaveAttribute('aria-expanded', 'false');
+  await expect(openNavigation).toBeFocused();
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const persisted = await storage(); for (const secret of [user.email, 'Private project', 'Second private', 'fxk_', 'synthetic-csrf', 'private-path', 'source text fixture']) assert.ok(!persisted.includes(secret), 'Sensitive value persisted: ' + secret);
   checks.push('Authoritative usage/latency/held balance, read-only billing, project creation/switching, eight routes, six widths, mobile navigation and storage allowlist');
 

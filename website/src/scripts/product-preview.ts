@@ -288,7 +288,14 @@ async function initWorkspace(root: HTMLElement) {
         const row = element('tr'), id = element('td'), link = element('button', 'pp-request-link', item.id); link.type = 'button'; link.dataset.requestId = item.id; link.addEventListener('click', () => { void openRequest(item.id); }); id.append(link); row.append(id);
         const stateCell = element('td'), state = String(item.state || 'unknown'); stateCell.append(element('span', 'pp-status pp-status-' + (['completed','failed','running','unknown'].includes(state) ? state : 'running'), state)); row.append(stateCell);
         const route = item.routing || item.route || {}, profile = item.access_profile || item.profile || {};
-        row.append(element('td', '', `${route.class || item.proxy_class || '—'}${route.country ? ' / ' + route.country : ''} · ${typeof profile === 'string' ? profile : profile.id || '—'}`), element('td', '', typeof item.latency_ms === 'number' ? `${number(Math.round(item.latency_ms))} ms` : '—'), element('td', '', date(item.created_at))); body.append(row);
+        const profileId = typeof profile === 'string' ? profile : profile.id;
+        const routeClass = route.class || item.proxy_class || '—';
+        const country = route.country ? ' / ' + route.country : '';
+        const routeLabel = routeClasses.includes(routeClass) ? routeLabels[routeClass as RouteClass] : '—';
+        const routeProfile = typeof profileId === 'string' && profileId.startsWith('playground:')
+          ? `${item.execution === 'browser' ? 'Browser' : 'HTTP'} · ${routeLabel}${country}`
+          : `${routeClass}${country} · ${profileId || '—'}`;
+        row.append(element('td', '', routeProfile), element('td', '', typeof item.latency_ms === 'number' ? `${number(Math.round(item.latency_ms))} ms` : '—'), element('td', '', date(item.created_at))); body.append(row);
       }); table.append(body); scroll.append(table); parent.append(scroll);
     });
   }
@@ -662,7 +669,8 @@ async function initWorkspace(root: HTMLElement) {
     if (result?.error) setError(result.error.message || result.error.code || 'The operation could not complete.', '[data-response-error]');
     else clearError('[data-response-error]');
     const route = result?.routing;
-    const duration = result?.usage?.duration_ms ?? result?.duration_ms;
+    const duration = [result?.usage?.duration_ms, result?.duration_ms]
+      .find((value): value is number => typeof value === 'number' && Number.isFinite(value));
     const bytes = result?.usage?.decoded_bytes ?? result?.usage?.encoded_bytes;
     const credit = result?.usage?.accounting?.request_credits ?? result?.request_credits;
     const creditState = { settled: 'used', released: 'released', reserved: 'reserved', held: 'held' } as Record<string, string>;
@@ -670,7 +678,8 @@ async function initWorkspace(root: HTMLElement) {
     textAll('[data-result-source]', typeof retained?.status === 'number' ? `HTTP ${retained.status}` : 'No response');
     textAll('[data-result-route]', routeClasses.includes(route?.class) ? routeLabels[route.class as RouteClass] : '—');
     textAll('[data-result-country]', route?.class === 'direct' ? 'Not selectable' : typeof route?.country === 'string' && /^[A-Z]{2}$/.test(route.country) ? `${countryName(route.country)} (${route.country})` : '—');
-    textAll('[data-result-duration]', typeof duration === 'number' ? `${number(Math.round(duration))} ms` : '—');
+    hide('[data-result-duration-metric]', duration === undefined);
+    textAll('[data-result-duration]', duration === undefined ? '—' : `${number(Math.round(duration))} ms`);
     textAll('[data-result-bytes]', number(bytes));
     textAll('[data-result-credits]', typeof credit?.credits === 'number' ? `${number(credit.credits)} ${creditState[credit.state] || ''}`.trim() : '—');
     renderRecovery();
@@ -824,10 +833,29 @@ async function initWorkspace(root: HTMLElement) {
     });
   });
   const menu = q<HTMLButtonElement>('[data-app-menu]');
-  function closeMenu() { root.classList.remove('pp-menu-open'); menu?.setAttribute('aria-expanded', 'false'); menu?.setAttribute('aria-label', 'Open workspace navigation'); }
-  menu?.addEventListener('click', () => { const open = menu.getAttribute('aria-expanded') !== 'true'; root.classList.toggle('pp-menu-open', open); menu.setAttribute('aria-expanded', String(open)); menu.setAttribute('aria-label', open ? 'Close workspace navigation' : 'Open workspace navigation'); });
-  document.addEventListener('keydown', event => { if (event.key === 'Escape' && root.classList.contains('pp-menu-open')) { closeMenu(); menu?.focus(); } });
-  document.addEventListener('click', event => { if (root.classList.contains('pp-menu-open') && !(event.target as Element).closest('.pp-sidebar,[data-app-menu]')) closeMenu(); });
+  const menuClose = q<HTMLButtonElement>('[data-app-menu-close]');
+  const sidebar = q('.pp-sidebar');
+  function closeMenu(restoreFocus = true) {
+    if (restoreFocus) menu?.focus();
+    root.classList.remove('pp-menu-open');
+    menu?.setAttribute('aria-expanded', 'false');
+    if (menuClose) menuClose.hidden = true;
+  }
+  menu?.addEventListener('click', () => {
+    if (menu.getAttribute('aria-expanded') === 'true') { closeMenu(); return; }
+    root.classList.add('pp-menu-open');
+    menu.setAttribute('aria-expanded', 'true');
+    if (menuClose) { menuClose.hidden = false; menuClose.focus(); }
+  });
+  menuClose?.addEventListener('click', () => closeMenu());
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && root.classList.contains('pp-menu-open')) closeMenu();
+  });
+  document.addEventListener('click', event => {
+    if (!root.classList.contains('pp-menu-open') || (event.target as Element).closest('.pp-sidebar,[data-app-menu]')) return;
+    const focused = document.activeElement;
+    closeMenu(focused === document.body || sidebar?.contains(focused));
+  });
   window.addEventListener('pagehide', () => { leavingPage = true; disposeGoogle?.(); disposeGithub?.(); concealSecret(); csrf = ''; email = ''; challenge = ''; clearPreparation(); currentResult = null; submittedRequest = null; retainedScreenshot = null; retainedHeaders = null; requestForm?.reset(); q('[data-browser-screenshot]')?.removeAttribute('src'); textAll('[data-response-output],[data-response-headers],[data-response-diagnostics],[data-request-detail],[data-generated-code]', ''); });
   window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
   q('[data-refresh-workspace]')?.addEventListener('click', () => { if (!sending && !mutating) void start(); });
