@@ -2,7 +2,7 @@ import {randomUUID,randomBytes} from 'node:crypto';
 import {CookieJar} from 'tough-cookie';
 import {sha} from './crypto.mjs';
 import {ID,GatewayError,fail,checkedHeaders} from './policy.mjs';
-import {providerProxy} from './residential.mjs';
+import {providerProxy,paidResidentialLedgerSql,reviewedPaidResidentialBudget} from './residential.mjs';
 import {nativeHttp,pinnedDestination,decodeNative,PAID_WIRE_READ_BYTES} from './v2-http.mjs';
 import {createSourceResolver,reviewedPaidDns,resolvePaidSource} from './v2-dns.mjs';
 import {reviewedAddressPreference} from './v2-address-policy.mjs';
@@ -16,6 +16,7 @@ import {estimateRoutePricing,estimatePaidPublicDatacenter} from './v2-pricing.mj
 import {residentialTrafficCharge,finishResidentialTrafficCharge} from './customer-traffic.mjs';
 import {distinctNativeRetryRoute,nativeRetryIdentityBinding,pristineNativeRetry,transientNativeTransport,transientNativeResponse,successfulNativeResponse} from './v2-native-retry.mjs';
 import {ControlCredits,recoverControlCredits,reviewedCreditPolicy} from './control-credits.mjs';
+import {lockStripeSales} from './control-stripe-provider.mjs';
 import {ControlPaidCredits,PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES,outstandingPaidCreditLiabilitySql,recoverControlPaidCredits,reviewedPaidCreditRoutes,quotePaidHttpCredits} from './control-paid-credits.mjs';
 import {PUBLIC_URL_ID,PUBLIC_URL_KIND,PUBLIC_URL_REF,PUBLIC_URL_ROUTES,RESERVED_PUBLIC_URL_IDS,PUBLIC_URL_MAX_BODY_BYTES,PUBLIC_URL_TRANSFER_LIMITS,checkedPublicRedirect,checkedPublicSourceUrl,checkedPublicAddresses,
  isPublicUrlProfile,publicUrlProfile,reviewedPublicUrlPolicy} from './v2-public-url.mjs';
@@ -167,9 +168,14 @@ export class V2Gateway{
   return {access_profiles:profiles.map(p=>this.publicProfile(p,project,publicClasses))};
  }
  pricing(project,profile,route,bytes,transport='http',duration=profile.limits.timeout_ms){
-  const options={config:this.config,project,profile,route,transport,reserved_tunnel_bytes:bytes,duration_ms:duration};
-  if(this.controlCredits.managed(project)&&isPublicUrlProfile(profile)&&route.class==='datacenter')
-   return estimatePaidPublicDatacenter(options);
+  const managed=this.controlCredits.managed(project);
+  let config=this.config;
+  if(managed&&route.class==='residential'){
+   const budget=reviewedPaidResidentialBudget(config);
+   config={residential:{providers:{[route.provider]:{microUsdPerGB:budget&&budget.provider===route.provider?budget.microUsdPerGB:null}}}};
+  }
+  const options={config,project,profile,route,transport,reserved_tunnel_bytes:bytes,duration_ms:duration};
+  if(managed&&isPublicUrlProfile(profile)&&route.class==='datacenter')return estimatePaidPublicDatacenter(options);
   return estimateRoutePricing(options);
  }
  paidHttpRequested(project,profile,route,raw){
@@ -196,7 +202,7 @@ export class V2Gateway{
    const {pricing,estimated_micro_usd}=this.pricing(project,profile,route,0);
    return estimated_micro_usd===0&&pricing?.provider==='oxylabs';
   }
-  return true;
+  return route.class!=='residential'||reviewedPaidResidentialBudget(this.config)?.provider===route.provider;
  }
  residentialProvider(profile,country,project){
   return ['evomi','dataimpulse'].find(provider=>{
@@ -230,15 +236,12 @@ export class V2Gateway{
     if(!this.approvedPaidRoute(project,profile,route))continue;
     if(route.class!=='residential')return true;
     const {max_transfer_bytes}=quotePaidHttpCredits({route});
-    const accounted=await this.reserveResidential(client,project,null,route,max_transfer_bytes+PAID_WIRE_READ_BYTES,purchaseCredits>0&&outstandingLiabilityBytes===null);
+    const accounted=await this.reserveResidential(client,project,null,route,max_transfer_bytes+PAID_WIRE_READ_BYTES,{
+     paid:true,includePrepaidObligations:purchaseCredits>0&&outstandingLiabilityBytes===null});
     if(purchaseCredits===0)return true;
     const required=BigInt(purchaseCredits)*BigInt(PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES)+BigInt(pendingLiabilityBytes)+BigInt(outstandingLiabilityBytes??accounted.prepaid_obligations);
-    const settings=this.config.residential,provider=settings.providers[route.provider];
-    const priors=Object.values(settings.providers).map(p=>p.priorReservedBytes??0);
-    if(priors.some(n=>!Number.isSafeInteger(n)||n<0))continue;
-    const globalRemaining=BigInt(settings.maxTotalBytes)-BigInt(accounted.total)-priors.reduce((sum,n)=>sum+BigInt(n),0n);
-    const providerRemaining=BigInt(provider.maxTotalBytes)-BigInt(accounted.provider_total)-BigInt(provider.priorReservedBytes??0);
-    if(globalRemaining>=required&&providerRemaining>=required)return true;
+    const remaining=BigInt(reviewedPaidResidentialBudget(this.config).maxTotalBytes)-BigInt(accounted.total);
+    if(remaining>=required)return true;
    }catch(error){if(!(error instanceof GatewayError))throw error;}
   }
   return false;
@@ -378,20 +381,29 @@ export class V2Gateway{
    }
   }
  }
- async reserveResidential(c,project,session,route,bytes,includePrepaidObligations=false){
+ async reserveResidential(c,project,session,route,bytes,{paid=false,includePrepaidObligations=false}={}){
   if(route.class!=='residential')return null;
   const settings=this.config.residential,pc=settings?.providers?.[route.provider];this.resolveProxy(route);
+  const budget=paid?reviewedPaidResidentialBudget(this.config):null;
+  if(paid&&budget?.provider!==route.provider)fail('residential_budget_unconfigured',503);
+  const usage=paid?
+   `SELECT project,provider,accounted_tunnel_bytes AS accounted_bytes,created_at FROM v2_ledger l WHERE proxy_class='residential' AND ${paidResidentialLedgerSql}`:
+   `SELECT project,provider,accounted_bytes,created_at FROM residential_usage UNION ALL
+    SELECT project,provider,accounted_tunnel_bytes AS accounted_bytes,created_at FROM v2_ledger l WHERE proxy_class='residential' AND NOT ${paidResidentialLedgerSql}`;
   const row=(await c.query(`SELECT COALESCE(sum(accounted_bytes),0) total,
    COALESCE(sum(accounted_bytes) FILTER(WHERE created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),0) daily,
    COALESCE(sum(accounted_bytes) FILTER(WHERE project=$1 AND created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),0) project_daily,
    COALESCE(sum(accounted_bytes) FILTER(WHERE provider=$2),0) provider_total
-   ${includePrepaidObligations?`,(${outstandingPaidCreditLiabilitySql}) AS prepaid_obligations`:''} FROM (
-    SELECT project,provider,accounted_bytes,created_at FROM residential_usage UNION ALL
-    SELECT project,provider,accounted_tunnel_bytes AS accounted_bytes,created_at FROM v2_ledger WHERE proxy_class='residential') u`,[project,route.provider])).rows[0];
-  const prior=Object.values(settings.providers).reduce((sum,p)=>sum+(p.priorReservedBytes??0),0);
-  for(const [used,cap]of [[Number(row.total)+prior,settings.maxTotalBytes],[Number(row.daily),settings.maxDailyBytes],[Number(row.project_daily),this.config.projects[project].maxDailyResidentialBytes??settings.maxDailyBytes],[Number(row.provider_total)+(pc.priorReservedBytes??0),pc.maxTotalBytes]])if(used+bytes>positive(cap,'residential_budget_unconfigured'))fail('residential_budget_exhausted',429);
+   ${includePrepaidObligations?`,(${outstandingPaidCreditLiabilitySql}) AS prepaid_obligations`:''} FROM (${usage}) u`,[project,route.provider])).rows[0];
+  const limits=budget?[[Number(row.total),budget.maxTotalBytes],[Number(row.daily),budget.maxDailyBytes]]:[
+   [Number(row.total)+Object.values(settings.providers).reduce((sum,p)=>sum+(p.priorReservedBytes??0),0),settings.maxTotalBytes],
+   [Number(row.daily),settings.maxDailyBytes],
+   [Number(row.project_daily),this.config.projects[project].maxDailyResidentialBytes??settings.maxDailyBytes],
+   [Number(row.provider_total)+(pc.priorReservedBytes??0),pc.maxTotalBytes]
+  ];
+  for(const [used,cap]of limits)if(used+bytes>positive(cap,'residential_budget_unconfigured'))fail('residential_budget_exhausted',429);
   if((await c.query("SELECT 1 FROM attempts WHERE provider=$1 AND error=ANY($2::text[]) UNION ALL SELECT 1 FROM v2_operations o JOIN v2_ledger l ON l.operation=o.id WHERE l.provider=$1 AND o.error=ANY($2::text[]) LIMIT 1",[route.provider,['provider_account_rejected','sensitive_provider_response','cost_overrun']])).rowCount)fail('residential_provider_held',409);
-  if(!Number.isSafeInteger(pc.microUsdPerGB)||pc.microUsdPerGB<0)fail('residential_rate_unconfigured',503);
+  if(!budget&&(!Number.isSafeInteger(pc.microUsdPerGB)||pc.microUsdPerGB<0))fail('residential_rate_unconfigured',503);
   return row;
  }
  async reserveHttpArtifactCapacity(c,bytes){
@@ -433,6 +445,7 @@ export class V2Gateway{
   }
   let reused,pricingDecision,paidQuote,publicBodyLimit=null,retryPlan=raw.retry===true?{requested:true,eligible:false,stop_reason:'retry_ineligible'}:null,reservationRequests=hops;
   await this.store.tx(async c=>{
+   if(paid&&route.class==='residential')await lockStripeSales(c,'live');
    await c.query('SELECT pg_advisory_xact_lock(1002)');
    const old=(await c.query('SELECT * FROM v2_operations WHERE project=$1 AND key=$2',[project,raw.idempotency_key])).rows[0];if(old){if(old.input_hash!==hash)fail('idempotency_conflict',409);reused=old;return;}
    const locked=(await c.query('SELECT * FROM v2_sessions WHERE id=$1 AND project=$2 FOR UPDATE',[session.id,project])).rows[0];
@@ -469,7 +482,7 @@ export class V2Gateway{
    const artifactBytes=publicUrl?Math.ceil((reservedBytes+publicBodyLimit)*1.4)+hops*512*1024:
     Math.ceil((reservedBytes+p.limits.max_decoded_bytes*hops)*1.4)+65536;
    await this.reserveHttpArtifactCapacity(c,artifactBytes);
-   await this.reserveResidential(c,project,session,route,reservedTunnel);
+   await this.reserveResidential(c,project,session,route,reservedTunnel,{paid});
    const estimated=pricingDecision.estimated_micro_usd;
    if(raw.max_estimated_micro_usd!==undefined){if(estimated===null)fail('cost_estimate_unavailable',409);if(estimated>raw.max_estimated_micro_usd||!paid&&(pricingDecision.customer_traffic_reservation?.max_estimated_micro_usd??0)>raw.max_estimated_micro_usd)fail('cost_ceiling_exceeded',429);}
    await c.query('INSERT INTO v2_operations(id,project,key_id,key,session_id,input_hash,input,recipe) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[id,project,keyId,raw.idempotency_key,session.id,hash,this.sealer.seal(raw),recipe]);

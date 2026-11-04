@@ -153,7 +153,8 @@ test('paid public fetch reserves the shared wire ceiling and separates customer 
   residential:{maxTotalBytes:3e9,maxDailyBytes:3e9,providers:{evomi:{enabled:true,username:'fixture-user',password:'fixture-pass',
    countries:['US'],maxTotalBytes:3e9,microUsdPerGB:1e6}}},
   controlPlane:{enabled:true,creditPolicy:{reviewed:true,version:'trial-test',trialCredits:1,weights:{direct:1},maxEstimatedMicroUsdPerOperation:0},
-   paidCreditPolicy:{reviewed:true,version:'paid-test',datacenterPool,routes:[{accessProfile:PUBLIC_URL_REF,...dc,provider:'oxylabs'},
+   paidCreditPolicy:{reviewed:true,version:'paid-test',datacenterPool,
+    residentialBudget:{reviewed:true,provider:'evomi',maxTotalBytes:3e9,maxDailyBytes:1e9,microUsdPerGB:1e6},routes:[{accessProfile:PUBLIC_URL_REF,...dc,provider:'oxylabs'},
     {accessProfile:PUBLIC_URL_REF,...res,provider:'evomi'},{accessProfile:privateProfile,...direct,provider:'direct'}],
    dns:{reviewed:true,endpoint:'https://resolver.sample.net/resolve',address:'1.1.1.1'},publicUrl:{reviewed:true,maxDailyOperations:9}}}};
  const dnsCalls=[],targetCalls=[],largeFile=Buffer.alloc(2_000_000,42);

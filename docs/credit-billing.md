@@ -24,7 +24,11 @@ A verified no-dispatch outcome or a FetchX-owned failure releases the customer r
 
 Purchases are used in order. A verified reversal removes the remaining capacity from that purchase and preserves recorded usage and holds. A payment hold pauses paid dispatch until the mapped incident is resolved. Existing verified grants remain usable when Checkout is disabled.
 
-The operator enables paid routes through the reviewed `controlPlane.paidCreditPolicy` configuration. Each eligible profile, route class, country, and provider is reviewed separately. Checkout checks cumulative approved provider capacity against pending and outstanding obligations. For that check, every outstanding credit can represent up to 50,000 residential bytes. Browser pricing remains provisional and browser admission requires separate qualification.
+The operator enables paid routes through the reviewed `controlPlane.paidCreditPolicy` configuration. Each eligible profile, route class, country, and provider is reviewed separately. Paid residential routes require a reviewed `residentialBudget` in that policy. The launch allocation is Evomi only, with a 60 GB lifetime ceiling, a 1 GB UTC daily ceiling, and a provider estimate of $1 per decimal GB. The existing private and legacy budgets, prior reservations, and rate estimates remain in force for their own operations.
+
+Checkout checks the remaining paid allocation against pending live orders and outstanding paid credits. Each outstanding credit can represent up to 50,000 residential bytes. Every pack can fit individually at a clean launch. One of each would require 60.5 GB, so the gateway limits sales as commitments accumulate. An uncertain dispatch or a refunded customer reservation can still occupy provider capacity. Keep the funded allocation available at the provider, including when other systems share the account.
+
+Browser pricing remains provisional and browser admission requires separate qualification.
 
 Billing and usage retain the existing project trial balance and report purchased credits separately. The paid balance reports `granted`, `available`, `reserved`, `used`, `held`, `revoked_unused`, and `payment_hold`. Paid operation accounting shows the saved credit tariff, maximum transfer bytes, and settled debit without a second cash charge.
 
