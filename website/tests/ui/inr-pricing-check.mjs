@@ -72,7 +72,12 @@ async function openHostedCheckout(button, visits) {
   // The hosted request starts before the return document and automatic status
   // lookup finish. Observe that navigation before advancing the payment fixture.
   await Promise.all([
-    page.waitForEvent('framenavigated', { predicate: frame => frame === page.mainFrame() && frame.url() === base + '/app/billing?checkout=success' }),
+    page.waitForEvent('framenavigated', { predicate: frame => {
+      if (frame !== page.mainFrame() || hosted.length !== visits) return false;
+      // Billing removes the checkout query with replaceState during startup.
+      const returned = new URL(frame.url());
+      return returned.origin === base && returned.pathname === '/app/billing';
+    } }),
     button.click(),
   ]);
   await expect.poll(() => hosted.length).toBe(visits);
