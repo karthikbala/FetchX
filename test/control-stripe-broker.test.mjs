@@ -4,7 +4,7 @@ import {createHash,createHmac,generateKeyPairSync,randomBytes,randomUUID} from '
 import {paymentWorker} from '../payments-worker/worker.mjs';
 import {ControlStripe} from '../src/control-stripe.mjs';
 import {StripeProvider,stripeSettings,verifiedStripeRelay} from '../src/control-stripe-provider.mjs';
-import {BROKER_PATH,RELAY_PATH,STRIPE_VERSION,audience,brokerMessage,checkoutForm,customerForm,epoch} from '../src/control-stripe-broker-protocol.mjs';
+import {BROKER_PATH,RELAY_PATH,STRIPE_VERSION,audience,brokerMessage,checkoutForm,customerForm,epoch,PACK_OFFERS,billingCurrency} from '../src/control-stripe-broker-protocol.mjs';
 
 const workerOrigin='https://payments.example',websiteOrigin='https://www.example',relayUrl='https://gateway.example'+RELAY_PATH;
 const stripeOrigin='https://api.stripe.com/v1';
@@ -16,11 +16,12 @@ const checkoutSafety=()=>({success_url:websiteOrigin+'/app/billing?checkout=succ
  automatic_tax:{enabled:false},allow_promotion_codes:false,payment_method_types:['card'],
  total_details:{amount_discount:0,amount_tax:0,amount_shipping:0}});
 
-function fixture({sessionMethods=['card']}={}){
+function fixture({offer=plan,sessionMethods=[offer.currency==='inr'?'upi':'card']}={}){
+ const plan=offer;
  const {privateKey,publicKey}=generateKeyPairSync('ed25519'),keyId='fixture-key';
  const secret=randomBytes(32).toString('base64url'),webhookSecret='whsec_SyntheticFixtureOnly';
  const config={controlPlane:{enabled:true,origins:[websiteOrigin],stripe:{enabled:true,mode:'test',accountId:'acct_fixture',
-  transport:'broker',brokerUrl:workerOrigin+BROKER_PATH,brokerReturnOrigin:websiteOrigin,brokerAuthSecret:secret,
+  inrSalesEnabled:true,transport:'broker',brokerUrl:workerOrigin+BROKER_PATH,brokerReturnOrigin:websiteOrigin,brokerAuthSecret:secret,
   relayPublicKeys:{[keyId]:publicKey.export({type:'spki',format:'der'}).toString('base64')},catalog:[plan],allowedProjects:['cp_'+randomUUID()]}}};
  const env={STRIPE_MODE:'test',STRIPE_ACCOUNT_ID:'acct_fixture',STRIPE_API_KEY:'rk_test_SyntheticWorkerOnly',STRIPE_WEBHOOK_SECRET:webhookSecret,
   BROKER_AUTH_SECRET:secret,RELAY_KEY_ID:keyId,STRIPE_RELAY_ED25519_PKCS8:privateKey.export({type:'pkcs8',format:'der'}).toString('base64'),
@@ -40,7 +41,7 @@ function fixture({sessionMethods=['card']}={}){
   assert.equal(options.headers['Stripe-Version'],STRIPE_VERSION);
   stripeCalls.push({path,method:options.method,body:options.body,key:options.headers['Idempotency-Key']});
   if(path==='/account')return Response.json({id:accountId,object:'account',email:'private-account@example.com'});
-  if(path==='/prices/'+plan.priceId)return Response.json(makePrice({metadata:{private:'value'}}));
+  if(path==='/prices/'+plan.priceId)return Response.json(makePrice({id:plan.priceId,currency:plan.currency,unit_amount:plan.amountMinor,metadata:{private:'value'}}));
   if(path==='/customers'&&options.method==='POST'){
    const customer={id:'cus_fixture',object:'customer',livemode:false,email:'private-customer@example.com',
     metadata:{fetchx_customer:new URLSearchParams(options.body).get('metadata[fetchx_customer]'),private:'value'}};
@@ -50,9 +51,9 @@ function fixture({sessionMethods=['card']}={}){
   if(path==='/checkout/sessions'&&options.method==='POST'){
    const params=new URLSearchParams(options.body),id='cs_test_fixture';
    assert.equal(params.has('payment_method_types[0]'),false);
-   assert.deepEqual(params.getAll('allowed_payment_method_types[0]'),['card']);
+   assert.deepEqual(params.getAll('allowed_payment_method_types[0]'),[plan.currency==='inr'?'upi':'card']);
    const session={id,object:'checkout.session',livemode:false,mode:'payment',client_reference_id:params.get('client_reference_id'),
-    customer:params.get('customer'),amount_subtotal:200,amount_total:200,currency:'usd',status:'open',payment_status:'unpaid',
+    customer:params.get('customer'),amount_subtotal:plan.amountMinor,amount_total:plan.amountMinor,currency:plan.currency,status:'open',payment_status:'unpaid',
     payment_intent:null,...checkoutSafety(),payment_method_types:sessionMethods,
     url:'https://checkout.stripe.com/c/pay/'+id+'#private-hosted-token',customer_details:{email:'private-customer@example.com'}};
    stripeObjects.set('/checkout/sessions/'+id,session);
@@ -214,5 +215,63 @@ test('production settings require the broker and reject Stripe secrets in its co
  for(const fields of [{secretKey:'sk_test_SyntheticFixtureOnly'},{webhookSecret:'whsec_SyntheticFixtureOnly'},{brokerUrl:'https://payments.example/other'}]){
   const value={...config,controlPlane:{...config.controlPlane,stripe:{...broker,...fields}}};
   assert.equal(stripeSettings(value),null);
+ }
+});
+
+const inrPlan={id:'credits-10000-inr',name:'10,000 credits',version:'inr-fixture-1',priceId:'price_inrfixture',amountMinor:17500,currency:'inr',credits:10000};
+
+test('INR broker Checkout keeps rupees, UPI and the immutable request key through Stripe',async()=>{
+ const f=fixture({offer:inrPlan}),config=stripeSettings(f.config),orderId=randomUUID(),expiresAt=epoch()+3600;
+ const creationKey=randomUUID(),saved=await f.provider.request(config,'/customers',{body:customerForm(creationKey),key:'fetchx-customer-'+creationKey});
+ await f.provider.assertPrice(config,inrPlan);
+ const body=checkoutForm({orderId,customerId:saved.id,priceId:inrPlan.priceId,expiresAt,returnOrigin:websiteOrigin,paymentMethod:'upi'});
+ const key='fetchx-checkout-'+orderId,result=await f.provider.request(config,'/checkout/sessions',{body,key});
+ assert.equal(result.currency,'inr');assert.equal(result.amount_total,17500);assert.deepEqual(result.payment_method_types,['upi']);
+ await f.provider.request(config,'/checkout/sessions',{body,key});
+ const writes=f.stripeCalls.filter(call=>call.path==='/checkout/sessions'&&call.method==='POST');
+ assert.equal(writes.length,2);assert.equal(writes[0].key,key);assert.deepEqual(writes[0],writes[1]);
+ const wire=new URLSearchParams(writes[0].body);
+ assert.equal(wire.get('allowed_payment_method_types[0]'),'upi');assert.equal(wire.has('payment_method_types[0]'),false);
+ assert.equal(wire.get('adaptive_pricing[enabled]'),'false');assert.equal(wire.get('line_items[0][price]'),inrPlan.priceId);
+ await assert.rejects(f.provider.request(config,'/checkout/sessions',{body:body.replace('=upi','=card'),key}),{code:'stripe_checkout_reconciliation_required'});
+ for(const methods of [['card'],['upi','card'],[]]){
+  const bad=fixture({offer:inrPlan,sessionMethods:methods});
+  await bad.broker({op:'customer.create',creation_key:randomUUID()});
+  const response=await bad.broker({op:'checkout.create',order_id:randomUUID(),customer_id:'cus_fixture',price_id:inrPlan.priceId,expires_at:expiresAt,return_origin:websiteOrigin});
+  assert.equal(response.status,502);
+ }
+});
+
+test('approved offer currencies cannot be substituted and country selection never falls back from India to USD',async()=>{
+ const f=fixture({offer:inrPlan}),project=f.config.controlPlane.stripe.allowedProjects[0];
+ f.config.controlPlane.stripe.catalog=[plan,inrPlan];
+ const store={pool:{query:async()=>({rows:[],rowCount:0})}};
+ const billing=new ControlStripe({store,config:f.config,paidCreditReady:async()=>true});
+ const india=await billing.billing(project,{country:'IN'}),other=await billing.billing(project,{country:'US'}),unknown=await billing.billing(project);
+ assert.equal(india.currency,'inr');assert.deepEqual(india.plans.map(p=>p.id),[inrPlan.id]);
+ assert.equal(other.currency,'usd');assert.deepEqual(other.plans.map(p=>p.id),[plan.id]);assert.deepEqual(unknown,other);
+ await assert.rejects(billing.checkout({project,key:randomUUID(),planId:plan.id,origin:websiteOrigin,country:'IN'}),{code:'stripe_plan_invalid'});
+ await assert.rejects(billing.checkout({project,key:randomUUID(),planId:inrPlan.id,origin:websiteOrigin,country:'US'}),{code:'stripe_plan_invalid'});
+ f.config.controlPlane.stripe.catalog=[plan];
+ const missing=await billing.billing(project,{country:'IN'});assert.equal(missing.currency,'inr');assert.deepEqual(missing.plans,[]);
+ assert.equal(missing.checkout_unavailable_reason,'stripe_currency_unavailable');
+ assert.equal(billingCurrency('XX'),'usd');
+ for(const fields of [{currency:'usd'},{amountMinor:200},{credits:50000},{id:plan.id}]){
+  f.config.controlPlane.stripe.catalog=[{...inrPlan,...fields}];assert.equal(stripeSettings(f.config),null);
+ }
+ assert.deepEqual(Object.values(PACK_OFFERS).filter(p=>p.currency==='inr').map(p=>p.amountMinor),[17500,75000,180000,900000]);
+});
+
+test('new async checkout and refund subjects are signed and relayed without sensitive refund data',async()=>{
+ const f=fixture(),config=stripeSettings(f.config);
+ for(const [type,object,id] of [
+  ['checkout.session.async_payment_failed','checkout.session','cs_test_failed'],
+  ['payment_intent.payment_failed','payment_intent','pi_expiredqr'],
+  ['refund.created','refund','re_created'],['refund.updated','refund','re_updated'],['refund.failed','refund','re_failed'],
+ ]){
+  const raw=JSON.stringify({id:'evt_'+randomBytes(8).toString('hex'),object:'event',livemode:false,type,data:{object:{id,object,metadata:{private:'secret'}}}});
+  const response=await f.webhook(raw);assert.equal(response.status,200);
+  const call=f.relayCalls.at(-1),event=verifiedStripeRelay(call.body,call.headers,config);
+  assert.equal(event.event_type,type);assert.equal(event.subject_id,id);assert.doesNotMatch(call.body.toString(),/secret/);
  }
 });

@@ -18,6 +18,7 @@ const API='https://api.stripe.com/v1';
 const SECRET='whsec_SyntheticWebhookSecretOnly';
 const AMOUNT=200,CREDITS=10_000,RESIDENTIAL_BYTES_PER_CREDIT=BigInt(PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES);
 const PLAN={id:'credits-10000',name:'10,000 credits',version:'fixture-1',priceId:'price_fixture',amountMinor:AMOUNT,currency:'usd',credits:CREDITS};
+const INR_PLAN={...PLAN,id:'credits-10000-inr',priceId:'price_inrfixture',amountMinor:17500,currency:'inr'};
 const ts=()=>Math.floor(Date.now()/1000);
 const signature=(raw,time=ts())=>`t=${time},v1=${createHmac('sha256',SECRET).update(time+'.').update(raw).digest('hex')}`;
 
@@ -64,7 +65,8 @@ test('Stripe prepaid checkout and signed reconciliation through the gateway',{sk
   if(options.method==='GET'){
    assert.equal(key,undefined);
    if(path==='/account')return Response.json({object:'account',id:wrongAccount?'acct_other':configStripe.accountId});
-   if(path==='/prices/'+PLAN.priceId)return Response.json(price(live));
+   const offer=configStripe.catalog.find(item=>path==='/prices/'+item.priceId);
+   if(offer)return Response.json(price(live,offer));
    if(path==='/checkout/sessions'){
     return Response.json({object:'list',has_more:false,data:sessions.filter(session=>session.payment_intent===url.searchParams.get('payment_intent'))});
    }
@@ -86,7 +88,8 @@ test('Stripe prepaid checkout and signed reconciliation through the gateway',{sk
   }else{
    assert.equal(path,'/checkout/sessions');
    const orderId=params.get('client_reference_id'),id=`cs_${configStripe.mode}_${randomBytes(8).toString('hex')}`;
-   const canonical=(await store.pool.query('SELECT request_body FROM control_stripe_orders WHERE id=$1',[orderId])).rows[0].request_body;
+   const order=(await store.pool.query('SELECT request_body,plan FROM control_stripe_orders WHERE id=$1',[orderId])).rows[0],offer=order.plan;
+   const canonical=order.request_body;
    if(configStripe.transport==='broker'){
     const wire=new URLSearchParams(canonical);
     assert.equal(wire.get('payment_method_types[0]'),'card','gateway keeps its durable canonical form');
@@ -95,15 +98,15 @@ test('Stripe prepaid checkout and signed reconciliation through the gateway',{sk
     assert.equal(params.has('payment_method_types[0]'),false);
     assert.equal(params.get('allowed_payment_method_types[0]'),'card');
    }else assert.equal(canonical,call.body);
-   assert.equal(params.get('mode'),'payment');assert.equal(params.get('line_items[0][price]'),PLAN.priceId);
+   assert.equal(params.get('mode'),'payment');assert.equal(params.get('line_items[0][price]'),offer.priceId);
    assert.equal(params.get('payment_intent_data[metadata][fetchx_checkout]'),orderId);
    const origin=configStripe.brokerReturnOrigin??ORIGIN;
    assert.equal(params.get('success_url'),origin+'/app/billing?checkout=success');assert.equal(params.get('cancel_url'),origin+'/app/billing?checkout=cancelled');
    assert.equal(params.has('customer_email'),false);assert.equal(params.has('invoice_creation[enabled]'),false);
    object={id,object:'checkout.session',livemode:live,mode:'payment',status:'open',payment_status:'unpaid',
-    customer:params.get('customer'),client_reference_id:orderId,amount_subtotal:AMOUNT,amount_total:AMOUNT,currency:'usd',
+    customer:params.get('customer'),client_reference_id:orderId,amount_subtotal:offer.amountMinor,amount_total:offer.amountMinor,currency:offer.currency,
     success_url:params.get('success_url'),cancel_url:params.get('cancel_url'),automatic_tax:{enabled:false},
-    allow_promotion_codes:false,payment_method_types:['card'],total_details:{amount_discount:0,amount_tax:0,amount_shipping:0},
+    allow_promotion_codes:false,payment_method_types:[offer.currency==='inr'?'upi':'card'],total_details:{amount_discount:0,amount_tax:0,amount_shipping:0},
     url:`https://checkout.stripe.com/c/pay/${id}#synthetic-secret`};
    sessions.push(object);objects.set(path+'/'+id,object);
   }
@@ -111,7 +114,7 @@ test('Stripe prepaid checkout and signed reconciliation through the gateway',{sk
   if(path==='/checkout/sessions'&&omitCheckoutResponse){omitCheckoutResponse=false;throw new Error('private Stripe transport details');}
   return Response.json(object);
  };
- function price(live){return {id:PLAN.priceId,object:'price',livemode:live,active:true,type:'one_time',unit_amount:AMOUNT,currency:'usd',billing_scheme:'per_unit',recurring:null};}
+ function price(live,offer=PLAN){return {id:offer.priceId,object:'price',livemode:live,active:true,type:'one_time',unit_amount:offer.amountMinor,currency:offer.currency,billing_scheme:'per_unit',recurring:null};}
  app=server(gateway,{stripeFetch,stripeAutoProcess:false});
  app.v2.paidCreditReady=async(_project,{publicOnly,purchaseCredits=0,pendingLiabilityBytes=0n,outstandingLiabilityBytes=0n}={})=>
   publicOnly===true&&routeReady&&(purchaseCredits===0||BigInt(purchaseCredits)*RESIDENTIAL_BYTES_PER_CREDIT+
@@ -142,13 +145,14 @@ test('Stripe prepaid checkout and signed reconciliation through the gateway',{sk
   if(drain)await app.stripe.reconcile();
   return value;
  }
- function paid(session,{received=AMOUNT,quantity=1}={}){
+ function paid(session,{received=session.amount_total,quantity=1}={}){
+  const offer=session.currency==='inr'?INR_PLAN:PLAN,amount=session.amount_total,currency=session.currency;
   const suffix=randomBytes(8).toString('hex'),intentId='pi_'+suffix,chargeId='ch_'+suffix,live=session.livemode;
-  const line={object:'item',price:price(live),quantity,currency:'usd',amount_subtotal:AMOUNT,amount_total:AMOUNT,amount_tax:0,amount_discount:0};
+  const line={object:'item',price:price(live,offer),quantity,currency,amount_subtotal:amount,amount_total:amount,amount_tax:0,amount_discount:0};
   const intent={id:intentId,object:'payment_intent',livemode:live,customer:session.customer,metadata:{fetchx_checkout:session.client_reference_id},
-   status:'succeeded',amount:AMOUNT,amount_received:received,currency:'usd',latest_charge:chargeId};
-  const charge={id:chargeId,object:'charge',livemode:live,customer:session.customer,payment_intent:intentId,paid:true,captured:true,amount:AMOUNT,
-   amount_captured:AMOUNT,currency:'usd',amount_refunded:0,refunded:false,disputed:false,created:ts(),payment_method_details:{type:'card'}};
+   status:'succeeded',amount,amount_received:received,currency,latest_charge:chargeId};
+  const charge={id:chargeId,object:'charge',livemode:live,customer:session.customer,payment_intent:intentId,paid:true,captured:true,amount,
+   amount_captured:amount,currency,amount_refunded:0,refunded:false,disputed:false,created:ts(),payment_method_details:{type:currency==='inr'?'upi':'card'}};
   Object.assign(session,{status:'complete',payment_status:'paid',payment_intent:intentId,url:null,customer_details:{email:'never-persist@example.com'}});
   objects.set('/checkout/sessions/'+session.id+'/line_items',{object:'list',has_more:false,data:[line]});
   objects.set('/payment_intents/'+intentId,intent);objects.set('/charges/'+chargeId,charge);
@@ -341,6 +345,65 @@ test('Stripe prepaid checkout and signed reconciliation through the gateway',{sk
    const records=(await store.pool.query('SELECT * FROM '+table)).rows;
    assert.doesNotMatch(JSON.stringify(records),/never-persist|synthetic-secret|sk_live_|whsec_/);
   }
+ });
+ await t.test('existing USD history survives guarded migration and INR grants join the same credit wallet',async()=>{
+  // The preceding legacy test intentionally left one open USD checkout.
+  const prior=lastSession();prior.status='expired';prior.url=null;await receive('checkout.session.expired',prior);
+  const tables=['control_stripe_orders','control_stripe_purchases','paid_credit_grants'];
+  const snapshots=await Promise.all(tables.map(table=>store.pool.query(`SELECT jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text) AS value FROM ${table} t`)));
+  await store.pool.query(`ALTER TABLE paid_credit_grants DROP CONSTRAINT paid_credit_grants_currency_check;
+   ALTER TABLE paid_credit_grants ADD CONSTRAINT paid_credit_grants_currency_check CHECK(currency='usd');
+   ALTER TABLE control_stripe_orders DROP CONSTRAINT control_stripe_orders_state_check;
+   ALTER TABLE control_stripe_orders ADD CONSTRAINT control_stripe_orders_state_check CHECK(state IN ('creating','awaiting_payment','complete','expired'));`);
+  await store.init();await store.init();
+  for(let i=0;i<tables.length;i++)assert.deepEqual((await store.pool.query(`SELECT jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text) AS value FROM ${tables[i]} t`)).rows,snapshots[i].rows);
+  config.controlPlane.stripe={...settings('live'),inrSalesEnabled:true,catalog:[PLAN,INR_PLAN]};
+  const india={'x-fetchx-client-country':'IN'},indiaBilling=await control('GET',path,a.actor,undefined,india);
+  assert.equal(indiaBilling.json().stripe.currency,'inr');assert.deepEqual(indiaBilling.json().stripe.plans.map(p=>p.id),[INR_PLAN.id]);
+  assert.deepEqual((await readBilling()).stripe.plans.map(p=>p.id),[PLAN.id]);
+  assert.equal((await control('POST',checkout,a.actor,{idempotency_key:randomUUID(),plan_id:PLAN.id},india)).statusCode,400);
+  assert.equal((await start(randomUUID(),a.actor,INR_PLAN.id)).statusCode,400);
+  const key=randomUUID(),before=(await paidCredits()).available,created=await control('POST',checkout,a.actor,{idempotency_key:key,plan_id:INR_PLAN.id},india);
+  assert.equal(created.statusCode,200,created.body);assert.equal(created.json().currency,'inr');
+  const session=lastSession(),saved=(await store.pool.query('SELECT request_body FROM control_stripe_orders WHERE id=$1',[session.client_reference_id])).rows[0].request_body;
+  assert.equal(new URLSearchParams(saved).get('payment_method_types[0]'),'upi');
+  // Geography changes recover the exact saved INR checkout instead of minting a USD replacement.
+  const recovered=await start(key,a.actor,INR_PLAN.id);assert.equal(recovered.statusCode,200);assert.equal(recovered.json().currency,'inr');
+  assert.equal((await store.pool.query('SELECT request_body FROM control_stripe_orders WHERE id=$1',[session.client_reference_id])).rows[0].request_body,saved);
+  Object.assign(session,{status:'complete',payment_status:'unpaid',url:null});
+  const pending=await receive('checkout.session.completed',session);assert.equal((await paidCredits()).available,before);
+  assert.equal((await store.pool.query('SELECT state FROM control_stripe_events WHERE event_id=$1',[pending.id])).rows[0].state,'applied');
+  const fixture=paid(session);fixture.charge.payment_method_details.type='card';
+  const paidEvent=await receive('checkout.session.async_payment_succeeded',session);
+  assert.equal((await paidCredits()).available,before,'a card charge cannot fund an INR UPI offer');
+  fixture.charge.payment_method_details.type='upi';
+  assert.equal((await app.stripe.reconcile({eventId:paidEvent.id})).applied,1);
+  await receive('checkout.session.completed',session);await receive('checkout.session.async_payment_succeeded',session);
+  assert.equal((await paidCredits()).available,before+CREDITS);
+  const grant=(await store.pool.query('SELECT currency,amount_minor,credits FROM paid_credit_grants WHERE checkout_session_id=$1',[session.id])).rows[0];
+  assert.deepEqual(grant,{currency:'inr',amount_minor:17500,credits:String(CREDITS)});
+  const refund={id:'re_'+randomBytes(8).toString('hex'),object:'refund',charge:fixture.charge.id,payment_intent:fixture.intent.id,currency:'inr',amount:1,status:'pending'};
+  objects.set('/refunds/'+refund.id,refund);
+  await receive('refund.created',refund);assert.equal((await paidCredits()).payment_hold,true);
+  assert.equal((await paidCredits()).available,0,'pending refund holds spendable credits without revoking them');
+  refund.status='failed';await receive('refund.failed',refund);await receive('refund.created',refund);
+  assert.equal((await paidCredits()).payment_hold,false);assert.equal((await paidCredits()).available,before+CREDITS);
+  const success={...refund,id:'re_'+randomBytes(8).toString('hex'),status:'pending'};objects.set('/refunds/'+success.id,success);
+  await receive('refund.created',success);success.status='succeeded';
+  await receive('refund.updated',success);await receive('refund.created',success);
+  assert.equal((await paidCredits()).payment_hold,false);assert.equal((await paidCredits()).available,before);
+  assert.equal((await get(key)).json().state,'reversed');
+ });
+ await t.test('confirmed asynchronous INR failure releases the checkout slot without granting credits',async()=>{
+  const india={'x-fetchx-client-country':'IN'},key=randomUUID(),before=await grants();
+  const created=await control('POST',checkout,a.actor,{idempotency_key:key,plan_id:INR_PLAN.id},india);assert.equal(created.statusCode,200,created.body);
+  const session=lastSession(),intentId='pi_'+randomBytes(8).toString('hex');
+  Object.assign(session,{status:'complete',payment_status:'unpaid',payment_intent:intentId,url:null});
+  objects.set('/payment_intents/'+intentId,{id:intentId,object:'payment_intent',livemode:true,customer:session.customer,
+   metadata:{fetchx_checkout:session.client_reference_id},amount:17500,amount_received:0,currency:'inr',status:'requires_payment_method',latest_charge:null});
+  await receive('checkout.session.async_payment_failed',session);assert.equal((await get(key)).json().state,'failed');assert.equal(await grants(),before);
+  const next=await control('POST',checkout,a.actor,{idempotency_key:randomUUID(),plan_id:INR_PLAN.id},india);assert.equal(next.statusCode,200,next.body);
+  const expired=lastSession();expired.status='expired';expired.url=null;await receive('checkout.session.expired',expired);
  });
  await t.test('brokered Checkout and signed relay reach the real inbox and sandbox receipt without a Stripe key in gateway config',async()=>{
   const accountId='acct_test',workerOrigin='https://payment-broker.fixture.example',returnOrigin='https://billing.fixture.example';

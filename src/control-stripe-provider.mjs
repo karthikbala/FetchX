@@ -3,7 +3,7 @@ import {fail} from './policy.mjs';
 import {paidCreditPack} from './control-paid-credits.mjs';
 import {
  BROKER_MAX_BODY,BROKER_PATH,BROKER_SECRET,EVENT_SUBJECTS,KEY_ID,RELAY_TIME_WINDOW,SHA256,
- STRIPE_VERSION,audience,brokerMessage,checkoutForm,customerForm,exact,fresh,relayMessage,sessionPrefix,subjectPrefix,
+ PACK_OFFERS,STRIPE_VERSION,audience,brokerMessage,checkoutForm,customerForm,exact,fresh,relayMessage,sessionPrefix,subjectPrefix,
 } from './control-stripe-broker-protocol.mjs';
 
 export {STRIPE_VERSION};
@@ -53,23 +53,25 @@ export function stripeSettings(config,{allowDirect=false}={}){
  }else if(transport!=='direct'||!allowDirect||
   !stripeMatches(value.secretKey,new RegExp('^(?:sk|rk)_'+value.mode+'_[A-Za-z0-9_]{12,256}$'))||
   !stripeMatches(value.webhookSecret,/^whsec_[A-Za-z0-9_]{16,256}$/))return null;
+ if(value.inrSalesEnabled!==undefined&&typeof value.inrSalesEnabled!=='boolean')return null;
  const projects=value.allowedProjects??[];
  if(!Array.isArray(projects)||!projects.every(project=>typeof project==='string'&&project.startsWith('cp_')&&STRIPE_UUID.test(project.slice(3))))return null;
  if(value.mode==='test'&&value.allowAllProjects===true)return null;
  const salesEnabled=config.controlPlane.enabled===true&&value.enabled===true;
  if(salesEnabled&&(value.mode==='test'&&!projects.length||value.mode==='live'&&(value.commercialReviewed!==true||!projects.length&&value.allowAllProjects!==true)))return null;
  const plans=value.catalog??[];
- if(!Array.isArray(plans)||salesEnabled&&!plans.length||plans.length>4)return null;
+ if(!Array.isArray(plans)||salesEnabled&&!plans.length||plans.length>8)return null;
  for(const plan of plans){
   if(!stripeMatches(plan?.id,PLAN_ID)||typeof plan.name!=='string'||plan.name.length<1||plan.name.length>80||!stripeMatches(plan.version,VERSION)||!stripeMatches(plan.priceId,PRICE)||
    !approvedPaidCreditPlan(plan))return null;
  }
- if(new Set(plans.map(p=>p.id)).size!==plans.length||new Set(plans.map(p=>p.priceId)).size!==plans.length||new Set(plans.map(p=>p.amountMinor)).size!==plans.length)return null;
+ if(new Set(plans.map(p=>p.id)).size!==plans.length||new Set(plans.map(p=>p.priceId)).size!==plans.length||new Set(plans.map(p=>p.currency+':'+p.amountMinor)).size!==plans.length)return null;
  return {...value,transport,relayKeys,catalog:plans,allowedProjects:projects,salesEnabled};
 }
 export function approvedPaidCreditPlan(plan){
- return plan?.currency==='usd'&&Number.isSafeInteger(plan.credits)&&plan.credits>0&&
-  paidCreditPack(plan.amountMinor)===plan.credits&&plan.id==='credits-'+plan.credits&&
+ const offer=PACK_OFFERS[plan?.id];
+ return !!offer&&plan.currency===offer.currency&&plan.amountMinor===offer.amountMinor&&plan.credits===offer.credits&&
+  paidCreditPack(plan.amountMinor,plan.currency)===plan.credits&&
   plan.name===plan.credits.toLocaleString('en-US')+' credits';
 }
 export async function lockStripeSales(client,mode){
@@ -127,7 +129,8 @@ function brokerCreateCommand(config,path,body,key){
  const rawExpiry=form.get('expires_at'),expiresAt=Number(rawExpiry),returnOrigin=config.brokerReturnOrigin;
  if(!stripeMatches(orderId,STRIPE_UUID)||!stripeId(customerId,'cus')||!stripeMatches(priceId,PRICE)||
   !stripeMatches(rawExpiry,/^\d{1,12}$/)||!Number.isSafeInteger(expiresAt)||key!=='fetchx-checkout-'+orderId||
-  body!==checkoutForm({orderId,customerId,priceId,expiresAt,returnOrigin}))fail('stripe_checkout_reconciliation_required',409);
+  body!==checkoutForm({orderId,customerId,priceId,expiresAt,returnOrigin,
+   paymentMethod:PACK_OFFERS[config.catalog.find(plan=>plan.priceId===priceId)?.id]?.paymentMethod}))fail('stripe_checkout_reconciliation_required',409);
  return {op:'checkout.create',order_id:orderId,customer_id:customerId,price_id:priceId,expires_at:expiresAt,return_origin:returnOrigin};
 }
 function brokerReadCommand(config,path){
@@ -136,12 +139,12 @@ function brokerReadCommand(config,path){
  if(byIntent)return {op:'checkout.by_payment_intent',intent_id:byIntent[1]};
  const line=/^\/checkout\/sessions\/([^/?]+)\/line_items\?limit=2$/.exec(path);
  if(line&&stripeId(line[1],sessionPrefix(config.mode)))return {op:'checkout.line_items',session_id:line[1]};
- const match=/^\/(prices|checkout\/sessions|payment_intents|charges|disputes)\/([^/?]+)$/.exec(path);
+ const match=/^\/(prices|checkout\/sessions|payment_intents|charges|disputes|refunds)\/([^/?]+)$/.exec(path);
  if(match){
   const [op,field,prefix]={
    prices:['price.get','price_id','price'],'checkout/sessions':['checkout.get','session_id',sessionPrefix(config.mode)],
    payment_intents:['payment_intent.get','intent_id','pi'],charges:['charge.get','charge_id','ch'],
-   disputes:['dispute.get','dispute_id','dp'],
+   disputes:['dispute.get','dispute_id','dp'],refunds:['refund.get','refund_id','re'],
   }[match[1]];
   if(stripeId(match[2],prefix))return {op,[field]:match[2]};
  }
