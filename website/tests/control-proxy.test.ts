@@ -6,9 +6,11 @@ const project='cp_00000000-0000-4000-8000-000000000001';
 const env:ControlEnv={SITE_ENV:'production',ALLOWED_ORIGINS:origin,FETCHX_CONTROL_URL:'https://gateway.example/control',FETCHX_CONTROL_SECRET:secret};
 let calls:{url:string;init:RequestInit}[]=[];
 let upstream:()=>Response|Promise<Response>;
-const send=(path='/session',options:{method?:string;body?:string;headers?:Record<string,string>;env?:ControlEnv;origin?:string}={})=>{
+const send=(path='/session',options:{method?:string;body?:string;headers?:Record<string,string>;env?:ControlEnv;origin?:string;country?:unknown}={})=>{
  const method=options.method??'GET';
- return handleControl(new Request((options.origin??origin)+'/api/control'+path,{method,headers:{Origin:options.origin??origin,'Content-Type':'application/json',Cookie:`unrelated=private; fetchx_session=${token}`,'X-CSRF-Token':'c'.repeat(43),...options.headers},...(options.body===undefined?{}:{body:options.body})}),options.env??env);
+ const request=new Request((options.origin??origin)+'/api/control'+path,{method,headers:{Origin:options.origin??origin,'Content-Type':'application/json',Cookie:`unrelated=private; fetchx_session=${token}`,'X-CSRF-Token':'c'.repeat(43),...options.headers},...(options.body===undefined?{}:{body:options.body})});
+ if(options.country!==undefined)Object.defineProperty(request,'cf',{value:{country:options.country}});
+ return handleControl(request,options.env??env);
 };
 beforeEach(()=>{
  calls=[];upstream=()=>Response.json({user:{id:'synthetic'}});
@@ -23,6 +25,15 @@ describe('same-origin control bridge',()=>{
   const headers=new Headers(calls[0].init.headers);expect(headers.get('X-FetchX-Control-Secret')).toBe(secret);expect(headers.get('Origin')).toBe(origin);expect(headers.get('Cookie')).toBe(`fetchx_session=${token}`);expect(headers.get('X-CSRF-Token')).toBe('c'.repeat(43));expect(headers.get('X-FetchX-Client-IP')).toBe('192.0.2.10');
   expect(headers.get('Authorization')).toBeNull();expect(headers.get('X-Forwarded-Host')).toBeNull();expect(calls[0].init.redirect).toBe('manual');
   expect(result.headers.get('Cache-Control')).toBe('no-store');expect(JSON.stringify(await result.json())).not.toContain(secret);
+ });
+ it('forwards only trusted Cloudflare country and replaces browser market spoofing',async()=>{
+  for(const country of ['IN','US',undefined,'XX','in','IND']){
+   const result=await send(`/projects/${project}/billing`,{country,headers:{'X-FetchX-Client-Country':'IN','CF-IPCountry':'IN','Accept-Language':'en-IN'}});
+   expect(result.status).toBe(200);
+   const forwarded=new Headers(calls.at(-1)!.init.headers);
+   expect(forwarded.get('X-FetchX-Client-Country')).toBe(country==='IN'||country==='US'?country:null);
+   expect(forwarded.get('CF-IPCountry')).toBeNull();expect(forwarded.get('Accept-Language')).toBeNull();
+  }
  });
  it('allows GET without an Origin and rejects a cross-site or mismatched Origin',async()=>{
   expect((await send('/session',{headers:{Origin:''}})).status).toBe(200);

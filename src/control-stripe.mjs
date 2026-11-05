@@ -6,7 +6,7 @@ import {
  stripeId,stripeObject,stripeProjectAllowed,stripeSettings,verifiedStripeEvent,verifiedStripeRelay,
 } from './control-stripe-provider.mjs';
 import {StripeEvents,checkoutMatches,stripeEventSubject} from './control-stripe-events.mjs';
-import {BROKER_MAX_BODY,RELAY_PATH,STRIPE_WEBHOOK_PATH,checkoutForm,customerForm} from './control-stripe-broker-protocol.mjs';
+import {BROKER_MAX_BODY,RELAY_PATH,STRIPE_WEBHOOK_PATH,checkoutForm,customerForm,billingCurrency,currencyPaymentMethod} from './control-stripe-broker-protocol.mjs';
 
 export async function initControlStripe(pool){
  await pool.query(`
@@ -18,10 +18,22 @@ export async function initControlStripe(pool){
   CREATE TABLE IF NOT EXISTS control_stripe_orders (
    id uuid PRIMARY KEY, mode text NOT NULL, account_id text NOT NULL, project text NOT NULL, operation_key uuid NOT NULL,
    plan jsonb NOT NULL, return_origin text NOT NULL, api_version text NOT NULL, request_body text,
-   created_at timestamptz NOT NULL DEFAULT now(), state text NOT NULL DEFAULT 'creating' CHECK(state IN ('creating','awaiting_payment','complete','expired')),
+   created_at timestamptz NOT NULL DEFAULT now(), state text NOT NULL DEFAULT 'creating' CHECK(state IN ('creating','awaiting_payment','complete','expired','failed')),
    session_id text, FOREIGN KEY(mode,project) REFERENCES control_stripe_customers(mode,project),
    UNIQUE(mode,project,operation_key), UNIQUE(mode,account_id,session_id)
   );
+  DO $order_state_migration$
+  DECLARE definition text;
+  BEGIN
+   SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+    WHERE conrelid='control_stripe_orders'::regclass AND conname='control_stripe_orders_state_check';
+   IF definition='CHECK ((state = ANY (ARRAY[''creating''::text, ''awaiting_payment''::text, ''complete''::text, ''expired''::text])))' THEN
+    ALTER TABLE control_stripe_orders DROP CONSTRAINT control_stripe_orders_state_check;
+    ALTER TABLE control_stripe_orders ADD CONSTRAINT control_stripe_orders_state_check
+     CHECK(state IN ('creating','awaiting_payment','complete','expired','failed'));
+   ELSIF definition IS DISTINCT FROM 'CHECK ((state = ANY (ARRAY[''creating''::text, ''awaiting_payment''::text, ''complete''::text, ''expired''::text, ''failed''::text])))'
+    THEN RAISE EXCEPTION 'stripe_order_state_constraint_unrecognized'; END IF;
+  END $order_state_migration$;
   CREATE UNIQUE INDEX IF NOT EXISTS control_stripe_one_open_checkout ON control_stripe_orders(mode,project)
    WHERE state IN ('creating','awaiting_payment');
   CREATE TABLE IF NOT EXISTS control_stripe_events (
@@ -58,7 +70,7 @@ function resumeBefore(row,limit){
  if(Date.now()-row.created_at.getTime()>=limit)fail('stripe_checkout_reconciliation_required',409);
 }
 function planView(plan){return {id:plan.id,name:plan.name,amount_minor:plan.amountMinor,currency:plan.currency,credits:plan.credits};}
-function checkoutView(row,state=row.state){return {mode:row.mode,state,plan_id:row.plan.id};}
+function checkoutView(row,state=row.state){return {mode:row.mode,state,plan_id:row.plan.id,currency:row.plan.currency,amount_minor:row.plan.amountMinor,credits:row.plan.credits};}
 function savedCheckoutState(row){
  if(row.purchase_state)return row.purchase_state;
  if(row.state==='creating'&&Date.now()-row.created_at.getTime()>=STRIPE_CREATE_WINDOW_MS)return 'reconciliation_required';
@@ -80,9 +92,10 @@ export class ControlStripe {
  }
  ready(){return !!this.settings();}
  webhookReady(path){return this.settings()?.transport===(path===RELAY_PATH?'broker':'direct');}
- async billing(project){
+ async billing(project,{country}={}){
   const config=this.settings();
   if(!config)return null;
+  const currency=billingCurrency(country),catalog=config.catalog.filter(plan=>plan.currency===currency),currencySales=currency==='usd'||config.inrSalesEnabled===true;
   const sales=config.salesEnabled&&stripeProjectAllowed(config,project),scope=[config.mode,config.accountId,project];
   const [drafts,history]=await Promise.all([
    this.store.pool.query(`SELECT id,operation_key,state,plan,created_at FROM control_stripe_orders
@@ -92,16 +105,16 @@ export class ControlStripe {
   ]);
   if(!sales&&!drafts.rowCount&&!history.rowCount)return null;
   const held=sales&&config.mode==='live'&&await this.paidCredits.paymentHeld(project);
-  const ready=sales&&!held&&await this.paidCreditReady(project,{publicOnly:true});
+  const baseReady=sales&&!held&&await this.paidCreditReady(project,{publicOnly:true}),ready=baseReady&&currencySales;
   const row=drafts.rows[0];
-  const pending=row?{plan_id:row.plan.id,idempotency_key:row.operation_key,state:savedCheckoutState(row)}:null;
+  const pending=row?{plan_id:row.plan.id,currency:row.plan.currency,amount_minor:row.plan.amountMinor,credits:row.plan.credits,idempotency_key:row.operation_key,state:savedCheckoutState(row)}:null;
   const {plans,canResume}=await this.withSalesCapacity(config,async client=>{
    const obligations=ready&&config.mode==='live'?await this.salesObligations(client):{};
    const plans=[];
-   for(const plan of sales?config.catalog:[]){
+   for(const plan of sales?catalog:[]){
     plans.push({...planView(plan),can_purchase:ready&&await this.packageFits(project,config,plan,obligations,client)});
    }
-   const canResume=!!pending&&ready&&pending.state!=='reconciliation_required'&&await this.packageFits(
+   const canResume=!!pending&&baseReady&&pending.state!=='reconciliation_required'&&await this.packageFits(
     project,config,row.plan,config.mode==='live'?await this.salesObligations(client,row.id):{},client);
    return {plans,canResume};
   });
@@ -109,9 +122,9 @@ export class ControlStripe {
   const purchases=history.rows.map(({plan,state,paid_at})=>({
    plan_id:plan.id,name:plan.name,amount_minor:plan.amountMinor,currency:plan.currency,credits:plan.credits,status:state,paid_at,
   }));
-  return {mode:config.mode,plans,pending_checkout:pending,can_checkout:eligible&&!pending,can_manage:false,purchases,
+  return {mode:config.mode,currency,plans,pending_checkout:pending,can_checkout:eligible&&!pending,can_manage:false,purchases,
    ...(pending?{can_resume_checkout:canResume}:{}),
-   ...(sales&&!eligible&&!canResume?{checkout_unavailable_reason:held?'paid_credit_payment_hold':ready?'paid_credit_capacity_unavailable':'paid_credit_route_unavailable'}:{})};
+   ...(sales&&!eligible&&!canResume?{checkout_unavailable_reason:held?'paid_credit_payment_hold':!currencySales||!catalog.length?'stripe_currency_unavailable':ready?'paid_credit_capacity_unavailable':'paid_credit_route_unavailable'}:{})};
  }
  async withSalesCapacity(config,fn){
   if(config.mode!=='live')return fn(this.store.pool);
@@ -183,36 +196,37 @@ export class ControlStripe {
   if(!saved.rowCount)fail('stripe_customer_mismatch',502);
   return customer.id;
  }
- async checkout({project,key,planId,origin}){
+ async checkout({project,key,planId,origin,country}){
   const config=this.configuration(project);checkKey(key);checkOrigin(this.config.controlPlane,origin);
   if(config.transport==='broker'&&origin!==config.brokerReturnOrigin)fail('origin_rejected',403);
   let row=await this.find(project,config,key);
   if(row&&(row.plan.id!==planId||row.return_origin!==origin))fail('stripe_checkout_conflict',409);
-  if(row&&(row.state==='complete'||row.state==='expired'))return checkoutView(row,savedCheckoutState(row));
+  if(row&&(row.state==='complete'||row.state==='expired'||row.state==='failed'))return checkoutView(row,savedCheckoutState(row));
   if(!await this.paidCreditReady(project,{publicOnly:true}))fail('paid_credit_route_unavailable',409);
   if(!row){
    const plan=config.catalog.find(item=>item.id===planId);
-   if(!plan)fail('stripe_plan_invalid',400);
+   if(!plan||plan.currency!==billingCurrency(country))fail('stripe_plan_invalid',400);
+   if(plan.currency==='inr'&&config.inrSalesEnabled!==true)fail('stripe_checkout_disabled',404);
    await this.withSalesCapacity(config,c=>this.assertCapacity(project,config,plan,c));
    await this.provider.assertAccount(config);
    await this.provider.assertPrice(config,plan);
    row=await this.prepareOrder(project,config,plan,key,origin);
   }
   if(row.plan.id!==planId||row.return_origin!==origin)fail('stripe_checkout_conflict',409);
-  if(row.state==='complete'||row.state==='expired')return checkoutView(row,savedCheckoutState(row));
+  if(row.state==='complete'||row.state==='expired'||row.state==='failed')return checkoutView(row,savedCheckoutState(row));
   if(!row.session_id)resumeBefore(row,STRIPE_CREATE_WINDOW_MS);
   await this.withSalesCapacity(config,c=>this.assertCapacity(project,config,row.plan,c,row.id));
   row=await this.find(project,config,key);
-  if(row.state==='complete'||row.state==='expired')return checkoutView(row,savedCheckoutState(row));
+  if(row.state==='complete'||row.state==='expired'||row.state==='failed')return checkoutView(row,savedCheckoutState(row));
   await this.provider.assertAccount(config);
   const customer=await this.customer(project,config);
   if(!row.request_body){
    const body=checkoutForm({orderId:row.id,customerId:customer,priceId:row.plan.priceId,
-    expiresAt:Math.floor(row.created_at.getTime()/1000)+3600,returnOrigin:origin});
+    expiresAt:Math.floor(row.created_at.getTime()/1000)+3600,returnOrigin:origin,paymentMethod:currencyPaymentMethod(row.plan.currency)});
    row=(await this.store.pool.query(`UPDATE control_stripe_orders SET request_body=COALESCE(request_body,$2)
     WHERE id=$1 AND state='creating' AND session_id IS NULL RETURNING *`,[row.id,body])).rows[0]??await this.find(project,config,key);
   }
-  if(row.state==='complete'||row.state==='expired')return checkoutView(row,savedCheckoutState(row));
+  if(row.state==='complete'||row.state==='expired'||row.state==='failed')return checkoutView(row,savedCheckoutState(row));
   const session=row.session_id
    ?await this.provider.request(config,'/checkout/sessions/'+row.session_id,{version:row.api_version})
    :await this.provider.request(config,'/checkout/sessions',{body:row.request_body,key:'fetchx-checkout-'+row.id,version:row.api_version});
@@ -224,7 +238,7 @@ export class ControlStripe {
    if(!result.rowCount)fail('stripe_checkout_unconfirmed',502);
    row=result.rows[0];
   }else row=await this.find(project,config,key);
-  if(row.state==='complete'||row.state==='expired')return checkoutView(row,savedCheckoutState(row));
+  if(row.state==='complete'||row.state==='expired'||row.state==='failed')return checkoutView(row,savedCheckoutState(row));
   if(session.status==='expired'){
    await this.store.pool.query("UPDATE control_stripe_orders SET state='expired' WHERE id=$1 AND state='awaiting_payment'",[row.id]);
    return checkoutView(row,'expired');
@@ -265,7 +279,7 @@ export class ControlStripe {
   if(!checkoutMatches(session,row,row.customer_id,config)||session.id!==sessionId||
    !['open','complete','expired'].includes(session.status))fail('stripe_checkout_conflict',409);
   const saved=await this.store.pool.query(`UPDATE control_stripe_orders SET session_id=$2,state=CASE
-   WHEN state IN ('complete','expired') THEN state WHEN $3='expired' THEN 'expired' ELSE 'awaiting_payment' END
+   WHEN state IN ('complete','expired','failed') THEN state WHEN $3='expired' THEN 'expired' ELSE 'awaiting_payment' END
    WHERE id=$1 AND (session_id IS NULL OR session_id=$2) RETURNING *`,[row.id,session.id,session.status]);
   if(!saved.rowCount)fail('stripe_checkout_conflict',409);
   const recovered=await this.find(row.project,config,row.operation_key);

@@ -1,11 +1,17 @@
 import {GatewayError,fail} from './policy.mjs';
+import {currencyPaymentMethod,stripeChargeId,stripeSubjectId} from './control-stripe-broker-protocol.mjs';
 import {STRIPE_UUID,approvedPaidCreditPlan,lockStripeSales,oneTimeStripePrice,stripeId,stripeObject} from './control-stripe-provider.mjs';
 
 const SUBJECTS=new Map([
  ['checkout.session.completed','checkout.session'],
  ['checkout.session.async_payment_succeeded','checkout.session'],
+ ['checkout.session.async_payment_failed','checkout.session'],
  ['checkout.session.expired','checkout.session'],
+ ['payment_intent.payment_failed','payment_intent'],
  ['charge.refunded','charge'],
+ ['refund.created','refund'],
+ ['refund.updated','refund'],
+ ['refund.failed','refund'],
  ['charge.dispute.created','dispute'],
  ['charge.dispute.closed','dispute'],
 ]);
@@ -15,8 +21,7 @@ export function stripeEventSubject(event){
  const object=SUBJECTS.get(event.type);
  if(!object)return null;
  const subject=event.data?.object;
- const prefix=object==='checkout.session'?sessionPrefix(event.livemode?'live':'test'):object==='charge'?'ch':'dp';
- if(subject?.object!==object||!stripeId(subject?.id,prefix))fail('stripe_event_invalid',400);
+ if(subject?.object!==object||!stripeSubjectId(subject?.id,object,event.livemode?'live':'test'))fail('stripe_event_invalid',400);
  return subject.id;
 }
 
@@ -74,7 +79,27 @@ export class StripeEvents{
  }
  async process(config,event){
   if(event.event_type.startsWith('checkout.session.'))return this.checkoutEvent(config,event);
+  if(event.event_type==='payment_intent.payment_failed')return this.intentFailureEvent(config,event);
+  if(event.event_type.startsWith('refund.'))return this.refundEvent(config,event);
   return this.reversalEvent(config,event);
+ }
+ async intentFailureEvent(config,event){
+  const intent=await this.provider.request(config,'/payment_intents/'+event.subject_id);
+  if(!stripeObject(intent,'payment_intent',event.subject_id,config))fail('stripe_payment_conflict',409);
+  const order=await this.order(config,intent.metadata?.fetchx_checkout);if(!order)return false;
+  if(!order.customer_id||intent.customer!==order.customer_id||intent.amount!==order.plan.amountMinor||intent.currency!==order.plan.currency)
+   fail('stripe_payment_conflict',409);
+  const session=order.session_id?await this.provider.request(config,'/checkout/sessions/'+order.session_id):
+   (await this.provider.request(config,'/checkout/sessions?'+new URLSearchParams({payment_intent:intent.id,limit:'2'}))).data?.[0];
+  if(!session||!checkoutMatches(session,order,order.customer_id,config)||session.payment_intent!==intent.id)fail('stripe_checkout_conflict',409);
+  if(!['requires_payment_method','canceled','succeeded'].includes(intent.status))fail('stripe_payment_unconfirmed',502);
+  // A five-minute UPI QR expiry is a failed attempt, not a terminal Checkout.
+  // The customer can recover its hosted page; retain liability until Stripe
+  // confirms that the Session itself expired or a verified payment settles it.
+  return this.apply(event,async c=>{
+   if(session.status==='expired')await c.query(`UPDATE control_stripe_orders SET state='expired'
+    WHERE id=$1 AND state IN ('creating','awaiting_payment')`,[order.id]);
+  });
  }
  async checkoutEvent(config,event){
   const id=event.subject_id;
@@ -88,13 +113,26 @@ export class StripeEvents{
    return this.apply(event,c=>c.query(`UPDATE control_stripe_orders SET state='expired',session_id=$2
     WHERE id=$1 AND state IN ('creating','awaiting_payment') AND (session_id IS NULL OR session_id=$2)`,[order.id,id]));
   }
+  if(event.event_type==='checkout.session.async_payment_failed'&&session.payment_status!=='paid'){
+   const intent=await this.provider.request(config,'/payment_intents/'+session.payment_intent);
+   if(!stripeObject(intent,'payment_intent',session.payment_intent,config)||intent.customer!==order.customer_id||
+    intent.metadata?.fetchx_checkout!==order.id||intent.amount!==order.plan.amountMinor||intent.currency!==order.plan.currency||
+    !['requires_payment_method','canceled'].includes(intent.status))fail('stripe_payment_unconfirmed',502);
+   return this.apply(event,c=>c.query(`UPDATE control_stripe_orders SET state='failed',session_id=$2
+    WHERE id=$1 AND state IN ('creating','awaiting_payment') AND (session_id IS NULL OR session_id=$2)`,[order.id,id]));
+  }
+  if(session.status==='complete'&&session.payment_status==='unpaid'&&event.event_type==='checkout.session.completed'){
+   // Completing the hosted UI does not prove a delayed payment succeeded.
+   return this.apply(event,c=>c.query(`UPDATE control_stripe_orders SET state='awaiting_payment',session_id=$2
+    WHERE id=$1 AND state IN ('creating','awaiting_payment') AND (session_id IS NULL OR session_id=$2)`,[order.id,id]));
+  }
   if(session.status!=='complete'||session.payment_status!=='paid')fail('stripe_payment_unconfirmed',502);
   const payment=await this.payment(config,session,order);
   return this.apply(event,async c=>{
    await lockStripeSales(c,config.mode);
    await c.query('SELECT id FROM control_projects WHERE id=$1 FOR UPDATE',[order.project]);
    const updated=await c.query(`UPDATE control_stripe_orders SET session_id=$2,state='complete'
-    WHERE id=$1 AND (session_id IS NULL OR session_id=$2) AND state<>'expired'`,[order.id,id]);
+    WHERE id=$1 AND (session_id IS NULL OR session_id=$2) AND state NOT IN ('expired','failed')`,[order.id,id]);
    if(!updated.rowCount)fail('stripe_checkout_conflict',409);
    const scope=[config.mode,config.accountId,id];
    const previous=(await c.query(`SELECT * FROM control_stripe_purchases
@@ -130,43 +168,80 @@ export class StripeEvents{
   const intent=await this.provider.request(config,'/payment_intents/'+intentId);
   if(!stripeObject(intent,'payment_intent',intentId,config)||intent.customer!==order.customer_id||intent.metadata?.fetchx_checkout!==order.id||
    intent.status!=='succeeded'||intent.amount!==plan.amountMinor||intent.amount_received!==plan.amountMinor||intent.currency!==plan.currency||
-   !stripeId(intent.latest_charge,'ch'))fail('stripe_payment_conflict',409);
+   !stripeChargeId(intent.latest_charge))fail('stripe_payment_conflict',409);
   const charge=await this.provider.request(config,'/charges/'+intent.latest_charge);
   if(!stripeObject(charge,'charge',intent.latest_charge,config)||charge.payment_intent!==intentId||charge.customer!==order.customer_id||
    charge.paid!==true||charge.captured!==true||charge.amount!==plan.amountMinor||charge.amount_captured!==plan.amountMinor||
-   charge.currency!==plan.currency||charge.payment_method_details?.type!=='card'||
+   charge.currency!==plan.currency||charge.payment_method_details?.type!==currencyPaymentMethod(plan.currency)||
    !Number.isSafeInteger(charge.amount_refunded)||charge.amount_refunded<0||typeof charge.disputed!=='boolean'||
    !Number.isSafeInteger(charge.created)||charge.created<=0||charge.created>Math.floor(Date.now()/1000)+300)fail('stripe_payment_conflict',409);
   return {intent,charge};
  }
- async reversalEvent(config,event){
-  const id=event.subject_id;
-  const dispute=event.event_type.startsWith('charge.dispute.')?await this.provider.request(config,'/disputes/'+id):null;
-  if(dispute&&!stripeObject(dispute,'dispute',id,config))fail('stripe_dispute_mismatch',409);
-  const chargeId=dispute?dispute.charge:id;
-  if(!stripeId(chargeId,'ch'))fail('stripe_charge_mismatch',409);
-  const charge=await this.provider.request(config,'/charges/'+chargeId);
-  if(!stripeObject(charge,'charge',chargeId,config)||!stripeId(charge.payment_intent,'pi'))fail('stripe_charge_mismatch',409);
-  const scope=[config.mode,config.accountId,chargeId];
+ async chargeOrder(config,charge){
+  const chargeId=charge.id,scope=[config.mode,config.accountId,chargeId];
   const known=(await this.store.pool.query(`SELECT * FROM control_stripe_purchases
    WHERE mode=$1 AND account_id=$2 AND charge_id=$3`,scope)).rows[0];
   let project,sessionId;
   if(known){
    if(known.payment_intent_id!==charge.payment_intent)fail('stripe_charge_mismatch',409);
+   const order=await this.order(config,known.order_id),session=await this.provider.request(config,'/checkout/sessions/'+known.session_id);
+   if(!order||order.project!==known.project||!order.customer_id||!checkoutMatches(session,order,order.customer_id,config)||
+    session.status!=='complete'||session.payment_status!=='paid')fail('stripe_checkout_conflict',409);
+   if((await this.payment(config,session,order)).charge.id!==charge.id)fail('stripe_charge_mismatch',409);
    ({project,session_id:sessionId}=known);
   }else{
    const params=new URLSearchParams({payment_intent:charge.payment_intent,limit:'2'});
    const list=await this.provider.request(config,'/checkout/sessions?'+params);
    const session=list?.data?.[0];
-   if(list?.object!=='list'||list.has_more!==false||list.data?.length!==1||session?.payment_intent!==charge.payment_intent)return false;
+   if(list?.object!=='list'||list.has_more!==false||list.data?.length!==1||session?.payment_intent!==charge.payment_intent)return null;
    const order=await this.order(config,session.client_reference_id);
-   if(!order)return false;
+   if(!order)return null;
    if(!order.customer_id||!checkoutMatches(session,order,order.customer_id,config)||
     session.status!=='complete'||session.payment_status!=='paid')fail('stripe_checkout_conflict',409);
    const payment=await this.payment(config,session,order);
    if(payment.charge.id!==charge.id)fail('stripe_charge_mismatch',409);
    project=order.project;sessionId=session.id;
   }
+  return {project,sessionId};
+ }
+ async refundEvent(config,event){
+  const refund=await this.provider.request(config,'/refunds/'+event.subject_id);
+  if(refund?.object!=='refund'||refund.id!==event.subject_id||!stripeChargeId(refund.charge)||!stripeId(refund.payment_intent,'pi')||
+   !Number.isSafeInteger(refund.amount)||refund.amount<=0||!['pending','requires_action','succeeded','failed','canceled'].includes(refund.status))
+   fail('stripe_refund_mismatch',409);
+  const charge=await this.provider.request(config,'/charges/'+refund.charge);
+  if(!stripeObject(charge,'charge',refund.charge,config)||refund.currency!==charge.currency||refund.payment_intent!==charge.payment_intent||refund.amount>charge.amount)
+   fail('stripe_refund_mismatch',409);
+  const found=await this.chargeOrder(config,charge);if(!found)return false;
+  const {project,sessionId}=found,scope=[config.mode,config.accountId,charge.id];
+  return this.apply(event,async c=>{
+   await lockStripeSales(c,config.mode);
+   await c.query('SELECT id FROM control_projects WHERE id=$1 FOR UPDATE',[project]);
+   const binding={project,accountId:config.accountId,mode:config.mode};
+   if(refund.status==='succeeded'){
+    const reversal=await c.query(`INSERT INTO control_stripe_credit_reversals(mode,account_id,charge_id,session_id,payment_intent_id,project,reason)
+     VALUES($1,$2,$3,$4,$5,$6,'refund') ON CONFLICT(mode,account_id,charge_id) DO UPDATE SET charge_id=EXCLUDED.charge_id
+     WHERE control_stripe_credit_reversals.session_id=EXCLUDED.session_id AND control_stripe_credit_reversals.project=EXCLUDED.project
+      AND control_stripe_credit_reversals.payment_intent_id=EXCLUDED.payment_intent_id`,[...scope,sessionId,charge.payment_intent,project]);
+    if(!reversal.rowCount)fail('stripe_payment_conflict',409);
+    await c.query("UPDATE control_stripe_purchases SET state='reversed' WHERE mode=$1 AND account_id=$2 AND charge_id=$3",scope);
+    if(config.mode==='live')await this.paidCredits.revokePaidCredits(c,{...binding,checkoutSessionId:sessionId,paymentIntentId:charge.payment_intent});
+   }
+   if(config.mode==='live')await this.paidCredits.setPaymentHold(c,{...binding,holdId:'refund:'+refund.id,
+    active:['pending','requires_action'].includes(refund.status)});
+  });
+ }
+ async reversalEvent(config,event){
+  const id=event.subject_id;
+  const dispute=event.event_type.startsWith('charge.dispute.')?await this.provider.request(config,'/disputes/'+id):null;
+  if(dispute&&!stripeObject(dispute,'dispute',id,config))fail('stripe_dispute_mismatch',409);
+  const chargeId=dispute?dispute.charge:id;
+  if(!stripeChargeId(chargeId))fail('stripe_charge_mismatch',409);
+  const charge=await this.provider.request(config,'/charges/'+chargeId);
+  if(!stripeObject(charge,'charge',chargeId,config)||!stripeId(charge.payment_intent,'pi'))fail('stripe_charge_mismatch',409);
+  const scope=[config.mode,config.accountId,chargeId],binding=await this.chargeOrder(config,charge);
+  if(!binding)return false;
+  const {project,sessionId}=binding;
   const isRefunded=refunded(charge),lost=dispute?.status==='lost';
   const resolved=lost||dispute?.status==='won'||dispute?.status==='warning_closed';
   if(!isRefunded&&!dispute)return false;

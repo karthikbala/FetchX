@@ -20,8 +20,10 @@ const purchase=(project,amountMinor=200)=>({project,amountMinor,mode:'live',acco
  checkoutSessionId:'cs_live_'+random(),paymentIntentId:'pi_'+random(),currency:'usd',credits:paidCreditPack(amountMinor)});
 
 test('approved packs and HTTP tariffs compute exact decimal byte and credit ceilings',()=>{
- assert.deepEqual([200,800,2000,10000].map(paidCreditPack),[10_000,50_000,150_000,1_000_000]);
+ assert.deepEqual([200,800,2000,10000].map(value=>paidCreditPack(value)),[10_000,50_000,150_000,1_000_000]);
  for(const value of [2,199,'200',null,NaN])assert.equal(paidCreditPack(value),null);
+ assert.deepEqual([17500,75000,180000,900000].map(value=>paidCreditPack(value,'inr')),[10000,50000,150000,1000000]);
+ for(const [amount,currency] of [[17500,'usd'],[200,'inr'],[17500,'eur'],['17500','inr']])assert.equal(paidCreditPack(amount,currency),null);
  for(const route of ['direct','datacenter'])assert.deepEqual(quote(route),{
   tariff_version:'paid-http-v1',route_class:route,block_bytes:1e6,credits_per_block:1,max_transfer_bytes:1e6,reserved_credits:1
  });
@@ -80,6 +82,7 @@ test('paid credit purchases, allocation, settlement and recovery are durable and
    const a=await makeProject(),b=await makeProject(),live=purchase(a.project),early=purchase(a.project);
    await assert.rejects(grant({...live,mode:'test'}),{code:'paid_credit_grant_invalid'});
    await assert.rejects(grant({...live,credits:1}),{code:'paid_credit_grant_invalid'});
+   await assert.rejects(grant({...live,currency:'inr'}),{code:'paid_credit_grant_invalid'});
    await assert.rejects(store.tx(async c=>{await paid.grantPaidCredits(c,live);throw Error('rollback');}),{message:'rollback'});
    assert.equal((await paid.usage(a.project)).available,0);
    assert.deepEqual((await Promise.all([grant(live),grant(live)])).sort(),[false,true]);
@@ -87,6 +90,7 @@ test('paid credit purchases, allocation, settlement and recovery are durable and
    await assert.rejects(grant({...live,paymentIntentId:'pi_'+random()}),{code:'paid_credit_grant_conflict'});
    await assert.rejects(grant({...live,checkoutSessionId:'cs_live_'+random()}),{code:'paid_credit_grant_conflict'});
    await assert.rejects(grant({...live,amountMinor:800,credits:50_000}),{code:'paid_credit_grant_conflict'});
+   await assert.rejects(grant({...live,currency:'inr',amountMinor:17500}),{code:'paid_credit_grant_conflict'});
    assert.equal(await revoke(early),false);assert.equal(await revoke(early),false);
    await assert.rejects(grant(early),{code:'paid_credit_grant_reversed'});
    await assert.rejects(grant({...early,project:b.project}),{code:'paid_credit_grant_conflict'});

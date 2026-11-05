@@ -95,7 +95,7 @@ await page.route('**/api/control/**', async route => {
     const { mode, purchases } = fixture;
     const pending = hideSavedCheckout ? null : fixture.pending;
     const catalog = [extraPlans[0], { ...plan, can_purchase: true }, ...extraPlans.slice(1)].map(item => ({ ...item, can_purchase: item.can_purchase && !fixture.capacityDown }));
-    const stripe = { mode, plans: fixture.salesPaused ? [] : catalog, purchases,
+    const stripe = { mode, currency: 'usd', plans: fixture.salesPaused ? [] : catalog, purchases,
       can_checkout: !fixture.salesPaused && !pending?.open && !fixture.hold && !fixture.routeDown && !fixture.capacityDown,
       pending_checkout: pending?.open ? { plan_id: plan.id, idempotency_key: pending.key, state: pending.state } : null,
       ...(pending?.open ? { can_resume_checkout: !fixture.hold && !fixture.routeDown && !fixture.capacityDown } : {}),

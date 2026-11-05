@@ -1,3 +1,4 @@
+import { requestCountry } from './pricing';
 // Server-only: never import this module from a browser script.
 export interface ControlEnv {
  FETCHX_CONTROL_URL?: string;
@@ -146,6 +147,7 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
   const cookie=cookies.filter(Boolean).join('; ');if(cookie)forwarded.set('Cookie',cookie);
   const csrf=request.headers.get('X-CSRF-Token');if(csrf){if(!/^[A-Za-z0-9_-]{43}$/.test(csrf))return error(403,'csrf_rejected','This request could not be authorized.');forwarded.set('X-CSRF-Token',csrf);}
   const ip=request.headers.get('CF-Connecting-IP');if(ip&&/^[a-fA-F0-9:.]{3,64}$/.test(ip))forwarded.set('X-FetchX-Client-IP',ip);
+  const country=requestCountry(request);if(country)forwarded.set('X-FetchX-Client-Country',country);
   let body:string|undefined;
   if(!['GET','HEAD'].includes(request.method)){
    if(Number(request.headers.get('Content-Length')??0)>CONTROL_REQUEST_LIMIT)return error(413,'request_too_large','This request is too large.');

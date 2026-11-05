@@ -5,7 +5,7 @@ import { consumeGithubResult, mountGithubSignIn } from './github-sign-in';
 import { countries, countryName } from '../data/countries';
 import { operationExecution, operationResource, requestCode, routeClasses, routeLabels, type Execution, type PlaygroundCapabilities, type Preparation, type RouteClass, type SafeKey } from '../data/playground';
 import { mountStripeBilling } from './stripe-billing';
-import { creditPackages, formatCredits } from '../data/credit-packages';
+import { isCreditPlanId, formatCredits } from '../data/credit-packages';
 type Json = Record<string, any>;
 type Project = { id: string; name: string; status: string; created_at?: string };
 type Profile = { id: string; version: number; kind?: string; origins: string[]; paths?: string[]; methods: string[]; proxy_classes: string[]; countries: string[]; max_daily_operations?: number | null; route_reservations?: Json[] };
@@ -47,7 +47,7 @@ async function initWorkspace(root: HTMLElement) {
   const authPage = ['signup', 'login'].includes(root.dataset.view || '');
   const query = new URLSearchParams(window.location.search);
   const plan = query.get('plan');
-  const preferredPlan = creditPackages.some(pack => pack.id === plan) ? plan : null;
+  const preferredPlan = isCreditPlanId(plan) ? plan : null;
   const billingPath = '/app/billing' + (preferredPlan ? '?plan=' + preferredPlan : '');
   const authDestination = preferredPlan || query.get('view') === 'billing' ? billingPath : '/app';
   const selectedStorage = 'fetchx-selected-project';
