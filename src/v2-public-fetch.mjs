@@ -1,6 +1,8 @@
 import {sha} from './crypto.mjs';
 import {GatewayError,ID,fail} from './policy.mjs';
 import {hasHtmlChallenge} from './source-challenge.mjs';
+import {ensurePlaygroundProfile,isPlaygroundRef,playgroundMessage} from './control-playground.mjs';
+import {PUBLIC_URL_REF,PUBLIC_URL_TRANSFER_LIMITS,isPublicUrlProfile} from './v2-public-url.mjs';
 
 const KIND='public_fetch_request_v1';
 const failureContexts=new WeakMap();
@@ -14,9 +16,15 @@ const keys=k=>({session:'public-fetch.s.'+sha(k).slice(0,32),operation:'public-f
 const registryKey=(project,k)=>sha(canonical([project,k]));
 const lookupUrl=k=>validKey(k)?'/v2/fetch/'+encodeURIComponent(k):null;
 const publicCode=code=>typeof code==='string'&&/^[a-z][a-z0-9_]{0,80}$/.test(code)?code:'internal_error';
+const responseHeaders=new Set(['accept-ranges','cache-control','content-disposition','content-encoding','content-language','content-length','content-type','date','etag','expires','last-modified','pragma','retry-after','vary']);
+export function publicResponseHeaders(headers){
+ return Object.fromEntries(Object.entries(headers??{}).filter(([name,value])=>responseHeaders.has(name.toLowerCase())&&typeof value==='string').map(([name,value])=>[name.toLowerCase(),value.slice(0,2048)]));
+}
 const renderOptions=new Set(['render','browser','javascript','js_render','wait_for','waitFor','screenshot','screenshots','formats','actions','script','selectors','extract','transport']);
 const operationAdmissionCodes=new Set(['operation_invalid','idempotency_key_required','identifier_invalid','cost_ceiling_invalid','idempotency_conflict','session_not_found','access_profile_forbidden','access_profile_configuration','version_immutable','request_invalid','method_rejected','body_rejected','headers_rejected','session_expired','session_busy_or_unknown','session_limit','client_quota_exhausted','capacity_wait','artifact_quota','residential_budget_exhausted','residential_provider_held','residential_budget_unconfigured','residential_rate_unconfigured','residential_provider_unavailable','residential_country_unavailable','cost_estimate_unavailable','cost_ceiling_exceeded','entitlement_configuration']);
-for(const code of ['credit_policy_unreviewed','credit_policy_invalid','credit_route_forbidden','credit_account_unavailable','credit_balance_exhausted','api_key_identity_required','api_key_forbidden','project_inactive','credential_scope_rejected'])operationAdmissionCodes.add(code);
+for(const code of ['credit_policy_unreviewed','credit_policy_invalid','credit_route_forbidden','credit_account_unavailable','credit_balance_exhausted','api_key_identity_required','api_key_forbidden','project_inactive','project_not_found','credential_scope_rejected','country_pool_unavailable','proxy_configuration_invalid','playground_key_selection_required','playground_policy_invalid','playground_policy_version_changed','playground_profile_invalid','playground_profile_limit','playground_destination_rejected','playground_url_invalid','playground_execution_mismatch','playground_route_unreviewed','playground_route_unhealthy','playground_route_mismatch'])operationAdmissionCodes.add(code);
+for(const code of ['paid_credit_route_forbidden','paid_credit_policy_unreviewed','paid_credit_balance_exhausted','paid_credit_payment_hold','paid_credit_reservation_unavailable','paid_credit_reservation_invalid','paid_credit_reservation_conflict','paid_credit_account_invalid','paid_credit_retry_unsupported','max_transfer_mb_invalid','max_credits_invalid','max_credits_exceeded','paid_public_url_daily_quota_exhausted','paid_dns_unavailable'])operationAdmissionCodes.add(code);
+export const isPublicOperationAdmissionError=error=>error instanceof GatewayError&&operationAdmissionCodes.has(error.code);
 
 function retryEvidence(result){
  const retry=result?.retry;
@@ -28,12 +36,13 @@ function retryEvidence(result){
 
 export function isPublicFetchRequest(req){return /^\/v2\/fetch(?:\/|\?|$)/.test(req.url);}
 
-function normalize(raw){
+function normalize(raw,{implicitPublic=false}={}){
  if(plain(raw)&&Object.keys(raw).some(k=>renderOptions.has(k)))fail('capability_unsupported',409);
- if(!exact(raw,['idempotency_key','access_profile','url','proxy','session_id','method','headers','body_base64','max_estimated_micro_usd','retry']))fail('request_invalid');
+ if(!exact(raw,['idempotency_key','access_profile','url','proxy','session_id','method','headers','body_base64','max_estimated_micro_usd','max_transfer_mb','max_credits','retry']))fail('request_invalid');
  if(raw.retry!==undefined&&typeof raw.retry!=='boolean')fail('request_invalid');
  if(!validKey(raw.idempotency_key))fail('idempotency_key_required');
- if(!exact(raw.access_profile,['id','version'])||!validKey(raw.access_profile.id)||!Number.isSafeInteger(raw.access_profile.version)||raw.access_profile.version<1)fail('version_reference_invalid');
+ const accessProfile=raw.access_profile===undefined&&implicitPublic?PUBLIC_URL_REF:raw.access_profile;
+ if(!exact(accessProfile,['id','version'])||!validKey(accessProfile.id)||!Number.isSafeInteger(accessProfile.version)||accessProfile.version<1)fail('version_reference_invalid');
  if(typeof raw.url!=='string'||raw.url.length>12000)fail('request_invalid');
  if(raw.method!==undefined&&(typeof raw.method!=='string'||!['GET','HEAD','POST','PUT','PATCH','DELETE'].includes(raw.method)))fail('method_rejected');
  if(!exact(raw.proxy,['class','country'])||!['direct','datacenter','residential'].includes(raw.proxy.class))fail('proxy_required');
@@ -44,7 +53,11 @@ function normalize(raw){
  if(raw.max_estimated_micro_usd!==undefined&&(!Number.isSafeInteger(raw.max_estimated_micro_usd)||raw.max_estimated_micro_usd<0))fail('cost_ceiling_invalid');
  // Keep false identical to omission, including fingerprints bound before retry
  // existed. Only an explicit true changes the durable request contract.
- return {idempotency_key:raw.idempotency_key,access_profile:raw.access_profile,url:raw.url,proxy:raw.proxy,session_id:raw.session_id??null,method:raw.method===undefined?'GET':raw.method,headers:raw.headers===undefined?{}:raw.headers,body_base64:raw.body_base64??null,...(raw.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:raw.max_estimated_micro_usd}),...(raw.retry===true?{retry:true}:{})};
+ return {idempotency_key:raw.idempotency_key,access_profile:accessProfile,url:raw.url,proxy:raw.proxy,session_id:raw.session_id??null,method:raw.method===undefined?'GET':raw.method,headers:raw.headers===undefined?{}:raw.headers,body_base64:raw.body_base64??null,...(raw.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:raw.max_estimated_micro_usd}),...paidLimits(raw),...(raw.retry===true?{retry:true}:{})};
+}
+
+function paidLimits(raw){
+ return {...(raw.max_transfer_mb===undefined?{}:{max_transfer_mb:raw.max_transfer_mb}),...(raw.max_credits===undefined?{}:{max_credits:raw.max_credits})};
 }
 
 function message(code){
@@ -90,6 +103,18 @@ function message(code){
   proxy_class_forbidden:'This proxy class is not approved by the access profile.',
   client_quota_exhausted:'The project operation quota is exhausted; session creation does not grant an allowance.',
   credit_balance_exhausted:'The project has no available request credits for this operation.',
+  paid_credit_balance_exhausted:'The project does not have enough prepaid credits to reserve this operation.',
+  paid_credit_payment_hold:'Paid requests are paused while a payment is under review.',
+  paid_credit_reservation_unavailable:'The prepaid credit reservation is no longer available for dispatch.',
+  paid_credit_retry_unsupported:'Paid HTTP requests use one pinned route and do not retry automatically.',
+  paid_public_url_daily_quota_exhausted:'The project has reached its daily paid public URL quota.',
+  max_transfer_mb_invalid:'Supply a transfer limit from 0.25 through 20 decimal MB in increments of 0.25 MB.',
+  max_credits_invalid:'Supply a positive integer credit ceiling.',
+  max_credits_exceeded:'The credit reservation exceeds the requested ceiling.',
+  max_transfer_bytes_exceeded:'The operation reached its bidirectional wire limit. max_transfer_mb sets the wire ceiling and determines the credit reservation.',
+  encoded_body_limit:'The operation reached its encoded response body limit.',
+  decoded_body_limit:'The operation reached its decoded response body limit.',
+  decompression_ratio_limit:'The response exceeded the permitted decompression expansion ratio.',
   credit_route_forbidden:'The operator has not approved request credits for this transport or proxy class.',
   credit_policy_unreviewed:'The operator must review the self-service request credit policy before requests can run.',
   api_key_identity_required:'A scoped API key or authenticated project console session is required.',
@@ -100,12 +125,32 @@ function message(code){
   operation_incomplete:'The operation is active or incomplete. Recover the saved operation before any new source work.',
   internal_error:'The gateway could not complete this request. Recover by key before considering new source work.'
  };
- if(messages[code])return messages[code];
+ if(Object.hasOwn(messages,code))return messages[code];
+ if(code.startsWith('playground_'))return playgroundMessage(code);
  if(/forbidden|rejected|invalid|required|mismatch/.test(code))return 'The request is not permitted by the gateway or approved access profile.';
  if(/budget|quota|limit|capacity|ceiling/.test(code))return 'A gateway quota, capacity or spending reservation prevented this request.';
  if(/configuration|unconfigured|unavailable|held/.test(code))return 'The selected route is unavailable or requires an operator configuration change.';
  if(/unknown|incomplete|interrupted/.test(code))return 'The operation outcome is uncertain. Recover the saved operation; do not replay source work.';
  return 'The gateway could not complete this operation. Inspect the retained operation and its safe diagnostics.';
+}
+
+export {publicCode as publicOperationErrorCode,message as publicOperationErrorMessage};
+const publicBodyLimitErrors=new Set(['max_transfer_bytes_exceeded','encoded_body_limit','decoded_body_limit']);
+
+function publicLimitFailure(code,operation,profile){
+ const paid=operation.accounting?.paid_credits;
+ if(!publicBodyLimitErrors.has(code)||!isPublicUrlProfile(profile)||!paid)return null;
+ const {max_transfer_mb:maximum,step_mb:step}=PUBLIC_URL_TRANSFER_LIMITS;
+ const current=paid.max_transfer_bytes/1_000_000;
+ const details={max_transfer_mb:current,max_allowed_transfer_mb:maximum,reserved_credits:paid.reserved_credits};
+ if(operation.state!=='failed'||operation.result?.partial||paid.state!=='settled')
+  return {details,message:message(code)+' Recover the saved operation using its original key before considering new source work.'};
+ if(current>=maximum)return {details,message:message(code)+' This operation used the maximum max_transfer_mb.'};
+ const next=current+step;
+ details.next={max_transfer_mb:next,max_credits:Math.ceil(next*1_000_000/paid.block_bytes)*paid.credits_per_block,
+  requires_new_idempotency_key:true};
+ const limit=code==='max_transfer_bytes_exceeded'?'wire and body limits':'body limits';
+ return {details,message:message(code)+` For a new operation with a new idempotency key, a higher max_transfer_mb raises the ${limit} and reserves credits for that ceiling. The final debit is based on measured wire bytes.`};
 }
 
 function retryGuidance({key,code,state,method,route,profile,result,admission=false}){
@@ -117,10 +162,11 @@ function retryGuidance({key,code,state,method,route,profile,result,admission=fal
  if(code==='proxy_connect_refused')return {...recovery,next_action:'review_proxy_configuration'};
  if(code==='source_rate_limited'||code==='source_cooldown')return {...recovery,next_action:'wait_for_source_retry_after',retry_after:result?.retry_after??null};
  // A non-GET request may already have changed state even when the source fails.
+ if(isPublicUrlProfile(profile)&&publicBodyLimitErrors.has(code))return {...recovery,next_action:'review_transfer_limit'};
  if(!admission&&method!=='GET')return recovery;
  if(code==='source_not_found')return {...recovery,next_action:'check_url'};
  if(['source_forbidden','source_challenge'].includes(code)){
-  const approved=route?.class==='datacenter'&&profile?.proxy_classes?.includes('residential')&&profile?.countries?.includes(route.country);
+  const approved=!isPublicUrlProfile(profile)&&route?.class==='datacenter'&&profile?.proxy_classes?.includes('residential')&&profile?.countries?.includes(route.country);
   return {...recovery,next_action:approved?'consider_approved_residential_fresh_session':'review_source_access',...(approved?{safe_to_retry:true,new_request_allowed:true,suggested_proxy:{class:'residential',country:route.country},requires_new_idempotency_key:true,requires_fresh_session:true}:{})};
  }
  if(code==='idempotency_conflict')return recovery;
@@ -169,12 +215,13 @@ export async function publicFetchResponse(v2,project,key,operation,{keyScope='ca
  const charset=/;\s*charset\s*=\s*["']?([^\s;"']+)/i.exec(contentType??'')?.[1];
  let text=null;
  if(body&&textual&&(!charset||/^(?:utf-8|utf8|us-ascii)$/i.test(charset))){try{text=new TextDecoder('utf-8',{fatal:true}).decode(body);}catch{}}
+ const limitFailure=publicLimitFailure(code,operation,row.policy);
  const stage=code?.startsWith('source_')&&['source_rate_limited','source_forbidden','source_not_found','source_challenge','source_http_error'].includes(code)?'source_response':result?.diagnostics?.stage??'operation';
  return {success:!code&&operation.state==='completed',state:operation.state,gateway_http_status:200,operation_id:operation.id,session_id:operation.session_id,idempotency_key:key,idempotency_key_scope:keyScope,...(keyScope==='internal_operation'?{internal_idempotency_key:operation.idempotency_key}:{}),routing:route,
-  data:result?{status:result.status??null,final_url:result.final_url??last?.url??null,content_type:contentType,body_base64:last?.decoded_body_base64??null,text,retry_after:result.retry_after??null}:null,
+  data:result?{status:result.status??null,final_url:result.final_url??last?.url??null,content_type:contentType,body_base64:last?.decoded_body_base64??null,text,retry_after:result.retry_after??null,headers:publicResponseHeaders(last?.headers)}:null,
   artifacts:artifacts.map(a=>({id:a.id,kind:a.kind,status:a.status,...(a.attempt===undefined?{}:{attempt:a.attempt}),encoded_sha256:a.encoded_sha256??null,decoded_sha256:a.decoded_sha256??null,encoded_bytes:a.encoded_bytes??null,decoded_bytes:a.decoded_bytes??null,content_encoding:a.content_encoding??null,decoding_error:a.decoding_error??null})),
-  diagnostics:result?.diagnostics??null,error:code?{code,message:code==='source_transport_unknown'&&/TLS|SSL|CERT|SELF_SIGNED|ISSUER/.test(result?.diagnostics?.failure?.cause_code??'')?'Source TLS verification or negotiation failed. The transport outcome may be uncertain; recover before any new source work.':message(code),stage}:null,retry:{...retryGuidance({key,code,state:operation.state,method,route,profile:row.policy,result}),...retryEvidence(result),same_key_replay_safe:keyScope==='caller',lookup_url:recoveryUrl},
-  usage:{accounting:operation.accounting,native_requests:result?.physical_requests??null,dns_requests:result?.dns_requests??null,encoded_bytes:result?.encoded_bytes??null,decoded_bytes:result?.decoded_bytes??null,tunnel_bytes:result?.tunnel_bytes??null,dns_encoded_bytes:null,dns_decoded_bytes:null,dns_tunnel_bytes:null,byte_basis:result?.retry?'encoded_includes_native_and_metered_session_proxy_dns_when_retry_is_eligible; decoded_is_native_response_bytes; tunnel_includes_native_and_session_proxy_dns; separate_dns_bytes_unavailable':'encoded_and_decoded_are_native_response_bytes; tunnel_includes_native_and_session_proxy_dns; separate_dns_bytes_unavailable'},application_acceptance:'not_evaluated'};
+  diagnostics:result?.diagnostics??null,error:code?{code,message:limitFailure?.message??(code==='source_transport_unknown'&&/TLS|SSL|CERT|SELF_SIGNED|ISSUER/.test(result?.diagnostics?.failure?.cause_code??'')?'Source TLS verification or negotiation failed. The transport outcome may be uncertain; recover before any new source work.':message(code)),stage,...(limitFailure?{details:limitFailure.details}:{})}:null,retry:{...retryGuidance({key,code,state:operation.state,method,route,profile:row.policy,result}),...retryEvidence(result),same_key_replay_safe:keyScope==='caller',lookup_url:recoveryUrl},
+  usage:{accounting:operation.accounting,native_requests:result?.physical_requests??null,dns_requests:result?.dns_requests??null,encoded_bytes:result?.encoded_bytes??null,decoded_bytes:result?.decoded_bytes??null,tunnel_bytes:result?.tunnel_bytes??null,...(operation.accounting?.paid_credits?{wire_bytes:result?.wire_bytes??null,wire_bytes_lower_bound:result?.wire_bytes_lower_bound??null}:{}),dns_encoded_bytes:null,dns_decoded_bytes:null,dns_tunnel_bytes:null,byte_basis:operation.accounting?.paid_credits?'wire_includes_bidirectional_tls_connect_and_metered_dns_across_hops; encoded_and_decoded_are_native_response_bytes':result?.retry?'encoded_includes_native_and_metered_session_proxy_dns_when_retry_is_eligible; decoded_is_native_response_bytes; tunnel_includes_native_and_session_proxy_dns; separate_dns_bytes_unavailable':'encoded_and_decoded_are_native_response_bytes; tunnel_includes_native_and_session_proxy_dns; separate_dns_bytes_unavailable'},application_acceptance:'not_evaluated'};
 }
 
 export class PublicFetchGateway{
@@ -195,26 +242,32 @@ export class PublicFetchGateway{
  }
  async fetch(project,raw,identity){
   this.v2.controlCredits.keyId(project,identity);
-  const input=normalize(raw),hash=sha(canonical(input)),names=keys(input.idempotency_key);
+  const input=normalize(raw,{implicitPublic:this.v2.controlCredits.managed(project)}),hash=sha(canonical(input)),names=keys(input.idempotency_key);
   const prior=await this.fingerprint(project,input.idempotency_key,hash);
   if(prior){
    try{return await this.respond(project,input.idempotency_key,await this.v2.lookup(project,names.operation));}
    catch(error){if(!(error instanceof GatewayError)||error.code!=='operation_not_found')throw error;}
   }
-  const profile=await this.v2.profile(project,input.access_profile);
+  const playground=isPlaygroundRef(input.access_profile);
+  if(playground&&(input.max_transfer_mb!==undefined||input.max_credits!==undefined))fail('paid_credit_route_forbidden',403);
+  const candidate=playground?await ensurePlaygroundProfile(this.v2,project,input.access_profile,input.url,'http',input.proxy,input.method):null;
+  const profile=candidate??await this.v2.profile(project,input.access_profile);
   const request={url:input.url,method:input.method,headers:input.headers,body_base64:input.body_base64};
   this.v2.request(request,profile);
+  const paid=!playground&&this.v2.paidHttpRequested(project,profile,input.proxy,input);
   let session;
   if(input.session_id){
    session=await this.v2.readSession(project,input.session_id);
+   if(session.transport!=='http')fail('capability_unsupported',409);
    if(session.access_profile.id!==input.access_profile.id||session.access_profile.version!==input.access_profile.version)fail('session_profile_conflict',409);
    if(session.proxy.class!==input.proxy.class||session.proxy.country!==input.proxy.country)fail('session_route_conflict',409);
-  }else session=await this.v2.session(project,{idempotency_key:names.session,access_profile:input.access_profile,transport:'http',proxy:{...input.proxy,affinity:'session'}});
+  }else session=await this.v2.session(project,{idempotency_key:names.session,access_profile:input.access_profile,transport:'http',proxy:{...input.proxy,affinity:'session'}},{profile:candidate,paid});
   await this.fingerprint(project,input.idempotency_key,hash,{bind:true});
   let operation;
-  try{operation=await this.v2.operation(project,{idempotency_key:names.operation,session_id:session.id,request,...(input.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:input.max_estimated_micro_usd}),...(input.retry===true?{retry:true}:{})},identity);}
+  try{operation=await this.v2.operation(project,{idempotency_key:names.operation,session_id:session.id,request,...(input.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:input.max_estimated_micro_usd}),...paidLimits(input),...(input.retry===true?{retry:true}:{})},identity);}
   catch(error){
-   if(error&&typeof error==='object')failureContexts.set(error,{key:input.idempotency_key,session_id:session.id,routing:{class:session.proxy.class,country:session.proxy.country,provider:session.proxy.provider},state:error instanceof GatewayError&&operationAdmissionCodes.has(error.code)?'rejected':'unknown',stage:error instanceof GatewayError&&operationAdmissionCodes.has(error.code)?'operation_admission':'operation'});
+   const rejected=isPublicOperationAdmissionError(error);
+   if(error&&typeof error==='object')failureContexts.set(error,{key:input.idempotency_key,session_id:session.id,routing:{class:session.proxy.class,country:session.proxy.country,provider:session.proxy.provider},state:rejected?'rejected':'unknown',stage:rejected?'operation_admission':'operation'});
    throw error;
   }
   return this.respond(project,input.idempotency_key,operation);
@@ -224,8 +277,8 @@ export class PublicFetchGateway{
   if(!await this.fingerprint(project,key))fail('operation_not_found',404);
   return this.respond(project,key,await this.v2.lookup(project,keys(key).operation));
  }
- async lookupOperation(project,id){
-  const operation=await this.v2.readOperation(project,id),internal=/^public-fetch\.o\.[a-f0-9]{32}$/.test(operation.idempotency_key);
+ async lookupOperation(project,id,retained){
+  const operation=retained??await this.v2.readOperation(project,id),internal=/^public-fetch\.o\.[a-f0-9]{32}$/.test(operation.idempotency_key);
   // The fingerprint intentionally stores no caller key. Do not reverse or
   // relabel a hashed internal key as if it were the original caller key.
   return this.respond(project,internal?null:operation.idempotency_key,operation,{keyScope:internal?'internal_operation':'native_operation',recoveryUrl:'/v2/fetch/operations/'+operation.id});

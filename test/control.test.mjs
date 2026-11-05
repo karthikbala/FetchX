@@ -17,6 +17,13 @@ async function fixture(options={}){
  identity.authMethods=async()=>({github:false});
  const v2={store:{pool},recentOperations:async(id,raw)=>{queries.push({args:[id,Number(raw.limit??25)]});return {operations:[{id:operation,state:'completed',error:null,created_at:'2026-11-01T00:00:00Z',finished_at:'2026-11-01T00:00:00.400Z',latency_ms:400,access_profile:{id:'source',version:1},routing:{class:'direct',country:null,provider:'direct',private:'secret'},private_capture:'secret source URL',diagnostics:{private:'secret'},source_http_status:200}]};},capabilities:async()=>({transports:{http:true,browser:true},proxy_classes:{direct:true,datacenter:true,residential:true},features:{browser_network_probe:true}}),profiles:async()=>({access_profiles:[{id:'source',version:1,proxy_classes:['direct','residential'],route_reservations:[{class:'direct'},{class:'residential'}],browser_probe:{enabled:true}}]}),usage:async()=>({outcomes:{source_successes:1}})};
  const app=Fastify();app.decorate('v2',v2);app.decorate('publicFetch',{fetch:async(id,body,identity)=>{calls.push(['fetch',id,body,identity]);if(body.render)throw new GatewayError('capability_unsupported',409);return envelope;},lookup:async(id,saved)=>{calls.push(['lookup',id,saved]);return envelope;},lookupOperation:async(id,op)=>{calls.push(['lookupOperation',id,op]);return envelope;}});
+ if(options.testRender){
+  const rendered={...envelope,execution:'browser'};
+  v2.readOperation=async(id,op)=>{calls.push(['readOperation',id,op]);return {id:op,execution:'browser'};};
+  app.decorate('publicRender',{render:async(id,body,selected)=>{calls.push(['render',id,body,selected]);return rendered;},
+   lookup:async(id,saved)=>{calls.push(['renderLookup',id,saved]);return rendered;},
+   lookupOperation:async(id,op,retained)=>{calls.push(['renderLookupOperation',id,op,retained]);return rendered;}});
+ }
  const config={enabled:true,origins:[origin],bridgeSecret:secret,creditPolicy:{weights:{direct:1}},...options};
  const credits={usage:async()=>({granted:10,available:9,held:1})};
  registerControl(app,{config:{controlPlane:config}},{identity,credits});await app.ready();
@@ -41,7 +48,7 @@ test('control authenticates the bridge, exact origin, session and session-bound 
 
 test('control checks membership for every project resource and never accepts body grants or credentials',async t=>{
  const f=await fixture();t.after(()=>f.app.close());
- for(const [method,path,body]of [['GET',''],['GET','/keys'],['POST','/keys',{name:'new'}],['POST',`/keys/${operation}/rotate`,{}],['DELETE',`/keys/${operation}`],['POST','/fetch',{idempotency_key:'x'}],['GET','/fetch/saved'],['GET','/requests'],['GET',`/requests/${operation}`],['GET','/usage'],['GET','/billing']]){
+ for(const [method,path,body]of [['GET',''],['GET','/keys'],['POST','/keys',{name:'new'}],['POST',`/keys/${operation}/rotate`,{}],['DELETE',`/keys/${operation}`],['POST','/fetch',{idempotency_key:'x'}],['GET','/fetch/saved'],['POST','/playground/prepare',{}],['POST','/render',{}],['GET','/render/saved'],['GET','/requests'],['GET',`/requests/${operation}`],['GET','/usage'],['GET','/billing']]){
   const denied=await f.send(method,`/projects/${foreign}${path}`,body);assert.equal(denied.statusCode,404,path);assert.equal(denied.json().error.code,'project_not_found');
  }
  assert.equal(f.calls.some(c=>c[0]==='fetch'),false);assert.equal(f.queries.length,0);
@@ -73,6 +80,25 @@ test('control fetch uses trusted console identity and recovery reads retained st
  await f.send('GET',`/projects/${project}/fetch/saved`);await f.send('GET',`/projects/${project}/requests/${operation}`);
  assert.equal(f.calls.filter(c=>c[0]==='fetch').length,1);assert.equal(f.calls.filter(c=>c[0]==='lookup').length,1);
  const unsupported=await f.send('POST',`/projects/${project}/fetch`,{idempotency_key:'render',render:true});assert.equal(unsupported.statusCode,409);assert.equal(unsupported.json().error.code,'capability_unsupported');assert.equal(unsupported.json().supported.render,false);
+});
+
+test('control browser routes forward only named attribution and recover typed retained operations',async t=>{
+ const f=await fixture({testRender:true});t.after(()=>f.app.close());
+ f.identity.keys=async()=>[{...key,scopes:['fetch:write']}];
+ const body={idempotency_key:'saved',url:'https://example.com/',access_profile:{id:'synthetic',version:1},proxy:{class:'direct',country:null},screenshot:true,wait_ms:200};
+ assert.equal((await f.send('POST',`/projects/${project}/render`,body,{'x-csrf-token':''})).statusCode,403);
+ const submitted=await f.send('POST',`/projects/${project}/render`,{...body,key_id:key.id});
+ assert.equal(submitted.statusCode,200,submitted.body);
+ assert.equal(submitted.json().execution,'browser');
+ assert.equal(submitted.json().retry.lookup_url,`/api/control/projects/${project}/render/saved`);
+ assert.deepEqual(f.calls.find(c=>c[0]==='render'),['render',project,body,{keyId:key.id,userId:user.id,requireSoleKey:false}]);
+ f.identity.keys=async()=>[];
+ const recovery=await f.send('GET',`/projects/${project}/render/saved`);
+ assert.equal(recovery.json().state,'unknown');
+ const history=await f.send('GET',`/projects/${project}/requests/${operation}`);
+ assert.equal(history.json().retry.lookup_url,`/api/control/projects/${project}/requests/${operation}`);
+ assert.deepEqual(f.calls.find(c=>c[0]==='renderLookupOperation'),['renderLookupOperation',project,operation,{id:operation,execution:'browser'}]);
+ assert.equal(f.calls.filter(c=>c[0]==='render').length,1);
 });
 
 test('control rejects malformed, oversized and unknown requests with stable errors',async t=>{

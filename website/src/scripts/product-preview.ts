@@ -1,10 +1,40 @@
-// The workspace uses the same-origin control plane. Only project IDs and pending
-// operation keys cross page boundaries; credentials and source inputs stay in memory.
+// The workspace uses the same-origin control plane. Project IDs and pending
+// operation recovery details can cross page boundaries. Credentials stay in memory.
 import { mountGoogleSignIn } from './google-sign-in';
 import { consumeGithubResult, mountGithubSignIn } from './github-sign-in';
+import { countries, countryName } from '../data/countries';
+import { operationExecution, operationResource, requestCode, routeClasses, routeLabels, type Execution, type PlaygroundCapabilities, type Preparation, type RouteClass, type SafeKey } from '../data/playground';
+import { mountStripeBilling } from './stripe-billing';
+import { creditPackages, formatCredits } from '../data/credit-packages';
 type Json = Record<string, any>;
 type Project = { id: string; name: string; status: string; created_at?: string };
-type Profile = { id: string; version: number; origins: string[]; paths?: string[]; methods: string[]; proxy_classes: string[]; countries: string[]; route_reservations?: Json[] };
+type Profile = { id: string; version: number; kind?: string; origins: string[]; paths?: string[]; methods: string[]; proxy_classes: string[]; countries: string[]; max_daily_operations?: number | null; route_reservations?: Json[] };
+const publicUrlId = 'public-url-http';
+const publicUrlKind = 'public_url_http';
+const decimalMb = 1_000_000;
+const transferLimitErrors = new Set(['max_transfer_bytes_exceeded', 'encoded_body_limit', 'decoded_body_limit']);
+type PaidQuote = { route_class: string; block_bytes: number; credits_per_block: number; max_transfer_bytes: number; reserved_credits: number };
+const isPublicUrlProfile = (profile?: Profile) => profile?.id === publicUrlId && profile.version === 1 && profile.kind === publicUrlKind;
+const validTransferMb = (value: unknown): value is number => typeof value === 'number' && value >= 0.25 && value <= 20 && Number.isInteger(value * 4);
+const positiveInteger = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+
+function transferSuggestion(result: Json | null) {
+  const details = result?.error?.details, next = details?.next;
+  const paid = result?.usage?.accounting?.paid_credits;
+  if (result?.state !== 'failed' || !transferLimitErrors.has(result.error?.code) || paid?.state !== 'settled' ||
+      next?.requires_new_idempotency_key !== true || !validTransferMb(details.max_transfer_mb) ||
+      !validTransferMb(details.max_allowed_transfer_mb) || !validTransferMb(next.max_transfer_mb) ||
+      next.max_transfer_mb <= details.max_transfer_mb || next.max_transfer_mb > details.max_allowed_transfer_mb ||
+      !positiveInteger(details.reserved_credits) || details.reserved_credits !== paid.reserved_credits ||
+      !positiveInteger(next.max_credits) || !positiveInteger(paid.block_bytes) || !positiveInteger(paid.credits_per_block) ||
+      next.max_credits !== Math.ceil(next.max_transfer_mb * decimalMb / paid.block_bytes) * paid.credits_per_block) return '';
+  return `Suggested limit for a new request is ${next.max_transfer_mb} MB with a ${formatCredits(next.max_credits)}-credit reservation. Use a new operation key.`;
+}
+function validPublicDestination(value: string) {
+  if (value.length > 4096 || /[\s\\#]/.test(value) || !/^https:\/\/[a-z0-9.-]+(?::443)?(?=[/?]|$)/i.test(value)) return false;
+  try { const host = new URL(value).hostname; return host.includes('.') && !/^[\d.]+$/.test(host); }
+  catch { return false; }
+}
 class ControlError extends Error {
   constructor(message: string, public code: string, public status = 0, public payload: Json | null = null) { super(message); }
 }
@@ -15,6 +45,11 @@ async function initWorkspace(root: HTMLElement) {
   const q = <T extends HTMLElement = HTMLElement>(selector: string, parent: ParentNode = root) => parent.querySelector<T>(selector);
   const qa = <T extends HTMLElement = HTMLElement>(selector: string, parent: ParentNode = root) => [...parent.querySelectorAll<T>(selector)];
   const authPage = ['signup', 'login'].includes(root.dataset.view || '');
+  const query = new URLSearchParams(window.location.search);
+  const plan = query.get('plan');
+  const preferredPlan = creditPackages.some(pack => pack.id === plan) ? plan : null;
+  const billingPath = '/app/billing' + (preferredPlan ? '?plan=' + preferredPlan : '');
+  const authDestination = preferredPlan || query.get('view') === 'billing' ? billingPath : '/app';
   const selectedStorage = 'fetchx-selected-project';
   const pendingPrefix = 'fetchx-pending-operations:';
   const validProject = (id: unknown): id is string => typeof id === 'string' && /^cp_[a-f0-9-]{36}$/i.test(id);
@@ -23,7 +58,7 @@ async function initWorkspace(root: HTMLElement) {
   let service: Json = {}, keys: Json[] = [], operations: Json[] = [], usage: Json | null = null, billing: Json | null = null;
   let challenge = '', email = '', revealedSecret = '', currentKey = '', currentResult: Json | null = null;
   let signingOut = false;
-  let signedIn = false, ready = false, sending = false, prepared = true, loadVersion = 0, mutating = 0;
+  let signedIn = false, ready = false, sending = false, draftOpen = true, loadVersion = 0, mutating = 0;
   let toastTimer: ReturnType<typeof setTimeout>;
   let confirmCallback: (() => void) | null = null;
   let lastFocus: HTMLElement | null = null;
@@ -34,6 +69,22 @@ async function initWorkspace(root: HTMLElement) {
   let githubControls: { control: HTMLInputElement | HTMLButtonElement; disabled: boolean }[] = [];
   const githubResult = authPage ? consumeGithubResult() : null;
   try { sessionStorage.removeItem('fetchx-product-preview-v1'); } catch { /* Clear obsolete preview state when storage is available. */ }
+  const billingPanel = q('[data-stripe-billing]');
+  const stripeBilling = billingPanel ? mountStripeBilling(billingPanel, {
+    request: api, refreshAccounting: refreshStripeAccounting, preferredPlan,
+    canInteract: () => signedIn && ready && !signingOut && !leavingPage,
+  }) : null;
+  if (root.dataset.view === 'billing') {
+    const link = q<HTMLAnchorElement>('[data-login-link]');
+    if (link) link.href = '/login?view=billing' + (preferredPlan ? '&plan=' + preferredPlan : '');
+  }
+  if (authPage && authDestination === billingPath) {
+    const switchLink = q<HTMLAnchorElement>('.pp-auth-switch');
+    if (switchLink) switchLink.search = 'view=billing' + (preferredPlan ? '&plan=' + preferredPlan : '');
+    qa<HTMLAnchorElement>('[data-auth-existing] a[href="/app"], [data-signup-stage="2"] a[href="/app"]').forEach(link => { link.href = billingPath; });
+    const finish = q<HTMLAnchorElement>('[data-finish-signup]');
+    if (finish) { finish.href = billingPath; finish.textContent = 'Review project billing'; }
+  }
 
   function textAll(selector: string, value: unknown) { qa(selector).forEach(node => { node.textContent = String(value ?? '—'); }); }
   function setError(error: unknown, selector = '[data-page-error]') {
@@ -51,17 +102,16 @@ async function initWorkspace(root: HTMLElement) {
     if (!id || !validProject(id)) return [];
     try { const value = JSON.parse(sessionStorage.getItem(pendingPrefix + id) || '[]'); return Array.isArray(value) ? value.filter(validOperation).slice(-100) : []; } catch { return []; }
   }
-  function savePending(key: string) {
-    if (!project) throw new ControlError('Select a project first.', 'project_required');
-    const pending = pendingKeys();
+  function savePending(id: string, key: string) {
+    const pending = pendingKeys(id);
     if (!pending.includes(key)) pending.push(key);
     if (pending.length > 100) throw new ControlError('Recover pending operations before creating more requests.', 'pending_limit');
     try {
-      sessionStorage.setItem(pendingPrefix + project.id, JSON.stringify(pending));
-      if (!pendingKeys().includes(key)) throw new Error('Storage verification failed');
+      sessionStorage.setItem(pendingPrefix + id, JSON.stringify(pending));
+      if (!pendingKeys(id).includes(key)) throw new Error('Storage verification failed');
     } catch { throw new ControlError('Browser session storage is unavailable. Enable it so the operation key can be retained before sending.', 'recovery_storage_unavailable'); }
   }
-  function clearPending(key: string) { if (!project) return; try { const remaining = pendingKeys().filter(item => item !== key); if (remaining.length) sessionStorage.setItem(pendingPrefix + project.id, JSON.stringify(remaining)); else sessionStorage.removeItem(pendingPrefix + project.id); } catch { /* A retained key is safe to recover again. */ } }
+  function clearPending(id: string, key: string) { try { const remaining = pendingKeys(id).filter(item => item !== key); if (remaining.length) sessionStorage.setItem(pendingPrefix + id, JSON.stringify(remaining)); else sessionStorage.removeItem(pendingPrefix + id); } catch { /* A retained key is safe to recover again. */ } }
 
   async function api(path: string, options: { method?: string; body?: Json; publicFetch?: boolean; timeout?: number } = {}): Promise<Json> {
     const method = options.method || 'GET';
@@ -127,7 +177,7 @@ async function initWorkspace(root: HTMLElement) {
     acceptSession(data); email = ''; challenge = ''; clearError();
     const code = q<HTMLInputElement>('[data-signup-verify] input'); if (code) code.value = '';
     if (projects.length && githubResult?.connectRequired) { showExistingAccount(); toast('Signed in. Choose Connect GitHub to connect this account.'); requestAnimationFrame(() => q('[data-github-connect]')?.focus()); }
-    else if (projects.length) window.location.assign('/app'); else stage(2);
+    else if (projects.length) window.location.assign(authDestination); else stage(2);
   }
   function showExistingAccount() { qa('[data-signup-stage]').forEach(node => { node.hidden = true; }); q('[data-auth-existing]')!.hidden = false; q('[data-auth-progress]')?.setAttribute('hidden', ''); }
   async function googleRequest(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -201,13 +251,17 @@ async function initWorkspace(root: HTMLElement) {
   q('[data-conceal-signup-key]')?.addEventListener('click', () => { concealSecret(); q<HTMLButtonElement>('[data-signup-copy]')!.disabled = true; });
   qa('[data-logout]').forEach(button => button.addEventListener('click', async () => {
     if (signingOut || githubInProgress) return;
-    signingOut = true; clearError();
+    signingOut = true; stripeBilling?.reset(); clearError();
     const buttons = qa<HTMLButtonElement>('[data-logout]');
     buttons.forEach(node => { node.disabled = true; node.textContent = 'Signing out…'; node.setAttribute('aria-busy', 'true'); });
     try { await api('/auth/logout', { method: 'POST', body: {} }); concealSecret(); csrf = ''; signedIn = false; try { sessionStorage.removeItem(selectedStorage); } catch {} window.location.assign('/login'); }
     catch (error) {
       setError(error); signingOut = false;
       buttons.forEach(node => { node.disabled = false; node.textContent = 'Sign out'; node.removeAttribute('aria-busy'); });
+      if (project && stripeBilling) {
+        if (ready) stripeBilling.setProject(project.id, stripeView());
+        else void selectProject(project.id);
+      }
     }
   }));
   qa('[data-open-project]').forEach(button => button.addEventListener('click', () => { if (!signedIn) return; lastFocus = document.activeElement as HTMLElement; q<HTMLDialogElement>('[data-project-dialog]')?.showModal(); q<HTMLInputElement>('[data-create-project] input')?.focus(); }));
@@ -223,11 +277,12 @@ async function initWorkspace(root: HTMLElement) {
   q<HTMLDialogElement>('[data-request-dialog]')?.addEventListener('close', () => { textAll('[data-request-detail]', ''); lastFocus?.focus(); });
 
   async function selectProject(id: string, created = false) {
-    const selected = projects.find(item => item.id === id); if (!selected) return;
+    const selected = projects.find(item => item.id === id); if (!selected || signingOut) return;
     if (sending || (mutating && !created)) { toast('Wait for the active action before switching projects.'); const select = q<HTMLSelectElement>('[data-project-select]'); if (select && project) select.value = project.id; return; }
-    const version = ++loadVersion; project = selected; ready = false; concealSecret(); q<HTMLDialogElement>('[data-key-dialog]')?.close(); q<HTMLDialogElement>('[data-request-dialog]')?.close(); saveProject(id); setProjectOptions(); clearError(); gate('Loading project…', 'Reading approved profiles, keys, history, and current balances.'); textAll('[data-project-name]', selected.name);
+    const version = ++loadVersion; project = selected; ready = false; stripeBilling?.reset(); concealSecret(); q<HTMLDialogElement>('[data-key-dialog]')?.close(); q<HTMLDialogElement>('[data-request-dialog]')?.close(); saveProject(id); setProjectOptions(); clearError(); gate('Loading project…', 'Reading approved profiles, keys, history, and current balances.'); textAll('[data-project-name]', selected.name);
+    resetPlayground();
     const result = await Promise.allSettled([api(projectPath()), api(projectPath('/keys')), api(projectPath('/requests')), api(projectPath('/usage')), api(projectPath('/billing'))]);
-    if (version !== loadVersion) return;
+    if (version !== loadVersion || signingOut || leavingPage) return;
     const detail = result[0];
     if (detail.status !== 'fulfilled') { gate('Project unavailable', 'The service could not load this project. Refresh to try reading it again.'); setError(detail.reason); return; }
     project = detail.value.project; profiles = Array.isArray(detail.value.access_profiles) ? detail.value.access_profiles : []; capabilities = detail.value.capabilities || {};
@@ -237,13 +292,27 @@ async function initWorkspace(root: HTMLElement) {
     billing = result[4].status === 'fulfilled' ? result[4].value : null;
     const failures = result.slice(1).filter(item => item.status === 'rejected');
     if (failures.length) setError('Some project data could not be loaded. ' + failures.map(item => item.status === 'rejected' ? item.reason.message : '').join(' '));
-    ready = true; prepared = true; currentResult = null; currentKey = pendingKeys().at(-1) || ''; if (currentKey) prepared = false;
-    renderProfiles(); renderKeys(); renderRequests(); renderUsage(); renderChecklist(); renderRecovery(); renderResult(null);
+    ready = true; draftOpen = true; currentResult = null; currentKey = pendingKeys().at(-1) || ''; if (currentKey) draftOpen = false;
+    renderProfiles(); renderKeys(); renderRequests(); renderUsage(); renderChecklist(); renderResult(null);
+    stripeBilling?.setProject(id, stripeView());
     q('[data-workspace-gate]')!.hidden = true; q('[data-workspace-content]')!.hidden = false; updateRunButton();
   }
   async function refreshKeys() { const id = project?.id; const data = await api(projectPath('/keys')); if (id !== project?.id) return; keys = data.keys || []; renderKeys(); renderChecklist(); }
-  async function refreshHistory() { const id = project?.id; const data = await api(projectPath('/requests')); if (id !== project?.id) return; operations = data.operations || []; renderRequests(); renderChecklist(); }
-  async function refreshAccounting() { const id = project?.id; const results = await Promise.allSettled([api(projectPath('/usage')), api(projectPath('/billing')), refreshHistory()]); if (id !== project?.id) return; usage = results[0].status === 'fulfilled' ? results[0].value : null; billing = results[1].status === 'fulfilled' ? results[1].value : null; renderUsage(); if (results.some(result => result.status === 'rejected')) setError('The request result is shown, but some usage or history data could not be refreshed. Use Refresh to read it again.'); }
+  async function refreshHistory() { const version = loadVersion; const data = await api(projectPath('/requests')); if (version !== loadVersion) return; operations = data.operations || []; renderRequests(); renderChecklist(); }
+  async function refreshAccounting() { const version = loadVersion; const results = await Promise.allSettled([api(projectPath('/usage')), api(projectPath('/billing')), refreshHistory()]); if (version !== loadVersion) return; usage = results[0].status === 'fulfilled' ? results[0].value : null; billing = results[1].status === 'fulfilled' ? results[1].value : null; renderUsage(); if (results.some(result => result.status === 'rejected')) setError('The request result is shown, but some usage or history data could not be refreshed. Use Refresh to read it again.'); }
+  const paymentHeld = () => billing?.paid_credits?.payment_hold === true || usage?.paid_credits?.payment_hold === true;
+  function stripeView() { return billing?.stripe && paymentHeld() ? { ...billing.stripe, payment_hold: true } : billing?.stripe; }
+  async function refreshStripeAccounting(id: string) {
+    const version = loadVersion;
+    const path = '/projects/' + encodeURIComponent(id);
+    const [freshUsage, freshBilling] = await Promise.allSettled([api(path + '/usage'), api(path + '/billing')]);
+    if (id !== project?.id || version !== loadVersion || !signedIn || signingOut || leavingPage) return null;
+    usage = freshUsage.status === 'fulfilled' ? freshUsage.value : null;
+    billing = freshBilling.status === 'fulfilled' ? freshBilling.value : null;
+    renderUsage();
+    if (freshBilling.status === 'rejected') throw new ControlError('FetchX could not refresh billing. Use Refresh to read the project’s purchase history and balances.', 'billing_refresh_failed');
+    return stripeView();
+  }
   function renderKeys() {
     const parent = q('[data-key-list]'); if (!parent) return; parent.replaceChildren();
     if (!keys.length) { parent.append(element('p', 'pp-live-empty', 'No keys returned. Create a scoped API key for your server.')); return; }
@@ -272,7 +341,31 @@ async function initWorkspace(root: HTMLElement) {
     for (const [selector, field] of [['source-successes', 'source_successes'], ['source-failures', 'source_failures'], ['gateway-failures', 'gateway_failures'], ['unknown-outcomes', 'unknown']]) textAll(`[data-${selector}]`, number(outcomes?.[field]));
     const latency = gateway?.latency_ms; textAll('[data-mean-latency]', typeof latency?.mean === 'number' ? `${number(Math.round(latency.mean))} ms` : 'Unavailable'); textAll('[data-p95-latency]', typeof latency?.p95 === 'number' ? `${number(Math.round(latency.p95))} ms` : 'Unavailable');
     qa('[data-credit-meter]').forEach(node => { node.style.width = credits?.granted > 0 ? `${Math.max(0, Math.min(100, (credits.settled + credits.reserved + credits.held) / credits.granted * 100))}%` : '0%'; });
-    const status = billing?.status; textAll('[data-billing-status]', status === 'trial' ? 'Trial access' : status === 'approval_required' ? 'Approval required' : 'Status unavailable'); textAll('[data-billing-description]', status === 'trial' ? 'Your configured trial allocation is active. Usage is limited to approved native HTTP routes.' : status === 'approval_required' ? 'Contact FetchX for a reviewed credit grant or commercial access.' : 'The service did not return a billing status. Refresh to read it again.');
+    const status = billing?.status;
+    const trial = billing?.trial ?? usage?.trial;
+    const dailyLimit = trial?.max_daily_operations ?? (gateway?.entitlement?.mode === 'metered' ? gateway.entitlement.max_daily_operations : null);
+    const trialRoutes = Array.isArray(trial?.eligible_routes) ? trial.eligible_routes.filter((route: unknown) => route === 'direct' || route === 'datacenter').join(' or ') : '';
+    const trialInfo = q('[data-trial-daily-limit]');
+    if (trialInfo) {
+      trialInfo.hidden = !Number.isSafeInteger(dailyLimit) || dailyLimit < 1;
+      trialInfo.textContent = trialInfo.hidden ? '' : `Project limit for scoped routes: ${number(dailyLimit)} requests per day.`;
+    }
+    textAll('[data-billing-status]', status === 'trial' ? 'Trial access' : status === 'approval_required' ? 'Approval required' : 'Status unavailable');
+    textAll('[data-billing-description]', status === 'trial' ? `Your configured trial allocation is active. Use approved ${trialRoutes || 'trial'} routes. The playground also shows any reviewed trial residential and browser options for this project.` : status === 'approval_required' ? 'This project has no available trial credits. Check your account’s other projects or contact FetchX for help.' : 'The service did not return a billing status. Refresh to read it again.');
+    textAll('[data-billing-policy]', trial?.trial_target === 1_000 && trial.grant_scope === 'account' && trial.grant_frequency === 'once' ? 'Eligible accounts receive 1,000 trial credits once. Paid credits have a separate balance.' : 'Trial credits follow the project’s configured allowance. Paid credits have a separate balance.');
+    const paidCredits = billing?.paid_credits ?? usage?.paid_credits;
+    const unavailable = q('[data-paid-credits-unavailable]');
+    if (unavailable) {
+      unavailable.hidden = !!billing?.stripe;
+      unavailable.textContent = billing ? 'Paid credit checkout is currently unavailable for this project.' : 'FetchX could not check paid credit billing. Use Refresh to try again.';
+    }
+    const paidCreditPanel = q('[data-paid-credits-panel]');
+    if (paidCreditPanel) {
+      paidCreditPanel.hidden = paidCredits?.unit !== 'credits';
+      for (const field of ['available', 'used', 'reserved', 'held']) textAll(`[data-paid-credits-${field}]`, formatCredits(paidCredits?.[field]));
+      q('[data-paid-credits-hold]')!.hidden = !paymentHeld();
+      q('[data-paid-credits-use]')!.hidden = paymentHeld() || !profiles.some(advertisesPublicRoute);
+    }
   }
   function renderChecklist() { const states = [signedIn, Boolean(project), keys.some(key => !key.revoked_at), operations.length > 0]; textAll('[data-onboarding-count]', `${states.filter(Boolean).length} of 4 complete`); ['email','project','key','request'].forEach((name, index) => { const node = q(`[data-checklist-${name}]`); node?.classList.toggle('is-complete', states[index]); const mark = node?.querySelector('.pp-step-check'); if (mark) mark.textContent = states[index] ? '✓' : String(index + 1); }); }
   function renderRequests() {
@@ -286,15 +379,26 @@ async function initWorkspace(root: HTMLElement) {
         const row = element('tr'), id = element('td'), link = element('button', 'pp-request-link', item.id); link.type = 'button'; link.dataset.requestId = item.id; link.addEventListener('click', () => { void openRequest(item.id); }); id.append(link); row.append(id);
         const stateCell = element('td'), state = String(item.state || 'unknown'); stateCell.append(element('span', 'pp-status pp-status-' + (['completed','failed','running','unknown'].includes(state) ? state : 'running'), state)); row.append(stateCell);
         const route = item.routing || item.route || {}, profile = item.access_profile || item.profile || {};
-        row.append(element('td', '', `${route.class || item.proxy_class || '—'}${route.country ? ' / ' + route.country : ''} · ${typeof profile === 'string' ? profile : profile.id || '—'}`), element('td', '', typeof item.latency_ms === 'number' ? `${number(Math.round(item.latency_ms))} ms` : '—'), element('td', '', date(item.created_at))); body.append(row);
+        const profileId = typeof profile === 'string' ? profile : profile.id;
+        const routeClass = route.class || item.proxy_class || '—';
+        const country = route.country ? ' / ' + route.country : '';
+        const routeLabel = routeClasses.includes(routeClass) ? routeLabels[routeClass as RouteClass] : '—';
+        const routeProfile = typeof profileId === 'string' && profileId.startsWith('playground:')
+          ? `${item.execution === 'browser' ? 'Browser' : 'HTTP'} · ${routeLabel}${country}`
+          : `${routeClass}${country} · ${profileId || '—'}`;
+        row.append(element('td', '', routeProfile), element('td', '', typeof item.latency_ms === 'number' ? `${number(Math.round(item.latency_ms))} ms` : '—'), element('td', '', date(item.created_at))); body.append(row);
       }); table.append(body); scroll.append(table); parent.append(scroll);
     });
+  }
+  function previewField(value: unknown, limit: number) {
+    if (value === undefined) return undefined;
+    return JSON.stringify(value, null, 2).length <= limit ? value : '[Preview omitted: field exceeds display limit]';
   }
   function previewResult(result: Json) {
     // Never insert remote HTML, even for text/html; omit bulky binary data and
     // cap text before serializing the response inspector.
     const data = result.data ? { ...result.data, body_base64: result.data.body_base64 ? `[${result.data.body_base64.length} base64 characters omitted]` : null, text: typeof result.data.text === 'string' ? result.data.text.slice(0, 32000) + (result.data.text.length > 32000 ? '\n[Source text truncated at 32,000 characters]' : '') : null } : null;
-    return JSON.stringify({ ...result, data }, null, 2).slice(0, 60000);
+    return JSON.stringify({ ...result, data, artifacts: previewField(result.artifacts, 12000), diagnostics: previewField(result.diagnostics, 12000) }, null, 2);
   }
   async function openRequest(id: string) {
     const originalProject = project?.id; lastFocus = document.activeElement as HTMLElement; const dialog = q<HTMLDialogElement>('[data-request-dialog]'); if (!dialog) return; textAll('[data-request-detail]', 'Loading retained response…'); textAll('[data-request-detail-status]', 'Read-only lookup. No source request is dispatched.'); dialog.showModal();
@@ -303,116 +407,660 @@ async function initWorkspace(root: HTMLElement) {
   q('[data-request-search]')?.addEventListener('input', renderRequests); q('[data-request-filter]')?.addEventListener('change', renderRequests);
   q('[data-refresh-history]')?.addEventListener('click', async event => { const button = event.currentTarget as HTMLButtonElement; button.disabled = true; clearError(); try { await refreshHistory(); } catch (error) { setError(error); } finally { button.disabled = false; } });
 
-  function selectedProfile() { const value = q<HTMLSelectElement>('[data-request-profile]')?.value; return profiles.find(item => `${item.id}@${item.version}` === value); }
+  const requestForm = q<HTMLFormElement>('[data-playground-form]');
+  const walletSelect = q<HTMLSelectElement>('[data-request-wallet]');
+  const transferInput = q<HTMLInputElement>('[data-max-transfer]');
+  const creditCapInput = q<HTMLInputElement>('[data-max-credits]');
+  const purchasedHttp = () => walletSelect?.value === 'paid';
+  const requestUrl = q<HTMLInputElement>('[data-request-url]');
+  const routeSelect = q<HTMLSelectElement>('[data-request-route]');
+  const countrySelect = q<HTMLSelectElement>('[data-request-country]');
+  const countrySearch = q<HTMLInputElement>('[data-country-search]');
+  const methodSelect = q<HTMLSelectElement>('[data-request-method]');
+  const keySelect = q<HTMLSelectElement>('[data-request-key]');
+  const waitInput = q<HTMLInputElement>('[data-request-wait]');
+  const screenshotInput = q<HTMLInputElement>('[data-request-screenshot]');
+  const tabs = qa<HTMLButtonElement>('[data-inspector-tab]');
+  const preferredKeys = new Map<string, string>();
+  const bridgeDeadlineMs = 90_000; // Wait beyond the control bridge's 85-second deadline.
+  const previewTextLimit = 32_000;
+  let preparedRequest: Preparation | null = null, preparedSignature = '';
+  let preparedCapabilities: PlaygroundCapabilities | null = null, preparedKeys: SafeKey[] | null = null;
+  let prepareTimer: ReturnType<typeof setTimeout> | undefined, prepareVersion = 0;
+  let prepareError = '', checkingRequest = false, preferredCountry = '';
+  let hasRouteChoice = false;
+  let submittedRequest: { execution: Execution; body: Json } | null = null;
+  let retainedScreenshot: string | null = null;
+  let retainedHeaders: string | null = null;
+
+  const hide = (selector: string, hidden: boolean) => { const node = q(selector); if (node) node.hidden = hidden; };
+  const execution = (): Execution => !purchasedHttp() && q<HTMLInputElement>('input[name="mode"]:checked')?.value === 'browser' ? 'browser' : 'http';
+  const baseCapabilities = (): PlaygroundCapabilities | null => {
+    const value = purchasedHttp() ? null : capabilities.playground;
+    return Array.isArray(value?.executions) && value.executions.length && Array.isArray(value.routes) &&
+      !value.executions.every((mode: Json) => mode.reason === 'playground_disabled') ? value : null;
+  };
+  const activeCapabilities = () => preparedCapabilities || baseCapabilities();
+  const paidProfile = () => profiles.find(advertisesPublicRoute);
+  const selectedProfile = () => purchasedHttp() ? paidProfile() : profiles.find(item =>
+    item.id !== publicUrlId && item.kind !== publicUrlKind && `${item.id}@${item.version}` === q<HTMLSelectElement>('[data-request-profile]')?.value);
+  function paidQuote(profile: Profile | undefined, route: string, country: string | null): PaidQuote | null {
+    if (capabilities.paid_http?.proxy_classes?.[route] !== true || !capabilities.routes?.includes(route) ||
+        !profile?.proxy_classes.includes(route) || (route !== 'datacenter' && route !== 'residential') || country !== 'US' ||
+        !profile.countries.includes(country)) return null;
+    const quote = profile.route_reservations?.find(item => item.class === route && item.country === country)?.paid_credit_reservation;
+    return quote?.route_class === route &&
+      [quote.block_bytes, quote.credits_per_block, quote.max_transfer_bytes, quote.reserved_credits].every(positiveInteger) ? quote : null;
+  }
+  function advertisesPublicRoute(profile: Profile) {
+    const advertised = capabilities.paid_http?.public_url_access_profile;
+    return capabilities.native_http !== false && isPublicUrlProfile(profile) &&
+      advertised?.id === profile.id && advertised?.version === profile.version &&
+      routeClasses.some(route => paidQuote(profile, route, 'US')) &&
+      profile.methods.some(method => method === 'GET' || method === 'HEAD');
+  }
+  function selectedPaidQuote() {
+    return purchasedHttp() ? paidQuote(paidProfile(), routeSelect?.value || '', countrySelect?.value || null) : null;
+  }
+  function paidReservation(quote: PaidQuote) {
+    return transferInput?.value && validTransferMb(transferInput.valueAsNumber)
+      ? Math.ceil(transferInput.valueAsNumber * decimalMb / quote.block_bytes) * quote.credits_per_block
+      : quote.reserved_credits;
+  }
+  function renderTransferQuote() {
+    const quote = selectedPaidQuote();
+    const limits = q<HTMLFieldSetElement>('[data-paid-transfer]');
+    if (limits) limits.hidden = limits.disabled = !quote;
+    if (!quote) return;
+    const bytes = quote.max_transfer_bytes;
+    const defaultSize = bytes < decimalMb ? `${bytes / 1000} KB` : `${bytes / decimalMb} MB`;
+    const reserved = paidReservation(quote);
+    const dailyLimit = paidProfile()?.max_daily_operations;
+    const dailyDisclosure = positiveInteger(dailyLimit) ? ` Daily limit: ${number(dailyLimit)} requests.` : '';
+    textAll('[data-transfer-quote]', `Default ${defaultSize}. Reserves up to ${formatCredits(reserved)} ${reserved === 1 ? 'credit' : 'credits'}. The final charge follows measured wire traffic.${dailyDisclosure}`);
+  }
+  const currentExecutionCapability = () => activeCapabilities()?.executions.find(item => item.id === execution());
+  const routeChoice = () => routeClasses.find(value => value === routeSelect?.value);
+  const explicitKey = () => project ? preferredKeys.get(project.id) || '' : '';
+  const keyOptions = (): SafeKey[] => preparedKeys ?? keys.filter(key => typeof key.id === 'string' && !key.revoked_at && key.scopes?.includes('fetch:write')) as SafeKey[];
+  const keyChoice = () => explicitKey() || (keyOptions().length === 1 ? keyOptions()[0].id : '');
+
+  function explainAvailability(reason?: string | null) {
+    if (reason?.startsWith('browser_probe_')) return 'The browser service is temporarily unavailable.';
+    switch (reason) {
+      case 'playground_disabled': return 'This project uses its existing approved HTTP profiles.';
+      case 'playground_execution_unreviewed': return 'This execution mode has no configured routes.';
+      case 'playground_no_route': return 'No route is currently available for this execution mode.';
+      case 'playground_target_required': return 'Enter the URL to check availability for this website.';
+      case 'playground_route_unreviewed':
+      case 'credit_route_forbidden': return 'No configuration for this execution mode.';
+      case 'playground_route_unhealthy': return 'The proxy pool is temporarily unavailable.';
+      case 'country_pool_unavailable': return 'There is no available proxy pool for this location.';
+      case 'residential_provider_unavailable': return 'The residential proxy service is unavailable.';
+      case 'residential_provider_held':
+      case 'residential_budget_exhausted': return 'The residential route has reached a service limit.';
+      case 'cost_estimate_unavailable':
+      case 'cost_ceiling_exceeded': return 'A bounded cost is unavailable for this route.';
+      default: return 'Unavailable for this execution mode.';
+    }
+  }
+  function routeAvailability(value: RouteClass) {
+    if (purchasedHttp()) {
+      const available = !!paidQuote(paidProfile(), value, 'US');
+      return { available, reason: available ? null : 'playground_route_unreviewed', countries: available ? ['US'] : [] };
+    }
+    const mode = execution(), matrix = activeCapabilities();
+    if (matrix) {
+      const entry = matrix.routes.find(item => item.class === value);
+      return entry?.executions?.[mode] ?? (entry?.executions ? undefined : entry) ?? { available: false, reason: 'playground_route_unreviewed', countries: [] };
+    }
+    const profile = selectedProfile(), allowed = Array.isArray(capabilities.routes) ? capabilities.routes : ['direct'];
+    const countries = (profile?.route_reservations || []).filter(row => row.class === value && typeof row.country === 'string').map(row => row.country as string);
+    const available = mode === 'http' && capabilities.native_http !== false && allowed.includes(value) &&
+      Boolean(profile?.proxy_classes.includes(value)) && (value === 'direct' || countries.length > 0);
+    return { available, reason: available ? null : 'playground_route_unreviewed', countries };
+  }
   function renderProfiles() {
-    const select = q<HTMLSelectElement>('[data-request-profile]'); if (!select) return; select.replaceChildren();
-    profiles.forEach(profile => select.append(new Option(`${profile.id} · v${profile.version}`, `${profile.id}@${profile.version}`)));
-    select.disabled = !profiles.length; if (!profiles.length) { select.append(new Option('No approved HTTP profiles', '')); setError('This project has no approved native HTTP access profile. Contact FetchX to configure access.', '[data-fetch-error]'); }
-    updateRoutes();
+    const select = q<HTMLSelectElement>('[data-request-profile]'); if (!select) return;
+    const scoped = profiles.filter(profile => profile.id !== publicUrlId && profile.kind !== publicUrlKind);
+    select.replaceChildren(...scoped.map(profile => new Option(`${profile.id} · v${profile.version}`, `${profile.id}@${profile.version}`)));
+    select.disabled = !scoped.length;
+    hide('[data-request-wallet-field]', !paidProfile() && !purchasedHttp());
+    hide('[data-request-profile-field]', purchasedHttp() || Boolean(baseCapabilities()) || scoped.length <= 1);
+    renderRequestControls();
+    schedulePreparation();
   }
-  function updateRoutes() {
-    const profile = selectedProfile(), route = q<HTMLSelectElement>('[data-request-route]'); if (!route) return;
-    const previous = route.value; route.replaceChildren();
-    const allowed: string[] = Array.isArray(capabilities.routes) ? capabilities.routes : ['direct'];
-    for (const value of profile?.proxy_classes || []) if (allowed.includes(value)) route.append(new Option(value === 'direct' ? 'Direct · country unverified' : value === 'datacenter' ? 'Datacenter' : value, value));
-    if ([...route.options].some(option => option.value === previous)) route.value = previous;
-    route.disabled = !route.options.length;
-    textAll('[data-profile-summary]', profile ? `Approved origins: ${profile.origins.join(', ')}${profile.paths?.length ? ' · Paths: ' + profile.paths.join(', ') : ''}` : 'No profile configured.');
-    const method = q<HTMLSelectElement>('[data-request-method]'); if (method) { const old = method.value; method.replaceChildren(); for (const value of profile?.methods || []) if (['GET','HEAD'].includes(value)) method.append(new Option(value, value)); method.disabled = !method.options.length; if ([...method.options].some(option => option.value === old)) method.value = old; }
-    updateCountries();
+  function renderRequestControls() {
+    if (!routeSelect || !methodSelect) return;
+    const matrix = activeCapabilities(), mode = execution(), profile = selectedProfile();
+    for (const input of qa<HTMLInputElement>('input[name="mode"]')) {
+      const capability = matrix?.executions.find(item => item.id === input.value);
+      if (purchasedHttp() && input.value === 'http') input.checked = true;
+      input.disabled = purchasedHttp() ? input.value !== 'http' || !profile
+        : matrix ? capability?.available !== true : input.value === 'browser' || capabilities.native_http === false;
+      const description = input.disabled
+        ? purchasedHttp() && input.value === 'browser' ? 'Purchased credits support HTTP only'
+          : matrix ? explainAvailability(capability?.reason) : input.value === 'browser' ? 'Unavailable on this service' : 'HTTP service is unavailable'
+        : input.value === 'browser' ? 'Rendered page' : 'Source response';
+      textAll(`[data-execution-help="${input.value}"]`, description);
+    }
+    const previous = routeChoice();
+    const values = routeClasses.map(value => {
+      const availability = routeAvailability(value);
+      const option = new Option(routeLabels[value] + (availability.available ? '' : ' · unavailable'), value);
+      option.disabled = !availability.available; return option;
+    });
+    routeSelect.replaceChildren(new Option('Choose a route', ''), ...values);
+    routeSelect.options[0].disabled = true;
+    routeSelect.value = previous ?? (!hasRouteChoice && routeAvailability('direct').available ? 'direct' : '');
+    const unavailable = new Map<string, string[]>();
+    for (const route of routeClasses) {
+      const availability = routeAvailability(route);
+      if (availability.available) continue;
+      const reason = explainAvailability(availability.reason);
+      const labels = unavailable.get(reason) ?? [];
+      labels.push(routeLabels[route]);
+      unavailable.set(reason, labels);
+    }
+    textAll('[data-route-help]', [...unavailable].map(([reason, labels]) => `${labels.join(' and ')}: ${reason}`).join(' '));
+    const oldMethod = methodSelect.value;
+    const methods = (matrix ? currentExecutionCapability()?.methods ?? (mode === 'http' ? ['GET', 'HEAD'] : ['GET']) : profile?.methods || []).filter(value => value === 'GET' || value === 'HEAD');
+    methodSelect.replaceChildren(...methods.map(method => new Option(method, method)));
+    if (methods.some(method => method === oldMethod)) methodSelect.value = oldMethod;
+    hide('[data-request-method-field]', methods.length <= 1);
+    const allowedHeaders = mode === 'http' && matrix ? currentExecutionCapability()?.headers || [] : [];
+    for (const input of qa<HTMLInputElement>('[data-request-header]')) {
+      input.disabled = !allowedHeaders.includes(input.dataset.requestHeader || '');
+      (input.closest('[data-header-field]') as HTMLElement).hidden = input.disabled;
+    }
+    hide('[data-request-headers]', !allowedHeaders.length);
+    hide('[data-screenshot-field]', mode !== 'browser' || currentExecutionCapability()?.available !== true);
+    const waitMax = currentExecutionCapability()?.max_wait_ms;
+    const hasWait = mode === 'browser' && typeof waitMax === 'number' && Number.isSafeInteger(waitMax) && waitMax >= 0 && waitMax <= 2000;
+    hide('[data-wait-field]', !hasWait);
+    if (waitInput) {
+      waitInput.disabled = !hasWait;
+      if (hasWait) waitInput.max = String(waitMax);
+    }
+    textAll('[data-profile-summary]', purchasedHttp()
+      ? 'Public HTTPS destinations on US routes. Measured wire traffic uses purchased credits.'
+      : matrix
+      ? preparedRequest?.access_profile ? 'FetchX matched an access policy for this website and execution mode.' : 'FetchX checks the destination and chooses an access policy automatically.'
+      : profile ? `Approved destinations: ${profile.origins.join(', ')}${profile.paths?.length ? ' · Paths: ' + profile.paths.join(', ') : ''}` : 'No approved HTTP access profile is configured.');
+    textAll('#request-url-help', purchasedHttp() ? 'Use a public HTTPS hostname on port 443 without credentials or fragments.' : matrix ? 'Use a public HTTPS URL.' : 'Use a public HTTPS URL approved by this project’s profile.');
+    renderCountries();
+    renderKeyChoice();
   }
-  function updateCountries() {
-    const profile = selectedProfile(), route = q<HTMLSelectElement>('[data-request-route]')?.value, country = q<HTMLSelectElement>('[data-request-country]'); if (!country) return; const previous = country.value; country.replaceChildren();
-    if (route === 'direct') { country.append(new Option('Unverified · null', '')); country.disabled = true; }
-    else { (profile?.countries || []).forEach(value => country.append(new Option(value, value))); country.disabled = !country.options.length; if ([...country.options].some(option => option.value === previous)) country.value = previous; }
-    updateRunButton(); renderCode();
+  function renderCountries() {
+    if (!countrySelect || !countrySearch) return;
+    const route = routeChoice();
+    const proxy = route === 'datacenter' || route === 'residential';
+    const availability = route ? routeAvailability(route) : null;
+    hide('[data-country-search-field]', !proxy || !availability?.available);
+    countrySelect.disabled = !proxy || !availability?.available;
+    if (!proxy || !availability?.available) {
+      countrySelect.replaceChildren(new Option(route === 'direct' ? 'Location not selectable' : 'Choose an available proxy route', ''));
+      textAll('[data-country-help]', route === 'direct' ? 'Use a proxy to select a location.' : '');
+      return;
+    }
+    const supported = new Set(availability.countries);
+    const query = countrySearch.value.trim().toLowerCase();
+    const matching = countries.filter(({ code, name }) => !query || code.toLowerCase().includes(query) || name.toLowerCase().includes(query) || `${name} (${code})`.toLowerCase().includes(query));
+    const placeholder = new Option(matching.length ? 'Choose a country' : 'No countries match', '');
+    placeholder.disabled = true;
+    const groups = [element('optgroup'), element('optgroup')];
+    groups[0].label = 'Available'; groups[1].label = 'Unavailable on this route';
+    for (const { code, name } of matching) {
+      const enabled = supported.has(code);
+      const option = new Option(`${name} (${code})`, code);
+      option.disabled = !enabled; groups[enabled ? 0 : 1].append(option);
+    }
+    countrySelect.replaceChildren(placeholder, ...groups.filter(group => group.childElementCount > 0));
+    countrySelect.value = supported.has(preferredCountry) && matching.some(item => item.code === preferredCountry) ? preferredCountry : '';
+    textAll('[data-country-help]', `${supported.size} supported ${supported.size === 1 ? 'country' : 'countries'}. Other locations are unavailable for this route and execution mode.`);
+  }
+  function renderKeyChoice() {
+    if (!keySelect || !project) return;
+    const managed = purchasedHttp() || Boolean(baseCapabilities()), eligible = keyOptions();
+    hide('[data-request-keys]', !managed);
+    if (!managed) return;
+    if (!eligible.some(item => item.id === explicitKey())) preferredKeys.delete(project.id);
+    keySelect.replaceChildren(new Option('Choose a key', ''), ...eligible.map(item => new Option(`${item.name || 'API key'} · …${item.id.slice(-8)}`, item.id)));
+    keySelect.value = keyChoice();
+    hide('[data-request-key-field]', eligible.length <= 1);
+    hide('[data-request-key-empty]', eligible.length > 0);
+    hide('[data-selected-key]', eligible.length !== 1);
+    textAll('[data-selected-key]', eligible.length === 1 ? `API key: ${eligible[0].name || 'Project key'}` : '');
+  }
+
+  function draftInput(): Json | null {
+    const url = requestUrl?.value.trim(), mode = execution(), route = routeChoice(), method = methodSelect?.value, country = countrySelect?.value;
+    if (!url || requestUrl?.validity.typeMismatch || !route || !routeAvailability(route).available || !method ||
+        activeCapabilities() && currentExecutionCapability()?.available !== true ||
+        route !== 'direct' && (!country || !routeAvailability(route).countries.includes(country))) return null;
+    return { url, execution: mode, method, proxy: { class: route, country: route === 'direct' ? null : country }, ...(explicitKey() ? { key_id: explicitKey() } : {}) };
+  }
+  function clearPreparation() {
+    clearTimeout(prepareTimer); ++prepareVersion;
+    preparedRequest = null; preparedSignature = ''; prepareError = ''; checkingRequest = false;
+  }
+  function schedulePreparation() {
+    clearPreparation();
+    const draft = draftInput(), url = requestUrl?.value.trim();
+    if (ready && draftOpen && !sending && baseCapabilities() && url && !requestUrl?.validity.typeMismatch) {
+      // The project matrix can be provisional for a profile-priced route. A
+      // URL alone can resolve the actual matrix before any proxy is selectable.
+      const input = draft ?? {
+        url, execution: execution(), method: methodSelect?.value || 'GET', proxy: { class: 'direct', country: null },
+        ...(explicitKey() ? { key_id: explicitKey() } : {}),
+      };
+      checkingRequest = true;
+      const id = project?.id, version = prepareVersion;
+      prepareTimer = setTimeout(() => { void prepareRequest(input, id, version, Boolean(draft)); }, 300);
+    }
+    renderTransferQuote(); updateRunButton(); renderCode();
+  }
+  async function prepareRequest(input: Json, id: string | undefined, version: number, chosenRoute: boolean) {
+    const active = () => id === project?.id && version === prepareVersion && !leavingPage;
+    if (!active() || !draftOpen || sending) return;
+    try {
+      const data = await api(projectPath('/playground/prepare'), { method: 'POST', body: input }) as Preparation;
+      if (!active()) return;
+      preparedCapabilities = data.capabilities || null;
+      preparedKeys = Array.isArray(data.keys) ? data.keys : null;
+      preparedRequest = data;
+      preparedSignature = JSON.stringify(input);
+      prepareError = (data.errors || []).filter(error => chosenRoute || error.field === 'url' || error.field === 'key_id')
+        .map(error => error.message).filter(Boolean).join(' ').slice(0, 1000);
+      const invalidUrl = (data.errors || []).some(error => error.field === 'url');
+      if (invalidUrl) requestUrl?.setAttribute('aria-invalid', 'true');
+      renderRequestControls();
+      const resolvedDraft = draftInput();
+      if (!chosenRoute && !invalidUrl && resolvedDraft && JSON.stringify(resolvedDraft) !== preparedSignature) schedulePreparation();
+    } catch (error) {
+      if (!active()) return;
+      preparedRequest = null; preparedSignature = '';
+      prepareError = error instanceof ControlError && error.code === 'timeout' ? 'The request check timed out. Change a setting to check again.' :
+        error instanceof Error ? error.message : 'Could not check this request.';
+    } finally {
+      if (active()) { checkingRequest = false; updateRunButton(); renderCode(); }
+    }
+  }
+  function requestIssue() {
+    if (!requestUrl?.value.trim()) return 'Enter a URL to check the request.';
+    if (requestUrl.validity.typeMismatch) return 'Enter a complete URL, including https://.';
+    if (purchasedHttp() && !validPublicDestination(requestUrl.value.trim())) return 'Use a public HTTPS hostname on port 443 without credentials or fragments.';
+    if (purchasedHttp() && !paidProfile()) return 'Purchased HTTP is unavailable for this project.';
+    if (!baseCapabilities() && !selectedProfile()) return 'No approved HTTP profile is configured for this project.';
+    if (baseCapabilities() && currentExecutionCapability()?.available !== true) return explainAvailability(currentExecutionCapability()?.reason);
+    if (!routeChoice() || !routeAvailability(routeChoice()!).available) return 'Choose an available route.';
+    if (routeChoice() !== 'direct' && !countrySelect?.value) return 'Choose a supported country.';
+    if ((purchasedHttp() || baseCapabilities()) && !keyChoice()) return keyOptions().length ? 'Choose an API key.' : 'A project API key is required.';
+    if (purchasedHttp()) {
+      const quote = selectedPaidQuote();
+      if (!quote) return 'Choose a reviewed purchased HTTP route.';
+      if (paymentHeld()) return 'Purchased credits are on hold.';
+      if (transferInput?.validity.badInput || transferInput?.value && !validTransferMb(transferInput.valueAsNumber))
+        return 'Enter a transfer ceiling from 0.25 to 20 MB in 0.25 MB steps.';
+      if (creditCapInput?.validity.badInput || creditCapInput?.value && !positiveInteger(creditCapInput.valueAsNumber))
+        return 'Enter a positive whole number for the credit cap.';
+      if (creditCapInput?.value && creditCapInput.valueAsNumber < paidReservation(quote))
+        return 'The credit cap is below the reservation.';
+    }
+    if (waitInput && !waitInput.disabled && !waitInput.validity.valid) return `Enter a whole number from 0 to ${waitInput.max} for the browser wait.`;
+    if (qa<HTMLInputElement>('[data-request-header]').some(input => !input.disabled && /[\u0000-\u0008\u000a-\u001f\u007f\u0100-\uffff]/u.test(input.value))) return 'Request headers must use printable HTTP characters.';
+    return '';
+  }
+  function currentDraftBody(): Json | null {
+    const input = draftInput(), managed = Boolean(baseCapabilities());
+    const profile = managed ? preparedRequest?.access_profile : selectedProfile();
+    if (!input || !profile || requestIssue()) return null;
+    if (managed && (!preparedRequest?.ready || preparedRequest.selected_key_id !== keyChoice() || preparedSignature !== JSON.stringify(input))) return null;
+    const maximum = preparedRequest?.quote?.max_estimated_micro_usd;
+    const body: Json = {
+      access_profile: { id: profile.id, version: profile.version },
+      url: managed ? preparedRequest?.url || input.url : input.url, proxy: input.proxy,
+      ...(typeof maximum === 'number' ? { max_estimated_micro_usd: maximum } : {}),
+      ...((managed || purchasedHttp()) && explicitKey() ? { key_id: explicitKey() } : {}),
+    };
+    if (purchasedHttp()) {
+      if (transferInput?.value) body.max_transfer_mb = transferInput.valueAsNumber;
+      if (creditCapInput?.value) body.max_credits = creditCapInput.valueAsNumber;
+    }
+    if (input.execution === 'browser') {
+      if (screenshotInput?.checked) body.screenshot = true;
+      if (waitInput && !waitInput.disabled && waitInput.value !== '') body.wait_ms = waitInput.valueAsNumber;
+    } else {
+      body.method = input.method;
+      const headers = Object.fromEntries(qa<HTMLInputElement>('[data-request-header]').filter(header => !header.disabled && header.value.trim())
+        .map(header => [header.dataset.requestHeader, header.value.trim()]));
+      if (Object.keys(headers).length) body.headers = headers;
+    }
+    return body;
   }
   function updateRunButton() {
     q<HTMLSelectElement>('[data-project-select]')?.toggleAttribute('disabled', sending || mutating > 0 || !projects.length);
     const button = q<HTMLButtonElement>('[data-run-request]'); if (!button) return;
-    const profile = selectedProfile(), route = q<HTMLSelectElement>('[data-request-route]')?.value, method = q<HTMLSelectElement>('[data-request-method]')?.value;
-    button.disabled = !ready || sending || !prepared || !profile || !route || !method;
-    button.textContent = sending ? 'Waiting for response…' : !prepared ? 'Start a new request to send again' : 'Send request →';
-    const fresh = q<HTMLButtonElement>('[data-new-request]'); if (fresh) fresh.disabled = sending || !ready;
-    const recover = q<HTMLButtonElement>('[data-recover-result]'); if (recover) recover.disabled = sending || !currentKey;
+    const body = ready && draftOpen && !sending ? currentDraftBody() : null;
+    button.disabled = !body;
+    button.textContent = sending ? 'Waiting for result…' : 'Send request →';
+    button.hidden = !draftOpen && !sending;
+    const config = q<HTMLFieldSetElement>('[data-request-config]');
+    if (config) { config.disabled = sending || !draftOpen; config.hidden = !draftOpen && !submittedRequest; }
+    const fresh = q<HTMLButtonElement>('[data-new-request]');
+    if (fresh) { fresh.disabled = sending || !ready; fresh.hidden = draftOpen && !pendingKeys().length; }
+    const recover = q<HTMLButtonElement>('[data-recover-result]'); if (recover) recover.disabled = sending || !ready || !recoveryKey();
+    const pending = q<HTMLSelectElement>('[data-pending-operation]'); if (pending) pending.disabled = sending || !ready;
+    const quote = preparedRequest?.quote;
+    const credits = quote?.credits;
+    const estimate = purchasedHttp() ? 'This request uses purchased HTTP credits.' : typeof credits === 'number'
+      ? `Reserves up to ${number(credits)} ${credits === 1 ? 'credit' : 'credits'}${quote?.max_estimated_micro_usd != null && quote.max_estimated_micro_usd > 0 ? ' · cost ceiling $' + (quote.max_estimated_micro_usd / 1_000_000).toFixed(6) : ''}.`
+      : 'Approved profile limits apply.';
+    const quoteText = sending ? 'Waiting for the saved result…' : !draftOpen ? '' : checkingRequest ? 'Checking access, route, and cost…' :
+      prepareError || requestIssue() || (body ? estimate : 'Check the request settings before sending.');
+    const quoteNode = q('[data-request-quote]');
+    if (quoteNode) {
+      if (quoteNode.textContent !== quoteText) quoteNode.textContent = quoteText;
+      quoteNode.hidden = !quoteText;
+    }
   }
+  function recoveryKey() { return q<HTMLSelectElement>('[data-pending-operation]')?.value || currentKey; }
   function renderRecovery() {
-    const pending = pendingKeys(), select = q<HTMLSelectElement>('[data-pending-operation]'); if (select) { select.replaceChildren(); pending.forEach(key => select.append(new Option(key, key))); select.value = currentKey; }
-    const label = q('[data-pending-label]'); if (label) label.hidden = pending.length < 2;
-    const recover = q('[data-recover-result]'); if (recover) recover.hidden = !currentKey;
-    const note = q('[data-recovery-note]'); if (note) note.hidden = !pending.length;
-    textAll('[data-operation-key]', currentKey || 'Assigned before dispatch'); updateRunButton(); renderCode();
+    const pending = pendingKeys(), select = q<HTMLSelectElement>('[data-pending-operation]');
+    if (select) {
+      const previous = select.value;
+      select.replaceChildren(...pending.map(key => new Option(`${operationExecution(key) === 'browser' ? 'Browser' : 'HTTP'} · ${key}`, key)));
+      select.value = pending.includes(currentKey) ? currentKey : pending.includes(previous) ? previous : pending.at(-1) || '';
+    }
+    hide('[data-pending-label]', !pending.length);
+    hide('[data-recover-result]', !recoveryKey());
+    hide('[data-recovery-note]', !recoveryKey());
+    hide('[data-operation-row]', !currentKey);
+    textAll('[data-operation-key]', currentKey);
+    updateRunButton(); renderCode();
   }
   function renderResult(result: Json | null) {
     currentResult = result;
-    const state = result?.state || (currentKey ? 'Pending recovery' : 'Ready'); textAll('[data-response-state]', state[0].toUpperCase() + state.slice(1));
-    const badge = q('[data-response-state]'); if (badge) badge.className = 'pp-status pp-status-' + (['completed','failed','running','unknown'].includes(state) ? state : 'running');
-    textAll('[data-response-output]', result ? previewResult(result) : currentKey ? 'A saved operation key is awaiting recovery. Select “Recover saved result” to read retained state.' : 'Send a request to inspect the retained response.');
-    textAll('[data-response-diagnostics]', result ? JSON.stringify({ routing: result.routing, diagnostics: result.diagnostics, usage: result.usage, retry: result.retry, error: result.error }, null, 2).slice(0, 48000) : 'No diagnostics yet.');
-    textAll('[data-response-note]', result ? `${result.success ? 'Source response retained.' : result.error?.message || 'Operation state retained.'} Application acceptance: ${result.application_acceptance || 'not evaluated'}.` : currentKey ? 'Recovery never redispatches the source request.' : 'No request has been sent.');
+    const mode = currentKey ? operationExecution(currentKey) : submittedRequest?.execution || execution();
+    const state = result?.state || (currentKey ? 'Pending recovery' : 'Ready');
+    textAll('[data-response-state]', state[0].toUpperCase() + state.slice(1));
+    const badge = q('[data-response-state]');
+    if (badge) badge.className = 'pp-status pp-status-' + (['completed','failed','running','unknown'].includes(state) ? state : 'running');
+    const retained = result?.data;
+    const bodyText = typeof retained?.text === 'string' ? retained.text : null;
+    const output = bodyText !== null ? bodyText.slice(0, previewTextLimit) + (bodyText.length > previewTextLimit ? '\n[Source text truncated at 32,000 characters. Download for the full retained body.]' : '') :
+      retained?.body_base64 ? 'A binary body was retained. Download it to inspect the bytes.' :
+      state === 'running' ? 'Waiting for the gateway response…' : currentKey ? 'No source body is available for this operation.' : 'Send a request to inspect the response body.';
+    textAll('[data-response-output]', output);
+    const artifacts = Array.isArray(result?.artifacts) ? result.artifacts : [];
+    const screenshot = mode === 'browser' && artifacts.find((artifact: Json) => artifact.kind === 'browser_screenshot' && artifact.content_type === 'image/jpeg');
+    const image = q<HTMLImageElement>('[data-browser-screenshot]');
+    retainedScreenshot = typeof screenshot?.body_base64 === 'string' && screenshot.body_base64.length <= 4 * Math.ceil(1_048_576 / 3) &&
+      /^\/9j\/[A-Za-z0-9+/]*={0,2}$/.test(screenshot.body_base64) ? screenshot.body_base64 : null;
+    if (image) { if (retainedScreenshot) image.src = 'data:image/jpeg;base64,' + retainedScreenshot; else image.removeAttribute('src'); }
+    const screenshotTab = q<HTMLButtonElement>('[data-inspector-tab="screenshot"]');
+    if (screenshotTab) {
+      if (!retainedScreenshot && screenshotTab.getAttribute('aria-selected') === 'true') selectTab(tabs[0]);
+      screenshotTab.hidden = !retainedScreenshot;
+    }
+    textAll('[data-body-description]', mode === 'browser' && bodyText !== null ? 'Rendered DOM' : 'Response body');
+    hide('[data-copy-body]', bodyText === null);
+    hide('[data-download-body]', bodyText === null && !retained?.body_base64);
+    const headers = retained?.headers;
+    retainedHeaders = headers && typeof headers === 'object' && !Array.isArray(headers) && Object.keys(headers).length ? JSON.stringify(headers, null, 2) : null;
+    textAll('[data-response-headers]', retainedHeaders && retainedHeaders.length <= 24_000 ? retainedHeaders : retainedHeaders ? 'The retained headers exceed the preview limit. Copy headers to read them.' : 'No source headers retained.');
+    hide('[data-copy-headers]', !retainedHeaders);
+    textAll('[data-response-diagnostics]', result ? JSON.stringify({
+      state, operation_id: result.operation_id ?? null, execution: mode, gateway_http_status: result.gateway_http_status ?? null,
+      source: retained ? { status: retained.status, final_url: retained.final_url, content_type: retained.content_type } : null,
+      routing: result.routing, usage: previewField(result.usage, 12000), diagnostics: previewField(result.diagnostics, 24000),
+      artifacts: previewField(artifacts.map(({ body_base64, ...metadata }: Json) => metadata), 12000),
+      retry: previewField(result.retry, 8000), error: result.error ?? null,
+    }, null, 2) : 'No diagnostics yet.');
+    const note = result
+      ? state === 'running' ? 'Request sent. Keep the operation key for recovery.' :
+        result.success ? 'Source response retained. Check the body for the content you expected.' :
+        state === 'unknown' ? 'The outcome is uncertain. Recover the saved operation before sending again.' : 'Operation state retained.'
+      : currentKey ? 'Read the saved result using its operation key.' : 'No request has been sent.';
+    const blocked = result?.usage?.blocked_requests;
+    const partial = mode === 'browser' && result?.usage?.capture_complete === false;
+    const captureNote = partial ? ' Partial capture.' + (Number.isSafeInteger(blocked) && blocked > 0 ? ` ${number(blocked)} ${blocked === 1 ? 'request was' : 'requests were'} blocked.` : '') : '';
+    textAll('[data-response-note]', note + captureNote);
+    if (result?.error) setError(result.error.message || result.error.code || 'The operation could not complete.', '[data-response-error]');
+    else clearError('[data-response-error]');
+    const suggestion = transferSuggestion(result);
+    textAll('[data-response-transfer]', suggestion);
+    hide('[data-response-transfer]', !suggestion);
+    const paid = result?.usage?.accounting?.paid_credits;
+    hide('[data-response-accounting]', !paid);
+    textAll('[data-response-accounting]', paid
+      ? `Paid credits reserved: ${formatCredits(paid.reserved_credits)}. Paid credits used: ${formatCredits(paid.used_credits)}.${paid.state === 'held' ? ' The reservation remains held.' : ''}`
+      : '');
+    const route = result?.routing;
+    const duration = [result?.usage?.duration_ms, result?.duration_ms]
+      .find((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    const bytes = result?.usage?.decoded_bytes ?? result?.usage?.encoded_bytes;
+    const credit = result?.usage?.accounting?.request_credits ?? result?.request_credits;
+    const creditState = { settled: 'used', released: 'released', reserved: 'reserved', held: 'held' } as Record<string, string>;
+    hide('[data-result-facts]', !result || state === 'running');
+    textAll('[data-result-source]', typeof retained?.status === 'number' ? `HTTP ${retained.status}` : 'No response');
+    textAll('[data-result-route]', routeClasses.includes(route?.class) ? routeLabels[route.class as RouteClass] : '—');
+    textAll('[data-result-country]', route?.class === 'direct' ? 'Not selectable' : typeof route?.country === 'string' && /^[A-Z]{2}$/.test(route.country) ? `${countryName(route.country)} (${route.country})` : '—');
+    hide('[data-result-duration-metric]', duration === undefined);
+    textAll('[data-result-duration]', duration === undefined ? '—' : `${number(Math.round(duration))} ms`);
+    textAll('[data-result-bytes]', number(bytes));
+    textAll('[data-result-credits]', typeof credit?.credits === 'number' ? `${number(credit.credits)} ${creditState[credit.state] || ''}`.trim() : '—');
     renderRecovery();
   }
-  function fetchBody(): Json {
-    const profile = selectedProfile(); if (!profile) throw new ControlError('Select an approved access profile.', 'profile_required');
-    const proxyClass = q<HTMLSelectElement>('[data-request-route]')?.value || '', country = proxyClass === 'direct' ? null : q<HTMLSelectElement>('[data-request-country]')?.value;
-    return { idempotency_key: currentKey || 'REPLACE_WITH_NEW_OPERATION_KEY', access_profile: { id: profile.id, version: profile.version }, url: q<HTMLInputElement>('[data-request-url]')?.value || '', method: q<HTMLSelectElement>('[data-request-method]')?.value || 'GET', proxy: { class: proxyClass, country } };
+
+  function resetPlayground() {
+    clearPreparation(); preparedCapabilities = null; preparedKeys = null; hasRouteChoice = false; preferredCountry = '';
+    draftOpen = true; currentKey = ''; currentResult = null; submittedRequest = null;
+    requestForm?.reset(); requestUrl?.removeAttribute('aria-invalid');
+    if (routeSelect) routeSelect.replaceChildren();
+    q('[data-pending-operation]')?.replaceChildren();
+    q<HTMLDetailsElement>('[data-request-advanced]')?.removeAttribute('open');
+    const codeOperation = q<HTMLSelectElement>('[data-code-operation]'); if (codeOperation) codeOperation.value = 'send';
+    clearError('[data-fetch-error]');
+    if (tabs[0]) selectTab(tabs[0]);
   }
   function newRequest() {
-    prepared = true; currentKey = ''; clearError('[data-fetch-error]'); renderResult(null); q<HTMLInputElement>('[data-request-url]')?.focus();
+    draftOpen = true; currentKey = ''; submittedRequest = null;
+    if (transferInput) transferInput.value = '';
+    if (creditCapInput) creditCapInput.value = '';
+    const codeOperation = q<HTMLSelectElement>('[data-code-operation]'); if (codeOperation) codeOperation.value = 'send';
+    clearError('[data-fetch-error]'); renderResult(null); schedulePreparation(); requestUrl?.focus();
   }
   q('[data-new-request]')?.addEventListener('click', () => {
-    if (pendingKeys().length) confirmAction('Start a deliberate new request?', 'Pending operations and their reservations remain unchanged. This request uses a new operation key and may consume additional credits. You can still recover saved pending keys.', 'Start new request', newRequest);
+    if (sending) return;
+    if (pendingKeys().length) confirmAction('Start a deliberate new request?', 'The saved requests remain available to recover. Sending this request creates a separate operation and may use additional credits.', 'Start new request', newRequest);
     else newRequest();
   });
-  q<HTMLSelectElement>('[data-pending-operation]')?.addEventListener('change', event => { currentKey = (event.currentTarget as HTMLSelectElement).value; prepared = false; renderResult(null); });
-  onForm('[data-playground-form]', async () => {
-    if (!ready || !prepared || sending) return;
-    currentKey = 'console_' + crypto.randomUUID();
-    const body = fetchBody();
-    savePending(currentKey); // A storage failure prevents dispatch.
-    prepared = false; sending = true; renderRecovery(); textAll('[data-response-state]', 'Running'); textAll('[data-response-note]', 'Request dispatched. Keep the operation key for read-only recovery.'); textAll('[data-response-output]', 'Waiting for the gateway response…');
+  requestForm?.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!ready || !draftOpen || sending || !project) return;
+    const input = currentDraftBody();
+    if (!input || !requestForm.reportValidity()) return;
+    const id = project.id, version = loadVersion, mode = execution(), key = (mode === 'browser' ? 'render_' : 'console_') + crypto.randomUUID(), path = projectPath(operationResource(mode));
+    const body = { ...input, idempotency_key: key };
+    clearError('[data-fetch-error]');
+    try { savePending(id, key); } catch (error) { setError(error, '[data-fetch-error]'); return; } // A storage failure prevents dispatch.
+    clearPreparation(); submittedRequest = { execution: mode, body };
+    currentKey = key; draftOpen = false; sending = true;
+    renderResult({ state: 'running' });
     try {
-      const result = await api(projectPath('/fetch'), { method: 'POST', body, publicFetch: true, timeout: 45000 });
-      if (['completed','failed','rejected'].includes(result.state)) clearPending(currentKey);
-      renderResult(result);
+      const result = await api(path, { method: 'POST', body, publicFetch: true, timeout: bridgeDeadlineMs });
+      if (['completed','failed','rejected'].includes(result.state)) clearPending(id, key);
+      if (version === loadVersion && id === project?.id) renderResult(result);
     } catch (error) {
-      renderResult({ state: 'unknown', success: false, idempotency_key: currentKey, error: { code: error instanceof ControlError ? error.code : 'network_error', message: error instanceof Error ? error.message : 'The operation outcome is unknown.' }, application_acceptance: 'not_evaluated' }); setError(error, '[data-fetch-error]');
-    } finally { sending = false; renderRecovery(); await refreshAccounting(); }
-  }, '[data-fetch-error]');
+      if (version === loadVersion && id === project?.id) renderResult({ state: 'unknown', success: false, idempotency_key: key, error: { code: error instanceof ControlError ? error.code : 'network_error', message: error instanceof Error ? error.message : 'The operation outcome is unknown.' } });
+    } finally {
+      if (version === loadVersion && id === project?.id) { sending = false; renderRecovery(); await refreshAccounting(); }
+    }
+  });
   q('[data-recover-result]')?.addEventListener('click', async () => {
-    if (!currentKey || sending) return; sending = true; updateRunButton(); clearError('[data-fetch-error]');
-    try { const result = await api(projectPath('/fetch/' + encodeURIComponent(currentKey)), { publicFetch: true }); if (result.operation_id && ['completed','failed'].includes(result.state)) clearPending(currentKey); renderResult(result); }
-    catch (error) { setError(error, '[data-fetch-error]'); textAll('[data-response-note]', 'Recovery could not confirm an outcome. The original key remains saved; no source work was resubmitted.'); }
-    finally { sending = false; renderRecovery(); await refreshAccounting(); }
+    const key = recoveryKey();
+    if (!key || sending || !ready || !project) return;
+    const id = project.id, version = loadVersion, path = projectPath(operationResource(operationExecution(key)) + '/' + encodeURIComponent(key));
+    if (key !== currentKey) submittedRequest = null;
+    clearPreparation(); sending = true; currentKey = key; draftOpen = false; clearError('[data-fetch-error]'); renderResult(null);
+    textAll('[data-response-note]', 'Reading the saved operation…');
+    try {
+      const result = await api(path, { publicFetch: true, timeout: bridgeDeadlineMs });
+      if (result.operation_id && ['completed','failed'].includes(result.state)) clearPending(id, key);
+      if (version === loadVersion && id === project?.id) renderResult(result);
+    } catch (error) {
+      if (version === loadVersion && id === project?.id) {
+        setError(error, '[data-response-error]');
+        textAll('[data-response-note]', 'Recovery could not confirm an outcome. The key remains saved.');
+      }
+    } finally {
+      if (version === loadVersion && id === project?.id) { sending = false; renderRecovery(); await refreshAccounting(); }
+    }
   });
   function renderCode() {
-    if (!q('[data-generated-code]')) return;
-    const profile = selectedProfile(); if (!profile) { textAll('[data-generated-code]', 'No approved native HTTP profile is available.'); return; }
-    const body = currentResult && !prepared ? null : fetchBody(), recovery = !prepared && currentKey;
-    const method = recovery ? 'GET' : 'POST', endpoint = String(service.api_base_url || 'https://YOUR_FETCHX_API').replace(/\/$/, '') + '/v2/fetch' + (recovery ? '/' + encodeURIComponent(currentKey) : '');
-    const language = q<HTMLSelectElement>('[data-code-language]')?.value || 'curl'; let code = '';
-    if (language === 'javascript') code = `const response = await fetch(${JSON.stringify(endpoint)}, {\n  method: ${JSON.stringify(method)},\n  headers: { Authorization: \`Bearer \${process.env.FETCHX_API_KEY}\`${recovery ? '' : ', "Content-Type": "application/json"'} }${recovery ? '' : ',\n  body: JSON.stringify(' + JSON.stringify(body, null, 2) + ')'}\n});\nconst result = await response.json();\nconsole.log(result);`;
-    else if (language === 'python') code = `import os, json, requests\n${recovery ? '' : 'payload = json.loads(' + JSON.stringify(JSON.stringify(body)) + ')\n'}response = requests.${recovery ? 'get' : 'post'}(\n    ${JSON.stringify(endpoint)},\n    headers={"Authorization": "Bearer " + os.environ["FETCHX_API_KEY"]}${recovery ? '' : ',\n    json=payload'}\n)\nprint(response.json())`;
-    else { const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"; code = `curl ${quote(endpoint)} \\\n  -H "Authorization: Bearer $FETCHX_API_KEY"${recovery ? '' : ' \\\n  -H "Content-Type: application/json" \\\n  --data ' + quote(JSON.stringify(body, null, 2))}`; }
-    textAll('[data-generated-code]', code);
+    const control = q<HTMLSelectElement>('[data-code-operation]'), copyButton = q<HTMLButtonElement>('[data-copy-code]');
+    if (!control || !copyButton) return;
+    const key = currentKey || recoveryKey();
+    const recover = control.querySelector<HTMLOptionElement>('option[value="recover"]')!;
+    recover.disabled = !key;
+    if (!key && control.value === 'recover') control.value = 'send';
+    const recovery = control.value === 'recover', body = recovery ? null : submittedRequest?.body ?? (draftOpen ? currentDraftBody() : null);
+    copyButton.disabled = !recovery && !body;
+    if (copyButton.disabled) {
+      textAll('[data-generated-code]', key ? 'Choose Recover this request to look up the saved operation, or prepare a new request.' : 'Prepare a request to generate code.');
+      return;
+    }
+    const mode = recovery ? operationExecution(key) : submittedRequest?.execution || execution();
+    const base = String(service.api_base_url || 'https://YOUR_FETCHX_API').replace(/\/$/, '');
+    textAll('[data-generated-code]', requestCode(base, mode, q<HTMLSelectElement>('[data-code-language]')?.value || 'curl', body, recovery ? key : ''));
   }
-  q('[data-request-profile]')?.addEventListener('change', updateRoutes); q('[data-request-route]')?.addEventListener('change', updateCountries); q('[data-request-country]')?.addEventListener('change', renderCode); q('[data-request-method]')?.addEventListener('change', renderCode); q('[data-request-url]')?.addEventListener('input', renderCode); q('[data-code-language]')?.addEventListener('change', renderCode); q('[data-copy-code]')?.addEventListener('click', () => { void copy(q('[data-generated-code]')?.textContent || ''); });
-  const tabs = qa<HTMLButtonElement>('[data-inspector-tab]');
-  function selectTab(button: HTMLButtonElement) { tabs.forEach(tab => { const selected = tab === button; tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1; }); qa('[data-inspector-panel]').forEach(panel => { panel.hidden = panel.dataset.inspectorPanel !== button.dataset.inspectorTab; }); }
-  tabs.forEach((tab, index) => { tab.addEventListener('click', () => selectTab(tab)); tab.addEventListener('keydown', event => { let next = index; if (event.key === 'ArrowRight') next = (index + 1) % tabs.length; else if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length; else if (event.key === 'Home') next = 0; else if (event.key === 'End') next = tabs.length - 1; else return; event.preventDefault(); selectTab(tabs[next]); tabs[next].focus(); }); });
+  function changeDraft(resetMatrix = false) {
+    clearError('[data-fetch-error]'); requestUrl?.removeAttribute('aria-invalid');
+    if (resetMatrix) { preparedCapabilities = null; renderRequestControls(); }
+    schedulePreparation();
+  }
+  walletSelect?.addEventListener('change', () => {
+    preparedCapabilities = null; preparedKeys = null; preferredCountry = ''; hasRouteChoice = false;
+    if (routeSelect) routeSelect.value = '';
+    if (countrySearch) countrySearch.value = '';
+    if (transferInput) transferInput.value = '';
+    if (creditCapInput) creditCapInput.value = '';
+    hide('[data-request-profile-field]', purchasedHttp() || Boolean(baseCapabilities()) || (q<HTMLSelectElement>('[data-request-profile]')?.options.length ?? 0) <= 1);
+    renderRequestControls(); changeDraft();
+  });
+  for (const input of [transferInput, creditCapInput]) input?.addEventListener('input', () => {
+    renderTransferQuote(); updateRunButton(); renderCode();
+  });
+  q('[data-request-profile]')?.addEventListener('change', () => { renderRequestControls(); changeDraft(); });
+  qa('input[name="mode"]').forEach(input => input.addEventListener('change', () => {
+    if (countrySearch) countrySearch.value = '';
+    renderRequestControls(); changeDraft();
+  }));
+  routeSelect?.addEventListener('change', () => {
+    hasRouteChoice = true;
+    if (countrySearch) countrySearch.value = '';
+    if (purchasedHttp()) {
+      if (transferInput) transferInput.value = '';
+      if (creditCapInput) creditCapInput.value = '';
+    }
+    renderCountries(); changeDraft();
+  });
+  countrySearch?.addEventListener('input', () => { renderCountries(); changeDraft(); });
+  countrySelect?.addEventListener('change', () => { preferredCountry = countrySelect.value; changeDraft(); });
+  keySelect?.addEventListener('change', () => {
+    if (project) { if (keySelect.value) preferredKeys.set(project.id, keySelect.value); else preferredKeys.delete(project.id); }
+    changeDraft();
+  });
+  methodSelect?.addEventListener('change', () => changeDraft());
+  requestUrl?.addEventListener('input', () => changeDraft(true));
+  qa('[data-request-wait],[data-request-screenshot],[data-request-header]').forEach(input => input.addEventListener('input', () => { updateRunButton(); renderCode(); }));
+  q('[data-pending-operation]')?.addEventListener('change', renderCode);
+  q('[data-code-language]')?.addEventListener('change', renderCode);
+  q('[data-code-operation]')?.addEventListener('change', renderCode);
+  q('[data-copy-code]')?.addEventListener('click', () => { void copy(q('[data-generated-code]')?.textContent || ''); });
+  q('[data-copy-body]')?.addEventListener('click', () => { if (typeof currentResult?.data?.text === 'string') void copy(currentResult.data.text); });
+  q('[data-copy-headers]')?.addEventListener('click', () => { if (retainedHeaders) void copy(retainedHeaders); });
+  function download(blob: Blob, filename: string) {
+    const href = URL.createObjectURL(blob), anchor = element('a');
+    anchor.href = href; anchor.download = filename; anchor.click();
+    setTimeout(() => URL.revokeObjectURL(href), 1_000);
+  }
+  function downloadBytes(encoded: string, filename: string, type: string) {
+    try {
+      const raw = atob(encoded), bytes = new Uint8Array(raw.length);
+      for (let index = 0; index < bytes.length; index++) bytes[index] = raw.charCodeAt(index);
+      download(new Blob([bytes], { type }), filename);
+    }
+    catch { toast('The retained bytes could not be downloaded.'); }
+  }
+  q('[data-download-body]')?.addEventListener('click', () => {
+    if (typeof currentResult?.data?.text === 'string') download(new Blob([currentResult.data.text], { type: 'text/plain;charset=utf-8' }), 'fetchx-body.txt');
+    else if (typeof currentResult?.data?.body_base64 === 'string') downloadBytes(currentResult.data.body_base64, 'fetchx-body.bin', 'application/octet-stream');
+  });
+  q('[data-download-screenshot]')?.addEventListener('click', () => {
+    if (retainedScreenshot) downloadBytes(retainedScreenshot, 'fetchx-screenshot.jpg', 'image/jpeg');
+  });
+  function selectTab(button: HTMLButtonElement) {
+    tabs.forEach(tab => { const selected = tab === button; tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1; });
+    qa('[data-inspector-panel]').forEach(panel => { panel.hidden = panel.dataset.inspectorPanel !== button.dataset.inspectorTab; });
+  }
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => selectTab(tab));
+    tab.addEventListener('keydown', event => {
+      const visible = tabs.filter(item => !item.hidden), index = visible.indexOf(tab);
+      let next;
+      if (event.key === 'ArrowRight') next = (index + 1) % visible.length;
+      else if (event.key === 'ArrowLeft') next = (index + visible.length - 1) % visible.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = visible.length - 1;
+      else return;
+      event.preventDefault(); selectTab(visible[next]); visible[next].focus();
+    });
+  });
   const menu = q<HTMLButtonElement>('[data-app-menu]');
-  function closeMenu() { root.classList.remove('pp-menu-open'); menu?.setAttribute('aria-expanded', 'false'); menu?.setAttribute('aria-label', 'Open workspace navigation'); }
-  menu?.addEventListener('click', () => { const open = menu.getAttribute('aria-expanded') !== 'true'; root.classList.toggle('pp-menu-open', open); menu.setAttribute('aria-expanded', String(open)); menu.setAttribute('aria-label', open ? 'Close workspace navigation' : 'Open workspace navigation'); });
-  document.addEventListener('keydown', event => { if (event.key === 'Escape' && root.classList.contains('pp-menu-open')) { closeMenu(); menu?.focus(); } });
-  document.addEventListener('click', event => { if (root.classList.contains('pp-menu-open') && !(event.target as Element).closest('.pp-sidebar,[data-app-menu]')) closeMenu(); });
-  window.addEventListener('pagehide', () => { leavingPage = true; disposeGoogle?.(); disposeGithub?.(); concealSecret(); csrf = ''; email = ''; challenge = ''; currentResult = null; textAll('[data-response-output],[data-response-diagnostics],[data-request-detail],[data-generated-code]', ''); });
+  const menuClose = q<HTMLButtonElement>('[data-app-menu-close]');
+  const sidebar = q('.pp-sidebar');
+  function closeMenu(restoreFocus = true) {
+    if (restoreFocus) menu?.focus();
+    root.classList.remove('pp-menu-open');
+    menu?.setAttribute('aria-expanded', 'false');
+    if (menuClose) menuClose.hidden = true;
+  }
+  menu?.addEventListener('click', () => {
+    if (menu.getAttribute('aria-expanded') === 'true') { closeMenu(); return; }
+    root.classList.add('pp-menu-open');
+    menu.setAttribute('aria-expanded', 'true');
+    if (menuClose) { menuClose.hidden = false; menuClose.focus(); }
+  });
+  menuClose?.addEventListener('click', () => closeMenu());
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && root.classList.contains('pp-menu-open')) closeMenu();
+  });
+  document.addEventListener('click', event => {
+    if (!root.classList.contains('pp-menu-open') || (event.target as Element).closest('.pp-sidebar,[data-app-menu]')) return;
+    const focused = document.activeElement;
+    closeMenu(focused === document.body || sidebar?.contains(focused));
+  });
+  window.addEventListener('pagehide', () => {
+    leavingPage = true;
+    ++loadVersion;
+    stripeBilling?.reset();
+    disposeGoogle?.(); disposeGithub?.(); concealSecret();
+    csrf = ''; email = ''; challenge = '';
+    clearPreparation();
+    currentResult = null; submittedRequest = null; retainedScreenshot = null; retainedHeaders = null;
+    requestForm?.reset();
+    q('[data-browser-screenshot]')?.removeAttribute('src');
+    textAll('[data-response-output],[data-response-headers],[data-response-diagnostics],[data-request-detail],[data-generated-code]', '');
+  });
   window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
-  q('[data-refresh-workspace]')?.addEventListener('click', () => { if (!sending && !mutating) void start(); });
+  q('[data-refresh-workspace]')?.addEventListener('click', () => { if (!sending && !mutating && !signingOut) void start(); });
 
   async function start() {
     disposeGoogle?.(); disposeGoogle = undefined;
     disposeGithub?.(); disposeGithub = undefined;
-    ready = false; signedIn = false; csrf = ''; projects = []; project = null; concealSecret(); clearError();
+    loadVersion++; ready = false; signedIn = false; csrf = ''; projects = []; project = null; stripeBilling?.reset(); concealSecret(); clearError();
     qa('[data-logout],[data-session-account],[data-auth-account]').forEach(node => { node.hidden = true; }); setProjectOptions();
     textAll('[data-user-email]', 'Not signed in');
     if (!authPage) gate('Opening your workspace…', 'Checking the service and your session.');

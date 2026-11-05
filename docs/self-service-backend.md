@@ -2,7 +2,7 @@
 
 ## Outcome and boundaries
 
-Connect the existing website to verified users, project membership, server-issued keys, native HTTP fetch, retained request history and authoritative usage. The gateway remains the source of truth. Existing configured projects and v1/v2 contracts retain their behavior. New self-service credentials initially support the native HTTP API; browser execution remains independently qualified.
+Connect the existing website to verified users, project membership, server-issued keys, native HTTP fetch, retained request history and authoritative usage. The gateway remains the source of truth. Existing configured projects and v1/v2 contracts retain their behavior. The initial self-service configuration uses native HTTP. Managed keys can also use the [Render API](render-api.md) on a project with an approved browser policy and qualified runtime.
 
 Implementation is local until release authorization. No paid source calls, production migration, email sends or commercial activation are part of verification. Proposed prices are not activated by a user clicking a plan.
 
@@ -12,7 +12,7 @@ Operator configuration lives in `config.controlPlane`. `enabled` defaults false.
 
 `projectTemplate` has `id`, `v2_access_profiles`, `v2_entitlement` and optional `v2_discovery_policy`; it grants no v1 profiles. All grants come from operator configuration, never request fields. Persist a canonical template hash and fail closed if the template changes until an operator migration explicitly approves the change. New project identifiers use `cp_` plus a UUID. Configuration projections contain no plaintext credentials and no legacy `tokenHash`.
 
-`creditPolicy` has `reviewed: true`, `version`, `trialCredits`, `weights` (`direct`, optionally `datacenter`) and `maxEstimatedMicroUsdPerOperation`. Credits are a separate customer usage ledger, not provider invoices. Only the first project per verified user receives the configured trial allocation; subsequent projects receive zero until an explicit operator grant. No automatic monthly refill, upgrade or overage. Paid route cost estimates must be known and within the configured ceiling. The review configuration uses direct-only HTTP and no paid allowance.
+`creditPolicy` has `reviewed: true`, `version`, `trialCredits`, `weights` (`direct`, optionally `datacenter`) and `maxEstimatedMicroUsdPerOperation`. The free plan grants 1,000 trial credits once per verified account. The allocation belongs to the account's first project. Each request must meet the configured route, source, cost and daily-operation limits. The trial ledger is separate from prepaid credit packs and provider invoices. Reviewed Playground HTTP and browser routes can use separate `creditPolicy.modeWeights`, including residential where configured. These trial operations use the existing provider allocation. The Playground offers an explicit Purchased HTTP balance when the built-in paid public URL profile is available. This profile uses separate prepaid accounting and supports `max_transfer_mb` and `max_credits`.
 
 ### Identity service
 
@@ -40,12 +40,12 @@ Same-origin website calls `/api/control/*`. A Pages Function proxies only known 
 - `GET, POST /projects`: `{projects}` / `{project}`.
 - `GET /projects/:id`: `{project,capabilities,access_profiles}`.
 - `GET, POST /projects/:id/keys`; `POST /projects/:id/keys/:key/rotate`; `DELETE /projects/:id/keys/:key`.
-- `POST /projects/:id/fetch`: exact current `/v2/fetch` body. Persist operation key before sending, return the real public fetch envelope.
+- `POST /projects/:id/fetch`: exact current `/v2/fetch` body, including `max_transfer_mb` and `max_credits` for eligible paid HTTP requests. Persist operation key before sending, return the real public fetch envelope.
 - `GET /projects/:id/fetch/:key`: original-key recovery; no redispatch.
 - `GET /projects/:id/requests`: bounded `{operations}` list with real IDs, state, timestamps, route/profile context and latency. No raw source captures in list.
 - `GET /projects/:id/requests/:operationId`: retained public fetch projection by operation ID.
-- `GET /projects/:id/usage`: `{gateway,credits}` with outcome/latency/request counts and conservative balances.
-- `GET /projects/:id/billing`: `{status:'trial'|'approval_required',credits,commercial_enabled:false}`. No checkout or subscription mutation.
+- `GET /projects/:id/usage`: `{gateway,credits}` with outcome and latency counts and authoritative balances. Active or held paid allocations also expose `paid_credits`.
+- `GET /projects/:id/billing`: `{status:'trial'|'approval_required',credits,commercial_enabled}`. Configured projects can buy [prepaid credit packs](stripe-payments.md) through separate Stripe checkout routes. The reviewed free-plan policy adds `trial:{trial_target:1000,grant_scope:'account',grant_frequency:'once',eligible_routes,max_daily_operations}` to billing and usage.
 
 Errors use `{error:{code,message}}` for control paths; public fetch envelopes remain unchanged. All authenticated responses are no-store. Source content is rendered as text, never inserted as HTML. The browser stores only selected project and pending operation keys; never session tokens, API keys, source URLs/bodies or private account data in web storage.
 
@@ -69,7 +69,7 @@ Add this section to an existing private gateway configuration, replacing placeho
     "creditPolicy": {
       "reviewed": false,
       "version": "direct-http-v1",
-      "trialCredits": 25,
+      "trialCredits": 1000,
       "weights": {"direct": 1},
       "maxEstimatedMicroUsdPerOperation": 0
     },
@@ -82,7 +82,17 @@ Add this section to an existing private gateway configuration, replacing placeho
 }
 ```
 
-The trial count above is an operator example, not the proposed public allowance. Remote source access still needs TLS and reviewed access profiles. No browser, residential, CAPTCHA, unqualified route, checkout or automatic credit refill is granted to these account keys. Datacenter can be added only with a reviewed integer weight and known bounded route cost. Account-key endpoint scopes are enforced independently from profiles and credits. Existing provisioned project tokens retain their v1/v2 access.
+The trial count above is an operator example. This policy enables only direct
+HTTP after operator review. Remote source access still needs TLS and reviewed
+access profiles. Datacenter needs a reviewed integer weight and known bounded
+route cost. The managed-key `fetch:write` scope covers both Fetch and Render.
+Render requires a separate approved browser playground route, a reviewed browser
+credit weight, and a qualified runtime. See the [Render API](render-api.md) for
+admission requirements. Account-key scopes, approved profiles and credit limits
+apply independently. Existing provisioned tokens retain their approved v1 and
+v2 access.
+
+The example config grants free credits for reviewed direct HTTP access once enabled. Datacenter trial access needs a reviewed integer weight and known bounded route cost. Paid public HTTP routes require their own policy and funding. Account-key endpoint scopes are enforced independently from profiles and credits.
 
 Configure the Pages environment separately:
 
@@ -136,7 +146,7 @@ Back up the target PostgreSQL database and private configuration before an autho
 
 Validate a restricted staging account through real mail delivery, TLS, signup, project creation, key lifecycle, an approved source and retained usage. Verify the gateway and Pages origin/secret pair, cookie security, project isolation, encrypted capture retention, cost ceilings and unknown recovery on the intended host. Source content acceptance and provider invoice reconciliation remain separate from a source HTTP status.
 
-Before enabling paid routes or publishing allowances, measure the configured routes' costs, approve logical-operation weights and failure treatment, and approve commercial terms. A dispatched source failure consumes its configured request credits; a proven predispatch cancellation releases them; an uncertain dispatch retains a hold. Request credits are not provider invoice amounts. Monthly subscriptions, renewals, payment webhooks and automatic refills remain P1 work.
+Before enabling paid routes or publishing allowances, measure the configured routes' costs, approve logical-operation weights and failure treatment, and approve commercial terms. Trial source failures after dispatch consume the configured request credits. Proven predispatch cancellations release credits, and uncertain dispatches retain a hold. Paid HTTP settles against measured wire traffic. Request credits are not provider invoice amounts. Stripe sells one-time paid credit packs for eligible public HTTP routes. The billing and usage APIs project paid and trial credits separately.
 
 Rollback by disabling `controlPlane.enabled` and removing the website bridge configuration from the affected environment. Retain identity tables, key hashes, operations, captures and credit holds for recovery; do not truncate them or reset allowances. Do not widen a changed project template automatically: existing projects fail closed on a template hash change until a reviewed migration approves it. Public indexing and advertised browser/AI capabilities retain the separate launch gates in the website backlog.
 

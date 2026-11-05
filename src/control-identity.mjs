@@ -1,7 +1,8 @@
 import {createHash,createHmac,randomBytes,randomInt,randomUUID,timingSafeEqual} from 'node:crypto';
 import {fail} from './policy.mjs';
 import {createControlMail} from './control-mail.mjs';
-import {grantInitialCredits} from './control-credits.mjs';
+import {TRIAL_CREDITS_PER_ACCOUNT,grantAccountTrialCredits,grantInitialCredits,reviewedCreditPolicy} from './control-credits.mjs';
+import {initPlayground} from './control-playground.mjs';
 import {createControlGoogle,googleConfiguration} from './control-google.mjs';
 import {createControlGithub,githubConfiguration,githubSettings,githubAuthorizationUrl} from './control-github.mjs';
 
@@ -48,7 +49,9 @@ export async function initControlIdentity(pool){await pool.query(`
  CREATE INDEX IF NOT EXISTS control_github_challenges_expiry ON control_github_challenges(expires_at);
  CREATE INDEX IF NOT EXISTS control_github_challenges_binding ON control_github_challenges(binding_hash);
  CREATE TABLE IF NOT EXISTS control_github_identities(subject text PRIMARY KEY CHECK(subject ~ '^[1-9][0-9]{0,15}$'),user_id uuid NOT NULL UNIQUE REFERENCES control_users(id),created_at timestamptz NOT NULL DEFAULT now());
- `);}
+ `);
+ await initPlayground(pool);
+}
 
 export class ControlIdentity{
  constructor({store,config,mail,google,github}){Object.assign(this,{store,config});this.mail=mail??createControlMail(config);this.google=google??createControlGoogle();this.github=github??createControlGithub();}
@@ -255,24 +258,34 @@ export class ControlIdentity{
   return (await this.store.pool.query('SELECT p.* FROM control_projects p JOIN control_memberships m ON m.project=p.id WHERE m.user_id=$1 ORDER BY p.created_at,p.id',[userId])).rows.map(projectView);
  }
  async createProject(userId,input){
-  const control=this.settings(),template=this.template();
+  this.settings();const template=this.template();
   if(!plain(input)||Object.keys(input).some(k=>k!=='name'))fail('project_invalid');const name=label(input.name,'project_name_invalid');
   if(typeof userId!=='string'||!UUID.test(userId))fail('unauthorized',401);
-  const trial=control.creditPolicy?.trialCredits;
-  if(control.creditPolicy?.reviewed!==true||!Number.isSafeInteger(trial)||trial<0)fail('credit_policy_configuration',503);
+  const trial=reviewedCreditPolicy(this.config).trialCredits;
   const row=await this.store.tx(async c=>{
    if(!(await c.query('SELECT id FROM control_users WHERE id=$1 FOR UPDATE',[userId])).rowCount)fail('unauthorized',401);
    const count=Number((await c.query('SELECT count(*) AS n FROM control_projects WHERE user_id=$1',[userId])).rows[0].n);
    if(count>=10)fail('project_limit',429);
    const row=(await c.query('INSERT INTO control_projects(id,user_id,name,template_hash) VALUES($1,$2,$3,$4) RETURNING *',[`cp_${randomUUID()}`,userId,name,template.hash])).rows[0];
    await c.query('INSERT INTO control_memberships(user_id,project) VALUES($1,$2)',[userId,row.id]);
-   await grantInitialCredits(c,row.id,count===0?trial:0);return row;
+   await grantInitialCredits(c,row.id,0);
+   await grantAccountTrialCredits(c,{userId,targetCredits:trial,templateHash:template.hash});
+   return row;
   });
   await this.hydrateProject(row.id);return projectView(row);
  }
  async hydrateProject(projectId){
-  this.settings();if(typeof projectId!=='string'||!PROJECT.test(projectId))fail('project_not_found',404);
-  const row=this.assertProject((await this.store.pool.query('SELECT * FROM control_projects WHERE id=$1',[projectId])).rows[0]);
+  const control=this.settings();if(typeof projectId!=='string'||!PROJECT.test(projectId))fail('project_not_found',404);
+  const trial=control.creditPolicy;
+  const migrate=trial?.reviewed===true&&(trial.trialCredits===undefined||trial.trialCredits===TRIAL_CREDITS_PER_ACCOUNT);
+  const query=migrate?`SELECT p.*,EXISTS(SELECT 1 FROM control_trial_grant_receipts r
+   WHERE r.user_id=p.user_id AND r.target_credits=$2) AS trial_claimed FROM control_projects p WHERE p.id=$1`:
+   'SELECT * FROM control_projects WHERE id=$1';
+  const row=this.assertProject((await this.store.pool.query(query,migrate?[projectId,TRIAL_CREDITS_PER_ACCOUNT]:[projectId])).rows[0]);
+  if(migrate&&!row.trial_claimed){
+   const targetCredits=reviewedCreditPolicy(this.config).trialCredits;
+   await this.store.tx(c=>grantAccountTrialCredits(c,{userId:row.user_id,targetCredits,templateHash:row.template_hash}));
+  }
   const policy=this.template().policy;
   this.config.projects??={};this.config.projects[row.id]=policy;return policy;
  }

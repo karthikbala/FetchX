@@ -37,6 +37,23 @@ export async function initResidential(pool){await pool.query(`
  ALTER TABLE residential_usage ADD COLUMN IF NOT EXISTS customer_traffic jsonb;
  ALTER TABLE residential_usage ADD COLUMN IF NOT EXISTS observed_proxy_bytes bigint;
  `);}
+// The immutable reservation event is written in the same transaction as its
+// provider row and survives artifact retention and customer credit settlement.
+export const paidResidentialLedgerSql=`EXISTS (
+ SELECT 1 FROM v2_ledger_events e WHERE e.operation=l.operation AND e.event='reserve'
+ AND e.detail->'paid_credit_quote'->>'route_class'='residential'
+)`;
+
+export function reviewedPaidResidentialBudget(config){
+ const budget=config.controlPlane?.paidCreditPolicy?.residentialBudget;
+ if(config.controlPlane?.enabled!==true||config.controlPlane?.paidCreditPolicy?.reviewed!==true||
+  budget?.reviewed!==true||budget.provider!=='evomi'||budget.microUsdPerGB!==1_000_000||
+  Object.keys(budget).some(key=>!['reviewed','provider','maxTotalBytes','maxDailyBytes','microUsdPerGB'].includes(key))||
+  !Number.isSafeInteger(budget.maxTotalBytes)||budget.maxTotalBytes<1||budget.maxTotalBytes>60_000_000_000||
+  !Number.isSafeInteger(budget.maxDailyBytes)||budget.maxDailyBytes<1||budget.maxDailyBytes>Math.min(budget.maxTotalBytes,1_000_000_000))return null;
+ return budget;
+}
+
 const limit=(n)=>{if(!Number.isSafeInteger(n)||n<=0)fail('residential_budget_unconfigured',503);return n;};
 export async function reserveResidential(c,config,w,attempt,provider){
  const p=w.config,settings=config.residential,pc=settings?.providers?.[provider],n=limit(p.maxAttemptBytes);
@@ -47,7 +64,8 @@ export async function reserveResidential(c,config,w,attempt,provider){
  COALESCE(sum(accounted_bytes) FILTER(WHERE project=$2 AND created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),0) AS project_daily,
  COALESCE(sum(accounted_bytes) FILTER(WHERE provider=$3),0) AS provider_total FROM (
  SELECT workflow,project,provider,accounted_bytes,created_at FROM residential_usage
- UNION ALL SELECT session_id AS workflow,project,provider,accounted_tunnel_bytes AS accounted_bytes,created_at FROM v2_ledger WHERE proxy_class='residential') usage`,[w.id,w.project,provider])).rows[0];
+ UNION ALL SELECT session_id AS workflow,project,provider,accounted_tunnel_bytes AS accounted_bytes,created_at FROM v2_ledger l
+ WHERE proxy_class='residential' AND NOT ${paidResidentialLedgerSql}) usage`,[w.id,w.project,provider])).rows[0];
  const prior=Object.values(settings.providers).reduce((sum,p)=>sum+(p.priorReservedBytes??0),0);
  if(Number(totals.daily)+n>limit(settings?.maxDailyBytes)||Number(totals.total)+prior+n>limit(settings?.maxTotalBytes)||Number(totals.workflow)+n>limit(p.maxResidentialBytes)||Number(totals.project_daily)+n>limit(config.projects[w.project].maxDailyResidentialBytes??settings.maxDailyBytes)||Number(totals.provider_total)+(pc.priorReservedBytes??0)+n>limit(pc.maxTotalBytes))fail('residential_budget_exhausted',429);
  if((await c.query("SELECT 1 FROM attempts WHERE provider=$1 AND error=ANY($2::text[]) UNION ALL SELECT 1 FROM v2_operations o JOIN v2_ledger l ON l.operation=o.id WHERE l.provider=$1 AND o.error=ANY($2::text[]) LIMIT 1",[provider,['provider_account_rejected','sensitive_provider_response','cost_overrun']])).rowCount)fail('residential_provider_held',409);

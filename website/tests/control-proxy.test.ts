@@ -37,6 +37,44 @@ describe('same-origin control bridge',()=>{
   expect((await send(`/projects/${project}/requests?limit=51`)).status).toBe(400);expect((await send(`/projects/${project}/requests?limit=2&limit=3`)).status).toBe(400);expect(calls).toHaveLength(0);
   expect((await send(`/projects/${project}/requests?limit=50`)).status).toBe(200);expect(calls[0].url).toContain('?limit=50');
  });
+ it('forwards only the bounded playground preparation, render submission and recovery routes',async()=>{
+  const base=`/projects/${project}`,body=JSON.stringify({url:'https://source.example/path?x=1'});
+  expect((await send(`${base}/playground/prepare`,{method:'POST',body})).status).toBe(200);
+  expect((await send(`${base}/render`,{method:'POST',body})).status).toBe(200);
+  expect((await send(`${base}/render/${encodeURIComponent('render-key:1')}`)).status).toBe(200);
+  expect(calls.map(({url,init})=>[url,init.method,init.body])).toEqual([
+   [`https://gateway.example/control${base}/playground/prepare`,'POST',body],
+   [`https://gateway.example/control${base}/render`,'POST',body],
+   [`https://gateway.example/control${base}/render/render-key%3A1`,'GET',undefined]
+  ]);
+  expect((await send(`${base}/playground/prepare`)).status).toBe(405);
+  expect((await send(`${base}/render/saved`,{method:'POST',body})).status).toBe(405);
+  expect((await send(`${base}/render/key%2Fextra`)).status).toBe(404);
+  expect((await send(`${base}/render/saved?url=other`)).status).toBe(400);
+  expect((await send(`${base}/render`,{method:'POST',body,headers:{'X-CSRF-Token':'invalid'}})).status).toBe(403);
+  expect((await send(`${base}/playground/prepare`,{method:'POST',body,headers:{Origin:'https://other.example'}})).status).toBe(403);
+  upstream=()=>{throw new Error('uncertain render submission');};
+  expect((await send(`${base}/render`,{method:'POST',body})).status).toBe(502);
+  expect(calls).toHaveLength(4);
+ });
+ it('allows only the project-scoped Stripe checkout methods',async()=>{
+  const stripe=`/projects/${project}/billing/stripe`,key='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const checkout=JSON.stringify({plan_id:'developer',idempotency_key:key});
+  for(const path of ['/billing/stripe/checkout','/webhooks/stripe',`${stripe}/refund`,`${stripe}/checkout/${key.toUpperCase()}`,`${stripe}/checkout/${key}/extra`,`${stripe}/checkout/${key}%2Fextra`])expect((await send(path)).status).toBe(404);
+  expect((await send(`${stripe}/checkout`)).status).toBe(405);
+  expect((await send(`${stripe}/portal`,{method:'POST',body:checkout})).status).toBe(404);
+  expect((await send(`${stripe}/checkout/${key}`,{method:'POST',body:checkout})).status).toBe(405);
+  expect((await send(`${stripe}/checkout/${key}?extra=1`)).status).toBe(400);
+  expect((await send(`${stripe}/checkout`,{method:'POST',body:checkout,headers:{Origin:'https://other.example'}})).status).toBe(403);
+  expect((await send(`${stripe}/checkout`,{method:'POST',body:checkout,headers:{'X-CSRF-Token':'invalid'}})).status).toBe(403);
+  expect(calls).toHaveLength(0);
+  expect((await send(`${stripe}/checkout`,{method:'POST',body:checkout})).status).toBe(200);
+  expect((await send(`${stripe}/checkout/${key}`)).status).toBe(200);
+  expect(calls.map(({url,init})=>[url,init.method,init.body])).toEqual([
+   [`https://gateway.example/control${stripe}/checkout`,'POST',checkout],
+   [`https://gateway.example/control${stripe}/checkout/${key}`,'GET',undefined],
+  ]);
+ });
  it('returns an explicit disabled state with no configured upstream',async()=>{
   const missing={...env,FETCHX_CONTROL_URL:undefined};
   const status=await send('/status',{env:missing});expect(status.status).toBe(503);expect(await status.json()).toMatchObject({enabled:false,mail_configured:false});expect((await send('/session',{env:missing})).status).toBe(503);expect(calls).toHaveLength(0);

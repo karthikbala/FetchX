@@ -17,6 +17,7 @@ const GITHUB_ISSUER='https://github.com/login/oauth';
 const GITHUB_ERRORS=new Set(['github_disabled','github_unavailable','github_verification_invalid','github_cancelled','github_account_link_required','github_identity_conflict','github_session_conflict','github_email_verification_required']);
 const PROJECT='cp_[a-fA-F0-9-]{36}';
 const UUID='[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}';
+const STRIPE_KEY='[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
 export const CONTROL_REQUEST_LIMIT=96*1024;
 export const CONTROL_RESPONSE_LIMIT=24*1024*1024;
 export const CONTROL_TIMEOUT_MS=85_000;
@@ -32,9 +33,11 @@ function allowedMethods(path:string):string[]|null {
  if(new RegExp(`^/projects/${PROJECT}/keys$`).test(path))return ['GET','POST'];
  if(new RegExp(`^/projects/${PROJECT}/keys/${UUID}/rotate$`).test(path))return ['POST'];
  if(new RegExp(`^/projects/${PROJECT}/keys/${UUID}$`).test(path))return ['DELETE'];
- if(new RegExp(`^/projects/${PROJECT}/fetch$`).test(path))return ['POST'];
- if(new RegExp(`^/projects/${PROJECT}/fetch/[A-Za-z0-9_.:-]{1,160}$`).test(path))return ['GET'];
+ if(new RegExp(`^/projects/${PROJECT}/(?:fetch|render|playground/prepare)$`).test(path))return ['POST'];
+ if(new RegExp(`^/projects/${PROJECT}/(?:fetch|render)/(?:[A-Za-z0-9_.:-]|%3[Aa]){1,160}$`).test(path))return ['GET'];
  if(new RegExp(`^/projects/${PROJECT}/(?:requests|usage|billing)$`).test(path))return ['GET'];
+ if(new RegExp(`^/projects/${PROJECT}/billing/stripe/checkout$`).test(path))return ['POST'];
+ if(new RegExp(`^/projects/${PROJECT}/billing/stripe/checkout/${STRIPE_KEY}$`).test(path))return ['GET'];
  if(new RegExp(`^/projects/${PROJECT}/requests/${UUID}$`).test(path))return ['GET'];
  return null;
 }

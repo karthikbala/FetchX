@@ -9,5 +9,9 @@ RUN node node_modules/playwright-core/cli.js install-deps chromium firefox && rm
 COPY src ./src
 COPY knowledge ./knowledge
 ENV GATEWAY_PYTHON=/opt/venv/bin/python3 NODE_ENV=production
+# The isolated browser worker resolves its home through passwd; it does not inherit HOME.
+RUN groupadd --gid 10001 fetchx \
+ && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /home/fetchx --shell /usr/sbin/nologin --no-log-init fetchx \
+ && install -d -o root -g root -m 0755 /home/fetchx
 USER 10001:10001
 CMD ["node","src/main.mjs"]

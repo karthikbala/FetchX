@@ -409,13 +409,15 @@ export FETCHX_TOKEN='YOUR_PROJECT_API_KEY_OR_TOKEN'` }] },
           { kind: 'table', headers: ['Field', 'Required', 'Description'], rows: [
             ['`idempotency_key`', 'Yes', '1–160 characters from letters, digits, `_`, `.`, `:` and `-`. Persist before calling.'],
             ['`access_profile`', 'Yes', 'Exact approved `{ "id": "source.http", "version": 1 }` reference.'],
-            ['`url`', 'Yes', 'HTTPS URL permitted by the profile origins and paths.'],
+            ['`url`', 'Yes', 'HTTPS URL permitted by the profile’s destination policy.'],
             ['`proxy`', 'Yes', 'Explicit `{ "class": "direct", "country": null }` or an approved proxy class and country.'],
             ['`session_id`', 'No', 'Owned HTTP session UUID for cookie continuity. Its profile and route stay pinned.'],
             ['`method`', 'No', 'Defaults to `GET`. Supported methods are `GET`, `HEAD`, `POST`, `PUT`, `PATCH` and `DELETE`, subject to profile approval.'],
             ['`headers`', 'No', 'Object of approved source header names and string values. Defaults to `{}`.'],
             ['`body_base64`', 'No', 'Canonical base64 request body within the profile limit. GET and HEAD reject bodies.'],
             ['`max_estimated_micro_usd`', 'No', 'Nonnegative integer ceiling for the conservative reservation estimate. One USD equals 1,000,000 microdollars.'],
+            ['`max_transfer_mb`', 'No', 'Paid HTTP only. Decimal MB in 0.25 MB steps, from 0.25 to 20. Leave out to use the advertised route default.'],
+            ['`max_credits`', 'No', 'Paid HTTP only. Positive integer cap on the credits the gateway may reserve for this request.'],
             ['`retry`', 'No', 'Boolean, default `false`. Permits at most one extra eligible fresh datacenter read attempt within the existing limits.'],
           ] },
           { kind: 'note', title: 'Native HTTP', text: 'This endpoint returns native source responses. Rendering, browser actions, screenshots, output `formats`, extraction options and arbitrary scripts return `capability_unsupported`. Unknown request fields are rejected.' },
@@ -432,6 +434,30 @@ export FETCHX_TOKEN='YOUR_PROJECT_API_KEY_OR_TOKEN'` }] },
           ] },
           { kind: 'text', text: 'Select a route returned by the profile. Proxy country is requested routing configuration. Each session pins its provider, class and country. Reuse `session_id` for a later cookie-dependent request with a new operation key and the same profile and route.' },
           { kind: 'link', label: 'Inspect route reservations and profile limits', href: '/docs/profiles' },
+        ],
+      },
+      {
+        id: 'paid-public-urls',
+        title: 'Use prepaid credits for a public URL',
+        blocks: [
+          { kind: 'text', text: 'Use this example when `GET /v2/access-profiles` advertises `public-url-http` version 1 and the requested paid route for your project. Use a scoped API key with `fetch:write` and keep the key on your server.' },
+          { kind: 'code', title: 'Residential GET with an explicit transfer limit', snippets: [{ label: 'cURL', language: 'bash', code: `curl --silent --show-error "$FETCHX_URL/v2/fetch" \\
+  -H "Authorization: Bearer $FETCHX_API_KEY" \\
+  -H 'Content-Type: application/json' \\
+  --data '{
+    "idempotency_key": "REPLACE_WITH_A_NEW_OPERATION_KEY",
+    "access_profile": {"id": "public-url-http", "version": 1},
+    "url": "https://example.com/",
+    "method": "GET",
+    "proxy": {"class": "residential", "country": "US"},
+    "max_transfer_mb": 1,
+    "max_credits": 20
+  }'` }] },
+          { kind: 'text', text: 'This profile supports public HTTPS hostnames and GET or HEAD, with no request body, cookie, or source authorization. It follows at most two same-origin redirects. Use the route and country advertised by your project.' },
+          { kind: 'text', text: 'Datacenter uses 1 credit per started 1 MB and defaults to a 1 MB limit. Residential uses 5 credits per started 250 KB and defaults to 250 KB. The gateway reserves the maximum before dispatch. The example reserves up to 20 credits. Final charges follow measured wire traffic across all hops. Inspect `usage.accounting.paid_credits` for reserved and used amounts.' },
+          { kind: 'text', text: 'The `max_transfer_mb` cap applies separately to bidirectional wire traffic, total encoded response bytes, and total decoded response bytes across all hops. Each limit is `max_transfer_mb × 1,000,000` bytes, up to 20 MB. Decoding also has a separate 100× expansion limit. Credit settlement uses measured wire bytes.' },
+          { kind: 'note', title: 'Transfer limit and recovery', text: 'Wire, encoded-body, and decoded-body limits can return `max_transfer_bytes_exceeded`, `encoded_body_limit`, or `decoded_body_limit`. For paid public URLs, `error.details` includes `max_transfer_mb`, `max_allowed_transfer_mb`, and `reserved_credits`. A verified terminal outcome below 20 MB may include `next` with a suggested `max_transfer_mb`, `max_credits`, and `requires_new_idempotency_key: true`. An uncertain outcome omits the suggestion. Recover it using the original key.' },
+          { kind: 'link', label: 'Review paid and trial balances', href: '/app/billing' },
         ],
       },
       {

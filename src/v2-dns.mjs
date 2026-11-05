@@ -4,6 +4,7 @@ import {GatewayError,ID,fail} from './policy.mjs';
 import {nativeHttp,pinnedDestination,decodeNative} from './v2-http.mjs';
 import {safeCauseCode,proxyRefusedBeforeConnect,proxyConnectEvidence} from './v2-diagnostics.mjs';
 import {transientProxyRejection} from './v2-native-retry.mjs';
+import {isPublicAddress} from './v2-public-url.mjs';
 
 const DNS_CODES=new Set(['ENOTFOUND','ENODATA','ESERVFAIL','EREFUSED','ETIMEOUT','EAI_AGAIN','ECANCELLED','ECONNREFUSED','EFORMERR','EBADRESP','ENONAME']);
 const trimDot=host=>host.toLowerCase().replace(/\.$/,'');
@@ -115,4 +116,36 @@ export function createSourceResolver(settings,{systemLookup=lookup,http=nativeHt
   }
   last??=dnsFailure(null);last.dns_diagnostics={attempts};throw last;
  };
+}
+
+// Paid routes use a reviewed, IP-pinned DoH resolver so the source DNS query
+// and response go through the same wire meter. No system/fallback lookup of the
+// source or resolver hostname is needed, including for a public-URL profile.
+export function reviewedPaidDns(config){
+ const rule=config.controlPlane?.paidCreditPolicy?.dns;
+ if(!rule||rule.reviewed!==true||typeof rule.endpoint!=='string'||typeof rule.address!=='string'||
+  Object.keys(rule).some(key=>!['reviewed','endpoint','address'].includes(key)))return null;
+ const family=isIP(rule.address);
+ if(!isPublicAddress({address:rule.address,family}))return null;
+ let endpoint;try{endpoint=new URL(rule.endpoint);}catch{return null;}
+ if(endpoint.protocol!=='https:'||!domain(endpoint.hostname)||!endpoint.hostname.includes('.')||isIP(endpoint.hostname)||
+  endpoint.port||endpoint.username||endpoint.password||endpoint.search||endpoint.hash||endpoint.href!==rule.endpoint||
+  !['/resolve','/dns-query'].includes(endpoint.pathname))return null;
+ return {endpoint,address:rule.address,family};
+}
+
+export async function resolvePaidSource(host,{resolver,request}){
+ const answers=[];
+ for(const type of [1,28]){
+  const url=new URL(resolver.endpoint);
+  url.searchParams.set('name',host+'.');url.searchParams.set('type',String(type));url.searchParams.set('cd','0');url.searchParams.set('do','1');
+  const limits={max_encoded_bytes:32768,max_decoded_bytes:32768,max_expansion_ratio:20};
+  const response=await request({method:'GET',headers:{accept:'application/dns-json','accept-encoding':'identity'}},{url,address:resolver.address,family:resolver.family},limits);
+  if(response.status!==200)throw dnsFailure(null);
+  let value;try{value=JSON.parse(decodeNative(response.encoded,response.headers['content-encoding'],limits).toString('utf8'));}catch{throw invalidResponse();}
+  answers.push(...parseDnsJson(value,host,type).addresses);
+ }
+ if(!answers.length)throw dnsFailure(Object.assign(new Error(),{code:'ENODATA'}));
+ answers.dns_diagnostics={resolver_id:'paid_doh',fallback_used:false,answer_count:answers.length};
+ return answers;
 }
