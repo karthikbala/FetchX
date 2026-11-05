@@ -76,7 +76,7 @@ test('INR UPI and legacy USD reconcile through the actual Worker into an isolate
   assert.equal(response.status,200);return {event,result:await stripe.reconcile({eventId:event.id})};
  };
  const settle=session=>{
-  const offer=catalog.find(p=>p.currency===session.currency&&p.amountMinor===session.amount_total),intentId=id('pi'),chargeId=id('ch');
+  const offer=catalog.find(p=>p.currency===session.currency&&p.amountMinor===session.amount_total),intentId=id('pi'),chargeId=id(session.currency==='inr'?'py':'ch');
   const intent={id:intentId,object:'payment_intent',livemode:true,customer:session.customer,metadata:{fetchx_checkout:session.client_reference_id},
    amount:offer.amountMinor,amount_received:offer.amountMinor,currency:offer.currency,status:'succeeded',latest_charge:chargeId};
   const charge={id:chargeId,object:'charge',livemode:true,customer:session.customer,payment_intent:intentId,amount:offer.amountMinor,amount_captured:offer.amountMinor,
@@ -106,7 +106,7 @@ test('INR UPI and legacy USD reconcile through the actual Worker into an isolate
   await assert.rejects(start('credits-10000',randomUUID(),'IN'),{code:'stripe_plan_invalid'});await assert.rejects(start('credits-10000-inr'),{code:'stripe_plan_invalid'});
   await start('credits-10000-inr',randomUUID(),'IN');const session=last();assert.equal(session.currency,'inr');assert.equal(session.amount_total,17500);
   Object.assign(session,{status:'complete',url:null});assert.equal((await deliver('checkout.session.completed',session)).result.applied,1);assert.equal((await usage()).available,10000);
-  inr=settle(session);inr.charge.payment_method_details.type='card';const rejected=await deliver('checkout.session.async_payment_succeeded',session);assert.equal(rejected.result.pending,1);assert.equal((await usage()).available,10000);
+  inr=settle(session);assert.match(inr.charge.id,/^py_/);assert.match(usd.charge.id,/^ch_/);inr.charge.payment_method_details.type='card';const rejected=await deliver('checkout.session.async_payment_succeeded',session);assert.equal(rejected.result.pending,1);assert.equal((await usage()).available,10000);
   inr.charge.payment_method_details.type='upi';assert.equal((await stripe.reconcile({eventId:rejected.event.id})).applied,1);
   await deliver('checkout.session.completed',session);await deliver('checkout.session.async_payment_succeeded',session);assert.equal((await usage()).available,20000);
   const grant=(await store.pool.query('SELECT currency,amount_minor,credits FROM paid_credit_grants WHERE checkout_session_id=$1',[session.id])).rows[0];
@@ -121,12 +121,12 @@ test('INR UPI and legacy USD reconcile through the actual Worker into an isolate
   assert.equal((await stripe.billing(projects[0],{country:'IN'})).plans.find(p=>p.id==='credits-1000000-inr').can_purchase,true);capacity=liability(1_000_000_000);
  });
  await t.test('UPI refund status is read fresh and clearing its hold cannot clear an existing dispute',async()=>{
-  const refund={id:id('re'),object:'refund',amount:1,currency:'inr',charge:inr.charge.id,payment_intent:inr.intent.id,status:'pending'};objects.set('/refunds/'+refund.id,refund);
+  const refund={id:id('pyr'),object:'refund',amount:1,currency:'inr',charge:inr.charge.id,payment_intent:inr.intent.id,status:'pending'};objects.set('/refunds/'+refund.id,refund);
   await deliver('refund.created',refund);assert.equal((await usage()).payment_hold,true);assert.equal((await usage()).granted,20000);
   const dispute={id:id('dp'),object:'dispute',livemode:true,charge:usd.charge.id,status:'needs_response'};objects.set('/disputes/'+dispute.id,dispute);
   await deliver('charge.dispute.created',dispute);refund.status='failed';await deliver('refund.failed',refund);await deliver('refund.created',refund);
   assert.equal((await usage()).payment_hold,true);dispute.status='won';await deliver('charge.dispute.closed',dispute);assert.equal((await usage()).available,20000);
-  const success={...refund,id:id('re'),status:'pending'};objects.set('/refunds/'+success.id,success);await deliver('refund.created',success);success.status='succeeded';
+  const success={...refund,id:id('pyr'),status:'pending'};objects.set('/refunds/'+success.id,success);await deliver('refund.created',success);success.status='succeeded';
   await deliver('refund.updated',success);await deliver('refund.created',success);assert.equal((await usage()).payment_hold,false);assert.equal((await usage()).available,10000);
  });
  await t.test('INR sales can pause independently while USD sales and saved INR Checkout recovery remain available',async()=>{

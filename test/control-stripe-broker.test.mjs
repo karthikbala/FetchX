@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash,createHmac,generateKeyPairSync,randomBytes,randomUUID} from 'node:crypto';
 import {paymentWorker} from '../payments-worker/worker.mjs';
 import {ControlStripe} from '../src/control-stripe.mjs';
+import {stripeEventSubject} from '../src/control-stripe-events.mjs';
 import {StripeProvider,stripeSettings,verifiedStripeRelay} from '../src/control-stripe-provider.mjs';
 import {BROKER_PATH,RELAY_PATH,STRIPE_VERSION,audience,brokerMessage,checkoutForm,customerForm,epoch,PACK_OFFERS,billingCurrency} from '../src/control-stripe-broker-protocol.mjs';
 
@@ -184,6 +185,51 @@ test('broker canonical reads are bounded to tagged FetchX objects and minimize d
  }
  f.stripeObjects.get('/customers/cus_fixture').metadata={};
  await assert.rejects(f.provider.request(config,'/charges/ch_fixture'),{code:'stripe_provider_unconfirmed'});
+});
+
+test('UPI Payment IDs retain the complete tagged payment and signed refund chain',async()=>{
+ const offer={...plan,id:'credits-10000-inr',currency:'inr',amountMinor:17500},f=fixture({offer}),config=stripeSettings(f.config);
+ const orderId=randomUUID(),creationKey=randomUUID(),chargeId='py_fixture';
+ f.stripeObjects.set('/customers/cus_fixture',{id:'cus_fixture',object:'customer',livemode:false,metadata:{fetchx_customer:creationKey}});
+ const intent={id:'pi_fixture',object:'payment_intent',livemode:false,metadata:{fetchx_checkout:orderId},customer:'cus_fixture',
+  currency:'inr',amount:17500,amount_received:17500,status:'succeeded',latest_charge:chargeId,client_secret:'private'};
+ const charge={id:chargeId,object:'charge',livemode:false,payment_intent:intent.id,customer:'cus_fixture',currency:'inr',
+  amount:17500,amount_captured:17500,paid:true,captured:true,disputed:false,amount_refunded:0,refunded:false,created:epoch(),
+  payment_method_details:{type:'upi',upi:{vpa:'private'}}};
+ f.stripeObjects.set('/payment_intents/'+intent.id,intent);f.stripeObjects.set('/charges/'+chargeId,charge);
+ const refund={id:'pyr_fixture',object:'refund',amount:1,currency:'inr',charge:chargeId,payment_intent:intent.id,status:'pending'};
+ f.stripeObjects.set('/refunds/'+refund.id,refund);
+ assert.equal((await f.provider.request(config,'/payment_intents/'+intent.id)).latest_charge,chargeId);
+ const payment=await f.provider.request(config,'/charges/'+chargeId);
+ assert.equal(payment.id,chargeId);assert.deepEqual(payment.payment_method_details,{type:'upi'});assert.doesNotMatch(JSON.stringify(payment),/private/);
+ assert.equal((await f.provider.request(config,'/refunds/'+refund.id)).charge,chargeId);
+ for(const [type,object] of [['charge.refunded',charge],['refund.created',refund]]){
+  const providerEvent={id:'evt_'+type.replaceAll('.',''),object:'event',livemode:false,type,data:{object}};
+  const response=await f.webhook(JSON.stringify(providerEvent));assert.equal(response.status,200);
+  const relay=f.relayCalls.at(-1),event=verifiedStripeRelay(relay.body,relay.headers,config);
+  assert.equal(event.subject_id,object.id);assert.equal(stripeEventSubject(providerEvent),object.id);
+ }
+ for(const invalid of ['pay_fixture','py_','py_fixture_extra','py_'+ 'a'.repeat(201),'py_fixture/other']){
+  const calls=f.stripeCalls.length;
+  await assert.rejects(f.provider.request(config,'/charges/'+invalid),{code:'stripe_broker_operation_invalid'});
+  assert.equal(f.stripeCalls.length,calls);
+  assert.equal((await f.broker({op:'charge.get',charge_id:invalid})).status,400);
+  const event={id:'evt_invalid',object:'event',livemode:false,type:'charge.refunded',data:{object:{...charge,id:invalid}}};
+  assert.equal((await f.webhook(JSON.stringify(event))).status,400);assert.throws(()=>stripeEventSubject(event),{code:'stripe_event_invalid'});
+ }
+ for(const invalid of ['refund_fixture','pyr_','pyr_fixture_extra','pyr_'+ 'a'.repeat(201),'pyr_fixture/other']){
+  const calls=f.stripeCalls.length;
+  await assert.rejects(f.provider.request(config,'/refunds/'+invalid),{code:'stripe_broker_operation_invalid'});
+  assert.equal(f.stripeCalls.length,calls);assert.equal((await f.broker({op:'refund.get',refund_id:invalid})).status,400);
+  const event={id:'evt_invalidrefund',object:'event',livemode:false,type:'refund.created',data:{object:{...refund,id:invalid}}};
+  assert.equal((await f.webhook(JSON.stringify(event))).status,400);assert.throws(()=>stripeEventSubject(event),{code:'stripe_event_invalid'});
+ }
+ for(const [object,key,wrong] of [[charge,'livemode',true],[charge,'currency','usd'],[charge,'customer','cus_other'],
+  [charge,'payment_method_details',{type:'card'}],[intent,'metadata',{}],[intent,'latest_charge','pay_fixture']]){
+  const saved=object[key];object[key]=wrong;
+  await assert.rejects(f.provider.request(config,'/charges/'+chargeId),{code:'stripe_provider_unconfirmed'});object[key]=saved;
+ }
+ assert.equal((await f.provider.request(config,'/charges/'+chargeId)).id,chargeId);
 });
 
 test('Worker verifies raw Stripe events and relay requires signature and durable acknowledgment',async()=>{

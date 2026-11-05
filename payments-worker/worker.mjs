@@ -2,7 +2,7 @@ import {
  BROKER_MAX_BODY,BROKER_PATH,BROKER_SECRET,BROKER_TIME_WINDOW,EVENT_SUBJECTS,KEY_ID,PACK_AMOUNTS,PACK_OFFERS,
  RELAY_PATH,RELAY_TIME_WINDOW,SHA256,STRIPE_MAX_BODY,STRIPE_VERSION,STRIPE_WEBHOOK_PATH,
  audience,brokerMessage,checkoutForm,customerForm,epoch,exact,fresh,hex,relayMessage,sessionPrefix,sha256,
- stripeId,subjectPrefix,utf8,uuid,currencyPaymentMethod,
+ stripeId,stripeChargeId,stripeRefundId,stripeSubjectId,utf8,uuid,currencyPaymentMethod,
 } from '../src/control-stripe-broker-protocol.mjs';
 
 const STRIPE_API='https://api.stripe.com/v1';
@@ -107,7 +107,7 @@ async function verifiedStripeEvent(config,raw,header){
   typeof event.type!=='string'||event.account!=null||event.context!=null)fail('stripe_event_invalid',400);
  if(!Object.hasOwn(EVENT_SUBJECTS,event.type))return null;
  const expected=EVENT_SUBJECTS[event.type],subject=event.data?.object;
- if(subject?.object!==expected||!stripeId(subject.id,subjectPrefix(expected,config.mode)))fail('stripe_event_invalid',400);
+ if(subject?.object!==expected||!stripeSubjectId(subject.id,expected,config.mode))fail('stripe_event_invalid',400);
  return {v:1,mode:config.mode,account_id:config.accountId,event_id:event.id,event_type:event.type,subject_id:subject.id,
   provider_payload_sha256:await sha256(raw)};
 }
@@ -217,7 +217,7 @@ class StripeOperations {
   const value=await this.stripe('/payment_intents/'+id);
   if(!validObject(value,'payment_intent',id,this.config)||!uuid(value.metadata?.fetchx_checkout)||
    !stripeId(value.customer,'cus')||![...this.config.offersByPrice.values()].some(offer=>offer.currency===value.currency&&offer.amountMinor===value.amount)||
-   value.latest_charge!=null&&!stripeId(value.latest_charge,'ch'))fail('stripe_payment_mismatch',502);
+   value.latest_charge!=null&&!stripeChargeId(value.latest_charge))fail('stripe_payment_mismatch',502);
   await this.customer(value.customer);
   return {...selected(value,['id','object','livemode','customer','status','amount','amount_received','currency','latest_charge']),
    metadata:{fetchx_checkout:value.metadata.fetchx_checkout}};
@@ -235,7 +235,7 @@ class StripeOperations {
   const value=await this.stripe('/refunds/'+id);
   // Refund objects do not expose livemode. The tagged Charge -> PaymentIntent
   // -> Customer chain proves the account and mode before any data is relayed.
-  if(value?.object!=='refund'||value.id!==id||!stripeId(value.charge,'ch')||!stripeId(value.payment_intent,'pi')||
+  if(value?.object!=='refund'||value.id!==id||!stripeChargeId(value.charge)||!stripeId(value.payment_intent,'pi')||
    !Number.isSafeInteger(value.amount)||value.amount<=0||!['pending','requires_action','succeeded','failed','canceled'].includes(value.status))
    fail('stripe_refund_mismatch',502);
   const charge=await this.charge(value.charge);
@@ -245,7 +245,7 @@ class StripeOperations {
  }
  async dispute(id){
   const value=await this.stripe('/disputes/'+id);
-  if(!validObject(value,'dispute',id,this.config)||!stripeId(value.charge,'ch'))fail('stripe_dispute_mismatch',502);
+  if(!validObject(value,'dispute',id,this.config)||!stripeChargeId(value.charge))fail('stripe_dispute_mismatch',502);
   await this.charge(value.charge);
   return selected(value,['id','object','livemode','charge','status']);
  }
@@ -271,8 +271,8 @@ async function broker(request,env,config,outbound,raw){
  if(typeof command?.op!=='string'||!Object.hasOwn(COMMANDS,command.op)||!exact(command,['op',...COMMANDS[command.op]]))fail('broker_operation_rejected');
  if('price_id'in command&&!stripeId(command.price_id,'price')||'customer_id'in command&&!stripeId(command.customer_id,'cus')||
   'session_id'in command&&!stripeId(command.session_id,sessionPrefix(config.mode))||
-  'intent_id'in command&&!stripeId(command.intent_id,'pi')||'charge_id'in command&&!stripeId(command.charge_id,'ch')||
-  'dispute_id'in command&&!stripeId(command.dispute_id,'dp')||'refund_id'in command&&!stripeId(command.refund_id,'re')||'creation_key'in command&&!uuid(command.creation_key)||
+  'intent_id'in command&&!stripeId(command.intent_id,'pi')||'charge_id'in command&&!stripeChargeId(command.charge_id)||
+  'dispute_id'in command&&!stripeId(command.dispute_id,'dp')||'refund_id'in command&&!stripeRefundId(command.refund_id)||'creation_key'in command&&!uuid(command.creation_key)||
   'order_id'in command&&!uuid(command.order_id))fail('broker_operation_rejected');
  if(typeof env.BROKER_RATE_LIMIT?.limit!=='function'||typeof env.BROKER_WRITE_RATE_LIMIT?.limit!=='function')fail('broker_rate_limit_unavailable',503);
  if(!(await env.BROKER_RATE_LIMIT.limit({key:config.audience})).success||

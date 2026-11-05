@@ -35,9 +35,14 @@ export const EVENT_SUBJECTS=Object.freeze({
 });
 const encode=new TextEncoder();
 export const stripeId=(value,prefix)=>typeof value==='string'&&value.startsWith(prefix+'_')&&/^[A-Za-z0-9]{1,200}$/.test(value.slice(prefix.length+1));
+// Stripe local payment methods can use Payment IDs for Charge objects.
+// Consumers still verify object, account, mode, currency and payment method.
+export const stripeChargeId=value=>stripeId(value,'ch')||stripeId(value,'py');
+export const stripeRefundId=value=>stripeId(value,'re')||stripeId(value,'pyr');
 export const uuid=value=>typeof value==='string'&&UUID.test(value);
 export const sessionPrefix=mode=>mode==='live'?'cs_live':'cs_test';
 export const subjectPrefix=(object,mode)=>object==='checkout.session'?sessionPrefix(mode):object==='charge'?'ch':object==='refund'?'re':object==='payment_intent'?'pi':'dp';
+export const stripeSubjectId=(value,object,mode)=>object==='charge'?stripeChargeId(value):object==='refund'?stripeRefundId(value):stripeId(value,subjectPrefix(object,mode));
 export const audience=(mode,accountId)=>'fetchx-stripe-'+mode+'-'+accountId;
 export const exact=(value,keys)=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&
  Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));

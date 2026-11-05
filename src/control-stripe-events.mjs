@@ -1,5 +1,5 @@
 import {GatewayError,fail} from './policy.mjs';
-import {currencyPaymentMethod} from './control-stripe-broker-protocol.mjs';
+import {currencyPaymentMethod,stripeChargeId,stripeSubjectId} from './control-stripe-broker-protocol.mjs';
 import {STRIPE_UUID,approvedPaidCreditPlan,lockStripeSales,oneTimeStripePrice,stripeId,stripeObject} from './control-stripe-provider.mjs';
 
 const SUBJECTS=new Map([
@@ -21,8 +21,7 @@ export function stripeEventSubject(event){
  const object=SUBJECTS.get(event.type);
  if(!object)return null;
  const subject=event.data?.object;
- const prefix=object==='checkout.session'?sessionPrefix(event.livemode?'live':'test'):object==='charge'?'ch':object==='refund'?'re':object==='payment_intent'?'pi':'dp';
- if(subject?.object!==object||!stripeId(subject?.id,prefix))fail('stripe_event_invalid',400);
+ if(subject?.object!==object||!stripeSubjectId(subject?.id,object,event.livemode?'live':'test'))fail('stripe_event_invalid',400);
  return subject.id;
 }
 
@@ -169,7 +168,7 @@ export class StripeEvents{
   const intent=await this.provider.request(config,'/payment_intents/'+intentId);
   if(!stripeObject(intent,'payment_intent',intentId,config)||intent.customer!==order.customer_id||intent.metadata?.fetchx_checkout!==order.id||
    intent.status!=='succeeded'||intent.amount!==plan.amountMinor||intent.amount_received!==plan.amountMinor||intent.currency!==plan.currency||
-   !stripeId(intent.latest_charge,'ch'))fail('stripe_payment_conflict',409);
+   !stripeChargeId(intent.latest_charge))fail('stripe_payment_conflict',409);
   const charge=await this.provider.request(config,'/charges/'+intent.latest_charge);
   if(!stripeObject(charge,'charge',intent.latest_charge,config)||charge.payment_intent!==intentId||charge.customer!==order.customer_id||
    charge.paid!==true||charge.captured!==true||charge.amount!==plan.amountMinor||charge.amount_captured!==plan.amountMinor||
@@ -207,7 +206,7 @@ export class StripeEvents{
  }
  async refundEvent(config,event){
   const refund=await this.provider.request(config,'/refunds/'+event.subject_id);
-  if(refund?.object!=='refund'||refund.id!==event.subject_id||!stripeId(refund.charge,'ch')||!stripeId(refund.payment_intent,'pi')||
+  if(refund?.object!=='refund'||refund.id!==event.subject_id||!stripeChargeId(refund.charge)||!stripeId(refund.payment_intent,'pi')||
    !Number.isSafeInteger(refund.amount)||refund.amount<=0||!['pending','requires_action','succeeded','failed','canceled'].includes(refund.status))
    fail('stripe_refund_mismatch',409);
   const charge=await this.provider.request(config,'/charges/'+refund.charge);
@@ -237,7 +236,7 @@ export class StripeEvents{
   const dispute=event.event_type.startsWith('charge.dispute.')?await this.provider.request(config,'/disputes/'+id):null;
   if(dispute&&!stripeObject(dispute,'dispute',id,config))fail('stripe_dispute_mismatch',409);
   const chargeId=dispute?dispute.charge:id;
-  if(!stripeId(chargeId,'ch'))fail('stripe_charge_mismatch',409);
+  if(!stripeChargeId(chargeId))fail('stripe_charge_mismatch',409);
   const charge=await this.provider.request(config,'/charges/'+chargeId);
   if(!stripeObject(charge,'charge',chargeId,config)||!stripeId(charge.payment_intent,'pi'))fail('stripe_charge_mismatch',409);
   const scope=[config.mode,config.accountId,chargeId],binding=await this.chargeOrder(config,charge);

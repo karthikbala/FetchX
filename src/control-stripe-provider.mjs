@@ -3,7 +3,7 @@ import {fail} from './policy.mjs';
 import {paidCreditPack} from './control-paid-credits.mjs';
 import {
  BROKER_MAX_BODY,BROKER_PATH,BROKER_SECRET,EVENT_SUBJECTS,KEY_ID,RELAY_TIME_WINDOW,SHA256,
- PACK_OFFERS,STRIPE_VERSION,audience,brokerMessage,checkoutForm,customerForm,exact,fresh,relayMessage,sessionPrefix,subjectPrefix,
+ PACK_OFFERS,STRIPE_VERSION,audience,brokerMessage,checkoutForm,customerForm,exact,fresh,relayMessage,sessionPrefix,stripeChargeId,stripeRefundId,stripeSubjectId,
 } from './control-stripe-broker-protocol.mjs';
 
 export {STRIPE_VERSION};
@@ -110,7 +110,7 @@ export function verifiedStripeRelay(body,headers,config){
  try{value=JSON.parse(decode.decode(body));}catch{fail('stripe_event_invalid',400);}
  if(!exact(value,['v','mode','account_id','event_id','event_type','subject_id','provider_payload_sha256'])||
   value.v!==1||value.mode!==config.mode||value.account_id!==config.accountId||!stripeId(value.event_id,'evt')||
-  !Object.hasOwn(EVENT_SUBJECTS,value.event_type)||!stripeId(value.subject_id,subjectPrefix(EVENT_SUBJECTS[value.event_type],config.mode))||
+  !Object.hasOwn(EVENT_SUBJECTS,value.event_type)||!stripeSubjectId(value.subject_id,EVENT_SUBJECTS[value.event_type],config.mode)||
   !stripeMatches(value.provider_payload_sha256,SHA256))fail('stripe_event_invalid',400);
  return value;
 }
@@ -146,7 +146,7 @@ function brokerReadCommand(config,path){
    payment_intents:['payment_intent.get','intent_id','pi'],charges:['charge.get','charge_id','ch'],
    disputes:['dispute.get','dispute_id','dp'],refunds:['refund.get','refund_id','re'],
   }[match[1]];
-  if(stripeId(match[2],prefix))return {op,[field]:match[2]};
+  if(op==='charge.get'?stripeChargeId(match[2]):op==='refund.get'?stripeRefundId(match[2]):stripeId(match[2],prefix))return {op,[field]:match[2]};
  }
  fail('stripe_broker_operation_invalid',503);
 }
