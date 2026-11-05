@@ -86,7 +86,15 @@ test('Stripe prepaid checkout and signed reconciliation through the gateway',{sk
   }else{
    assert.equal(path,'/checkout/sessions');
    const orderId=params.get('client_reference_id'),id=`cs_${configStripe.mode}_${randomBytes(8).toString('hex')}`;
-   assert.equal((await store.pool.query('SELECT request_body FROM control_stripe_orders WHERE id=$1',[orderId])).rows[0].request_body,call.body);
+   const canonical=(await store.pool.query('SELECT request_body FROM control_stripe_orders WHERE id=$1',[orderId])).rows[0].request_body;
+   if(configStripe.transport==='broker'){
+    const wire=new URLSearchParams(canonical);
+    assert.equal(wire.get('payment_method_types[0]'),'card','gateway keeps its durable canonical form');
+    wire.delete('payment_method_types[0]');wire.set('allowed_payment_method_types[0]','card');
+    assert.equal(call.body,wire.toString(),'Worker changes only the deprecated Stripe wire parameter');
+    assert.equal(params.has('payment_method_types[0]'),false);
+    assert.equal(params.get('allowed_payment_method_types[0]'),'card');
+   }else assert.equal(canonical,call.body);
    assert.equal(params.get('mode'),'payment');assert.equal(params.get('line_items[0][price]'),PLAN.priceId);
    assert.equal(params.get('payment_intent_data[metadata][fetchx_checkout]'),orderId);
    const origin=configStripe.brokerReturnOrigin??ORIGIN;
@@ -95,7 +103,7 @@ test('Stripe prepaid checkout and signed reconciliation through the gateway',{sk
    object={id,object:'checkout.session',livemode:live,mode:'payment',status:'open',payment_status:'unpaid',
     customer:params.get('customer'),client_reference_id:orderId,amount_subtotal:AMOUNT,amount_total:AMOUNT,currency:'usd',
     success_url:params.get('success_url'),cancel_url:params.get('cancel_url'),automatic_tax:{enabled:false},
-    allow_promotion_codes:false,total_details:{amount_discount:0,amount_tax:0,amount_shipping:0},
+    allow_promotion_codes:false,payment_method_types:['card'],total_details:{amount_discount:0,amount_tax:0,amount_shipping:0},
     url:`https://checkout.stripe.com/c/pay/${id}#synthetic-secret`};
    sessions.push(object);objects.set(path+'/'+id,object);
   }
