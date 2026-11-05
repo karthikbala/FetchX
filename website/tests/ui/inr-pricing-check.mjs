@@ -68,6 +68,16 @@ await page.route('**/api/control/**', async route => {
 });
 const stripe = name => page.locator(`[data-stripe-${name}]`);
 const go = path => page.goto(base + path);
+async function openHostedCheckout(button, visits) {
+  // The hosted request starts before the return document and automatic status
+  // lookup finish. Observe that navigation before advancing the payment fixture.
+  await Promise.all([
+    page.waitForEvent('framenavigated', { predicate: frame => frame === page.mainFrame() && frame.url() === base + '/app/billing?checkout=success' }),
+    button.click(),
+  ]);
+  await expect.poll(() => hosted.length).toBe(visits);
+  await expect(stripe('status')).toContainText('Payment confirmation is processing');
+}
 try {
   delayPricing = new Promise(resolve => { releasePricing = resolve; });
   await go('/pricing');
@@ -109,10 +119,8 @@ try {
   await stripe('check').click();
   await expect(stripe('resume')).toContainText('Resume saved INR checkout');
   const firstKey = posts[0].idempotency_key;
-  await stripe('resume').click();
-  await expect.poll(() => hosted.length).toBe(1);
+  await openHostedCheckout(stripe('resume'), 1);
   assert.equal(posts[1].idempotency_key, firstKey);
-  await expect(stripe('status')).toContainText('Payment confirmation is processing');
   assert.equal(available, 0);
   assert.equal(posts[1].currency, 'inr', 'Paused INR checkout recovery keeps its original currency');
   pausedCatalog = false;
@@ -121,8 +129,7 @@ try {
   await expect(stripe('status')).toContainText('Payment failed. No credits were added.');
   await expect(page.locator('[data-paid-credits-available]')).toHaveText('0');
   await expect(page.locator('[data-stripe-plan="credits-10000-inr"]')).toBeEnabled();
-  await page.locator('[data-stripe-plan="credits-10000-inr"]').click();
-  await expect.poll(() => hosted.length).toBe(2);
+  await openHostedCheckout(page.locator('[data-stripe-plan="credits-10000-inr"]'), 2);
   assert.notEqual(posts[2].idempotency_key, firstKey);
   pending.state = 'paid'; available = 10000;
   purchases.push({ ...pending.plan, plan_id: pending.plan.id, status: 'paid', paid_at: '2026-11-05T12:00:00Z' });
@@ -156,14 +163,12 @@ try {
   await expect(stripe('mode-help')).toContainText('Prices and payment are in USD. Pay by card');
   await expect(stripe('plans')).toContainText('$2.00');
   await expect(stripe('purchases')).toContainText('₹175 · Paid');
-  await page.locator('[data-stripe-plan="credits-10000"]').click();
-  await expect.poll(() => hosted.length).toBe(3);
+  await openHostedCheckout(page.locator('[data-stripe-plan="credits-10000"]'), 3);
   const originalUsdKey = pending.key;
   market = 'inr'; missingCatalog = true;
   await go('/app/billing');
   await expect(stripe('resume')).toContainText('Resume saved USD checkout');
-  await stripe('resume').click();
-  await expect.poll(() => hosted.length).toBe(4);
+  await openHostedCheckout(stripe('resume'), 4);
   assert.equal(pending.key, originalUsdKey, 'Country changes must recover the original checkout without replacing its currency or key');
   assert.equal(posts.at(-1).currency, 'usd');
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
