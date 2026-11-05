@@ -13,9 +13,10 @@ const makePrice=(overrides={})=>({id:plan.priceId,object:'price',active:true,liv
  currency:'usd',billing_scheme:'per_unit',recurring:null,...overrides});
 const digest=value=>createHash('sha256').update(value).digest('hex');
 const checkoutSafety=()=>({success_url:websiteOrigin+'/app/billing?checkout=success',cancel_url:websiteOrigin+'/app/billing?checkout=cancelled',
- automatic_tax:{enabled:false},allow_promotion_codes:false,total_details:{amount_discount:0,amount_tax:0,amount_shipping:0}});
+ automatic_tax:{enabled:false},allow_promotion_codes:false,payment_method_types:['card'],
+ total_details:{amount_discount:0,amount_tax:0,amount_shipping:0}});
 
-function fixture(){
+function fixture({sessionMethods=['card']}={}){
  const {privateKey,publicKey}=generateKeyPairSync('ed25519'),keyId='fixture-key';
  const secret=randomBytes(32).toString('base64url'),webhookSecret='whsec_SyntheticFixtureOnly';
  const config={controlPlane:{enabled:true,origins:[websiteOrigin],stripe:{enabled:true,mode:'test',accountId:'acct_fixture',
@@ -48,9 +49,12 @@ function fixture(){
   }
   if(path==='/checkout/sessions'&&options.method==='POST'){
    const params=new URLSearchParams(options.body),id='cs_test_fixture';
+   assert.equal(params.has('payment_method_types[0]'),false);
+   assert.deepEqual(params.getAll('allowed_payment_method_types[0]'),['card']);
    const session={id,object:'checkout.session',livemode:false,mode:'payment',client_reference_id:params.get('client_reference_id'),
     customer:params.get('customer'),amount_subtotal:200,amount_total:200,currency:'usd',status:'open',payment_status:'unpaid',
-    payment_intent:null,...checkoutSafety(),url:'https://checkout.stripe.com/c/pay/'+id+'#private-hosted-token',customer_details:{email:'private-customer@example.com'}};
+    payment_intent:null,...checkoutSafety(),payment_method_types:sessionMethods,
+    url:'https://checkout.stripe.com/c/pay/'+id+'#private-hosted-token',customer_details:{email:'private-customer@example.com'}};
    stripeObjects.set('/checkout/sessions/'+id,session);
    return Response.json(session);
   }
@@ -90,7 +94,14 @@ test('gateway broker reconstructs exact durable forms and keeps the Stripe key a
  const replay=await f.provider.request(config,'/checkout/sessions',{body,key});
  assert.deepEqual(replay,session);
  const creates=f.stripeCalls.filter(call=>call.method==='POST'&&call.path==='/checkout/sessions');
- assert.deepEqual(creates,[{path:'/checkout/sessions',method:'POST',body,key},{path:'/checkout/sessions',method:'POST',body,key}]);
+ const wire=new URLSearchParams(body);wire.delete('payment_method_types[0]');wire.set('allowed_payment_method_types[0]','card');
+ assert.equal(new URLSearchParams(body).get('payment_method_types[0]'),'card','durable canonical gateway form remains unchanged');
+ assert.deepEqual(creates,[{path:'/checkout/sessions',method:'POST',body:wire.toString(),key},
+  {path:'/checkout/sessions',method:'POST',body:wire.toString(),key}]);
+ assert.deepEqual(f.gatewayRequests.filter(call=>JSON.parse(call.options.body).op==='checkout.create').map(call=>JSON.parse(call.options.body)),[
+  {op:'checkout.create',order_id:orderId,customer_id:customer.id,price_id:plan.priceId,expires_at:expiresAt,return_origin:websiteOrigin},
+  {op:'checkout.create',order_id:orderId,customer_id:customer.id,price_id:plan.priceId,expires_at:expiresAt,return_origin:websiteOrigin},
+ ]);
  const before=f.gatewayRequests.length;
  for(const wrong of [body.replace('expires_at=','deadline='),body.replace(encodeURIComponent(websiteOrigin),encodeURIComponent('https://attacker.example')),body+'&unused=1']){
   await assert.rejects(f.provider.request(config,'/checkout/sessions',{body:wrong,key}),{code:'stripe_checkout_reconciliation_required'});
@@ -98,6 +109,20 @@ test('gateway broker reconstructs exact durable forms and keeps the Stripe key a
  await assert.rejects(f.provider.request(config,'/checkout/sessions',{body,key,version:'2025-01-01.old'}),{code:'stripe_checkout_reconciliation_required'});
  await assert.rejects(f.provider.request(config,'/refunds'),{code:'stripe_broker_operation_invalid'});
  assert.equal(f.gatewayRequests.length,before);
+});
+
+test('broker refuses created sessions whose resolved payment methods are not exactly card',async()=>{
+ for(const sessionMethods of [null,[],['link'],['card','link'],['card','card']]){
+  const f=fixture({sessionMethods}),orderId=randomUUID();
+  assert.equal((await f.broker({op:'customer.create',creation_key:randomUUID()})).status,200);
+  const rejected=await f.broker({op:'checkout.create',order_id:orderId,customer_id:'cus_fixture',price_id:plan.priceId,
+   expires_at:epoch()+3600,return_origin:websiteOrigin});
+  assert.equal(rejected.status,502);
+  assert.deepEqual(await rejected.json(),{error:'stripe_checkout_mismatch'});
+  const creates=f.stripeCalls.filter(call=>call.method==='POST'&&call.path==='/checkout/sessions');
+  assert.equal(creates.length,1);
+  assert.equal(creates[0].key,'fetchx-checkout-'+orderId);
+ }
 });
 
 test('broker rejects unauthenticated, stale, arbitrary and rate-limited commands',async()=>{
@@ -148,6 +173,8 @@ test('broker canonical reads are bounded to tagged FetchX objects and minimize d
  for(const [key,value] of [
   ['success_url','https://attacker.example'],['automatic_tax',{enabled:true}],
   ['allow_promotion_codes',true],['total_details',{amount_discount:200,amount_tax:0,amount_shipping:0}],
+  ['payment_method_types',undefined],['payment_method_types',[]],['payment_method_types',['link']],
+  ['payment_method_types',['card','link']],['payment_method_types',['card','card']],
  ]){
   const saved=session[key];session[key]=value;
   const rejected=await f.broker({op:'checkout.get',session_id:'cs_test_fixture'});

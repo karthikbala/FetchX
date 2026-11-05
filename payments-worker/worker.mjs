@@ -167,6 +167,7 @@ class StripeOperations {
  sessionView(value,id){
   if(!validObject(value,'checkout.session',id,this.config)||!stripeId(id,sessionPrefix(this.config.mode))||
    value.mode!=='payment'||!uuid(value.client_reference_id)||!stripeId(value.customer,'cus')||value.currency!=='usd'||
+   !Array.isArray(value.payment_method_types)||value.payment_method_types.length!==1||value.payment_method_types[0]!=='card'||
    value.amount_subtotal!==value.amount_total||![...this.config.amountsByPrice.values()].includes(value.amount_total)||
    !['open','complete','expired'].includes(value.status)||!['unpaid','paid'].includes(value.payment_status)||
    value.success_url!==this.config.returnOrigin+'/app/billing?checkout=success'||
@@ -190,9 +191,13 @@ class StripeOperations {
   if(input.return_origin!==this.config.returnOrigin||!Number.isSafeInteger(input.expires_at)||
    input.expires_at<=epoch()||input.expires_at>epoch()+3660)fail('stripe_checkout_rejected');
   const [price]=await Promise.all([this.price(input.price_id),this.customer(input.customer_id)]);
-  const body=checkoutForm({orderId:input.order_id,customerId:input.customer_id,priceId:input.price_id,
-   expiresAt:input.expires_at,returnOrigin:this.config.returnOrigin});
-  const value=await this.stripe('/checkout/sessions',body,'fetchx-checkout-'+input.order_id),result=this.sessionView(value,value?.id);
+  const form=new URLSearchParams(checkoutForm({orderId:input.order_id,customerId:input.customer_id,priceId:input.price_id,
+   expiresAt:input.expires_at,returnOrigin:this.config.returnOrigin}));
+  // Endive removed the old create parameter. Translate only the Stripe wire
+  // form; the gateway's durable canonical form and idempotency stay unchanged.
+  form.delete('payment_method_types[0]');
+  form.set('allowed_payment_method_types[0]','card');
+  const value=await this.stripe('/checkout/sessions',form.toString(),'fetchx-checkout-'+input.order_id),result=this.sessionView(value,value?.id);
   if(result.client_reference_id!==input.order_id||result.customer!==input.customer_id||result.amount_total!==price.unit_amount)fail('stripe_checkout_mismatch',502);
   return result;
  }
