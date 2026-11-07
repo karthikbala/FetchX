@@ -111,7 +111,7 @@ function message(code){
   max_transfer_mb_invalid:'Supply a transfer limit from 0.25 through 20 decimal MB in increments of 0.25 MB.',
   max_credits_invalid:'Supply a positive integer credit ceiling.',
   max_credits_exceeded:'The credit reservation exceeds the requested ceiling.',
-  max_transfer_bytes_exceeded:'The operation reached its bidirectional wire limit. max_transfer_mb sets the wire ceiling and determines the credit reservation.',
+  max_transfer_bytes_exceeded:'The operation reached its reserved bidirectional wire limit.',
   encoded_body_limit:'The operation reached its encoded response body limit.',
   decoded_body_limit:'The operation reached its decoded response body limit.',
   decompression_ratio_limit:'The response exceeded the permitted decompression expansion ratio.',
@@ -143,14 +143,15 @@ function publicLimitFailure(code,operation,profile){
  const {max_transfer_mb:maximum,step_mb:step}=PUBLIC_URL_TRANSFER_LIMITS;
  const current=paid.max_transfer_bytes/1_000_000;
  const details={max_transfer_mb:current,max_allowed_transfer_mb:maximum,reserved_credits:paid.reserved_credits};
+ const summary=message(code)+` This operation reserved a ${current} MB transfer ceiling.`;
  if(operation.state!=='failed'||operation.result?.partial||paid.state!=='settled')
-  return {details,message:message(code)+' Recover the saved operation using its original key before considering new source work.'};
- if(current>=maximum)return {details,message:message(code)+' This operation used the maximum max_transfer_mb.'};
+  return {details,message:summary+' Recover the saved operation using its original key before considering new source work.'};
+ if(current>=maximum)return {details,message:summary};
  const next=current+step;
  details.next={max_transfer_mb:next,max_credits:Math.ceil(next*1_000_000/paid.block_bytes)*paid.credits_per_block,
   requires_new_idempotency_key:true};
  const limit=code==='max_transfer_bytes_exceeded'?'wire and body limits':'body limits';
- return {details,message:message(code)+` For a new operation with a new idempotency key, a higher max_transfer_mb raises the ${limit} and reserves credits for that ceiling. The final debit is based on measured wire bytes.`};
+ return {details,message:summary+` For a new operation with a new idempotency key, a higher max_transfer_mb raises the ${limit} and reserves credits for that ceiling. The final debit is based on measured wire bytes.`};
 }
 
 function retryGuidance({key,code,state,method,route,profile,result,admission=false}){
@@ -240,8 +241,9 @@ export class PublicFetchGateway{
   if(saved&&hash!==undefined&&saved.hash!==hash)fail('idempotency_conflict',409);
   return saved;
  }
- async fetch(project,raw,identity){
+ async fetch(project,raw,identity,{automaticTransfer=true}={}){
   this.v2.controlCredits.keyId(project,identity);
+  // Transfer mode is a control-client preference for new admissions, outside the replay fingerprint.
   const input=normalize(raw,{implicitPublic:this.v2.controlCredits.managed(project)}),hash=sha(canonical(input)),names=keys(input.idempotency_key);
   const prior=await this.fingerprint(project,input.idempotency_key,hash);
   if(prior){
@@ -264,7 +266,7 @@ export class PublicFetchGateway{
   }else session=await this.v2.session(project,{idempotency_key:names.session,access_profile:input.access_profile,transport:'http',proxy:{...input.proxy,affinity:'session'}},{profile:candidate,paid});
   await this.fingerprint(project,input.idempotency_key,hash,{bind:true});
   let operation;
-  try{operation=await this.v2.operation(project,{idempotency_key:names.operation,session_id:session.id,request,...(input.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:input.max_estimated_micro_usd}),...paidLimits(input),...(input.retry===true?{retry:true}:{})},identity);}
+  try{operation=await this.v2.operation(project,{idempotency_key:names.operation,session_id:session.id,request,...(input.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:input.max_estimated_micro_usd}),...paidLimits(input),...(input.retry===true?{retry:true}:{})},identity,{automaticTransfer});}
   catch(error){
    const rejected=isPublicOperationAdmissionError(error);
    if(error&&typeof error==='object')failureContexts.set(error,{key:input.idempotency_key,session_id:session.id,routing:{class:session.proxy.class,country:session.proxy.country,provider:session.proxy.provider},state:rejected?'rejected':'unknown',stage:rejected?'operation_admission':'operation'});

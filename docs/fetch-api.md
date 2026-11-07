@@ -41,7 +41,7 @@ the project's approved profiles, route reservations and limits.
 | `headers` | Optional object, defaults to `{}`. Existing header/credential restrictions apply. |
 | `body_base64` | Optional canonical base64 body. Body size and method restrictions apply; GET/HEAD cannot carry a body. |
 | `max_estimated_micro_usd` | Optional nonnegative integer ceiling on the conservative reservation estimate. An unavailable estimate fails closed. |
-| `max_transfer_mb` | Optional paid HTTP transfer ceiling in decimal MB, from 0.25 through 20 in increments of 0.25. |
+| `max_transfer_mb` | Optional paid HTTP transfer ceiling in decimal MB, from 0.25 through 20 in increments of 0.25. For Public URL HTTP, omit it to let FetchX size the reservation automatically. |
 | `max_credits` | Optional positive integer paid HTTP credit ceiling. |
 | `retry` | Optional boolean, defaults to `false`. `true` permits at most one extra known-safe attempt for an eligible fresh HTTP read; see [bounded retries](#bounded-retries). Other types are rejected. |
 
@@ -66,16 +66,18 @@ use the [v1 workflow API](api.md).
 
 ## Paid public URLs and transfer ceilings
 
-Purchased HTTP uses a separate balance from the reviewed Playground trial routes.
-Select Purchased HTTP explicitly in the Playground. Trial profiles use the
-configured trial weights, including residential HTTP where reviewed, and reject
-paid transfer and credit ceiling fields. Qualified browser requests use the
-[Render API](render-api.md) and its configured trial weights.
+Public URL HTTP charges for measured transfer. Reviewed Playground routes use
+fixed credits per operation, including qualified Browser requests through the
+[Render API](render-api.md). Upgraded projects spend from one shared balance.
 
 An eligible self-service project can use `public-url-http@1` for a public HTTPS
 URL on port 443. The operator reviews the route before it appears in
-`GET /v2/access-profiles`. Select `datacenter` or `residential` with country
-`US` from the routes available to the project. Paid public requests accept
+`GET /v2/access-profiles`. Version 1 supports US datacenter and residential
+routes. Version 2 is an explicit profile for additional reviewed routes. Use
+the exact profile version and class/country pair advertised in its
+`route_reservations`. The `paid_http.public_url_access_profiles` capability
+lists available profile references when extended coverage is ready. Omitting
+`access_profile` continues to select version 1. Paid public requests accept
 `GET` and `HEAD` with optional `accept`, `accept-language` and `user-agent`
 headers. URL user information, authentication and cookie headers, bodies and
 IP literals are rejected. Each hop rejects private, special or mixed DNS
@@ -90,22 +92,23 @@ reviewed fixed-fee Oxylabs schema with `countries: ["US"]`. The fingerprint
 covers the exact legacy URLs and IDs with the reviewed provider and pool
 metadata. A changed or unreviewed US member disables the paid datacenter
 route. The binding applies only to paid public HTTP and leaves existing
-private and trial pricing policies in place.
+private and trial pricing policies in place. Version 2 uses the same binding
+schema per country in `controlPlane.paidCreditPolicy.datacenterPoolsByCountry`.
+Residential locations also require an explicit provider rule and a reviewed
+spending budget for the selected provider.
 
 ```json
 {
   "idempotency_key": "paid-url-001",
   "url": "https://www.example.com/data",
-  "proxy": {"class": "datacenter", "country": "US"},
-  "max_transfer_mb": 2.25,
-  "max_credits": 3
+  "proxy": {"class": "datacenter", "country": "US"}
 }
 ```
 
-| Route | Default transfer ceiling | Debit per started block |
+| Route | Billing block | Debit per started block |
 | --- | ---: | ---: |
-| Direct or datacenter | 1,000,000 bytes | 1 credit per 1,000,000 bytes |
-| Residential | 250,000 bytes | 5 credits per 250,000 bytes |
+| Direct or datacenter | 1,000,000 bytes | 1 credit |
+| Residential | 250,000 bytes | 5 credits |
 
 Direct paid HTTP is available only through an eligible operator-registered
 profile. On a reviewed self-service direct or datacenter profile, supplying
@@ -114,13 +117,18 @@ requests continue to use trial credits with their approved profiles. The public
 URL profile uses a separate paid daily operation quota and requires a prepaid
 balance. Paid routes reject `retry: true`.
 
-The gateway reserves the credits for the entire transfer ceiling before DNS or
-source dispatch. A ceiling that needs more than `max_credits` returns
-`max_credits_exceeded`. The cumulative wire meter covers encrypted bytes in both
+For Public URL HTTP, omitting `max_transfer_mb` sizes the reservation from the
+available credit balance, any supplied `max_credits`, and the service and
+provider transfer limits. The maximum service ceiling is 20 MB. Supplying
+`max_transfer_mb` sets an explicit ceiling. The gateway reserves credits
+before DNS or source dispatch and rejects an explicit ceiling that needs more
+than `max_credits`. The `paid_credit_reservation` in access-profile discovery
+describes a single billing block. The operation response reports the actual
+reservation and debit. The cumulative wire meter covers encrypted bytes in both
 directions, CONNECT, DNS over HTTPS and redirects. It measures the gateway's
 socket payload and excludes TCP/IP framing.
 
-On `public-url-http@1`, the authorized transfer ceiling also sets two separate
+On Public URL HTTP, the authorized transfer ceiling also sets two separate
 aggregate body limits, one for encoded bytes and one for decoded bytes. Each
 tops out at 20,000,000 bytes across the operation, including redirect bodies.
 A response must also pass the profile's 100× expansion check. Allow room for
@@ -142,7 +150,9 @@ read while the credit debit remains capped at the authorized transfer ceiling.
 `usage.wire_bytes` reports a complete local observation when available, and
 `usage.wire_bytes_lower_bound` reports confirmed bytes. Read
 `usage.accounting.paid_credits` for `reserved_credits`, `used_credits`,
-`billable_bytes`, `state`, and `settlement_basis`. Measured source failures
+`billable_bytes`, `billable_blocks`, `block_bytes`, `credits_per_block`, `state`, and
+`settlement_basis`. For a settled transfer, the debit is the number of started
+billable blocks multiplied by `credits_per_block`. Measured source failures
 and size cutoffs can consume credits. Invalid destinations and requests with
 verified zero dispatch use zero credits. A FetchX internal failure releases the
 customer reservation while provider accounting remains separate. An uncertain

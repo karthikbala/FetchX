@@ -72,7 +72,8 @@ test('paid residential capacity and pending Checkout stay separate from both leg
   }
  });
  const fetch=new PublicFetchGateway(v2),identity={keyId:'console'};
- const paid=key=>fetch.fetch(paidProject,{idempotency_key:key,url:'https://paid-budget.sample.net/',proxy:route},identity);
+ const paidRequest=key=>({idempotency_key:key,url:'https://paid-budget.sample.net/',proxy:route,max_transfer_mb:.25});
+ const paid=key=>fetch.fetch(paidProject,paidRequest(key),identity);
  const legacyV2=key=>fetch.fetch(legacy,{idempotency_key:key,access_profile:legacyRef,url:`https://${legacyHost}/`,proxy:route});
  const legacyV1=async key=>{
   const workflow=await gateway.workflow(legacy,{profile:'native',idempotency_key:key+'-workflow'});
@@ -166,7 +167,7 @@ test('paid residential capacity and pending Checkout stay separate from both leg
   assert.equal(legacyV2Dispatches,1);
   assert.equal(paidDispatches,2);
 
-  // Scale the newly funded balance to two default requests without running an entire pack.
+  // Fund two requests at the fixture's 0.25 MB ceiling.
   const redeemProject=buyerIds[1];
   await store.pool.query(`INSERT INTO paid_credit_grants(project,account_id,mode,checkout_session_id,payment_intent_id,credits,amount_minor,currency)
    VALUES($1,'acct_fixture','live','cs_live_redeemfixture','pi_redeemfixture',10,200,'usd')`,[redeemProject]);
@@ -174,7 +175,7 @@ test('paid residential capacity and pending Checkout stay separate from both leg
   budget.maxTotalBytes=budget.maxDailyBytes=2*paidHoldBytes+508_200;
   paidMode='success';
   for(const [key,outstanding] of [['redeem-first',508_454_100n],['redeem-second',508_200_000n]]){
-   const result=await fetch.fetch(redeemProject,{idempotency_key:key,url:'https://paid-budget.sample.net/',proxy:route},identity);
+   const result=await fetch.fetch(redeemProject,paidRequest(key),identity);
    assert.equal(result.state,'completed');
    assert.equal(result.usage.accounting.paid_credits.used_credits,5);
    assert.equal(result.usage.accounting.paid_credits.max_transfer_bytes,250_000);

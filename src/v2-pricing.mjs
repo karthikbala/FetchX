@@ -1,6 +1,7 @@
 import {sha} from './crypto.mjs';
 import {ID} from './policy.mjs';
 import {residentialTrafficReservation} from './customer-traffic.mjs';
+import {PUBLIC_URL_V2_REF,isPublicUrlProfile} from './v2-public-url.mjs';
 
 const plain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const exact=(v,keys)=>plain(v)&&Object.keys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k));
@@ -66,21 +67,26 @@ function estimateFixedFeePool({config,route,transport,now_ms,duration_ms}){
  return {estimated_micro_usd:0,pricing:{status:'valid',basis:'operator_fixed_fee_pool',provider:p.provider,cost_scope:p.cost_scope,fixed_subscription_allocation_micro_usd:null,invoice_micro_usd:null,customer_traffic_charge_micro_usd:0,policy_id:p.id},dispatch_deadline_ms:now_ms+duration_ms,binding:{pool_fingerprint_sha256:fingerprint,policy_id:p.id,policy_sha256:sha(JSON.stringify(ordered(p))),provenance:{...p.provenance}}};
 }
 
-// Paid public HTTP has an isolated policy. The legacy proxy inventory stays
-// untouched, and its full US candidate set must match the reviewed binding.
-export function estimatePaidPublicDatacenter({config,route,transport='http',now_ms=Date.now(),duration_ms=0}){
- if(transport!=='http'||route.class!=='datacenter'||route.provider!=='configured_datacenter'||route.country!=='US')
+// Paid public HTTP uses its own reviewed bindings. The full candidate set in
+// the selected country must match the binding used for the profile version.
+export function estimatePaidPublicDatacenter({config,profile,route,transport='http',now_ms=Date.now(),duration_ms=0}){
+ const regional=isPublicUrlProfile(profile)&&profile.version===PUBLIC_URL_V2_REF.version;
+ const country=route.country;
+ if(transport!=='http'||route.class!=='datacenter'||route.provider!=='configured_datacenter'||
+  (regional?typeof country!=='string'||!/^[A-Z]{2}$/.test(country):country!=='US'))
   return unavailable('fixed_fee_pool_scope_mismatch');
- const reviewed=config.controlPlane?.paidCreditPolicy?.datacenterPool;
+ const policy=config.controlPlane?.paidCreditPolicy;
+ const pools=policy?.datacenterPoolsByCountry;
+ const reviewed=regional?(plain(pools)&&Object.hasOwn(pools,country)?pools[country]:null):policy?.datacenterPool;
  if(!exact(reviewed,['proxyIds','pricing'])||!Array.isArray(reviewed.proxyIds)||!reviewed.proxyIds.length||reviewed.proxyIds.length>100||
   !reviewed.proxyIds.every(identifier)||new Set(reviewed.proxyIds).size!==reviewed.proxyIds.length||
-  !validPoolPolicy(reviewed.pricing)||reviewed.pricing.countries.length!==1||reviewed.pricing.countries[0]!=='US')
+  !validPoolPolicy(reviewed.pricing)||reviewed.pricing.countries.length!==1||reviewed.pricing.countries[0]!==country)
   return unavailable('fixed_fee_pool_policy_invalid');
  const {proxyIds,pricing}=reviewed,approved=new Set(proxyIds);
  const members=Array.isArray(config.proxies)?config.proxies.filter(proxy=>proxy&&(
-  proxy.country==='US'||approved.has(proxy.id)||proxy.pool_id===pricing.pool_id)):[];
+  proxy.country===country||approved.has(proxy.id)||proxy.pool_id===pricing.pool_id)):[];
  if(members.length!==approved.size||new Set(members.map(proxy=>proxy.id)).size!==approved.size||
-  members.some(proxy=>proxy.country!=='US'||!approved.has(proxy.id)||
+  members.some(proxy=>proxy.country!==country||!approved.has(proxy.id)||regional&&proxy.enabled===false||
    proxy.provider!==undefined&&proxy.provider!==pricing.provider||proxy.pool_id!==undefined&&proxy.pool_id!==pricing.pool_id))
   return unavailable('pool_binding_mismatch');
  const proxies=members.map(proxy=>({...proxy,provider:pricing.provider,pool_id:pricing.pool_id}));

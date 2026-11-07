@@ -20,6 +20,9 @@ const UUID='[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0
 const STRIPE_KEY='[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
 export const CONTROL_REQUEST_LIMIT=96*1024;
 export const CONTROL_RESPONSE_LIMIT=24*1024*1024;
+// A 20 MB fetch can carry 26.7 MB of base64 plus a text preview and metadata.
+const CONTROL_FETCH_RESPONSE_LIMIT=28*1024*1024;
+const fetchResultPath=new RegExp(`^/projects/${PROJECT}/(?:fetch(?:/|$)|requests/${UUID}$)`);
 export const CONTROL_TIMEOUT_MS=85_000;
 const headers={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Pragma':'no-cache','X-Content-Type-Options':'nosniff','X-Robots-Tag':'noindex, nofollow'};
 const response=(status:number,body:unknown,extra:Record<string,string>={})=>new Response(JSON.stringify(body),{status,headers:{...headers,...extra}});
@@ -42,7 +45,7 @@ function allowedMethods(path:string):string[]|null {
  return null;
 }
 class ProxyFailure extends Error {constructor(readonly code:string){super(code);}}
-async function boundedBody(body:ReadableStream<Uint8Array>|null,limit:number,signal:AbortSignal):Promise<Uint8Array> {
+async function boundedBody(body:ReadableStream<Uint8Array>|null,limit:number,signal:AbortSignal):Promise<Uint8Array<ArrayBuffer>> {
  if(!body)return new Uint8Array();
  const reader=body.getReader(),chunks:Uint8Array[]=[];let length=0;
  let abort:()=>void=()=>{};
@@ -158,10 +161,11 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
   submitted=true;
   const result=await fetch(upstream.href,{method:request.method,headers:forwarded,body,redirect:'manual',signal:controller.signal});
   if(result.status>=300&&result.status<400){void result.body?.cancel().catch(()=>{});return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
-  if(!/^application\/json(?:\s*;|$)/i.test(result.headers.get('Content-Type')??'')||Number(result.headers.get('Content-Length')??0)>CONTROL_RESPONSE_LIMIT){void result.body?.cancel().catch(()=>{});return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
-  const bytes=await boundedBody(result.body,CONTROL_RESPONSE_LIMIT,controller.signal);
-  let payload:unknown;try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:false}).decode(bytes));if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error();}catch{return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
-  const output=response(result.status,payload);
+  const fetchResult=fetchResultPath.test(path),limit=fetchResult?CONTROL_FETCH_RESPONSE_LIMIT:CONTROL_RESPONSE_LIMIT;
+  if(!/^application\/json(?:\s*;|$)/i.test(result.headers.get('Content-Type')??'')||Number(result.headers.get('Content-Length')??0)>limit){void result.body?.cancel().catch(()=>{});return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
+  const bytes=await boundedBody(result.body,limit,controller.signal);
+  let payload:unknown;try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:fetchResult}).decode(bytes));if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error();}catch{return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
+  const output=fetchResult?new Response(bytes,{status:result.status,headers}):response(result.status,payload);
   const returnedCookies=result.headers.getSetCookie();
   for(const name of [COOKIE,...(path.startsWith('/auth/google/')?[GOOGLE_COOKIE]:[]),...(path.startsWith('/auth/github/')?[GITHUB_COOKIE]:[])]){
    const values=returnedCookies.filter(value=>value.startsWith(name+'='));

@@ -109,7 +109,12 @@ async function profiles(v2,project,allowed){
 function recovery(value,project,{key,id,execution='http'}={}){
  if(!value?.retry)return value;
  const endpoint=execution==='browser'?'render':'fetch';
- return {...value,retry:{...value.retry,lookup_url:key?`/api/control/projects/${project}/${endpoint}/${encodeURIComponent(key)}`:id?`/api/control/projects/${project}/requests/${id}`:null}};
+ const data=value.data,previewChars=32_000;
+ const preview=execution==='http'&&typeof data?.text==='string'&&data.text.length>previewChars&&
+  typeof data.body_base64==='string'&&data.body_base64.length>4*Math.ceil(1_000_000/3);
+ // Older tabs use body_base64 for a complete download when text is null.
+ return {...value,...(preview?{data:{...data,text:null,text_preview:data.text.slice(0,previewChars).replace(/[\uD800-\uDBFF]$/u,''),text_is_preview:true}}:{}),
+  retry:{...value.retry,lookup_url:key?`/api/control/projects/${project}/${endpoint}/${encodeURIComponent(key)}`:id?`/api/control/projects/${project}/requests/${id}`:null}};
 }
 async function history(v2,project,raw){
  if(!exact(raw,['limit'])||raw.limit!==undefined&&(typeof raw.limit!=='string'||!/^\d{1,2}$/.test(raw.limit)))fail('request_invalid');
@@ -240,8 +245,12 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,cr
   route('POST','/projects/:id/fetch',async(req,reply)=>{
    query(req);const auth=await member(req);
    try{
-    const {key_id,...body}=input(req,['key_id','idempotency_key','access_profile','url','proxy','session_id','method','headers','body_base64','max_estimated_micro_usd','max_transfer_mb','max_credits','retry','render','browser','javascript','js_render','wait_for','waitFor','screenshot','screenshots','formats','actions','script','selectors','extract','transport']);
-    return recovery(await fetch.fetch(auth.id,body,await submissionIdentity(auth,{key_id,...body},'http')),auth.id,{key:body.idempotency_key});
+    const payload=input(req,['key_id','idempotency_key','access_profile','url','proxy','session_id','method','headers','body_base64','max_estimated_micro_usd','max_transfer_mb','max_credits','automatic_transfer','retry','render','browser','javascript','js_render','wait_for','waitFor','screenshot','screenshots','formats','actions','script','selectors','extract','transport']);
+    const {key_id,automatic_transfer,...body}=payload;
+    if(Object.hasOwn(payload,'automatic_transfer')&&automatic_transfer!==true)fail('request_invalid');
+    // Already-open Playground tabs quote one tariff block when they omit the ceiling.
+    const selected=await submissionIdentity(auth,{key_id,...body},'http');
+    return recovery(await fetch.fetch(auth.id,body,selected,{automaticTransfer:automatic_transfer===true}),auth.id,{key:body.idempotency_key});
    }catch(error){return operationFailure(reply,error,auth.id,{key:req.body?.idempotency_key});}
   });
   route('GET','/projects/:id/fetch/:key',async(req,reply)=>{query(req);const auth=await member(req);try{return recovery(await fetch.lookup(auth.id,req.params.key),auth.id,{key:req.params.key});}catch(error){const value=publicFetchFailure(error,{key:req.params.key});return reply.code(value.gateway_http_status).send(recovery(value,auth.id,{key:value.idempotency_key}));}});

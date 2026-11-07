@@ -13,7 +13,7 @@ On upgrade, FetchX counts historical trial grants across the account, including 
 
 Verified live payments add the full purchase to the selected project's paid balance. Packs have no automatic renewal or expiry. Sandbox payments leave both balances unchanged.
 
-| Reviewed HTTP route | Credits per started block | Block and default transfer limit |
+| Reviewed HTTP route | Credits per started block | Billing block |
 | --- | ---: | ---: |
 | Direct or datacenter | 1 | 1,000,000 bytes |
 | Residential | 5 | 250,000 bytes |
@@ -24,15 +24,15 @@ A verified no-dispatch outcome or a FetchX-owned failure releases the customer r
 
 Purchases are used in order. A verified reversal removes the remaining capacity from that purchase and preserves recorded usage and holds. A payment hold pauses paid dispatch until the mapped incident is resolved. Existing verified grants remain usable when Checkout is disabled.
 
-The operator enables paid routes through the reviewed `controlPlane.paidCreditPolicy` configuration. Each eligible profile, route class, country, and provider is reviewed separately. Paid residential routes require a reviewed `residentialBudget` in that policy. The launch allocation is Evomi only, with a 60 GB lifetime ceiling, a 1 GB UTC daily ceiling, and a provider estimate of $1 per decimal GB. The existing private and legacy budgets, prior reservations, and rate estimates remain in force for their own operations.
+The operator enables paid routes through the reviewed `controlPlane.paidCreditPolicy` configuration. Each eligible profile, route class, country, and provider is reviewed separately. `residentialBudget` is the shared paid residential budget and the Evomi allocation used to qualify Checkout. Its maximums are 60 GB lifetime and 1 GB per UTC day, with a provider estimate of $1 per decimal GB. An optional reviewed `dataImpulseResidentialBudget` applies an additional provider ceiling under that shared budget. It does not increase the allocation backing Checkout. The existing private and legacy budgets, prior reservations, and rate estimates remain in force for their own operations.
 
 Checkout checks the remaining paid allocation against the new purchase, pending live orders, and outstanding paid credits. The residential customer tariff still covers 250,000 bytes per five credits, or 50,000 bytes per credit within that block. For sales capacity, the gateway allows 50,820 provider bytes per credit. This rounds up the 250,000-byte default block plus a 4,096-byte provider read allowance across five credits. Every pack can fit individually at a clean launch. One of each would require 61.4922 GB of capacity, above the 60 GB lifetime ceiling.
 
 A larger transfer ceiling with low measured usage can leave a provider hold much larger than the customer's debit. An uncertain dispatch or a refunded customer reservation can also retain provider capacity. Keep headroom in the funded allocation, including when other systems share the provider account. Reconcile provider usage against authoritative provider evidence. Customer settlement and refunds do not automatically release provider holds.
 
-Purchased credits cover native HTTP. Qualified Playground browser requests use their reviewed trial mode weights.
+Reviewed Playground HTTP and Browser requests charge their configured fixed credits per operation. Public URL HTTP settles on measured transfer. Upgraded projects use a unified balance for both.
 
-Billing and usage retain the existing project trial balance and report purchased credits separately. The paid balance reports `granted`, `available`, `reserved`, `used`, `held`, `revoked_unused`, and `payment_hold`. Paid operation accounting shows the saved credit tariff, maximum transfer bytes, and settled debit without a second cash charge.
+Billing and usage report the unified `credit_balance` for upgraded projects and separate balances before upgrade. The paid balance reports `granted`, `available`, `reserved`, `used`, `held`, `revoked_unused`, and `payment_hold`. Transfer accounting reports the saved tariff, billable bytes, the number of started billing blocks, and the settled credit debit.
 
 ## Resolve a held paid credit reservation
 

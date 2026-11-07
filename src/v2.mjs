@@ -19,8 +19,8 @@ import {ControlCredits,creditSnapshot,creditWeight,recoverControlCredits,reviewe
 import {PLAYGROUND_PREFIX,admitPlaygroundRoute,isPlaygroundRef,materializePlaygroundProfile,playgroundOperationProfile,playgroundPolicy,readPlaygroundProfile} from './control-playground.mjs';
 import {lockStripeSales} from './control-stripe-provider.mjs';
 import {ControlPaidCredits,PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES,outstandingPaidCreditLiabilitySql,recoverControlPaidCredits,restoreReleasedTrialCredits,reviewedPaidCreditRoutes,quotePaidHttpCredits} from './control-paid-credits.mjs';
-import {PUBLIC_URL_ID,PUBLIC_URL_KIND,PUBLIC_URL_REF,PUBLIC_URL_ROUTES,RESERVED_PUBLIC_URL_IDS,PUBLIC_URL_MAX_BODY_BYTES,PUBLIC_URL_TRANSFER_LIMITS,checkedPublicRedirect,checkedPublicSourceUrl,checkedPublicAddresses,
- isPublicUrlProfile,publicUrlProfile,reviewedPublicUrlPolicy} from './v2-public-url.mjs';
+import {PUBLIC_URL_ID,PUBLIC_URL_KIND,PUBLIC_URL_REF,PUBLIC_URL_V2_REF,RESERVED_PUBLIC_URL_IDS,PUBLIC_URL_MAX_BODY_BYTES,PUBLIC_URL_TRANSFER_LIMITS,checkedPublicRedirect,checkedPublicSourceUrl,checkedPublicAddresses,
+ isPublicUrlRef,isPublicUrlProfile,publicUrlProfile,publicUrlRouteAllowed,reviewedPublicUrlPolicy} from './v2-public-url.mjs';
 
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const plain=v=>v&&typeof v==='object'&&!Array.isArray(v);
@@ -125,9 +125,12 @@ export class V2Gateway{
   if(selfService){
    const proxyClasses={};
    for(const cls of ['direct','datacenter','residential'])proxyClasses[cls]=await this.paidCreditReady(project,{proxyClass:cls});
-   const publicReady=this.publicUrlPolicy(project)&&await this.paidCreditReady(project,{publicOnly:true});
-   paidHttp={proxy_classes:proxyClasses,public_url_access_profile:publicReady?PUBLIC_URL_REF:null,
-    ...(publicReady?{public_url_transfer_limits:PUBLIC_URL_TRANSFER_LIMITS}:{})};
+   const legacyReady=await this.paidCreditReady(project,{publicOnly:true});
+   const regionalReady=await this.paidCreditReady(project,{publicOnly:true,publicVersion:PUBLIC_URL_V2_REF.version});
+   const publicRefs=[...(legacyReady?[PUBLIC_URL_REF]:[]),...(regionalReady?[PUBLIC_URL_V2_REF]:[])];
+   paidHttp={proxy_classes:proxyClasses,public_url_access_profile:legacyReady?PUBLIC_URL_REF:null,
+    ...(regionalReady?{public_url_access_profiles:publicRefs}:{}),
+    ...(publicRefs.length?{public_url_transfer_limits:PUBLIC_URL_TRANSFER_LIMITS}:{})};
   }
   return {...V2_CAPABILITIES,...(selfService?{proxy_classes:Object.fromEntries(routes.map(route=>[route,!!creditWeight(creditPolicy,'http',route)||paidHttp.proxy_classes[route]])),paid_http:paidHttp}:{}),features:{...V2_CAPABILITIES.features,discovery_profiles:policy.enabled,browser_network_probe:available,browser_render:render},browser_probe:{available,reason:selfService?(render?'managed_render_endpoint_required':'self_service_http_only'):!runtime.available?runtime.reason:!approved?'browser_probe_profile_unapproved':null,original_encoded_available:false,max_requests:32,max_decoded_bytes:8388608,max_dom_bytes:1048576,proxy_classes:selfService?[]:routes,methods:['GET','HEAD'],live_leases:false},discovery_profile_policy:policy.enabled?{enabled:true,max_profiles:policy.max_profiles,max_origins:policy.max_origins,methods:['GET','HEAD'],proxy_classes:['direct'],max_paid_cost_micro_usd:0,limits:policy.limits,...(!selfService&&policy.browser_probe?{browser_probe:policy.browser_probe}:{})}:{enabled:false}};
  }
@@ -154,8 +157,8 @@ export class V2Gateway{
   const k=refKey(ref);
   if(isPlaygroundRef(ref))return readPlaygroundProfile(this,project,ref);
   if(ref.id===PUBLIC_URL_ID){
-   if(ref.version!==PUBLIC_URL_REF.version||!this.publicUrlPolicy(project))fail('access_profile_forbidden',403);
-   return this.registered('access_profile',publicUrlProfile());
+   if(!this.publicUrlPolicy(project,ref))fail('access_profile_forbidden',403);
+   return this.registered('access_profile',publicUrlProfile(ref));
   }
   if(ref.id.startsWith(DISCOVERY_PREFIX)){
    const policy=discoveryPolicy(this.config,project);if(!policy.enabled)fail('access_profile_forbidden',403);
@@ -172,20 +175,21 @@ export class V2Gateway{
  }
  async profiles(project){
   const profiles=[];for(const k of this.config.projects[project]?.v2_access_profiles??[]){const p=this.config.v2?.accessProfiles?.[k];if(p)profiles.push(await this.profile(project,{id:p.id,version:p.version}));}
-  const publicClasses=[];
-  if(this.publicUrlPolicy(project))for(const {class:proxyClass} of PUBLIC_URL_ROUTES){
-   if(await this.paidCreditReady(project,{publicOnly:true,proxyClass}))publicClasses.push(proxyClass);
+  const publicRoutes=new Map();
+  for await(const {profile,route} of this.readyPaidRoutes(project,{publicOnly:true,publicVersion:null})){
+   if(!publicRoutes.has(profile.version))publicRoutes.set(profile.version,[]);
+   publicRoutes.get(profile.version).push(route);
   }
-  if(publicClasses.length)profiles.push(await this.profile(project,PUBLIC_URL_REF));
+  for(const ref of [PUBLIC_URL_REF,PUBLIC_URL_V2_REF])if(publicRoutes.has(ref.version))profiles.push(await this.profile(project,ref));
   if(discoveryPolicy(this.config,project).enabled)for(const row of (await this.store.pool.query('SELECT id,version FROM v2_discovery_profiles WHERE project=$1 ORDER BY created_at,id',[project])).rows){try{profiles.push(await this.profile(project,{id:row.id,version:row.version}));}catch(error){if(error.code!=='discovery_policy_changed')throw error;}}
-  return {access_profiles:profiles.map(p=>this.publicProfile(p,project,publicClasses))};
+  return {access_profiles:profiles.map(p=>this.publicProfile(p,project,publicRoutes.get(p.version)))};
  }
  pricing(project,profile,route,bytes,transport='http',duration=profile.limits.timeout_ms){
   const managed=this.controlCredits.managed(project);
   let config=this.config;
   if(managed&&transport==='http'&&route.class==='residential'&&!isPlaygroundRef(profile)){
-   const budget=reviewedPaidResidentialBudget(config);
-   config={residential:{providers:{[route.provider]:{microUsdPerGB:budget&&budget.provider===route.provider?budget.microUsdPerGB:null}}}};
+   const budget=reviewedPaidResidentialBudget(config,route.provider);
+   config={residential:{providers:{[route.provider]:{microUsdPerGB:budget?.microUsdPerGB??null}}}};
   }
   const options={config,project,profile,route,transport,reserved_tunnel_bytes:bytes,duration_ms:duration};
   if(managed&&isPublicUrlProfile(profile)&&route.class==='datacenter')return estimatePaidPublicDatacenter(options);
@@ -197,18 +201,18 @@ export class V2Gateway{
   if(isPlaygroundRef(profile))return false;
   return this.controlCredits.managed(project)&&(explicit||isPublicUrlProfile(profile)||route?.class==='residential');
  }
- publicUrlPolicy(project){
-  if(!this.controlCredits.managed(project)||!this.config.projects?.[project]||!reviewedPaidDns(this.config))return null;
-  const reviewed=reviewedPaidCreditRoutes(this.config).some(rule=>refKey(rule.accessProfile)===refKey(PUBLIC_URL_REF)&&
-   PUBLIC_URL_ROUTES.some(route=>route.class===rule.class&&route.country===rule.country&&route.provider===rule.provider));
+ publicUrlPolicy(project,ref=PUBLIC_URL_REF){
+  if(!isPublicUrlRef(ref)||!this.controlCredits.managed(project)||!this.config.projects?.[project]||!reviewedPaidDns(this.config))return null;
+  const reviewed=reviewedPaidCreditRoutes(this.config).some(rule=>refKey(rule.accessProfile)===refKey(ref)&&publicUrlRouteAllowed(ref,rule));
   return reviewed?reviewedPublicUrlPolicy(this.config):null;
  }
  approvedPaidRoute(project,profile,route){
+  const publicUrl=isPublicUrlProfile(profile);
   if(!this.controlCredits.managed(project)||!reviewedPaidDns(this.config)||(profile.kind==='discovery'||isPlaygroundRef(profile))||
-   !profile.proxy_classes.includes(route.class)||route.class!=='direct'&&!profile.countries.includes(route.country))return false;
+   !profile.proxy_classes.includes(route.class)||!publicUrl&&route.class!=='direct'&&!profile.countries.includes(route.country))return false;
   const provider=route.class==='datacenter'?'oxylabs':route.provider;
-  if(isPublicUrlProfile(profile)){
-   if(!this.publicUrlPolicy(project)||!PUBLIC_URL_ROUTES.some(rule=>rule.class===route.class&&rule.country===route.country&&rule.provider===provider))return false;
+  if(publicUrl){
+   if(!this.publicUrlPolicy(project,profile)||!publicUrlRouteAllowed(profile,{...route,provider}))return false;
   }else if(!this.config.projects[project]?.v2_access_profiles?.includes(refKey(profile)))return false;
   if(!reviewedPaidCreditRoutes(this.config).some(rule=>refKey(rule.accessProfile)===refKey(profile)&&
    rule.class===route.class&&rule.country===route.country&&rule.provider===provider))return false;
@@ -216,7 +220,8 @@ export class V2Gateway{
    const {pricing,estimated_micro_usd}=this.pricing(project,profile,route,0);
    return estimated_micro_usd===0&&pricing?.provider==='oxylabs';
   }
-  return route.class!=='residential'||reviewedPaidResidentialBudget(this.config)?.provider===route.provider;
+  return route.class!=='residential'||(route.provider==='evomi'||publicUrl&&profile.version===PUBLIC_URL_V2_REF.version)&&
+   reviewedPaidResidentialBudget(this.config,route.provider)?.provider===route.provider;
  }
  residentialProvider(profile,country,project){
   return ['evomi','dataimpulse'].find(provider=>{
@@ -225,47 +230,64 @@ export class V2Gateway{
     (!this.controlCredits.managed(project)||isPlaygroundRef(profile)||this.approvedPaidRoute(project,profile,route));
   });
  }
- async paidCreditReady(project,{purchaseCredits=0,pendingLiabilityBytes=0,outstandingLiabilityBytes=null,
-  proxyClass,publicOnly=false,client=this.store.pool}={}){
-  if(!this.controlCredits.managed(project)||!reviewedPaidDns(this.config))return false;
-  const validBytes=n=>typeof n==='bigint'?n>=0n:Number.isSafeInteger(n)&&n>=0;
-  if(!Number.isSafeInteger(purchaseCredits)||purchaseCredits<0||!validBytes(pendingLiabilityBytes)||
-   outstandingLiabilityBytes!==null&&!validBytes(outstandingLiabilityBytes))return false;
-  const rules=reviewedPaidCreditRoutes(this.config);
-  if(!rules.length)return false;
-  const active=(await client.query('SELECT status FROM control_projects WHERE id=$1',[project])).rows[0];
-  if(active?.status!=='active')return false;
-  if(purchaseCredits>0&&await this.controlPaidCredits.paymentHeld(project,client))return false;
-  for(const rule of rules){
-   if(proxyClass&&rule.class!==proxyClass||purchaseCredits>0&&rule.class!=='residential')continue;
-   const key=refKey(rule.accessProfile),builtIn=key===refKey(PUBLIC_URL_REF);
-   if(publicOnly&&!builtIn)continue;
-   if(builtIn?!this.publicUrlPolicy(project):!this.config.projects[project]?.v2_access_profiles?.includes(key))continue;
-   try{
-    const profile=builtIn?publicUrlProfile():normalizeProfile(this.config.v2?.accessProfiles?.[key]);
-    if(refKey(profile)!==key)continue;
-    const registered=(await client.query("SELECT hash FROM v2_registry WHERE kind='access_profile' AND key=$1",[key])).rows[0];
-    if(registered&&registered.hash!==sha(canonical(profile)))continue;
-    const route=this.route(profile,{class:rule.class,country:rule.country,affinity:'session'},project);
-    if(!this.approvedPaidRoute(project,profile,route))continue;
-    if(route.class!=='residential')return true;
-    const {max_transfer_bytes}=quotePaidHttpCredits({route});
-    const accounted=await this.reserveResidential(client,project,null,route,max_transfer_bytes+PAID_WIRE_READ_BYTES,{
-     paid:true,includePrepaidObligations:purchaseCredits>0&&outstandingLiabilityBytes===null});
-    if(purchaseCredits===0)return true;
-    const required=BigInt(purchaseCredits)*BigInt(PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES)+BigInt(pendingLiabilityBytes)+BigInt(outstandingLiabilityBytes??accounted.prepaid_obligations);
-    const remaining=BigInt(reviewedPaidResidentialBudget(this.config).maxTotalBytes)-BigInt(accounted.total);
-    if(remaining>=required)return true;
-   }catch(error){if(!(error instanceof GatewayError))throw error;}
-  }
+ async paidCreditReady(project,options){
+  for await(const _ of this.readyPaidRoutes(project,options))return true;
   return false;
  }
- publicProfile(p,project,publicClasses=[]){
+ async *readyPaidRoutes(project,{purchaseCredits=0,pendingLiabilityBytes=0,outstandingLiabilityBytes=null,
+  proxyClass,publicOnly=false,publicVersion=PUBLIC_URL_REF.version,client=this.store.pool}={}){
+  if(!this.controlCredits.managed(project)||!reviewedPaidDns(this.config))return;
+  const validBytes=n=>typeof n==='bigint'?n>=0n:Number.isSafeInteger(n)&&n>=0;
+  if(!Number.isSafeInteger(purchaseCredits)||purchaseCredits<0||!validBytes(pendingLiabilityBytes)||
+   outstandingLiabilityBytes!==null&&!validBytes(outstandingLiabilityBytes))return;
+  const rules=reviewedPaidCreditRoutes(this.config);
+  if(!rules.length)return;
+  const active=(await client.query('SELECT status FROM control_projects WHERE id=$1',[project])).rows[0];
+  if(active?.status!=='active')return;
+  if(purchaseCredits>0&&await this.controlPaidCredits.paymentHeld(project,client))return;
+  const loaded=new Map(),residentialCapacity=new Map(),advertised=new Set();
+  for(const rule of rules){
+   const ref=rule.accessProfile,key=refKey(ref),builtIn=isPublicUrlRef(ref);
+   if(proxyClass&&rule.class!==proxyClass||publicOnly&&(!builtIn||publicVersion!==null&&ref.version!==publicVersion))continue;
+   if(purchaseCredits>0&&(rule.class!=='residential'||rule.provider!=='evomi'||builtIn&&ref.version!==PUBLIC_URL_REF.version))continue;
+   if(builtIn?!publicUrlRouteAllowed(ref,rule):!this.config.projects[project]?.v2_access_profiles?.includes(key))continue;
+   const selection=JSON.stringify([key,rule.class,rule.country]);
+   if(advertised.has(selection))continue;
+   try{
+    if(!loaded.has(key)){
+     if(builtIn&&!this.publicUrlPolicy(project,ref)){loaded.set(key,null);continue;}
+     const profile=builtIn?publicUrlProfile(ref):normalizeProfile(this.config.v2?.accessProfiles?.[key]);
+     const registered=(await client.query("SELECT hash FROM v2_registry WHERE kind='access_profile' AND key=$1",[key])).rows[0];
+     loaded.set(key,refKey(profile)===key&&(!registered||registered.hash===sha(canonical(profile)))?profile:null);
+    }
+    const profile=loaded.get(key);if(!profile)continue;
+    const route=this.route(profile,{class:rule.class,country:rule.country,affinity:'session'},project);
+    const provider=route.class==='datacenter'?'oxylabs':route.provider;
+    if(provider!==rule.provider||!this.approvedPaidRoute(project,profile,route))continue;
+    if(route.class==='residential'){
+     const {max_transfer_bytes}=quotePaidHttpCredits({route});
+     if(!residentialCapacity.has(provider))residentialCapacity.set(provider,this.reserveResidential(client,project,null,route,max_transfer_bytes+PAID_WIRE_READ_BYTES,{
+      paid:true,includePrepaidObligations:purchaseCredits>0&&outstandingLiabilityBytes===null}));
+     const accounted=await residentialCapacity.get(provider);
+     if(purchaseCredits>0){
+      const required=BigInt(purchaseCredits)*BigInt(PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES)+BigInt(pendingLiabilityBytes)+BigInt(outstandingLiabilityBytes??accounted.prepaid_obligations);
+      const remaining=BigInt(reviewedPaidResidentialBudget(this.config).maxTotalBytes)-BigInt(accounted.total);
+      if(remaining<required)continue;
+     }
+    }
+    advertised.add(selection);
+    yield {profile,route};
+   }catch(error){if(!(error instanceof GatewayError))throw error;}
+  }
+ }
+ publicProfile(p,project,publicRoutes=[]){
    const {id,version,origins,paths,method_paths,methods,headers,proxy_classes,countries,limits}=p;
    const selfService=this.controlCredits.managed(project),publicUrl=isPublicUrlProfile(p);
    const bytes=limits.max_tunnel_bytes*(limits.max_redirects+1),route_reservations=[];
-   for(const cls of publicUrl?publicClasses:proxy_classes)for(const country of cls==='direct'?[null]:countries){
-    const provider=cls==='direct'?'direct':cls==='residential'?this.residentialProvider(p,country,project):'configured_datacenter';
+   const candidates=publicUrl?publicRoutes.toSorted((a,b)=>a.class.localeCompare(b.class)||a.country.localeCompare(b.country)):
+    proxy_classes.flatMap(cls=>(cls==='direct'?[null]:countries).map(country=>({class:cls,country,
+     provider:cls==='direct'?'direct':cls==='residential'?this.residentialProvider(p,country,project):'configured_datacenter'})));
+   for(const {class:cls,country,provider} of candidates){
     if(cls==='residential'&&selfService&&!provider)continue;
     const route={class:cls,country,provider},paid=selfService&&this.approvedPaidRoute(project,p,route);
     const trial=selfService&&!publicUrl&&Object.hasOwn(reviewedCreditPolicy(this.config).weights,cls);
@@ -277,9 +299,10 @@ export class V2Gateway{
      ...(quote?{paid_credit_reservation:quote}:decision.customer_traffic_reservation?{customer_traffic_reservation:decision.customer_traffic_reservation}:{}),...(decision.pricing?{pricing:providerPricing(decision.pricing,quote)}:{})});
    }
    const classes=[...new Set(route_reservations.map(route=>route.class))];
+   const availableCountries=publicUrl&&version===PUBLIC_URL_V2_REF.version?[...new Set(route_reservations.map(route=>route.country))].sort():countries;
    const browser_probe=selfService?{enabled:false}:p.browser_probe?{...p.browser_probe,...(p.browser_probe.enabled?{route_reservations:route_reservations.map(r=>{const n=r.class==='direct'?0:p.browser_probe.max_network_bytes,decision=this.pricing(project,p,r,n,'browser');const {pricing,customer_traffic_reservation,...base}=r;return {...base,reserved_tunnel_bytes:n,estimated_micro_usd:decision.estimated_micro_usd,...(decision.customer_traffic_reservation?{customer_traffic_reservation:decision.customer_traffic_reservation}:{}),...(decision.pricing?{pricing:decision.pricing}:{})};})}:{})}:undefined;
-   return {id,version,origins,paths:paths??null,method_paths:method_paths??null,methods,headers,proxy_classes:classes,countries,limits,route_reservations,...(browser_probe?{browser_probe}:{}),...(p.kind==='discovery'?{kind:'discovery',max_paid_cost_micro_usd:0}:{}),
-    ...(publicUrl?{kind:PUBLIC_URL_KIND,transfer_limits:PUBLIC_URL_TRANSFER_LIMITS,max_daily_operations:this.publicUrlPolicy(project)?.maxDailyOperations??null}:{})};
+   return {id,version,origins,paths:paths??null,method_paths:method_paths??null,methods,headers,proxy_classes:classes,countries:availableCountries,limits,route_reservations,...(browser_probe?{browser_probe}:{}),...(p.kind==='discovery'?{kind:'discovery',max_paid_cost_micro_usd:0}:{}),
+    ...(publicUrl?{kind:PUBLIC_URL_KIND,transfer_limits:PUBLIC_URL_TRANSFER_LIMITS,max_daily_operations:this.publicUrlPolicy(project,p)?.maxDailyOperations??null}:{})};
  }
  async discoveryProfile(project,raw){
   const policy=discoveryPolicy(this.config,project);if(!policy.enabled)fail('discovery_profiles_disabled',403);
@@ -314,7 +337,7 @@ export class V2Gateway{
   if(!exact(proxy,['class','country','affinity'])||!['direct','datacenter','residential'].includes(proxy.class)||proxy.affinity!=='session')fail('capability_unsupported',409);
   if(!p.proxy_classes.includes(proxy.class))fail('proxy_class_forbidden',403);
   if(proxy.class==='direct'){if(proxy.country!==null)fail('direct_country_unverified');return {...proxy,provider:'direct',proxy_id:null};}
-  if(typeof proxy.country!=='string'||!p.countries.includes(proxy.country))fail('country_forbidden',403);
+  if(typeof proxy.country!=='string'||(isPublicUrlProfile(p)&&p.version===PUBLIC_URL_V2_REF.version?!/^[A-Z]{2}$/.test(proxy.country):!p.countries.includes(proxy.country)))fail('country_forbidden',403);
   if(proxy.class==='datacenter'){
    const route={...proxy,provider:'configured_datacenter'};
    if(isPublicUrlProfile(p)&&!this.approvedPaidRoute(project,p,route))fail('paid_credit_route_forbidden',403);
@@ -404,8 +427,9 @@ export class V2Gateway{
  async reserveResidential(c,project,session,route,bytes,{paid=false,includePrepaidObligations=false}={}){
   if(route.class!=='residential')return null;
   const settings=this.config.residential,pc=settings?.providers?.[route.provider];this.resolveProxy(route);
-  const budget=paid?reviewedPaidResidentialBudget(this.config):null;
-  if(paid&&budget?.provider!==route.provider)fail('residential_budget_unconfigured',503);
+  const globalBudget=paid?reviewedPaidResidentialBudget(this.config):null;
+  const providerBudget=paid?reviewedPaidResidentialBudget(this.config,route.provider):null;
+  if(paid&&(!globalBudget||providerBudget?.provider!==route.provider))fail('residential_budget_unconfigured',503);
   const usage=paid?
    `SELECT project,provider,accounted_tunnel_bytes AS accounted_bytes,created_at FROM v2_ledger l WHERE proxy_class='residential' AND ${paidResidentialLedgerSql}`:
    `SELECT project,provider,accounted_bytes,created_at FROM residential_usage UNION ALL
@@ -413,18 +437,21 @@ export class V2Gateway{
   const row=(await c.query(`SELECT COALESCE(sum(accounted_bytes),0) total,
    COALESCE(sum(accounted_bytes) FILTER(WHERE created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),0) daily,
    COALESCE(sum(accounted_bytes) FILTER(WHERE project=$1 AND created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),0) project_daily,
-   COALESCE(sum(accounted_bytes) FILTER(WHERE provider=$2),0) provider_total
+   COALESCE(sum(accounted_bytes) FILTER(WHERE provider=$2),0) provider_total,
+   COALESCE(sum(accounted_bytes) FILTER(WHERE provider=$2 AND created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'),0) provider_daily
    ${includePrepaidObligations?`,(${outstandingPaidCreditLiabilitySql}) AS prepaid_obligations`:''} FROM (${usage}) u`,[project,route.provider])).rows[0];
-  const limits=budget?[[Number(row.total),budget.maxTotalBytes],[Number(row.daily),budget.maxDailyBytes]]:[
+  const limits=globalBudget?[[Number(row.total),globalBudget.maxTotalBytes],[Number(row.daily),globalBudget.maxDailyBytes]]:[
    [Number(row.total)+Object.values(settings.providers).reduce((sum,p)=>sum+(p.priorReservedBytes??0),0),settings.maxTotalBytes],
    [Number(row.daily),settings.maxDailyBytes],
    [Number(row.project_daily),this.config.projects[project].maxDailyResidentialBytes??settings.maxDailyBytes],
    [Number(row.provider_total)+(pc.priorReservedBytes??0),pc.maxTotalBytes]
   ];
-  for(const [used,cap]of limits)if(used+bytes>positive(cap,'residential_budget_unconfigured'))fail('residential_budget_exhausted',429);
+  if(paid&&route.provider!=='evomi')limits.push([Number(row.provider_total),providerBudget.maxTotalBytes],[Number(row.provider_daily),providerBudget.maxDailyBytes]);
+  const remaining=Math.min(...limits.map(([used,cap])=>positive(cap,'residential_budget_unconfigured')-used));
+  if(bytes>remaining)fail('residential_budget_exhausted',429);
   if((await c.query("SELECT 1 FROM attempts WHERE provider=$1 AND error=ANY($2::text[]) UNION ALL SELECT 1 FROM v2_operations o JOIN v2_ledger l ON l.operation=o.id WHERE l.provider=$1 AND o.error=ANY($2::text[]) LIMIT 1",[route.provider,['provider_account_rejected','sensitive_provider_response','cost_overrun']])).rowCount)fail('residential_provider_held',409);
-  if(!budget&&(!Number.isSafeInteger(pc.microUsdPerGB)||pc.microUsdPerGB<0))fail('residential_rate_unconfigured',503);
-  return row;
+  if(!paid&&(!Number.isSafeInteger(pc.microUsdPerGB)||pc.microUsdPerGB<0))fail('residential_rate_unconfigured',503);
+  return {...row,remaining};
  }
  async unifiedAdmission(c,project){
   if(!this.controlCredits.managed(project))return false;
@@ -438,13 +465,13 @@ export class V2Gateway{
   const weight=this.controlCredits.quote({profile,route:reservation.route,transport,estimatedMicroUsd});
   return this.controlPaidCredits.reserveFixed(c,{...reservation,weight});
  }
- async checkDailyOperationQuota(c,project,{publicUrl=false,unified=false}={}){
+ async checkDailyOperationQuota(c,project,{publicUrl=null,unified=false}={}){
   if(unified&&!publicUrl)return;
   const usage=(await c.query(`SELECT count(*)::int AS n FROM v2_operations o JOIN v2_sessions s ON s.id=o.session_id
    WHERE o.project=$1 AND o.created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-   AND ((s.policy->>'id'=$2) IS TRUE)=$3`,[project,PUBLIC_URL_ID,publicUrl])).rows[0];
+   AND ((s.policy->>'id'=$2) IS TRUE)=$3`,[project,PUBLIC_URL_ID,!!publicUrl])).rows[0];
   if(publicUrl){
-   const policy=this.publicUrlPolicy(project);if(!policy)fail('paid_credit_route_forbidden',403);
+   const policy=this.publicUrlPolicy(project,publicUrl);if(!policy)fail('paid_credit_route_forbidden',403);
    if(usage.n>=policy.maxDailyOperations)fail('paid_public_url_daily_quota_exhausted',429);
   }else{
    const entitlement=this.entitlement(project);if(entitlement.mode==='metered'&&usage.n>=entitlement.max_daily_operations)fail('client_quota_exhausted',429);
@@ -468,7 +495,7 @@ export class V2Gateway{
   SELECT COALESCE(sum(GREATEST(stored.bytes,active.bytes)),0) AS n FROM stored FULL JOIN active ON stored.operation=active.id`)).rows[0];
   if(Number(n)+bytes>(this.config.v2?.maxArtifactBytes??256*1024*1024))fail('artifact_quota',507);
  }
- async operation(project,raw,identity){
+ async operation(project,raw,identity,{automaticTransfer=true}={}){
   const keyId=this.controlCredits.keyId(project,identity);
   if(!exact(raw,['idempotency_key','session_id','request','recipe','max_estimated_micro_usd','max_transfer_mb','max_credits','retry']))fail('operation_invalid');key(raw.idempotency_key);uuid(raw.session_id);
   if(raw.retry!==undefined&&typeof raw.retry!=='boolean')fail('request_invalid');
@@ -508,9 +535,19 @@ export class V2Gateway{
     retryPlan={requested:true,eligible:!!nextRoute,next_route:nextRoute,identity_binding:nativeRetryIdentityBinding(this.config,route),stop_reason:nextRoute?null:'retry_route_unavailable'};
     Object.assign(session,locked);
    }
+   let residentialCapacity;
    if(paid){
     if(!this.approvedPaidRoute(project,p,route))fail('paid_credit_route_forbidden',403);
-    paidQuote=quotePaidHttpCredits({route,maxTransferMb:raw.max_transfer_mb,maxCredits:raw.max_credits});
+    if(publicUrl&&automaticTransfer&&raw.max_transfer_mb===undefined){
+     let maxBytes=Math.min(PUBLIC_URL_MAX_BODY_BYTES,p.limits.max_session_encoded_bytes-Number(locked.encoded_bytes));
+     if(maxBytes<PUBLIC_URL_TRANSFER_LIMITS.min_transfer_mb*1_000_000)fail('session_limit',429);
+     if(route.class==='residential'){
+      const {max_transfer_bytes}=quotePaidHttpCredits({route});
+      residentialCapacity=await this.reserveResidential(c,project,session,route,max_transfer_bytes+PAID_WIRE_READ_BYTES,{paid:true});
+      maxBytes=Math.min(maxBytes,residentialCapacity.remaining-PAID_WIRE_READ_BYTES);
+     }
+     paidQuote=await this.controlPaidCredits.quoteAutomaticHttp(c,{...attribution,route,maxCredits:raw.max_credits,maxBytes});
+    }else paidQuote=quotePaidHttpCredits({route,maxTransferMb:raw.max_transfer_mb,maxCredits:raw.max_credits});
    }
    if(publicUrl)publicBodyLimit=Math.min(PUBLIC_URL_MAX_BODY_BYTES,paidQuote.max_transfer_bytes);
    const reservedBytes=publicBodyLimit??p.limits.max_encoded_bytes*hops;
@@ -520,13 +557,13 @@ export class V2Gateway{
    if(retryPlan?.eligible)reservationRequests=Math.min(hops+1,p.limits.max_requests-locked.requests);
    if(locked.requests+reservationRequests>p.limits.max_requests||reservationRequests<1||Number(locked.encoded_bytes)+reservedBytes>p.limits.max_session_encoded_bytes)fail('session_limit',429);
    if(!publicUrl)unified=await this.unifiedAdmission(c,project);
-   await this.checkDailyOperationQuota(c,project,{publicUrl,unified});
+   await this.checkDailyOperationQuota(c,project,{publicUrl:publicUrl?p:null,unified});
    const active=(await c.query("SELECT count(*)::int n FROM v2_operations WHERE state IN ('reserved','running')")).rows[0].n+Number((await c.query("SELECT count(*) AS n FROM attempts WHERE state IN ('reserved','sent')")).rows[0].n);
    if(active>=(this.config.maxConcurrentRequests??4))fail('capacity_wait',503);
    const artifactBytes=publicUrl?Math.ceil((reservedBytes+publicBodyLimit)*1.4)+hops*512*1024:
     Math.ceil((reservedBytes+p.limits.max_decoded_bytes*hops)*1.4)+65536;
    await this.reserveArtifactCapacity(c,artifactBytes);
-   await this.reserveResidential(c,project,session,route,reservedTunnel,{paid});
+   if(!residentialCapacity)await this.reserveResidential(c,project,session,route,reservedTunnel,{paid});
    const estimated=pricingDecision.estimated_micro_usd;
    if(raw.max_estimated_micro_usd!==undefined){if(estimated===null)fail('cost_estimate_unavailable',409);if(estimated>raw.max_estimated_micro_usd||!paid&&(pricingDecision.customer_traffic_reservation?.max_estimated_micro_usd??0)>raw.max_estimated_micro_usd)fail('cost_ceiling_exceeded',429);}
    await c.query('INSERT INTO v2_operations(id,project,key_id,key,session_id,input_hash,input,recipe) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[id,project,keyId,raw.idempotency_key,session.id,hash,this.sealer.seal(raw),recipe]);

@@ -170,6 +170,23 @@ describe('same-origin control bridge',()=>{
   upstream=()=>new Response('{}',{headers:{'Content-Type':'application/json','Content-Length':String(CONTROL_RESPONSE_LIMIT+1)}});expect((await send()).status).toBe(502);
   upstream=()=>new Response(new ReadableStream({start(controller){controller.enqueue(new Uint8Array(CONTROL_RESPONSE_LIMIT+1));controller.close();}}),{headers:{'Content-Type':'application/json'}});expect((await send()).status).toBe(502);
  });
+ it('passes a full 20 MB base64 fetch result within its scoped response budget',async()=>{
+  const encodedLength=4*Math.ceil(20_000_000/3);
+  upstream=()=>new Response(new ReadableStream({start(controller){
+   const encoder=new TextEncoder(),chunk=encoder.encode('A'.repeat(1024*1024));
+   controller.enqueue(encoder.encode('{"data":{"body_base64":"'));
+   for(let remaining=encodedLength;remaining>0;remaining-=chunk.length)controller.enqueue(chunk.subarray(0,remaining));
+   controller.enqueue(encoder.encode('"}}'));
+   controller.close();
+  }}),{headers:{'Content-Type':'application/json'}});
+  const path=`/projects/${project}/fetch`;
+  const result=await send(path,{method:'POST',body:'{}'});
+  expect(result.status).toBe(200);
+  expect(result.headers.get('Cache-Control')).toBe('no-store');
+  expect((await result.json() as {data:{body_base64:string}}).data.body_base64.length).toBe(encodedLength);
+  expect((await send(`${path}/saved`)).status).toBe(200);
+  expect((await send('/session')).status).toBe(502);
+ });
  it('times out a slow response body without replaying a submission',async()=>{
   vi.useFakeTimers();upstream=()=>new Response(new ReadableStream({start(){}}),{headers:{'Content-Type':'application/json'}});
   const pending=send('/projects',{method:'POST',body:'{}'});await vi.advanceTimersByTimeAsync(CONTROL_TIMEOUT_MS+1);const result=await pending;

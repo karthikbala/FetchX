@@ -1,9 +1,13 @@
 import {ID,fail} from './policy.mjs';
 import {lockActiveCreditProject} from './control-credits.mjs';
 import {PAID_WIRE_READ_BYTES} from './paid-wire-limits.mjs';
+import {PUBLIC_URL_V2_REF,publicUrlRouteAllowed} from './v2-public-url.mjs';
 
 const BYTES_PER_MB=1_000_000;
+const TRANSFER_STEP_BYTES=250_000;
 const MAX_TRANSFER_BYTES=20*BYTES_PER_MB;
+const MAX_LEGACY_PAID_ROUTES=100;
+const MAX_REGIONAL_PAID_ROUTES=3*249;
 const TARIFF_VERSION='paid-http-v1';
 const FIXED_TARIFF_VERSION='playground-fixed-v1';
 const MAX_FIXED_CREDITS=1_000_000;
@@ -58,10 +62,20 @@ export function quotePaidHttpCredits({route,maxTransferMb,maxCredits}){
 export function reviewedPaidCreditRoutes(config){
  const policy=config.controlPlane?.paidCreditPolicy;
  if(config.controlPlane?.enabled!==true||policy?.reviewed!==true||!matches(policy.version,ID)||
-  !Array.isArray(policy.routes)||policy.routes.length>100)return [];
+  !Array.isArray(policy.routes)||policy.routes.length>MAX_LEGACY_PAID_ROUTES+MAX_REGIONAL_PAID_ROUTES)return [];
+ let legacy=0;
+ const regional=new Set();
  const valid=policy.routes.every(route=>{
   if(!route||!matches(route.accessProfile?.id,ID)||Object.keys(route.accessProfile).length!==2||
    !Number.isSafeInteger(route.accessProfile.version)||route.accessProfile.version<1)return false;
+  if(route.accessProfile.id===PUBLIC_URL_V2_REF.id&&route.accessProfile.version===PUBLIC_URL_V2_REF.version){
+   if(regional.size>=MAX_REGIONAL_PAID_ROUTES||!publicUrlRouteAllowed(PUBLIC_URL_V2_REF,route))return false;
+   const key=`${route.class}:${route.country}:${route.provider}`;
+   if(regional.has(key))return false;
+   regional.add(key);
+   return true;
+  }
+  if(++legacy>MAX_LEGACY_PAID_ROUTES)return false;
   if(route.class==='direct')return route.country===null&&route.provider==='direct';
   if(!matches(route.country,/^[A-Z]{2}$/))return false;
   if(route.class==='datacenter')return route.provider==='oxylabs';
@@ -276,7 +290,7 @@ function exactNumber(value){
 
 function validateQuote(quote){
  const bytes=quote?.max_transfer_bytes;
- if(!validAmount(bytes)||!TARIFFS.has(quote.route_class)||bytes<250_000||bytes>MAX_TRANSFER_BYTES||bytes%250_000!==0)
+ if(!validAmount(bytes)||!TARIFFS.has(quote.route_class)||bytes<TRANSFER_STEP_BYTES||bytes>MAX_TRANSFER_BYTES||bytes%TRANSFER_STEP_BYTES!==0)
   fail('paid_credit_reservation_invalid',503);
  const expected=quotePaidHttpCredits({route:quote.route_class,maxTransferMb:bytes/BYTES_PER_MB});
  if(Object.keys(quote).length!==Object.keys(expected).length||
@@ -290,6 +304,7 @@ const operationView=row=>row?{
  unit:'credits',basis:fixed(row)?'prepaid_logical_operation_credits':'prepaid_http_wire_credits',state:row.state,
  reserved_credits:exactNumber(row.reserved_credits),used_credits:row.used_credits===null?null:exactNumber(row.used_credits),
  billable_bytes:row.billable_bytes===null?null:exactNumber(row.billable_bytes),settlement_basis:row.settlement_basis,
+ ...(!fixed(row)?{billable_blocks:row.billable_bytes===null?null:Math.ceil(Number(row.billable_bytes)/Number(row.block_bytes))}:{}),
  policy_version:row.policy_version,tariff_version:row.tariff_version,route_class:row.route_class,
  block_bytes:nullableNumber(row.block_bytes),credits_per_block:nullableNumber(row.credits_per_block),max_transfer_bytes:nullableNumber(row.max_transfer_bytes)
 }:null;
@@ -379,6 +394,26 @@ export class ControlPaidCredits{
    ON CONFLICT(account_id,mode,hold_id) DO UPDATE SET cleared_at=COALESCE(paid_credit_payment_holds.cleared_at,EXCLUDED.cleared_at)
    WHERE paid_credit_payment_holds.project=EXCLUDED.project`,[project,accountId,mode,holdId,active]);
   if(!result.rowCount)fail('paid_credit_payment_hold_conflict',409);
+ }
+
+ // After checking idempotency, the caller quotes and reserves in the same
+ // transaction so concurrent admissions cannot quote against the same credits.
+ async quoteAutomaticHttp(c,{project,keyId,userId,requireSoleKey,route,maxCredits,maxBytes}){
+  if(!managed(project))fail('paid_credit_reservation_invalid',503);
+  const {block_bytes,credits_per_block,reserved_credits}=quotePaidHttpCredits({
+   route,maxTransferMb:TRANSFER_STEP_BYTES/BYTES_PER_MB,maxCredits
+  });
+  if(maxBytes!==undefined&&!Number.isSafeInteger(maxBytes))fail('residential_budget_unconfigured',503);
+  await lockActiveCreditProject(c,project,keyId,{userId,requireSoleKey});
+  await lockAccount(c,project);
+  const {available,payment_hold}=await this.usage(project,c);
+  if(payment_hold)fail('paid_credit_payment_hold',409);
+  if(available<reserved_credits)fail('paid_credit_balance_exhausted',429);
+  if(maxBytes!==undefined&&maxBytes<TRANSFER_STEP_BYTES)fail('residential_budget_exhausted',429);
+  const affordableBlocks=Math.floor(Math.min(available,maxCredits??available)/credits_per_block);
+  const cappedBytes=Math.min(MAX_TRANSFER_BYTES,maxBytes??MAX_TRANSFER_BYTES,affordableBlocks*block_bytes);
+  const bytes=Math.floor(cappedBytes/TRANSFER_STEP_BYTES)*TRANSFER_STEP_BYTES;
+  return quotePaidHttpCredits({route,maxTransferMb:bytes/BYTES_PER_MB,maxCredits});
  }
 
  async reserve(c,{project,operation,keyId,userId,requireSoleKey,quote}){

@@ -10,13 +10,13 @@ const user={id:'user-one',email:'synthetic@example.com',token_hash:'private-user
 const metadata={id:project,name:'Synthetic project',status:'active',template_hash:'private-template-hash'};
 const key={id:operation,project,name:'Synthetic key',prefix:'fxk_safe',scopes:['fetch:read'],token_hash:'private-token-hash'};
 const envelope={success:false,state:'unknown',operation_id:operation,idempotency_key:'saved',data:null,retry:{safe_to_retry:false,lookup_url:'/v2/fetch/saved'}};
-async function fixture(options={}){
+async function fixture({fetchResult=envelope,...options}={}){
  const calls=[],queries=[];let revoked=false;
  const identity={mailConfigured:true,requestCode:async data=>{calls.push(['code',data]);return {challenge_id:operation,expires_in:600,accepted:true};},verifyCode:async()=>({user,session:{token,expires_at:'2030-01-01T00:00:00Z'}}),session:async value=>{if(value!==token||revoked)throw new GatewayError('unauthorized',401);return {user,session:{id:operation}};},revokeSession:async()=>{revoked=true;},projects:async()=>[metadata],createProject:async()=>metadata,requireProject:async(uid,id)=>{calls.push(['member',uid,id]);if(id!==project)throw new GatewayError('project_not_found',404);return metadata;},hydrateProject:async id=>calls.push(['hydrate',id]),keys:async()=>[key],createKey:async()=>({...key,token:'fxk_'+'k'.repeat(43)}),rotateKey:async()=>({...key,token:'fxk_'+'r'.repeat(43)}),revokeKey:async()=>calls.push(['revoke'])};
  const pool={query:async(sql,args)=>{queries.push({sql,args});if(sql.includes('percentile_cont'))return {rows:[{completed_operations:1,mean:400,p50:400,p95:400}]};return {rows:[{id:operation,state:'completed',error:null,created_at:'2026-11-01T00:00:00Z',finished_at:'2026-11-01T00:00:00.400Z',profile_id:'source',profile_version:1,provider:'direct',proxy_class:'direct',summary:{source_http_status:200,physical_requests:1,decoded_bytes:12,private_capture:'secret source URL',diagnostics:{private:'secret'}}}]};}};
  identity.authMethods=async()=>({github:false});
  const v2={store:{pool},recentOperations:async(id,raw)=>{queries.push({args:[id,Number(raw.limit??25)]});return {operations:[{id:operation,state:'completed',error:null,created_at:'2026-11-01T00:00:00Z',finished_at:'2026-11-01T00:00:00.400Z',latency_ms:400,access_profile:{id:'source',version:1},routing:{class:'direct',country:null,provider:'direct',private:'secret'},private_capture:'secret source URL',diagnostics:{private:'secret'},source_http_status:200}]};},capabilities:async()=>({transports:{http:true,browser:true},proxy_classes:{direct:true,datacenter:true,residential:true},features:{browser_network_probe:true}}),profiles:async()=>({access_profiles:[{id:'source',version:1,proxy_classes:['direct','residential'],route_reservations:[{class:'direct'},{class:'residential'}],browser_probe:{enabled:true}}]}),usage:async()=>({outcomes:{source_successes:1}})};
- const app=Fastify();app.decorate('v2',v2);app.decorate('publicFetch',{fetch:async(id,body,identity)=>{calls.push(['fetch',id,body,identity]);if(body.render)throw new GatewayError('capability_unsupported',409);return envelope;},lookup:async(id,saved)=>{calls.push(['lookup',id,saved]);return envelope;},lookupOperation:async(id,op)=>{calls.push(['lookupOperation',id,op]);return envelope;}});
+ const app=Fastify();app.decorate('v2',v2);app.decorate('publicFetch',{fetch:async(id,body,identity,options)=>{calls.push(['fetch',id,body,identity,options]);if(body.render)throw new GatewayError('capability_unsupported',409);return fetchResult;},lookup:async(id,saved)=>{calls.push(['lookup',id,saved]);return fetchResult;},lookupOperation:async(id,op)=>{calls.push(['lookupOperation',id,op]);return fetchResult;}});
  if(options.testRender){
   const rendered={...envelope,execution:'browser'};
   v2.readOperation=async(id,op)=>{calls.push(['readOperation',id,op]);return {id:op,execution:'browser'};};
@@ -76,10 +76,34 @@ test('control fetch uses trusted console identity and recovery reads retained st
  const f=await fixture();t.after(()=>f.app.close());
  const submitted=await f.send('POST',`/projects/${project}/fetch`,{idempotency_key:'saved'});
  assert.equal(submitted.json().state,'unknown');assert.equal(submitted.json().retry.safe_to_retry,false);assert.equal(submitted.json().retry.lookup_url,`/api/control/projects/${project}/fetch/saved`);
- assert.deepEqual(f.calls.find(c=>c[0]==='fetch')[3],{keyId:'console'});
+ assert.deepEqual(f.calls.find(c=>c[0]==='fetch'),['fetch',project,{idempotency_key:'saved'},{keyId:'console'},{automaticTransfer:false}]);
  await f.send('GET',`/projects/${project}/fetch/saved`);await f.send('GET',`/projects/${project}/requests/${operation}`);
  assert.equal(f.calls.filter(c=>c[0]==='fetch').length,1);assert.equal(f.calls.filter(c=>c[0]==='lookup').length,1);
+ const automatic=await f.send('POST',`/projects/${project}/fetch`,{idempotency_key:'automatic',automatic_transfer:true});
+ assert.equal(automatic.statusCode,200,automatic.body);
+ assert.deepEqual(f.calls.filter(c=>c[0]==='fetch').at(-1),['fetch',project,{idempotency_key:'automatic'},{keyId:'console'},{automaticTransfer:true}]);
+ for(const value of [false,null,'true',1,{}]){
+  const invalid=await f.send('POST',`/projects/${project}/fetch`,{idempotency_key:'invalid',automatic_transfer:value});
+  assert.equal(invalid.statusCode,400,invalid.body);assert.equal(invalid.json().error.code,'request_invalid');
+ }
+ assert.equal(f.calls.filter(c=>c[0]==='fetch').length,2);
  const unsupported=await f.send('POST',`/projects/${project}/fetch`,{idempotency_key:'render',render:true});assert.equal(unsupported.statusCode,409);assert.equal(unsupported.json().error.code,'capability_unsupported');assert.equal(unsupported.json().supported.render,false);
+});
+
+test('control returns a bounded text preview with complete bytes on HTTP submissions and recovery',async t=>{
+ const first='a'.repeat(31_999),text=first+'😀'+'b'.repeat(1_000_000),body_base64=Buffer.from(text).toString('base64');
+ const data={content_type:'text/plain',text,body_base64},f=await fixture({fetchResult:{...envelope,data}});
+ t.after(()=>f.app.close());
+ for(const [method,path,payload] of [
+  ['POST','/fetch',{idempotency_key:'saved',automatic_transfer:true}],['GET','/fetch/saved'],['GET',`/requests/${operation}`]
+ ]){
+  const response=await f.send(method,`/projects/${project}${path}`,payload);
+  assert.equal(response.statusCode,200);
+  const result=response.json();
+  assert.equal(result.data.text,null);assert.equal(result.data.text_preview,first);assert.equal(result.data.text_is_preview,true);
+  assert.equal(result.data.body_base64,body_base64);assert.equal(result.data.content_type,'text/plain');
+ }
+ assert.equal(data.text,text);assert.equal(f.calls.filter(c=>c[0]==='fetch').length,1);
 });
 
 test('control browser routes forward only named attribution and recover typed retained operations',async t=>{

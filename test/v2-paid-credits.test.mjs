@@ -201,8 +201,8 @@ test('paid public fetch reserves the shared wire ceiling and separates customer 
     return {status:redirect?302:200,headers:{'content-encoding':'gzip',...(redirect?{location:'/compressed-final'}:{})},
      encoded:compressedRedirectBody,wire_bytes:wire,wire_bytes_lower_bound:wire};
    }
-   if(['/decoded-over-default','/decoded-over-hard-max','/expansion-limit'].includes(path)){
-    const sizes={'/decoded-over-default':1_100_000,'/decoded-over-hard-max':20_000_001,'/expansion-limit':50_000};
+   if(['/decoded-over-cap','/decoded-over-hard-max','/expansion-limit'].includes(path)){
+    const sizes={'/decoded-over-cap':1_100_000,'/decoded-over-hard-max':20_000_001,'/expansion-limit':50_000};
     const encoded=gzipSync(Buffer.alloc(sizes[path])),wire=encoded.length+1200;
     return {status:200,headers:{'content-encoding':'gzip'},encoded,wire_bytes:wire,wire_bytes_lower_bound:wire};
    }
@@ -240,7 +240,7 @@ test('paid public fetch reserves the shared wire ceiling and separates customer 
   proxies.pop();
   assert.deepEqual(proxies,originalProxies);
   await assert.rejects(request('no-balance'),{code:'paid_credit_balance_exhausted'});
-  await assert.rejects(request('too-few',{proxy:res,max_credits:4}),{code:'max_credits_exceeded'});
+  await assert.rejects(request('too-few',{proxy:res,max_transfer_mb:.25,max_credits:4}),{code:'max_credits_exceeded'});
   await assert.rejects(request('private-ip',{url:'https://127.0.0.1/'}),{code:'destination_rejected'});
   await assert.rejects(request('credentials',{headers:{authorization:'Basic dGVzdA=='}}),{code:'credential_scope_rejected'});
   await assert.rejects(request('retry',{retry:true}),{code:'paid_credit_retry_unsupported'});
@@ -268,6 +268,7 @@ test('paid public fetch reserves the shared wire ceiling and separates customer 
   await assert.rejects(request('redirect',{...fields,max_credits:21}),{code:'idempotency_conflict'});
   mode='res-step';
   const residential=await request('res-step',{proxy:res,max_transfer_mb:.5});
+  assert.equal(residential.usage.accounting.paid_credits.billable_blocks,2);
   assert.equal(residential.usage.accounting.paid_credits.used_credits,10);
   assert.equal(dnsCalls.at(-1).proxy,targetCalls.at(-1).proxy);
   mode='mixed';
@@ -277,9 +278,14 @@ test('paid public fetch reserves the shared wire ceiling and separates customer 
   assert.equal(targetCalls.length,targetsBefore);
   assert.equal((await store.pool.query('SELECT state FROM v2_ledger WHERE operation=$1',[mixed.operation_id])).rows[0].state,'unreconciled');
   mode='source-error';
-  assert.equal((await request('source-error')).usage.accounting.paid_credits.used_credits,1);
+  const sourceError=await request('source-error');
+  assert.equal(sourceError.usage.accounting.paid_credits.max_transfer_bytes,20_000_000);
+  assert.equal(sourceError.usage.accounting.paid_credits.reserved_credits,20);
+  assert.equal(sourceError.usage.accounting.paid_credits.billable_blocks,1);
+  assert.equal(sourceError.usage.accounting.paid_credits.used_credits,1);
   mode='cap';
-  const capped=await request('cap',{proxy:res});
+  const residentialCap={proxy:res,max_transfer_mb:.25};
+  const capped=await request('cap',residentialCap);
   assert.equal(capped.error.code,'max_transfer_bytes_exceeded');
   assert.equal(capped.usage.accounting.paid_credits.settlement_basis,'confirmed_cap');
   assert.equal(capped.usage.accounting.paid_credits.used_credits,5);
@@ -287,10 +293,10 @@ test('paid public fetch reserves the shared wire ceiling and separates customer 
   assert.equal(capped.error.details.next,undefined);
   assert.equal(capped.retry.next_action,'recover_first');
   mode='unknown';
-  const uncertain=await request('unknown',{proxy:res});
+  const uncertain=await request('unknown',residentialCap);
   assert.equal(uncertain.state,'unknown');
   assert.equal(uncertain.usage.accounting.paid_credits.state,'held');
-  assert.equal((await request('unknown',{proxy:res})).operation_id,uncertain.operation_id);
+  assert.equal((await request('unknown',residentialCap)).operation_id,uncertain.operation_id);
   mode='internal';
   const internal=await request('internal');
   assert.equal(internal.usage.accounting.paid_credits.used_credits,0);
@@ -314,10 +320,10 @@ test('paid public fetch reserves the shared wire ceiling and separates customer 
   config.controlPlane.paidCreditPolicy.publicUrl.maxDailyOperations=20;
   mode='normal';
   const fileFields={url:'https://public.sample.net/two-megabytes'};
-  const defaultFile=await request('large-default',fileFields);
-  assert.equal(defaultFile.error.code,'max_transfer_bytes_exceeded');
-  assert.match(defaultFile.error.message,/max_transfer_mb.*reserves credits/);
-  assert.deepEqual(defaultFile.error.details,{max_transfer_mb:1,max_allowed_transfer_mb:20,reserved_credits:1,
+  const cappedFile=await request('large-capped',{...fileFields,max_transfer_mb:1});
+  assert.equal(cappedFile.error.code,'max_transfer_bytes_exceeded');
+  assert.match(cappedFile.error.message,/max_transfer_mb.*reserves credits/);
+  assert.deepEqual(cappedFile.error.details,{max_transfer_mb:1,max_allowed_transfer_mb:20,reserved_credits:1,
    next:{max_transfer_mb:1.25,max_credits:2,requires_new_idempotency_key:true}});
   const largerFields={...fileFields,max_transfer_mb:2.25,max_credits:3};
   const larger=await request('large-file',largerFields);
@@ -337,12 +343,12 @@ test('paid public fetch reserves the shared wire ceiling and separates customer 
   assert.equal(targetCalls.length,afterLarge);
   await assert.rejects(request('large-file',{...largerFields,max_transfer_mb:2.5}),{code:'idempotency_conflict'});
 
-  const decoded=await request('decoded-over-default',{url:'https://public.sample.net/decoded-over-default'});
+  const decoded=await request('decoded-over-cap',{url:'https://public.sample.net/decoded-over-cap',max_transfer_mb:1});
   assert.equal(decoded.error.code,'decoded_body_limit');
   assert.equal(decoded.error.details.next.max_transfer_mb,1.25);
   assert.equal(decoded.data.body_base64,null);
   assert.equal(decoded.usage.accounting.paid_credits.used_credits,1);
-  const aggregate=await request('aggregate-decoded',{url:'https://public.sample.net/compressed-redirect'});
+  const aggregate=await request('aggregate-decoded',{url:'https://public.sample.net/compressed-redirect',max_transfer_mb:1});
   assert.equal(aggregate.error.code,'decoded_body_limit');
   assert.deepEqual(aggregate.artifacts.map(artifact=>artifact.decoded_bytes),[600_000,null]);
   const hardDecoded=await request('decoded-over-hard-max',{url:'https://public.sample.net/decoded-over-hard-max',max_transfer_mb:20});

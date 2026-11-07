@@ -8,13 +8,36 @@ import {fileURLToPath} from 'node:url';
 import {Store} from '../src/store.mjs';
 import {Gateway} from '../src/gateway.mjs';
 import {sha} from '../src/crypto.mjs';
-import {providerProxy,residentialPolicy,routePlan,residentialStatus,reconcileResidential} from '../src/residential.mjs';
+import {providerProxy,residentialPolicy,routePlan,residentialStatus,reconcileResidential,reviewedPaidResidentialBudget} from '../src/residential.mjs';
 import {checkBrowserTier} from '../src/browser.mjs';
 import {connectRelay} from '../src/connect-relay.mjs';
 import http from 'node:http';
 const base={hosts:['source.example'],methods:['GET'],headers:['cookie'],country:'US',maxConcurrent:1,maxRequests:12,maxInputBytes:1024,maxResponseBytes:1024,maxBytes:20000,ttlSeconds:120,minIntervalMs:0,maxFallbackCredits:0,maxAttemptBytes:1000,maxResidentialBytes:4000};
 const provider={enabled:true,username:'private-user',password:'private-pass',maxTotalBytes:100000,microUsdPerGB:1000000};
 const settings={defaultRouting:'residential-v1',browser:{defaultEngine:'cloakbrowser'},residential:{maxDailyBytes:100000,maxTotalBytes:100000,providers:{evomi:{...provider},dataimpulse:{...provider}}}};
+test('DataImpulse paid residential budget requires a reviewed Evomi budget and stays within its limits',()=>{
+ const evomi={reviewed:true,provider:'evomi',maxTotalBytes:10_000,maxDailyBytes:1_000,microUsdPerGB:1_000_000};
+ const dataimpulse={...evomi,provider:'dataimpulse',maxTotalBytes:5_000,maxDailyBytes:500};
+ const policy={reviewed:true,residentialBudget:evomi};
+ const config={controlPlane:{enabled:true,paidCreditPolicy:policy}};
+ const get=()=>reviewedPaidResidentialBudget(config,'dataimpulse');
+ assert.equal(get(),null);
+ policy.dataImpulseResidentialBudget=dataimpulse;
+ assert.equal(get(),dataimpulse);
+ assert.equal(reviewedPaidResidentialBudget(config),evomi);
+ assert.equal(reviewedPaidResidentialBudget(config,'evomi'),evomi);
+ assert.equal(reviewedPaidResidentialBudget(config,'unknown'),null);
+ for(const patch of [{reviewed:false},{provider:'evomi'},{maxTotalBytes:10_001},{maxDailyBytes:1_001},
+  {maxTotalBytes:499},{maxTotalBytes:'5000'},{maxDailyBytes:0},{maxDailyBytes:500.5},{microUsdPerGB:990_000},{extra:true}]){
+  policy.dataImpulseResidentialBudget={...dataimpulse,...patch};
+  assert.equal(get(),null,JSON.stringify(patch));
+ }
+ policy.dataImpulseResidentialBudget=Object.create(dataimpulse);
+ assert.equal(get(),null);
+ policy.dataImpulseResidentialBudget=dataimpulse;
+ policy.residentialBudget={...evomi,reviewed:false};
+ assert.equal(get(),null);
+});
 test('new profile defaults, native/browser ladder and sticky country syntax',()=>{
  const p=residentialPolicy(base,settings);assert.equal(p.routingPolicy,'residential-v1');
  assert.deepEqual(routePlan(p).map(r=>r.provider),['evomi','dataimpulse']);

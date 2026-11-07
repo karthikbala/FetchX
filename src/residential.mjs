@@ -44,13 +44,24 @@ export const paidResidentialLedgerSql=`EXISTS (
  AND e.detail->'paid_credit_quote'->>'route_class'='residential'
 )`;
 
-export function reviewedPaidResidentialBudget(config){
- const budget=config.controlPlane?.paidCreditPolicy?.residentialBudget;
- if(config.controlPlane?.enabled!==true||config.controlPlane?.paidCreditPolicy?.reviewed!==true||
-  budget?.reviewed!==true||budget.provider!=='evomi'||budget.microUsdPerGB!==1_000_000||
-  Object.keys(budget).some(key=>!['reviewed','provider','maxTotalBytes','maxDailyBytes','microUsdPerGB'].includes(key))||
-  !Number.isSafeInteger(budget.maxTotalBytes)||budget.maxTotalBytes<1||budget.maxTotalBytes>60_000_000_000||
-  !Number.isSafeInteger(budget.maxDailyBytes)||budget.maxDailyBytes<1||budget.maxDailyBytes>Math.min(budget.maxTotalBytes,1_000_000_000))return null;
+const paidResidentialBudgetKeys=['reviewed','provider','maxTotalBytes','maxDailyBytes','microUsdPerGB'];
+function validPaidResidentialBudget(budget,provider,maxTotalBytes,maxDailyBytes){
+ return budget?.reviewed===true&&budget.provider===provider&&budget.microUsdPerGB===1_000_000&&
+  Object.keys(budget).every(key=>paidResidentialBudgetKeys.includes(key))&&
+  Number.isSafeInteger(budget.maxTotalBytes)&&budget.maxTotalBytes>=1&&budget.maxTotalBytes<=maxTotalBytes&&
+  Number.isSafeInteger(budget.maxDailyBytes)&&budget.maxDailyBytes>=1&&budget.maxDailyBytes<=Math.min(budget.maxTotalBytes,maxDailyBytes);
+}
+
+export function reviewedPaidResidentialBudget(config,provider='evomi'){
+ const control=config.controlPlane,policy=control?.paidCreditPolicy;
+ if(control?.enabled!==true||policy?.reviewed!==true)return null;
+ const shared=policy.residentialBudget;
+ if(!validPaidResidentialBudget(shared,'evomi',60_000_000_000,1_000_000_000))return null;
+ if(provider==='evomi')return shared;
+ if(provider!=='dataimpulse')return null;
+ const budget=policy.dataImpulseResidentialBudget;
+ if(!validPaidResidentialBudget(budget,provider,shared.maxTotalBytes,shared.maxDailyBytes)||
+  Object.keys(budget).length!==paidResidentialBudgetKeys.length)return null;
  return budget;
 }
 

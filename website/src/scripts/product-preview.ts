@@ -2,33 +2,29 @@
 // operation recovery details can cross page boundaries. Credentials stay in memory.
 import { mountGoogleSignIn } from './google-sign-in';
 import { consumeGithubResult, mountGithubSignIn } from './github-sign-in';
-import { countries, countryName } from '../data/countries';
+import { countryName } from '../data/countries';
 import { operationExecution, operationResource, requestCode, routeClasses, routeLabels, type Execution, type PlaygroundCapabilities, type Preparation, type RouteClass, type SafeKey } from '../data/playground';
 import { mountStripeBilling } from './stripe-billing';
 import { creditPackages, formatCredits } from '../data/credit-packages';
 type Json = Record<string, any>;
 type Project = { id: string; name: string; status: string; created_at?: string };
-type Profile = { id: string; version: number; kind?: string; origins: string[]; paths?: string[]; methods: string[]; proxy_classes: string[]; countries: string[]; max_daily_operations?: number | null; route_reservations?: Json[] };
+type Profile = { id: string; version: number; kind?: string; origins: string[]; paths?: string[]; methods: string[]; proxy_classes: string[]; route_reservations?: Json[] };
 const publicUrlId = 'public-url-http';
 const publicUrlKind = 'public_url_http';
-const decimalMb = 1_000_000;
 const transferLimitErrors = new Set(['max_transfer_bytes_exceeded', 'encoded_body_limit', 'decoded_body_limit']);
-type PaidQuote = { route_class: string; block_bytes: number; credits_per_block: number; max_transfer_bytes: number; reserved_credits: number };
-const isPublicUrlProfile = (profile?: Profile) => profile?.id === publicUrlId && profile.version === 1 && profile.kind === publicUrlKind;
-const validTransferMb = (value: unknown): value is number => typeof value === 'number' && value >= 0.25 && value <= 20 && Number.isInteger(value * 4);
+const isPublicUrlProfile = (profile: Profile) => profile.id === publicUrlId && profile.kind === publicUrlKind;
 const positiveInteger = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+const nonnegativeInteger = (value: unknown): value is number => value === 0 || positiveInteger(value);
+const isCountryCode = (value: unknown): value is string => typeof value === 'string' && /^[A-Z]{2}$/.test(value);
+const creditCount = (value: number) => `${formatCredits(value)} ${value === 1 ? 'credit' : 'credits'}`;
 
-function transferSuggestion(result: Json | null) {
-  const details = result?.error?.details, next = details?.next;
-  const paid = result?.usage?.accounting?.paid_credits;
-  if (result?.state !== 'failed' || !transferLimitErrors.has(result.error?.code) || paid?.state !== 'settled' ||
-      next?.requires_new_idempotency_key !== true || !validTransferMb(details.max_transfer_mb) ||
-      !validTransferMb(details.max_allowed_transfer_mb) || !validTransferMb(next.max_transfer_mb) ||
-      next.max_transfer_mb <= details.max_transfer_mb || next.max_transfer_mb > details.max_allowed_transfer_mb ||
-      !positiveInteger(details.reserved_credits) || details.reserved_credits !== paid.reserved_credits ||
-      !positiveInteger(next.max_credits) || !positiveInteger(paid.block_bytes) || !positiveInteger(paid.credits_per_block) ||
-      next.max_credits !== Math.ceil(next.max_transfer_mb * decimalMb / paid.block_bytes) * paid.credits_per_block) return '';
-  return `Suggested limit for a new request is ${next.max_transfer_mb} MB with a ${formatCredits(next.max_credits)}-credit reservation. Use a new operation key.`;
+function meteredCredits(paid: Json | null | undefined) {
+  return paid?.basis === 'prepaid_http_wire_credits' || positiveInteger(paid?.block_bytes) && positiveInteger(paid?.credits_per_block);
+}
+function billingBlockSize(bytes: number) {
+  if (bytes % 1_000_000 === 0) return `${bytes / 1_000_000} MB`;
+  if (bytes % 1_000 === 0) return `${bytes / 1_000} KB`;
+  return `${formatCredits(bytes)} ${bytes === 1 ? 'byte' : 'bytes'}`;
 }
 function validPublicDestination(value: string) {
   if (value.length > 4096 || /[\s\\#]/.test(value) || !/^https:\/\/[a-z0-9.-]+(?::443)?(?=[/?]|$)/i.test(value)) return false;
@@ -427,7 +423,7 @@ async function initWorkspace(root: HTMLElement) {
       hide('[data-paid-credits-hold]', !held);
       hide('[data-paid-credits-use]', held || !profiles.some(advertisesPublicRoute));
       textAll('[data-paid-credits-use-description]', merged
-        ? 'Select Public URL HTTP in the playground to see its transfer limits and credit estimate.'
+        ? 'Public URL HTTP shows measured transfer and credits used with each result.'
         : 'To use paid credits, select Purchased HTTP in the playground, then choose an available datacenter or residential route.');
     }
   }
@@ -473,13 +469,12 @@ async function initWorkspace(root: HTMLElement) {
 
   const requestForm = q<HTMLFormElement>('[data-playground-form]');
   const walletSelect = q<HTMLSelectElement>('[data-request-wallet]');
-  const transferInput = q<HTMLInputElement>('[data-max-transfer]');
-  const creditCapInput = q<HTMLInputElement>('[data-max-credits]');
   const purchasedHttp = () => walletSelect?.value === 'paid';
   const requestUrl = q<HTMLInputElement>('[data-request-url]');
   const routeSelect = q<HTMLSelectElement>('[data-request-route]');
-  const countrySelect = q<HTMLSelectElement>('[data-request-country]');
-  const countrySearch = q<HTMLInputElement>('[data-country-search]');
+  const countryInput = q<HTMLInputElement>('[data-request-country]');
+  const countryMenu = q('[data-country-menu]');
+  const countryList = q('[data-country-options]');
   const methodSelect = q<HTMLSelectElement>('[data-request-method]');
   const keySelect = q<HTMLSelectElement>('[data-request-key]');
   const waitInput = q<HTMLInputElement>('[data-request-wait]');
@@ -492,6 +487,9 @@ async function initWorkspace(root: HTMLElement) {
   let preparedCapabilities: PlaygroundCapabilities | null = null, preparedKeys: SafeKey[] | null = null;
   let prepareTimer: ReturnType<typeof setTimeout> | undefined, prepareVersion = 0;
   let prepareError = '', checkingRequest = false, preferredCountry = '';
+  let countryOptions: { code: string; label: string }[] = [];
+  let countryFilter: string | null = null;
+  let activeCountry = '';
   let hasRouteChoice = false;
   let submittedRequest: { execution: Execution; body: Json } | null = null;
   let retainedScreenshot: string | null = null;
@@ -505,43 +503,42 @@ async function initWorkspace(root: HTMLElement) {
       !value.executions.every((mode: Json) => mode.reason === 'playground_disabled') ? value : null;
   };
   const activeCapabilities = () => preparedCapabilities || baseCapabilities();
-  const paidProfile = () => profiles.find(advertisesPublicRoute);
-  const selectedProfile = () => purchasedHttp() ? paidProfile() : profiles.find(item =>
+  const selectedProfile = () => profiles.find(item =>
     item.id !== publicUrlId && item.kind !== publicUrlKind && `${item.id}@${item.version}` === q<HTMLSelectElement>('[data-request-profile]')?.value);
-  function paidQuote(profile: Profile | undefined, route: string, country: string | null): PaidQuote | null {
-    if (capabilities.paid_http?.proxy_classes?.[route] !== true || !capabilities.routes?.includes(route) ||
-        !profile?.proxy_classes.includes(route) || (route !== 'datacenter' && route !== 'residential') || country !== 'US' ||
-        !profile.countries.includes(country)) return null;
-    const quote = profile.route_reservations?.find(item => item.class === route && item.country === country)?.paid_credit_reservation;
-    return quote?.route_class === route &&
-      [quote.block_bytes, quote.credits_per_block, quote.max_transfer_bytes, quote.reserved_credits].every(positiveInteger) ? quote : null;
+  function paidRouteCountries(profile: Profile, route: RouteClass) {
+    if (route === 'direct' || capabilities.paid_http?.proxy_classes?.[route] !== true ||
+        !capabilities.routes?.includes(route) || !profile.proxy_classes.includes(route)) return [];
+    const codes: string[] = [];
+    for (const { class: routeClass, country, paid_credit_reservation: quote } of profile.route_reservations ?? []) {
+      if (routeClass === route && isCountryCode(country) && quote?.route_class === route &&
+          [quote.block_bytes, quote.credits_per_block, quote.max_transfer_bytes, quote.reserved_credits].every(positiveInteger)) {
+        codes.push(country);
+      }
+    }
+    return codes;
   }
   function advertisesPublicRoute(profile: Profile) {
-    const advertised = capabilities.paid_http?.public_url_access_profile;
+    const paid = capabilities.paid_http;
+    const advertised = paid?.public_url_access_profiles ?? [paid?.public_url_access_profile];
     return capabilities.native_http !== false && isPublicUrlProfile(profile) &&
-      advertised?.id === profile.id && advertised?.version === profile.version &&
-      routeClasses.some(route => paidQuote(profile, route, 'US')) &&
+      Array.isArray(advertised) && advertised.some(ref => ref?.id === profile.id && ref?.version === profile.version) &&
+      routeClasses.some(route => paidRouteCountries(profile, route).length > 0) &&
       profile.methods.some(method => method === 'GET' || method === 'HEAD');
   }
-  function selectedPaidQuote() {
-    return purchasedHttp() ? paidQuote(paidProfile(), routeSelect?.value || '', countrySelect?.value || null) : null;
+  const paidProfiles = () => profiles.filter(advertisesPublicRoute).sort((a, b) => a.version - b.version);
+  function paidRouteProfiles(route: RouteClass) {
+    const options = new Map<string, Profile>();
+    // Keep the earlier profile when both versions advertise the same route.
+    for (const profile of paidProfiles()) {
+      for (const country of paidRouteCountries(profile, route)) {
+        if (!options.has(country)) options.set(country, profile);
+      }
+    }
+    return options;
   }
-  function paidReservation(quote: PaidQuote) {
-    return transferInput?.value && validTransferMb(transferInput.valueAsNumber)
-      ? Math.ceil(transferInput.valueAsNumber * decimalMb / quote.block_bytes) * quote.credits_per_block
-      : quote.reserved_credits;
-  }
-  function renderTransferQuote() {
-    const quote = selectedPaidQuote();
-    const limits = q<HTMLFieldSetElement>('[data-paid-transfer]');
-    if (limits) limits.hidden = limits.disabled = !quote;
-    if (!quote) return;
-    const bytes = quote.max_transfer_bytes;
-    const defaultSize = bytes < decimalMb ? `${bytes / 1000} KB` : `${bytes / decimalMb} MB`;
-    const reserved = paidReservation(quote);
-    const dailyLimit = paidProfile()?.max_daily_operations;
-    const dailyDisclosure = positiveInteger(dailyLimit) ? ` Daily limit: ${number(dailyLimit)} requests.` : '';
-    textAll('[data-transfer-quote]', `Default ${defaultSize}. Reserves up to ${formatCredits(reserved)} ${reserved === 1 ? 'credit' : 'credits'}. The final charge follows measured wire traffic.${dailyDisclosure}`);
+  function selectedPaidProfile() {
+    const route = routeChoice();
+    return purchasedHttp() && route ? paidRouteProfiles(route).get(selectedCountry()) : undefined;
   }
   const currentExecutionCapability = () => activeCapabilities()?.executions.find(item => item.id === execution());
   const routeChoice = () => routeClasses.find(value => value === routeSelect?.value);
@@ -570,16 +567,22 @@ async function initWorkspace(root: HTMLElement) {
   }
   function routeAvailability(value: RouteClass) {
     if (purchasedHttp()) {
-      const available = !!paidQuote(paidProfile(), value, 'US');
-      return { available, reason: available ? null : 'playground_route_unreviewed', countries: available ? ['US'] : [] };
+      const countries = [...paidRouteProfiles(value).keys()];
+      const available = countries.length > 0;
+      return { available, reason: available ? null : 'playground_route_unreviewed', countries };
     }
     const mode = execution(), matrix = activeCapabilities();
     if (matrix) {
       const entry = matrix.routes.find(item => item.class === value);
-      return entry?.executions?.[mode] ?? (entry?.executions ? undefined : entry) ?? { available: false, reason: 'playground_route_unreviewed', countries: [] };
+      const availability = entry?.executions ? entry.executions[mode] : entry;
+      if (availability) {
+        const countries = availability.countries.filter(isCountryCode);
+        return { ...availability, available: availability.available && (value === 'direct' || countries.length > 0), countries };
+      }
+      return { available: false, reason: 'playground_route_unreviewed', countries: [] };
     }
     const profile = selectedProfile(), allowed = Array.isArray(capabilities.routes) ? capabilities.routes : ['direct'];
-    const countries = (profile?.route_reservations || []).filter(row => row.class === value && typeof row.country === 'string').map(row => row.country as string);
+    const countries = (profile?.route_reservations || []).filter(row => row.class === value).map(row => row.country).filter(isCountryCode);
     const available = mode === 'http' && capabilities.native_http !== false && allowed.includes(value) &&
       Boolean(profile?.proxy_classes.includes(value)) && (value === 'direct' || countries.length > 0);
     return { available, reason: available ? null : 'playground_route_unreviewed', countries };
@@ -597,18 +600,19 @@ async function initWorkspace(root: HTMLElement) {
     const scoped = profiles.filter(profile => profile.id !== publicUrlId && profile.kind !== publicUrlKind);
     select.replaceChildren(...scoped.map(profile => new Option(`${profile.id} · v${profile.version}`, `${profile.id}@${profile.version}`)));
     select.disabled = !scoped.length;
-    hide('[data-request-wallet-field]', !paidProfile() && !purchasedHttp());
+    hide('[data-request-wallet-field]', !paidProfiles().length && !purchasedHttp());
     hide('[data-request-profile-field]', purchasedHttp() || Boolean(baseCapabilities()) || scoped.length <= 1);
     renderRequestControls();
     schedulePreparation();
   }
   function renderRequestControls() {
     if (!routeSelect || !methodSelect) return;
-    const matrix = activeCapabilities(), mode = execution(), profile = selectedProfile();
+    const matrix = activeCapabilities(), mode = execution();
+    const paid = purchasedHttp(), availablePaidProfiles = paid ? paidProfiles() : [];
     for (const input of qa<HTMLInputElement>('input[name="mode"]')) {
       const capability = matrix?.executions.find(item => item.id === input.value);
       if (purchasedHttp() && input.value === 'http') input.checked = true;
-      input.disabled = purchasedHttp() ? input.value !== 'http' || !profile
+      input.disabled = paid ? input.value !== 'http' || !availablePaidProfiles.length
         : matrix ? capability?.available !== true : input.value === 'browser' || capabilities.native_http === false;
       const description = input.disabled
         ? purchasedHttp() && input.value === 'browser' ? 'This access mode supports HTTP only'
@@ -635,6 +639,8 @@ async function initWorkspace(root: HTMLElement) {
       unavailable.set(reason, labels);
     }
     textAll('[data-route-help]', [...unavailable].map(([reason, labels]) => `${labels.join(' and ')}: ${reason}`).join(' '));
+    renderCountries();
+    const profile = paid ? selectedPaidProfile() ?? availablePaidProfiles[0] : selectedProfile();
     const oldMethod = methodSelect.value;
     const methods = (matrix ? currentExecutionCapability()?.methods ?? (mode === 'http' ? ['GET', 'HEAD'] : ['GET']) : profile?.methods || []).filter(value => value === 'GET' || value === 'HEAD');
     methodSelect.replaceChildren(...methods.map(method => new Option(method, method)));
@@ -655,41 +661,71 @@ async function initWorkspace(root: HTMLElement) {
       if (hasWait) waitInput.max = String(waitMax);
     }
     textAll('[data-profile-summary]', purchasedHttp()
-      ? 'Public HTTPS destinations on US routes. The charge follows measured wire traffic.'
+      ? 'Public HTTPS destinations on available proxy routes. The charge follows measured wire traffic.'
       : matrix
       ? preparedRequest?.access_profile ? 'FetchX matched an access policy for this website and execution mode.' : 'FetchX checks the destination and chooses an access policy automatically.'
       : profile ? `Approved destinations: ${profile.origins.join(', ')}${profile.paths?.length ? ' · Paths: ' + profile.paths.join(', ') : ''}` : 'No approved HTTP access profile is configured.');
     textAll('#request-url-help', purchasedHttp() ? 'Use a public HTTPS hostname on port 443 without credentials or fragments.' : matrix ? 'Use a public HTTPS URL.' : 'Use a public HTTPS URL approved by this project’s profile.');
-    renderCountries();
     renderKeyChoice();
   }
+  function selectedCountry() {
+    if (countryOptions.length === 1) return countryOptions[0].code;
+    return countryOptions.some(option => option.code === preferredCountry) ? preferredCountry : '';
+  }
+  function closeCountryPicker() {
+    countryFilter = null;
+    activeCountry = '';
+    if (!countryInput || !countryMenu) return;
+    countryMenu.hidden = true;
+    countryInput.setAttribute('aria-expanded', 'false');
+    countryInput.removeAttribute('aria-activedescendant');
+    countryInput.value = countryOptions.find(option => option.code === selectedCountry())?.label || '';
+  }
   function renderCountries() {
-    if (!countrySelect || !countrySearch) return;
+    if (!countryInput) return;
     const route = routeChoice();
-    const proxy = route === 'datacenter' || route === 'residential';
-    const availability = route ? routeAvailability(route) : null;
-    hide('[data-country-search-field]', !proxy || !availability?.available);
-    countrySelect.disabled = !proxy || !availability?.available;
-    if (!proxy || !availability?.available) {
-      countrySelect.replaceChildren(new Option(route === 'direct' ? 'Location not selectable' : 'Choose an available proxy route', ''));
-      textAll('[data-country-help]', route === 'direct' ? 'Use a proxy to select a location.' : '');
-      return;
-    }
-    const supported = new Set(availability.countries);
-    const query = countrySearch.value.trim().toLowerCase();
-    const matching = countries.filter(({ code, name }) => !query || code.toLowerCase().includes(query) || name.toLowerCase().includes(query) || `${name} (${code})`.toLowerCase().includes(query));
-    const placeholder = new Option(matching.length ? 'Choose a country' : 'No countries match', '');
-    placeholder.disabled = true;
-    const groups = [element('optgroup'), element('optgroup')];
-    groups[0].label = 'Available'; groups[1].label = 'Unavailable on this route';
-    for (const { code, name } of matching) {
-      const enabled = supported.has(code);
-      const option = new Option(`${name} (${code})`, code);
-      option.disabled = !enabled; groups[enabled ? 0 : 1].append(option);
-    }
-    countrySelect.replaceChildren(placeholder, ...groups.filter(group => group.childElementCount > 0));
-    countrySelect.value = supported.has(preferredCountry) && matching.some(item => item.code === preferredCountry) ? preferredCountry : '';
-    textAll('[data-country-help]', `${supported.size} supported ${supported.size === 1 ? 'country' : 'countries'}. Other locations are unavailable for this route and execution mode.`);
+    const availability = route && route !== 'direct' ? routeAvailability(route) : null;
+    const codes = availability?.available ? [...new Set(availability.countries)] : [];
+    if (codes.length === countryOptions.length && countryOptions.every(option => codes.includes(option.code))) return;
+    countryOptions = codes.map(code => ({ code, label: `${countryName(code)} (${code})` }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'en'));
+    hide('[data-country-picker]', !countryOptions.length);
+    countryInput.disabled = !countryOptions.length;
+    const count = countryOptions.length;
+    textAll('[data-country-help]', `${count} supported ${count === 1 ? 'country' : 'countries'} for this route and execution mode.`);
+    closeCountryPicker();
+  }
+  function matchingCountries() {
+    const query = countryFilter?.trim().toLowerCase() || '';
+    const exact = countryOptions.find(option => option.code.toLowerCase() === query);
+    return exact ? [exact] : countryOptions.filter(option => option.label.toLowerCase().includes(query));
+  }
+  function showCountryMenu() {
+    if (!countryInput || !countryList || !countryMenu) return;
+    const matches = matchingCountries();
+    countryMenu.hidden = false;
+    countryInput.setAttribute('aria-expanded', 'true');
+    countryList.replaceChildren(...matches.map(({ code, label }) => {
+      const option = element('li', '', label);
+      option.id = `request-country-option-${code}`;
+      option.dataset.countryCode = code;
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', String(code === activeCountry));
+      return option;
+    }));
+    hide('[data-country-empty]', Boolean(matches.length));
+    if (activeCountry) {
+      const id = `request-country-option-${activeCountry}`;
+      countryInput.setAttribute('aria-activedescendant', id);
+      document.getElementById(id)?.scrollIntoView({ block: 'nearest' });
+    } else countryInput.removeAttribute('aria-activedescendant');
+  }
+  function chooseCountry(code: string) {
+    if (!countryOptions.some(option => option.code === code)) return;
+    preferredCountry = code;
+    closeCountryPicker();
+    if (purchasedHttp()) renderRequestControls();
+    changeDraft();
   }
   function renderKeyChoice() {
     if (!keySelect || !project) return;
@@ -706,10 +742,10 @@ async function initWorkspace(root: HTMLElement) {
   }
 
   function draftInput(): Json | null {
-    const url = requestUrl?.value.trim(), mode = execution(), route = routeChoice(), method = methodSelect?.value, country = countrySelect?.value;
+    const url = requestUrl?.value.trim(), mode = execution(), route = routeChoice(), method = methodSelect?.value, country = selectedCountry();
     if (!url || requestUrl?.validity.typeMismatch || !route || !routeAvailability(route).available || !method ||
         activeCapabilities() && currentExecutionCapability()?.available !== true ||
-        route !== 'direct' && (!country || !routeAvailability(route).countries.includes(country))) return null;
+        route !== 'direct' && (countryFilter !== null || !country || !routeAvailability(route).countries.includes(country))) return null;
     return { url, execution: mode, method, proxy: { class: route, country: route === 'direct' ? null : country }, ...(explicitKey() ? { key_id: explicitKey() } : {}) };
   }
   function clearPreparation() {
@@ -730,7 +766,7 @@ async function initWorkspace(root: HTMLElement) {
       const id = project?.id, version = prepareVersion;
       prepareTimer = setTimeout(() => { void prepareRequest(input, id, version, Boolean(draft)); }, 300);
     }
-    renderTransferQuote(); updateRunButton(); renderCode();
+    updateRunButton(); renderCode();
   }
   async function prepareRequest(input: Json, id: string | undefined, version: number, chosenRoute: boolean) {
     const active = () => id === project?.id && version === prepareVersion && !leavingPage;
@@ -763,22 +799,15 @@ async function initWorkspace(root: HTMLElement) {
     if (!requestUrl?.value.trim()) return 'Enter a URL to check the request.';
     if (requestUrl.validity.typeMismatch) return 'Enter a complete URL, including https://.';
     if (purchasedHttp() && !validPublicDestination(requestUrl.value.trim())) return 'Use a public HTTPS hostname on port 443 without credentials or fragments.';
-    if (purchasedHttp() && !paidProfile()) return 'Public URL HTTP is unavailable for this project.';
-    if (!baseCapabilities() && !selectedProfile()) return 'No approved HTTP profile is configured for this project.';
+    if (purchasedHttp() && !paidProfiles().length) return 'Public URL HTTP is unavailable for this project.';
+    if (!purchasedHttp() && !baseCapabilities() && !selectedProfile()) return 'No approved HTTP profile is configured for this project.';
     if (baseCapabilities() && currentExecutionCapability()?.available !== true) return explainAvailability(currentExecutionCapability()?.reason);
     if (!routeChoice() || !routeAvailability(routeChoice()!).available) return 'Choose an available route.';
-    if (routeChoice() !== 'direct' && !countrySelect?.value) return 'Choose a supported country.';
+    if (routeChoice() !== 'direct' && (countryFilter !== null || !selectedCountry())) return 'Choose a supported country.';
     if ((purchasedHttp() || baseCapabilities()) && !keyChoice()) return keyOptions().length ? 'Choose an API key.' : 'A project API key is required.';
     if (purchasedHttp()) {
-      const quote = selectedPaidQuote();
-      if (!quote) return 'Choose a reviewed public URL route.';
+      if (!selectedPaidProfile()) return 'Choose a reviewed public URL route.';
       if (paymentHeld()) return 'Purchased credits are on hold.';
-      if (transferInput?.validity.badInput || transferInput?.value && !validTransferMb(transferInput.valueAsNumber))
-        return 'Enter a transfer ceiling from 0.25 to 20 MB in 0.25 MB steps.';
-      if (creditCapInput?.validity.badInput || creditCapInput?.value && !positiveInteger(creditCapInput.valueAsNumber))
-        return 'Enter a positive whole number for the credit cap.';
-      if (creditCapInput?.value && creditCapInput.valueAsNumber < paidReservation(quote))
-        return 'The credit cap is below the reservation.';
     }
     if (waitInput && !waitInput.disabled && !waitInput.validity.valid) return `Enter a whole number from 0 to ${waitInput.max} for the browser wait.`;
     if (qa<HTMLInputElement>('[data-request-header]').some(input => !input.disabled && /[\u0000-\u0008\u000a-\u001f\u007f\u0100-\uffff]/u.test(input.value))) return 'Request headers must use printable HTTP characters.';
@@ -786,7 +815,7 @@ async function initWorkspace(root: HTMLElement) {
   }
   function currentDraftBody(): Json | null {
     const input = draftInput(), managed = Boolean(baseCapabilities());
-    const profile = managed ? preparedRequest?.access_profile : selectedProfile();
+    const profile = managed ? preparedRequest?.access_profile : purchasedHttp() ? selectedPaidProfile() : selectedProfile();
     if (!input || !profile || requestIssue()) return null;
     if (managed && (!preparedRequest?.ready || preparedRequest.selected_key_id !== keyChoice() || preparedSignature !== JSON.stringify(input))) return null;
     const maximum = preparedRequest?.quote?.max_estimated_micro_usd;
@@ -796,10 +825,6 @@ async function initWorkspace(root: HTMLElement) {
       ...(typeof maximum === 'number' ? { max_estimated_micro_usd: maximum } : {}),
       ...((managed || purchasedHttp()) && explicitKey() ? { key_id: explicitKey() } : {}),
     };
-    if (purchasedHttp()) {
-      if (transferInput?.value) body.max_transfer_mb = transferInput.valueAsNumber;
-      if (creditCapInput?.value) body.max_credits = creditCapInput.valueAsNumber;
-    }
     if (input.execution === 'browser') {
       if (screenshotInput?.checked) body.screenshot = true;
       if (waitInput && !waitInput.disabled && waitInput.value !== '') body.wait_ms = waitInput.valueAsNumber;
@@ -824,17 +849,12 @@ async function initWorkspace(root: HTMLElement) {
     if (fresh) { fresh.disabled = sending || !ready; fresh.hidden = draftOpen && !pendingKeys().length; }
     const recover = q<HTMLButtonElement>('[data-recover-result]'); if (recover) recover.disabled = sending || !ready || !recoveryKey();
     const pending = q<HTMLSelectElement>('[data-pending-operation]'); if (pending) pending.disabled = sending || !ready;
-    const quote = preparedRequest?.quote;
-    const credits = quote?.credits;
-    const estimate = purchasedHttp() ? 'This request is billed by measured wire traffic.' : typeof credits === 'number'
-      ? `Reserves up to ${number(credits)} ${credits === 1 ? 'credit' : 'credits'}${quote?.max_estimated_micro_usd != null && quote.max_estimated_micro_usd > 0 ? ' · cost ceiling $' + (quote.max_estimated_micro_usd / 1_000_000).toFixed(6) : ''}.`
-      : 'Approved profile limits apply.';
-    const quoteText = sending ? 'Waiting for the saved result…' : !draftOpen ? '' : checkingRequest ? 'Checking access, route, and cost…' :
-      prepareError || requestIssue() || (body ? estimate : 'Check the request settings before sending.');
-    const quoteNode = q('[data-request-quote]');
-    if (quoteNode) {
-      if (quoteNode.textContent !== quoteText) quoteNode.textContent = quoteText;
-      quoteNode.hidden = !quoteText;
+    const statusText = sending ? 'Waiting for the saved result…' : !draftOpen ? '' : checkingRequest ? 'Checking access and route…' :
+      prepareError || requestIssue() || (body ? 'Ready to send.' : 'Check the request settings before sending.');
+    const statusNode = q('[data-request-status]');
+    if (statusNode) {
+      if (statusNode.textContent !== statusText) statusNode.textContent = statusText;
+      statusNode.hidden = !statusText;
     }
   }
   function recoveryKey() { return q<HTMLSelectElement>('[data-pending-operation]')?.value || currentKey; }
@@ -852,6 +872,54 @@ async function initWorkspace(root: HTMLElement) {
     textAll('[data-operation-key]', currentKey);
     updateRunButton(); renderCode();
   }
+  function renderCreditUsage(result: Json | null, mode: Execution) {
+    const accounting = result?.usage?.accounting;
+    const paid = accounting?.paid_credits;
+    const fixed = accounting?.request_credits ?? result?.request_credits;
+    const state = paid?.state ?? fixed?.state;
+    const used = paid ? paid.used_credits : state === 'released' ? 0 : fixed?.credits;
+    const reserved = paid?.reserved_credits ?? fixed?.credits;
+    const metered = meteredCredits(paid);
+    let summary = '';
+    if (state === 'settled') {
+      if (!nonnegativeInteger(used)) summary = 'The final charge is unavailable.';
+      else if (metered) summary = `${creditCount(used)} used.`;
+      else summary = `${creditCount(used)} used for this ${mode === 'browser' ? 'browser' : 'HTTP'} request.`;
+    } else if (state === 'released') {
+      summary = (nonnegativeInteger(used) ? `${creditCount(used)} used. ` : '') + 'Reservation released.';
+    } else if (state === 'held') {
+      summary = (nonnegativeInteger(reserved) ? `${creditCount(reserved)} held. ` : 'Reservation held. ') + 'The final charge is pending.';
+    } else if (state === 'reserved') {
+      summary = (nonnegativeInteger(reserved) ? `${creditCount(reserved)} reserved. ` : 'Reservation pending. ') + 'The final charge is pending.';
+    }
+    hide('[data-credit-usage]', !summary);
+    textAll('[data-credit-usage-summary]', summary);
+
+    const meter = state === 'settled' && metered ? paid : null;
+    const bytes = nonnegativeInteger(meter?.billable_bytes) ? meter.billable_bytes : null;
+    const blockSize = positiveInteger(meter?.block_bytes) ? meter.block_bytes : null;
+    const rate = positiveInteger(meter?.credits_per_block) ? meter.credits_per_block : null;
+    let blocks = nonnegativeInteger(meter?.billable_blocks) ? meter.billable_blocks : null;
+    if (meter?.billable_blocks === undefined && bytes !== null && blockSize !== null && rate !== null && nonnegativeInteger(used)) {
+      const derived = Math.ceil(bytes / blockSize);
+      if (derived * rate === used) blocks = derived;
+    }
+    const rows = [
+      ['transfer', bytes === null ? '' : `${formatCredits(bytes)} ${bytes === 1 ? 'byte' : 'bytes'}`],
+      ['block-size', blockSize === null ? '' : billingBlockSize(blockSize)],
+      ['blocks', blocks === null ? '' : formatCredits(blocks)],
+      ['rate', rate === null ? '' : `${creditCount(rate)} per block`],
+    ];
+    for (const [name, value] of rows) {
+      hide(`[data-credit-usage-${name}-row]`, !value);
+      textAll(`[data-credit-usage-${name}]`, value);
+    }
+    hide('[data-credit-usage-meter]', !rows.some(([, value]) => value));
+    const calculation = blocks !== null && rate !== null && nonnegativeInteger(used) && blocks * rate === used
+      ? `${formatCredits(blocks)} ${blocks === 1 ? 'block' : 'blocks'} × ${creditCount(rate)} per block = ${creditCount(used)}` : '';
+    hide('[data-credit-usage-calculation]', !calculation);
+    textAll('[data-credit-usage-calculation]', calculation);
+  }
   function renderResult(result: Json | null) {
     currentResult = result;
     const mode = currentKey ? operationExecution(currentKey) : submittedRequest?.execution || execution();
@@ -860,8 +928,14 @@ async function initWorkspace(root: HTMLElement) {
     const badge = q('[data-response-state]');
     if (badge) badge.className = 'pp-status pp-status-' + (['completed','failed','running','unknown'].includes(state) ? state : 'running');
     const retained = result?.data;
-    const bodyText = typeof retained?.text === 'string' ? retained.text : null;
-    const output = bodyText !== null ? bodyText.slice(0, previewTextLimit) + (bodyText.length > previewTextLimit ? '\n[Source text truncated at 32,000 characters. Download for the full retained body.]' : '') :
+    const previewOnly = retained?.text_is_preview === true;
+    const text = previewOnly ? retained.text_preview : retained?.text;
+    const bodyText = typeof text === 'string' ? text : null;
+    const hasFullBody = Boolean(retained?.body_base64) || (!previewOnly && bodyText !== null);
+    const truncated = previewOnly || (bodyText !== null && bodyText.length > previewTextLimit);
+    const truncationNote = truncated
+      ? `\n[${previewOnly ? 'Source text preview.' : 'Source text truncated at 32,000 characters.'} ${hasFullBody ? 'Download for the full retained body.' : 'Only the preview is available.'}]` : '';
+    const output = bodyText !== null ? bodyText.slice(0, previewTextLimit) + truncationNote :
       retained?.body_base64 ? 'A binary body was retained. Download it to inspect the bytes.' :
       state === 'running' ? 'Waiting for the gateway response…' : currentKey ? 'No source body is available for this operation.' : 'Send a request to inspect the response body.';
     textAll('[data-response-output]', output);
@@ -877,8 +951,8 @@ async function initWorkspace(root: HTMLElement) {
       screenshotTab.hidden = !retainedScreenshot;
     }
     textAll('[data-body-description]', mode === 'browser' && bodyText !== null ? 'Rendered DOM' : 'Response body');
-    hide('[data-copy-body]', bodyText === null);
-    hide('[data-download-body]', bodyText === null && !retained?.body_base64);
+    hide('[data-copy-body]', bodyText === null || previewOnly);
+    hide('[data-download-body]', !hasFullBody);
     const headers = retained?.headers;
     retainedHeaders = headers && typeof headers === 'object' && !Array.isArray(headers) && Object.keys(headers).length ? JSON.stringify(headers, null, 2) : null;
     textAll('[data-response-headers]', retainedHeaders && retainedHeaders.length <= 24_000 ? retainedHeaders : retainedHeaders ? 'The retained headers exceed the preview limit. Copy headers to read them.' : 'No source headers retained.');
@@ -899,31 +973,27 @@ async function initWorkspace(root: HTMLElement) {
     const partial = mode === 'browser' && result?.usage?.capture_complete === false;
     const captureNote = partial ? ' Partial capture.' + (Number.isSafeInteger(blocked) && blocked > 0 ? ` ${number(blocked)} ${blocked === 1 ? 'request was' : 'requests were'} blocked.` : '') : '';
     textAll('[data-response-note]', note + captureNote);
-    if (result?.error) setError(result.error.message || result.error.code || 'The operation could not complete.', '[data-response-error]');
-    else clearError('[data-response-error]');
-    const suggestion = transferSuggestion(result);
-    textAll('[data-response-transfer]', suggestion);
-    hide('[data-response-transfer]', !suggestion);
-    const paid = result?.usage?.accounting?.paid_credits;
-    hide('[data-response-accounting]', !paid);
-    const creditLabel = hasUnifiedCredits() ? 'Credits' : 'Paid credits';
-    textAll('[data-response-accounting]', paid
-      ? `${creditLabel} reserved: ${formatCredits(paid.reserved_credits)}. ${creditLabel} used: ${formatCredits(paid.used_credits)}.${paid.state === 'held' ? ' The reservation remains held.' : ''}`
-      : '');
+    if (result?.error) {
+      let message = result.error.message || result.error.code || 'The operation could not complete.';
+      if (meteredCredits(result.usage?.accounting?.paid_credits) && transferLimitErrors.has(result.error.code)) {
+        message = result.error.code === 'max_transfer_bytes_exceeded'
+          ? 'This request reached its transfer limit.' : 'This response reached its body size limit.';
+        if (['unknown', 'reserved', 'running'].includes(state)) message += ' Recover the saved operation using its original key.';
+      }
+      setError(message, '[data-response-error]');
+    } else clearError('[data-response-error]');
+    renderCreditUsage(result, mode);
     const route = result?.routing;
     const duration = [result?.usage?.duration_ms, result?.duration_ms]
       .find((value): value is number => typeof value === 'number' && Number.isFinite(value));
     const bytes = result?.usage?.decoded_bytes ?? result?.usage?.encoded_bytes;
-    const credit = result?.usage?.accounting?.request_credits ?? result?.request_credits;
-    const creditState = { settled: 'used', released: 'released', reserved: 'reserved', held: 'held' } as Record<string, string>;
     hide('[data-result-facts]', !result || state === 'running');
     textAll('[data-result-source]', typeof retained?.status === 'number' ? `HTTP ${retained.status}` : 'No response');
     textAll('[data-result-route]', routeClasses.includes(route?.class) ? routeLabels[route.class as RouteClass] : '—');
-    textAll('[data-result-country]', route?.class === 'direct' ? 'Not selectable' : typeof route?.country === 'string' && /^[A-Z]{2}$/.test(route.country) ? `${countryName(route.country)} (${route.country})` : '—');
+    textAll('[data-result-country]', route?.class === 'direct' ? 'Not selectable' : isCountryCode(route?.country) ? `${countryName(route.country)} (${route.country})` : '—');
     hide('[data-result-duration-metric]', duration === undefined);
     textAll('[data-result-duration]', duration === undefined ? '—' : `${number(Math.round(duration))} ms`);
     textAll('[data-result-bytes]', number(bytes));
-    textAll('[data-result-credits]', typeof credit?.credits === 'number' ? `${number(credit.credits)} ${creditState[credit.state] || ''}`.trim() : '—');
     renderRecovery();
   }
 
@@ -932,6 +1002,7 @@ async function initWorkspace(root: HTMLElement) {
     draftOpen = true; currentKey = ''; currentResult = null; submittedRequest = null;
     requestForm?.reset(); requestUrl?.removeAttribute('aria-invalid');
     if (routeSelect) routeSelect.replaceChildren();
+    renderCountries();
     q('[data-pending-operation]')?.replaceChildren();
     q<HTMLDetailsElement>('[data-request-advanced]')?.removeAttribute('open');
     const codeOperation = q<HTMLSelectElement>('[data-code-operation]'); if (codeOperation) codeOperation.value = 'send';
@@ -940,8 +1011,6 @@ async function initWorkspace(root: HTMLElement) {
   }
   function newRequest() {
     draftOpen = true; currentKey = ''; submittedRequest = null;
-    if (transferInput) transferInput.value = '';
-    if (creditCapInput) creditCapInput.value = '';
     const codeOperation = q<HTMLSelectElement>('[data-code-operation]'); if (codeOperation) codeOperation.value = 'send';
     clearError('[data-fetch-error]'); renderResult(null); schedulePreparation(); requestUrl?.focus();
   }
@@ -957,13 +1026,14 @@ async function initWorkspace(root: HTMLElement) {
     if (!input || !requestForm.reportValidity()) return;
     const id = project.id, version = loadVersion, mode = execution(), key = (mode === 'browser' ? 'render_' : 'console_') + crypto.randomUUID(), path = projectPath(operationResource(mode));
     const body = { ...input, idempotency_key: key };
+    const controlBody = purchasedHttp() ? { ...body, automatic_transfer: true } : body;
     clearError('[data-fetch-error]');
     try { savePending(id, key); } catch (error) { setError(error, '[data-fetch-error]'); return; } // A storage failure prevents dispatch.
     clearPreparation(); submittedRequest = { execution: mode, body };
     currentKey = key; draftOpen = false; sending = true;
     renderResult({ state: 'running' });
     try {
-      const result = await api(path, { method: 'POST', body, publicFetch: true, timeout: bridgeDeadlineMs });
+      const result = await api(path, { method: 'POST', body: controlBody, publicFetch: true, timeout: bridgeDeadlineMs });
       if (['completed','failed','rejected'].includes(result.state)) clearPending(id, key);
       if (version === loadVersion && id === project?.id) renderResult(result);
     } catch (error) {
@@ -1015,33 +1085,67 @@ async function initWorkspace(root: HTMLElement) {
     schedulePreparation();
   }
   walletSelect?.addEventListener('change', () => {
-    preparedCapabilities = null; preparedKeys = null; preferredCountry = ''; hasRouteChoice = false;
+    preparedCapabilities = null; preparedKeys = null; hasRouteChoice = false;
     if (routeSelect) routeSelect.value = '';
-    if (countrySearch) countrySearch.value = '';
-    if (transferInput) transferInput.value = '';
-    if (creditCapInput) creditCapInput.value = '';
+    closeCountryPicker();
     hide('[data-request-profile-field]', purchasedHttp() || Boolean(baseCapabilities()) || (q<HTMLSelectElement>('[data-request-profile]')?.options.length ?? 0) <= 1);
     renderRequestControls(); changeDraft();
   });
-  for (const input of [transferInput, creditCapInput]) input?.addEventListener('input', () => {
-    renderTransferQuote(); updateRunButton(); renderCode();
-  });
   q('[data-request-profile]')?.addEventListener('change', () => { renderRequestControls(); changeDraft(); });
   qa('input[name="mode"]').forEach(input => input.addEventListener('change', () => {
-    if (countrySearch) countrySearch.value = '';
+    closeCountryPicker();
     renderRequestControls(); changeDraft();
   }));
   routeSelect?.addEventListener('change', () => {
     hasRouteChoice = true;
-    if (countrySearch) countrySearch.value = '';
-    if (purchasedHttp()) {
-      if (transferInput) transferInput.value = '';
-      if (creditCapInput) creditCapInput.value = '';
-    }
-    renderCountries(); changeDraft();
+    closeCountryPicker();
+    renderRequestControls(); changeDraft();
   });
-  countrySearch?.addEventListener('input', () => { renderCountries(); changeDraft(); });
-  countrySelect?.addEventListener('change', () => { preferredCountry = countrySelect.value; changeDraft(); });
+  countryInput?.addEventListener('focus', () => countryInput.select());
+  countryInput?.addEventListener('click', () => {
+    if (!countryMenu?.hidden) return;
+    countryInput.select();
+    activeCountry = selectedCountry();
+    showCountryMenu();
+  });
+  countryInput?.addEventListener('input', () => {
+    countryFilter = countryInput.value;
+    activeCountry = matchingCountries()[0]?.code || '';
+    showCountryMenu();
+    updateRunButton(); renderCode();
+  });
+  function cancelCountrySearch() {
+    if (countryMenu?.hidden) return;
+    closeCountryPicker();
+    updateRunButton(); renderCode();
+  }
+  countryInput?.addEventListener('blur', cancelCountrySearch);
+  countryInput?.addEventListener('keydown', event => {
+    if (event.isComposing) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (countryMenu?.hidden) showCountryMenu();
+      else if (activeCountry) chooseCountry(activeCountry);
+    } else if (event.key === 'Escape' && !countryMenu?.hidden) {
+      event.preventDefault();
+      cancelCountrySearch();
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const matches = matchingCountries();
+      const current = matches.findIndex(option => option.code === activeCountry);
+      const next = event.key === 'ArrowDown' ? Math.min(current + 1, matches.length - 1) :
+        current < 0 ? matches.length - 1 : Math.max(0, current - 1);
+      activeCountry = matches[next]?.code || '';
+      showCountryMenu();
+    }
+  });
+  countryList?.addEventListener('mousedown', event => {
+    if ((event.target as HTMLElement).closest('[data-country-code]')) event.preventDefault();
+  });
+  countryList?.addEventListener('click', event => {
+    const option = (event.target as HTMLElement).closest<HTMLElement>('[data-country-code]');
+    if (option?.dataset.countryCode) chooseCountry(option.dataset.countryCode);
+  });
   keySelect?.addEventListener('change', () => {
     if (project) { if (keySelect.value) preferredKeys.set(project.id, keySelect.value); else preferredKeys.delete(project.id); }
     changeDraft();
@@ -1053,7 +1157,9 @@ async function initWorkspace(root: HTMLElement) {
   q('[data-code-language]')?.addEventListener('change', renderCode);
   q('[data-code-operation]')?.addEventListener('change', renderCode);
   q('[data-copy-code]')?.addEventListener('click', () => { void copy(q('[data-generated-code]')?.textContent || ''); });
-  q('[data-copy-body]')?.addEventListener('click', () => { if (typeof currentResult?.data?.text === 'string') void copy(currentResult.data.text); });
+  q('[data-copy-body]')?.addEventListener('click', () => {
+    if (currentResult?.data?.text_is_preview !== true && typeof currentResult?.data?.text === 'string') void copy(currentResult.data.text);
+  });
   q('[data-copy-headers]')?.addEventListener('click', () => { if (retainedHeaders) void copy(retainedHeaders); });
   function download(blob: Blob, filename: string) {
     const href = URL.createObjectURL(blob), anchor = element('a');
@@ -1069,8 +1175,11 @@ async function initWorkspace(root: HTMLElement) {
     catch { toast('The retained bytes could not be downloaded.'); }
   }
   q('[data-download-body]')?.addEventListener('click', () => {
-    if (typeof currentResult?.data?.text === 'string') download(new Blob([currentResult.data.text], { type: 'text/plain;charset=utf-8' }), 'fetchx-body.txt');
-    else if (typeof currentResult?.data?.body_base64 === 'string') downloadBytes(currentResult.data.body_base64, 'fetchx-body.bin', 'application/octet-stream');
+    const body = currentResult?.data, textType = 'text/plain;charset=utf-8';
+    if (body?.text_is_preview === true) {
+      if (typeof body.body_base64 === 'string') downloadBytes(body.body_base64, 'fetchx-body.txt', textType);
+    } else if (typeof body?.text === 'string') download(new Blob([body.text], { type: textType }), 'fetchx-body.txt');
+    else if (typeof body?.body_base64 === 'string') downloadBytes(body.body_base64, 'fetchx-body.bin', 'application/octet-stream');
   });
   q('[data-download-screenshot]')?.addEventListener('click', () => {
     if (retainedScreenshot) downloadBytes(retainedScreenshot, 'fetchx-screenshot.jpg', 'image/jpeg');
@@ -1125,6 +1234,7 @@ async function initWorkspace(root: HTMLElement) {
     clearPreparation();
     currentResult = null; submittedRequest = null; retainedScreenshot = null; retainedHeaders = null;
     requestForm?.reset();
+    renderCreditUsage(null, 'http');
     q('[data-browser-screenshot]')?.removeAttribute('src');
     textAll('[data-response-output],[data-response-headers],[data-response-diagnostics],[data-request-detail],[data-generated-code]', '');
   });

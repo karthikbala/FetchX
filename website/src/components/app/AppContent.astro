@@ -44,10 +44,14 @@ const { view } = Astro.props as { view: PreviewView };
         <label><input type="radio" name="mode" value="browser" disabled aria-describedby="request-browser-help"/><span><Icon name="globe" size={19}/><strong>Browser</strong><small id="request-browser-help" data-execution-help="browser">Rendered page</small></span></label>
       </div></fieldset>
       <label class="pp-field">Route<select name="route" data-request-route required aria-describedby="request-route-help"><option value="">Loading routes…</option></select><small id="request-route-help" data-route-help></small></label>
-      <div class="pp-country-fields" data-country-fields>
-        <label class="pp-field" data-country-search-field hidden>Find a country<input type="search" data-country-search placeholder="Name or ISO code" aria-controls="request-country" autocomplete="off"/></label>
-        <label class="pp-field" data-country-select-field>Country<select id="request-country" name="country" data-request-country disabled aria-describedby="request-country-help"><option value="">Location not selectable</option></select></label>
-        <small id="request-country-help" class="pp-country-help" data-country-help>Use a proxy to select a location.</small>
+      <div class="pp-field pp-country-picker" data-country-picker hidden>
+        <label id="request-country-label" for="request-country">Proxy country</label>
+        <input id="request-country" type="text" data-request-country role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="request-country-options" aria-describedby="request-country-help" placeholder="Search by name or code" spellcheck="false" autocomplete="off" disabled/>
+        <div class="pp-country-menu" data-country-menu hidden>
+          <ul id="request-country-options" data-country-options role="listbox" aria-labelledby="request-country-label"></ul>
+          <p data-country-empty role="status" hidden>No matching proxy countries.</p>
+        </div>
+        <small id="request-country-help" data-country-help></small>
       </div>
       <div class="pp-key-choice" data-request-keys hidden>
         <p class="pp-form-help" data-selected-key hidden></p>
@@ -67,10 +71,9 @@ const { view } = Astro.props as { view: PreviewView };
         <label class="pp-browser-option" data-screenshot-field hidden><input type="checkbox" data-request-screenshot/> Capture a screenshot</label>
         <label class="pp-field" data-wait-field hidden>Wait after page load (ms)<input type="number" data-request-wait min="0" step="1" inputmode="numeric" placeholder="Default"/></label>
       </details>
-      <fieldset class="pp-transfer-limits" data-paid-transfer hidden disabled><legend>Paid transfer limits</legend><div class="pp-two-fields"><label class="pp-field">Max transfer in MB<input type="number" min="0.25" max="20" step="0.25" data-max-transfer aria-describedby="paid-transfer-help"/><small>Optional. Leave blank for the route default.</small></label><label class="pp-field">Credit cap<input type="number" min="1" step="1" data-max-credits aria-describedby="paid-transfer-help"/><small>Optional. Caps the allowed reservation.</small></label></div><p id="paid-transfer-help" class="pp-form-help" data-transfer-quote aria-live="polite"></p></fieldset>
     </fieldset>
     <div class="pp-request-send">
-      <p class="pp-form-help pp-request-estimate" data-request-quote role="status" aria-live="polite">Enter a URL to check the request.</p>
+      <p class="pp-form-help pp-request-status" data-request-status role="status">Enter a URL to check the request.</p>
       <p class="pp-inline-error" data-fetch-error role="alert" hidden></p>
       <button type="submit" class="pp-button pp-button-primary pp-full" data-run-request disabled>Send request <Icon name="arrow" size={17}/></button>
     </div>
@@ -84,12 +87,23 @@ const { view } = Astro.props as { view: PreviewView };
   <section class="pp-card pp-response-panel" aria-label="Response inspector">
     <div class="pp-result-overview">
       <div class="pp-result-title"><h2>Result</h2><span class="pp-status" data-response-state role="status" aria-live="polite">Ready</span></div>
-      <p class="pp-form-help" data-response-note>No request has been sent.</p><p class="pp-form-help" data-response-accounting hidden></p><p class="pp-form-help" data-response-transfer role="status" hidden></p>
+      <p class="pp-form-help" data-response-note>No request has been sent.</p>
       <p class="pp-inline-error" data-response-error role="alert" hidden></p>
       <dl class="pp-result-facts" data-result-facts hidden>
         <div><dt>Source status</dt><dd data-result-source>—</dd></div><div><dt>Route</dt><dd data-result-route>—</dd></div><div><dt>Country</dt><dd data-result-country>—</dd></div>
-        <div data-result-duration-metric hidden><dt>Duration</dt><dd data-result-duration>—</dd></div><div><dt>Decoded bytes</dt><dd data-result-bytes>—</dd></div><div><dt>Credits</dt><dd data-result-credits>—</dd></div>
+        <div data-result-duration-metric hidden><dt>Duration</dt><dd data-result-duration>—</dd></div><div><dt>Decoded bytes</dt><dd data-result-bytes>—</dd></div>
       </dl>
+      <section class="pp-credit-usage" data-credit-usage aria-labelledby="credit-usage-title" hidden>
+        <h3 id="credit-usage-title">Credit usage</h3>
+        <p class="pp-credit-usage-summary" data-credit-usage-summary role="status"></p>
+        <dl class="pp-result-facts" data-credit-usage-meter hidden>
+          <div data-credit-usage-transfer-row hidden><dt>Billed transfer</dt><dd data-credit-usage-transfer></dd></div>
+          <div data-credit-usage-block-size-row hidden><dt>Billing block size</dt><dd data-credit-usage-block-size></dd></div>
+          <div data-credit-usage-blocks-row hidden><dt>Blocks billed</dt><dd data-credit-usage-blocks></dd></div>
+          <div data-credit-usage-rate-row hidden><dt>Credit rate</dt><dd data-credit-usage-rate></dd></div>
+        </dl>
+        <p class="pp-credit-usage-calculation" data-credit-usage-calculation hidden></p>
+      </section>
       <p class="pp-result-operation pp-form-help" data-operation-row hidden>Operation key <code data-operation-key></code></p>
     </div>
     <div class="pp-response-toolbar"><div class="pp-tabs" role="tablist" aria-label="Response views">

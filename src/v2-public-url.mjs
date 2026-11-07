@@ -6,11 +6,12 @@ export const PUBLIC_URL_ID='public-url-http';
 export const RESERVED_PUBLIC_URL_IDS=Object.freeze([PUBLIC_URL_ID,'public-url-residential']);
 export const PUBLIC_URL_KIND='public_url_http';
 export const PUBLIC_URL_REF=Object.freeze({id:PUBLIC_URL_ID,version:1});
+export const PUBLIC_URL_V2_REF=Object.freeze({id:PUBLIC_URL_ID,version:2});
 export const PUBLIC_URL_MAX_BODY_BYTES=20_000_000;
 export const PUBLIC_URL_TRANSFER_LIMITS=Object.freeze({
  min_transfer_mb:0.25,max_transfer_mb:20,step_mb:0.25,
  max_encoded_bytes:PUBLIC_URL_MAX_BODY_BYTES,max_decoded_bytes:PUBLIC_URL_MAX_BODY_BYTES,
- body_limit_basis:'aggregate_authorized_transfer_ceiling'
+ body_limit_basis:'aggregate_authorized_transfer_ceiling',default_transfer_policy:'automatic'
 });
 export const PUBLIC_URL_ROUTES=Object.freeze([
  Object.freeze({class:'datacenter',country:'US',provider:'oxylabs'}),
@@ -24,13 +25,22 @@ const DOCUMENTATION_IPV6=ipaddr.parse('3fff::');
 const matchesHost=(host,suffix)=>host===suffix||host.endsWith('.'+suffix);
 const dnsName=host=>typeof host==='string'&&host.length<=253&&host.includes('.')&&!isIP(host)&&host.split('.').every(label=>LABEL.test(label));
 
-export function isPublicUrlProfile(profile){
- return profile?.id===PUBLIC_URL_ID&&profile.version===PUBLIC_URL_REF.version&&profile.kind===PUBLIC_URL_KIND;
+export const isPublicUrlRef=ref=>ref?.id===PUBLIC_URL_ID&&[PUBLIC_URL_REF.version,PUBLIC_URL_V2_REF.version].includes(ref.version);
+export const isPublicUrlProfile=profile=>isPublicUrlRef(profile)&&profile.kind===PUBLIC_URL_KIND;
+
+export function publicUrlRouteAllowed(ref,route){
+ if(!isPublicUrlRef(ref))return false;
+ if(ref.version===PUBLIC_URL_REF.version)return PUBLIC_URL_ROUTES.some(rule=>rule.class===route.class&&rule.country===route.country&&rule.provider===route.provider);
+ return typeof route.country==='string'&&/^[A-Z]{2}$/.test(route.country)&&(
+  route.class==='datacenter'&&route.provider==='oxylabs'||route.class==='residential'&&['evomi','dataimpulse'].includes(route.provider));
 }
 
-export function publicUrlProfile(){
- return {...PUBLIC_URL_REF,kind:PUBLIC_URL_KIND,origins:[],paths:['^/'],methods:['GET','HEAD'],
-  headers:['accept','accept-language','user-agent'],credential_headers:[],proxy_classes:['datacenter','residential'],countries:['US'],
+export function publicUrlProfile(ref=PUBLIC_URL_REF){
+ const {id,version}=ref;
+ // V2 keeps its registry body immutable. Its country scope is supplied by
+ // the exact, independently reviewed route rules during admission.
+ return {id,version,kind:PUBLIC_URL_KIND,origins:[],paths:['^/'],methods:['GET','HEAD'],
+  headers:['accept','accept-language','user-agent'],credential_headers:[],proxy_classes:['datacenter','residential'],countries:version===PUBLIC_URL_REF.version?['US']:[],
   limits:{max_requests:30,max_encoded_bytes:PUBLIC_URL_MAX_BODY_BYTES,max_decoded_bytes:PUBLIC_URL_MAX_BODY_BYTES,max_session_encoded_bytes:60_000_000,
    max_input_bytes:1,max_tunnel_bytes:PUBLIC_URL_MAX_BODY_BYTES,max_redirects:2,max_expansion_ratio:100,
    timeout_ms:15000,min_interval_ms:250,ttl_seconds:900}};

@@ -6,6 +6,7 @@ import {ControlPaidCredits,initControlPaidCredits,outstandingPaidCreditLiability
 import {ControlCredits,grantInitialCredits} from '../src/control-credits.mjs';
 import {sha} from '../src/crypto.mjs';
 import {Store} from '../src/store.mjs';
+import {PUBLIC_URL_V2_REF} from '../src/v2-public-url.mjs';
 
 const accessProfile={id:'synthetic-paid',version:1};
 const paidCreditPolicy={reviewed:true,version:'synthetic-v1',routes:[
@@ -42,6 +43,23 @@ test('approved packs and HTTP tariffs compute exact decimal byte and credit ceil
  assert.deepEqual(reviewedPaidCreditRoutes(invalid),[]);
 });
 
+test('regional public rules have their own bounded allowance and unique tuples',()=>{
+ const legacy=Array(100).fill(paidCreditPolicy.routes[0]);
+ const regional=Array.from({length:250},(_,i)=>String.fromCharCode(65+Math.floor(i/26),65+i%26)).flatMap(country=>[
+  {class:'datacenter',country,provider:'oxylabs'},
+  {class:'residential',country,provider:'evomi'},
+  {class:'residential',country,provider:'dataimpulse'}
+ ].map(route=>({...route,accessProfile:PUBLIC_URL_V2_REF})));
+ const reviewed=routes=>reviewedPaidCreditRoutes({controlPlane:{enabled:true,paidCreditPolicy:{...paidCreditPolicy,routes}}});
+ const full=[...legacy,...regional.slice(0,747)];
+ assert.equal(reviewed(full),full);
+ assert.deepEqual(reviewed([...legacy,legacy[0]]),[]);
+ assert.deepEqual(reviewed(regional.slice(0,748)),[]);
+ assert.deepEqual(reviewed([regional[0],{...regional[0]}]),[]);
+ assert.deepEqual(reviewed([{...regional[0],provider:'evomi'}]),[]);
+ assert.deepEqual(reviewed([{...paidCreditPolicy.routes[0],accessProfile:PUBLIC_URL_V2_REF}]),[]);
+});
+
 test('paid credit purchases, allocation, settlement and recovery are durable and isolated',{skip:!process.env.TEST_DATABASE_URL},async t=>{
  assert.match(new URL(process.env.TEST_DATABASE_URL).pathname,/^\/gateway_test_[A-Za-z0-9_]+$/);
  const store=new Store(process.env.TEST_DATABASE_URL),user=randomUUID(),projects=[];
@@ -66,6 +84,7 @@ test('paid credit purchases, allocation, settlement and recovery are durable and
   return operation;
  };
  const reserve=(project,operation,terms=quote())=>store.tx(c=>paid.reserve(c,{project,operation,keyId:'console',quote:terms}));
+ const automatic=(project,route='residential',options={})=>store.tx(c=>paid.quoteAutomaticHttp(c,{project,keyId:'console',route,...options}));
  const finish=(project,operation,traffic)=>store.tx(c=>paid.finish(c,{project,operation,...traffic}));
  const allocate=async(a,terms=quote())=>store.tx(async c=>{
   const operation=await insertOperation(c,a);
@@ -98,6 +117,26 @@ test('paid credit purchases, allocation, settlement and recovery are durable and
    assert.deepEqual(await paid.usage(a.project),{unit:'credits',granted:10_000,available:0,reserved:0,used:0,held:0,revoked_unused:10_000,payment_hold:false});
    assert.equal((await trial.usage(a.project)).available,2);
   });
+  await t.test('automatic transfer ceilings honor whole billing blocks, customer limits and provider headroom',async()=>{
+   const {project}=await makeProject(),payment=purchase(project);
+   await assert.rejects(automatic('unmanaged'),{code:'paid_credit_reservation_invalid',status:503});
+   await assert.rejects(automatic(project),{code:'paid_credit_balance_exhausted',status:429});
+   await grant(payment);
+   assert.deepEqual(await automatic(project,'datacenter'),quote('datacenter',20));
+   assert.deepEqual(await automatic(project,'residential'),quote('residential',20));
+   assert.deepEqual(await automatic(project,'direct',{maxCredits:2}),quote('direct',2));
+   assert.deepEqual(await automatic(project,'residential',{maxCredits:12}),quote('residential',0.5));
+   assert.deepEqual(await automatic(project,'datacenter',{maxBytes:1_749_999}),quote('datacenter',1.5));
+   assert.deepEqual(await automatic(project,'residential',{maxCredits:17,maxBytes:650_000}),quote('residential',0.5));
+   assert.deepEqual(await automatic(project,'residential',{maxBytes:250_000}),quote('residential',0.25));
+   await assert.rejects(automatic(project,'residential',{maxCredits:'5'}),{code:'max_credits_invalid',status:400});
+   await assert.rejects(automatic(project,'residential',{maxCredits:4}),{code:'max_credits_exceeded',status:429});
+   await assert.rejects(automatic(project,'residential',{maxBytes:249_999}),{code:'residential_budget_exhausted',status:429});
+   await assert.rejects(automatic(project,'residential',{maxBytes:Infinity}),{code:'residential_budget_unconfigured',status:503});
+   await assert.rejects(automatic(project,'residential',{keyId:randomUUID()}),{code:'api_key_forbidden',status:403});
+   await store.tx(c=>paid.setPaymentHold(c,{project,mode:'live',accountId:payment.accountId,holdId:'dp_automatic',active:true}));
+   await assert.rejects(automatic(project),{code:'paid_credit_payment_hold',status:409});
+  });
   await t.test('reserved credit ceilings cannot be overspent and actual charges use the saved grant split',async()=>{
    const a=await makeProject(),one=purchase(a.project),five=purchase(a.project,800);
    await grant(one);
@@ -110,8 +149,15 @@ test('paid credit purchases, allocation, settlement and recovery are durable and
     }
    });
    assert.equal((await paid.usage(a.project)).available,5);
+   assert.deepEqual(await automatic(a.project),quote('residential',0.25));
+   assert.deepEqual(await automatic(a.project,'datacenter'),quote('datacenter',5));
    const [first,second]=await store.tx(async c=>[await insertOperation(c,a),await insertOperation(c,a)]);
-   const results=await Promise.allSettled([reserve(a.project,first),reserve(a.project,second)]);
+   const reserveAutomatic=operation=>store.tx(async c=>{
+    const attribution={project:a.project,keyId:'console'};
+    const terms=await paid.quoteAutomaticHttp(c,{...attribution,route:'residential'});
+    return paid.reserve(c,{...attribution,operation,quote:terms});
+   });
+   const results=await Promise.allSettled([reserveAutomatic(first),reserveAutomatic(second)]);
    assert.equal(results.filter(result=>result.status==='fulfilled').length,1);
    assert.equal(results.find(result=>result.status==='rejected').reason.code,'paid_credit_balance_exhausted');
    const winner=results[0].status==='fulfilled'?first:second;
@@ -123,6 +169,7 @@ test('paid credit purchases, allocation, settlement and recovery are durable and
    assert.deepEqual(saved,[{credits:'5',offset_credits:'0'},{credits:'15',offset_credits:'5'}]);
    const settled=await finish(a.project,split,{dispatched:true,measuredBytes:250_001});
    assert.equal(settled.used_credits,10);assert.equal(settled.billable_bytes,250_001);
+   assert.equal(settled.billable_blocks,2);
    await revoke(one);
    assert.equal((await paid.usage(a.project)).available,49_995);
    assert.equal((await paid.usage(a.project)).revoked_unused,0);
@@ -146,11 +193,13 @@ test('paid credit purchases, allocation, settlement and recovery are durable and
    });
    const unknown=await finish(a.project,aReserved,{dispatched:true,unknown:true,measuredBytes:1_250_000});
    assert.equal(unknown.state,'held');assert.equal(unknown.used_credits,null);assert.equal(unknown.reserved_credits,2);
+   assert.equal(unknown.billable_blocks,null);
    assert.equal(await outstanding(),before);
    assert.equal(await finish(a.project,aReserved,{dispatched:false}),null);
    const lost=await allocate(a),noTraffic=await allocate(a),atCap=await allocate(a,quote('residential',0.5));
    const platform=await finish(a.project,lost,{dispatched:true,unknown:true,fetchxFailure:true});
    assert.equal(platform.settlement_basis,'fetchx_failure_refund');assert.equal(platform.used_credits,0);
+   assert.equal(platform.billable_blocks,0);
    assert.equal((await finish(a.project,noTraffic,{dispatched:false})).settlement_basis,'verified_no_dispatch');
    const proven=await finish(a.project,atCap,{dispatched:true,unknown:true,confirmedAtCap:true});
    assert.equal(proven.settlement_basis,'confirmed_cap');assert.equal(proven.used_credits,10);assert.equal(proven.billable_bytes,500_000);
