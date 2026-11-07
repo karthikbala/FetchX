@@ -8,10 +8,17 @@ import { mountStripeBilling } from './stripe-billing';
 import { creditPackages, formatCredits } from '../data/credit-packages';
 type Json = Record<string, any>;
 type Project = { id: string; name: string; status: string; created_at?: string };
-type Profile = { id: string; version: number; kind?: string; origins: string[]; paths?: string[]; methods: string[]; proxy_classes: string[]; route_reservations?: Json[] };
+type ProfileRef = { id: string; version: number };
+type Profile = ProfileRef & { kind?: string; origins: string[]; paths?: string[]; methods: string[]; headers?: string[]; proxy_classes: string[]; route_reservations?: Json[] };
+type DraftInput = { url: string; execution: Execution; method: string; proxy: { class: RouteClass; country: string | null }; key_id?: string };
+type DraftPolicy = { kind: 'reviewed'; profile: ProfileRef; url: string; maximum?: number | null } |
+  { kind: 'public' | 'legacy'; profile: Profile; url: string };
 const publicUrlId = 'public-url-http';
 const publicUrlKind = 'public_url_http';
 const transferLimitErrors = new Set(['max_transfer_bytes_exceeded', 'encoded_body_limit', 'decoded_body_limit']);
+const publicFallbackProxyErrors = new Set(['playground_route_unreviewed', 'playground_execution_unreviewed',
+  'playground_route_unhealthy', 'country_pool_unavailable', 'residential_provider_unavailable']);
+const publicFallbackExecutionErrors = new Set(['playground_execution_unreviewed', 'playground_no_route']);
 const isPublicUrlProfile = (profile: Profile) => profile.id === publicUrlId && profile.kind === publicUrlKind;
 const positiveInteger = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 const nonnegativeInteger = (value: unknown): value is number => value === 0 || positiveInteger(value);
@@ -329,7 +336,7 @@ async function initWorkspace(root: HTMLElement) {
     if (held) note = merged ? 'This project’s credits are on hold while a payment is under review.'
       : 'Paid credits are on hold. Trial credits still follow the project’s trial limits.';
     else if (merged && state === 'available') note = 'Your remaining signup credits and purchased credits share this project balance.';
-    else if (breakdown) note = state === 'available' ? 'Trial credits apply to eligible routes. Use Purchased HTTP to spend paid credits.'
+    else if (breakdown) note = state === 'available' ? 'The selected route determines which balance is used.'
       : 'Only the balances FetchX could verify are shown.';
     else if (state === 'unavailable') note = 'Refresh to check the current project balance.';
     qa('[data-credit-summary]').forEach(node => { node.dataset.creditSummary = state; });
@@ -372,7 +379,6 @@ async function initWorkspace(root: HTMLElement) {
   }
   function renderUsage() {
     const { pool, merged, held } = renderCreditSummary();
-    renderRequestCreditLabels(merged);
     const credits = merged ? pool : usage?.credits ?? billing?.credits;
     const billingView = root.dataset.view === 'billing';
     const gateway = usage?.gateway, outcomes = gateway?.outcomes;
@@ -405,7 +411,7 @@ async function initWorkspace(root: HTMLElement) {
       : status === 'trial' ? `Your configured trial allocation is active. Use approved ${trialRoutes || 'trial'} routes. The playground also shows any reviewed trial residential and browser options for this project.`
       : status === 'approval_required' ? 'This project has no available trial credits. Check your account’s other projects or contact FetchX for help.'
       : 'The service did not return a billing status. Refresh to read it again.');
-    textAll('[data-billing-policy]', merged ? 'Reviewed routes use fixed credits per operation. Public URL HTTP charges by measured wire traffic.'
+    textAll('[data-billing-policy]', merged ? 'Browser requests and some HTTP requests have a fixed charge. Other HTTP requests charge by measured transfer.'
       : trial?.trial_target === 1_000 && trial.grant_scope === 'account' && trial.grant_frequency === 'once' ? 'Eligible accounts receive 1,000 trial credits once.'
       : 'Trial credits follow the project’s configured allowance.');
     const paidCredits = merged ? pool : billing?.paid_credits ?? usage?.paid_credits;
@@ -422,9 +428,6 @@ async function initWorkspace(root: HTMLElement) {
       for (const field of ['available', 'used', 'reserved', 'held']) textAll(`[data-paid-credits-${field}]`, formatCredits(paidCredits?.[field]));
       hide('[data-paid-credits-hold]', !held);
       hide('[data-paid-credits-use]', held || !profiles.some(advertisesPublicRoute));
-      textAll('[data-paid-credits-use-description]', merged
-        ? 'Public URL HTTP shows measured transfer and credits used with each result.'
-        : 'To use paid credits, select Purchased HTTP in the playground, then choose an available datacenter or residential route.');
     }
   }
   function renderChecklist() { const states = [signedIn, Boolean(project), keys.some(key => !key.revoked_at), operations.length > 0]; textAll('[data-onboarding-count]', `${states.filter(Boolean).length} of 4 complete`); ['email','project','key','request'].forEach((name, index) => { const node = q(`[data-checklist-${name}]`); node?.classList.toggle('is-complete', states[index]); const mark = node?.querySelector('.pp-step-check'); if (mark) mark.textContent = states[index] ? '✓' : String(index + 1); }); }
@@ -468,8 +471,6 @@ async function initWorkspace(root: HTMLElement) {
   q('[data-refresh-history]')?.addEventListener('click', async event => { const button = event.currentTarget as HTMLButtonElement; button.disabled = true; clearError(); try { await refreshHistory(); } catch (error) { setError(error); } finally { button.disabled = false; } });
 
   const requestForm = q<HTMLFormElement>('[data-playground-form]');
-  const walletSelect = q<HTMLSelectElement>('[data-request-wallet]');
-  const purchasedHttp = () => walletSelect?.value === 'paid';
   const requestUrl = q<HTMLInputElement>('[data-request-url]');
   const routeSelect = q<HTMLSelectElement>('[data-request-route]');
   const countryInput = q<HTMLInputElement>('[data-request-country]');
@@ -496,9 +497,9 @@ async function initWorkspace(root: HTMLElement) {
   let retainedHeaders: string | null = null;
 
   const hide = (selector: string, hidden: boolean) => { const node = q(selector); if (node) node.hidden = hidden; };
-  const execution = (): Execution => !purchasedHttp() && q<HTMLInputElement>('input[name="mode"]:checked')?.value === 'browser' ? 'browser' : 'http';
+  const execution = (): Execution => q<HTMLInputElement>('input[name="mode"]:checked')?.value === 'browser' ? 'browser' : 'http';
   const baseCapabilities = (): PlaygroundCapabilities | null => {
-    const value = purchasedHttp() ? null : capabilities.playground;
+    const value = capabilities.playground;
     return Array.isArray(value?.executions) && value.executions.length && Array.isArray(value.routes) &&
       !value.executions.every((mode: Json) => mode.reason === 'playground_disabled') ? value : null;
   };
@@ -526,20 +527,9 @@ async function initWorkspace(root: HTMLElement) {
       profile.methods.some(method => method === 'GET' || method === 'HEAD');
   }
   const paidProfiles = () => profiles.filter(advertisesPublicRoute).sort((a, b) => a.version - b.version);
-  function paidRouteProfiles(route: RouteClass) {
-    const options = new Map<string, Profile>();
-    // Keep the earlier profile when both versions advertise the same route.
-    for (const profile of paidProfiles()) {
-      for (const country of paidRouteCountries(profile, route)) {
-        if (!options.has(country)) options.set(country, profile);
-      }
-    }
-    return options;
-  }
-  function selectedPaidProfile() {
-    const route = routeChoice();
-    return purchasedHttp() && route ? paidRouteProfiles(route).get(selectedCountry()) : undefined;
-  }
+  const canOfferPublic = () => Boolean(baseCapabilities()) || !selectedProfile();
+  const publicProfilesForPair = (route: RouteClass, country: string) => paidProfiles()
+    .filter(profile => paidRouteCountries(profile, route).includes(country));
   const currentExecutionCapability = () => activeCapabilities()?.executions.find(item => item.id === execution());
   const routeChoice = () => routeClasses.find(value => value === routeSelect?.value);
   const explicitKey = () => project ? preferredKeys.get(project.id) || '' : '';
@@ -565,12 +555,7 @@ async function initWorkspace(root: HTMLElement) {
       default: return 'Unavailable for this execution mode.';
     }
   }
-  function routeAvailability(value: RouteClass) {
-    if (purchasedHttp()) {
-      const countries = [...paidRouteProfiles(value).keys()];
-      const available = countries.length > 0;
-      return { available, reason: available ? null : 'playground_route_unreviewed', countries };
-    }
+  function reviewedRouteAvailability(value: RouteClass) {
     const mode = execution(), matrix = activeCapabilities();
     if (matrix) {
       const entry = matrix.routes.find(item => item.class === value);
@@ -587,36 +572,32 @@ async function initWorkspace(root: HTMLElement) {
       Boolean(profile?.proxy_classes.includes(value)) && (value === 'direct' || countries.length > 0);
     return { available, reason: available ? null : 'playground_route_unreviewed', countries };
   }
-  function renderRequestCreditLabels(merged: boolean) {
-    if (!walletSelect) return;
-    textAll('[data-request-wallet-label]', merged ? 'Access mode' : 'Credit balance');
-    const trialOption = walletSelect.querySelector('option[value="trial"]');
-    const paidOption = walletSelect.querySelector('option[value="paid"]');
-    if (trialOption) trialOption.textContent = merged ? 'Reviewed routes' : 'Trial credits';
-    if (paidOption) paidOption.textContent = merged ? 'Public URL HTTP' : 'Purchased HTTP';
+  function routeAvailability(value: RouteClass) {
+    const reviewed = reviewedRouteAvailability(value);
+    if (value === 'direct' || execution() !== 'http' || !canOfferPublic()) return reviewed;
+    const publicCountries = paidProfiles().flatMap(profile => paidRouteCountries(profile, value));
+    if (!publicCountries.length) return reviewed;
+    return { available: true, reason: null, countries: [...new Set([...(reviewed.available ? reviewed.countries : []), ...publicCountries])] };
   }
   function renderProfiles() {
     const select = q<HTMLSelectElement>('[data-request-profile]'); if (!select) return;
     const scoped = profiles.filter(profile => profile.id !== publicUrlId && profile.kind !== publicUrlKind);
     select.replaceChildren(...scoped.map(profile => new Option(`${profile.id} · v${profile.version}`, `${profile.id}@${profile.version}`)));
     select.disabled = !scoped.length;
-    hide('[data-request-wallet-field]', !paidProfiles().length && !purchasedHttp());
-    hide('[data-request-profile-field]', purchasedHttp() || Boolean(baseCapabilities()) || scoped.length <= 1);
+    hide('[data-request-profile-field]', Boolean(baseCapabilities()) || scoped.length <= 1);
     renderRequestControls();
     schedulePreparation();
   }
   function renderRequestControls() {
     if (!routeSelect || !methodSelect) return;
     const matrix = activeCapabilities(), mode = execution();
-    const paid = purchasedHttp(), availablePaidProfiles = paid ? paidProfiles() : [];
+    const publicHttp = canOfferPublic() && paidProfiles().length > 0;
     for (const input of qa<HTMLInputElement>('input[name="mode"]')) {
       const capability = matrix?.executions.find(item => item.id === input.value);
-      if (purchasedHttp() && input.value === 'http') input.checked = true;
-      input.disabled = paid ? input.value !== 'http' || !availablePaidProfiles.length
-        : matrix ? capability?.available !== true : input.value === 'browser' || capabilities.native_http === false;
+      input.disabled = !(input.value === 'http' && publicHttp) &&
+        (matrix ? capability?.available !== true : input.value === 'browser' || capabilities.native_http === false);
       const description = input.disabled
-        ? purchasedHttp() && input.value === 'browser' ? 'This access mode supports HTTP only'
-          : matrix ? explainAvailability(capability?.reason) : input.value === 'browser' ? 'Unavailable on this service' : 'HTTP service is unavailable'
+        ? matrix ? explainAvailability(capability?.reason) : input.value === 'browser' ? 'Unavailable on this service' : 'HTTP service is unavailable'
         : input.value === 'browser' ? 'Rendered page' : 'Source response';
       textAll(`[data-execution-help="${input.value}"]`, description);
     }
@@ -640,13 +621,17 @@ async function initWorkspace(root: HTMLElement) {
     }
     textAll('[data-route-help]', [...unavailable].map(([reason, labels]) => `${labels.join(' and ')}: ${reason}`).join(' '));
     renderCountries();
-    const profile = paid ? selectedPaidProfile() ?? availablePaidProfiles[0] : selectedProfile();
+    const profile = selectedProfile(), route = routeChoice();
+    const publicMethods = !matrix && !profile && route && selectedCountry()
+      ? publicProfilesForPair(route, selectedCountry()).flatMap(profile => profile.methods) : [];
     const oldMethod = methodSelect.value;
-    const methods = (matrix ? currentExecutionCapability()?.methods ?? (mode === 'http' ? ['GET', 'HEAD'] : ['GET']) : profile?.methods || []).filter(value => value === 'GET' || value === 'HEAD');
+    const methods = [...new Set(matrix ? currentExecutionCapability()?.methods ?? (mode === 'http' ? ['GET', 'HEAD'] : ['GET'])
+      : profile?.methods ?? publicMethods)].filter(value => value === 'GET' || value === 'HEAD');
     methodSelect.replaceChildren(...methods.map(method => new Option(method, method)));
     if (methods.some(method => method === oldMethod)) methodSelect.value = oldMethod;
     hide('[data-request-method-field]', methods.length <= 1);
-    const allowedHeaders = mode === 'http' && matrix ? currentExecutionCapability()?.headers || [] : [];
+    renderKeyChoice();
+    const allowedHeaders = draftHeaders(effectivePolicy(draftInput()));
     for (const input of qa<HTMLInputElement>('[data-request-header]')) {
       input.disabled = !allowedHeaders.includes(input.dataset.requestHeader || '');
       (input.closest('[data-header-field]') as HTMLElement).hidden = input.disabled;
@@ -660,13 +645,11 @@ async function initWorkspace(root: HTMLElement) {
       waitInput.disabled = !hasWait;
       if (hasWait) waitInput.max = String(waitMax);
     }
-    textAll('[data-profile-summary]', purchasedHttp()
-      ? 'Public HTTPS destinations on available proxy routes. The charge follows measured wire traffic.'
-      : matrix
-      ? preparedRequest?.access_profile ? 'FetchX matched an access policy for this website and execution mode.' : 'FetchX checks the destination and chooses an access policy automatically.'
-      : profile ? `Approved destinations: ${profile.origins.join(', ')}${profile.paths?.length ? ' · Paths: ' + profile.paths.join(', ') : ''}` : 'No approved HTTP access profile is configured.');
-    textAll('#request-url-help', purchasedHttp() ? 'Use a public HTTPS hostname on port 443 without credentials or fragments.' : matrix ? 'Use a public HTTPS URL.' : 'Use a public HTTPS URL approved by this project’s profile.');
-    renderKeyChoice();
+    textAll('[data-profile-summary]', !matrix && profile
+      ? `Approved destinations: ${profile.origins.join(', ')}${profile.paths?.length ? ' · Paths: ' + profile.paths.join(', ') : ''}`
+      : 'FetchX checks the destination and route before sending.');
+    textAll('#request-url-help', !matrix && profile ? 'Use a public HTTPS URL approved for this project.'
+      : 'Use a public HTTPS hostname on port 443 without credentials or fragments.');
   }
   function selectedCountry() {
     if (countryOptions.length === 1) return countryOptions[0].code;
@@ -724,14 +707,15 @@ async function initWorkspace(root: HTMLElement) {
     if (!countryOptions.some(option => option.code === code)) return;
     preferredCountry = code;
     closeCountryPicker();
-    if (purchasedHttp()) renderRequestControls();
+    renderRequestControls();
     changeDraft();
   }
   function renderKeyChoice() {
     if (!keySelect || !project) return;
-    const managed = purchasedHttp() || Boolean(baseCapabilities()), eligible = keyOptions();
-    hide('[data-request-keys]', !managed);
-    if (!managed) return;
+    const needsKey = Boolean(baseCapabilities()) || canOfferPublic() && paidProfiles().length > 0;
+    const eligible = keyOptions();
+    hide('[data-request-keys]', !needsKey);
+    if (!needsKey) return;
     if (!eligible.some(item => item.id === explicitKey())) preferredKeys.delete(project.id);
     keySelect.replaceChildren(new Option('Choose a key', ''), ...eligible.map(item => new Option(`${item.name || 'API key'} · …${item.id.slice(-8)}`, item.id)));
     keySelect.value = keyChoice();
@@ -741,12 +725,44 @@ async function initWorkspace(root: HTMLElement) {
     textAll('[data-selected-key]', eligible.length === 1 ? `API key: ${eligible[0].name || 'Project key'}` : '');
   }
 
-  function draftInput(): Json | null {
+  function draftInput(): DraftInput | null {
     const url = requestUrl?.value.trim(), mode = execution(), route = routeChoice(), method = methodSelect?.value, country = selectedCountry();
-    if (!url || requestUrl?.validity.typeMismatch || !route || !routeAvailability(route).available || !method ||
-        activeCapabilities() && currentExecutionCapability()?.available !== true ||
-        route !== 'direct' && (countryFilter !== null || !country || !routeAvailability(route).countries.includes(country))) return null;
+    if (!url || requestUrl?.validity.typeMismatch || !route || !method) return null;
+    const availability = routeAvailability(route);
+    if (!availability.available || route !== 'direct' && (countryFilter !== null || !country || !availability.countries.includes(country))) return null;
     return { url, execution: mode, method, proxy: { class: route, country: route === 'direct' ? null : country }, ...(explicitKey() ? { key_id: explicitKey() } : {}) };
+  }
+  function effectivePolicy(input: DraftInput | null): DraftPolicy | undefined {
+    if (!input) return;
+    const { execution, proxy, method, url } = input;
+    if (baseCapabilities()) {
+      const prepared = preparedRequest;
+      if (!prepared || preparedSignature !== JSON.stringify(input) || prepared.execution !== execution ||
+          !prepared.url || !prepared.selected_key_id || prepared.selected_key_id !== keyChoice() || !Array.isArray(prepared.errors)) return;
+      if (prepared.ready === true && prepared.access_profile && prepared.quote && !prepared.errors.length) {
+        return { kind: 'reviewed', profile: prepared.access_profile, url: prepared.url, maximum: prepared.quote.max_estimated_micro_usd };
+      }
+      // A successful check must rule out this exact reviewed route before the
+      // independently advertised public profile can be considered.
+      const reviewed = reviewedRouteAvailability(proxy.class);
+      if (prepared.ready !== false || prepared.quote !== null ||
+          reviewed.available && (proxy.class === 'direct' || proxy.country !== null && reviewed.countries.includes(proxy.country)) ||
+          !prepared.errors.some(error => error.field === 'proxy' && publicFallbackProxyErrors.has(error.code)) ||
+          !prepared.errors.every(error => error.field === 'proxy' ? publicFallbackProxyErrors.has(error.code) :
+            error.field === 'execution' && publicFallbackExecutionErrors.has(error.code))) return;
+    } else {
+      const legacy = selectedProfile();
+      if (legacy?.methods.includes(method)) return { kind: 'legacy', profile: legacy, url };
+      if (legacy) return;
+    }
+    if (execution !== 'http' || !proxy.country) return;
+    // The first eligible profile preserves the older ref for overlapping pairs.
+    const profile = publicProfilesForPair(proxy.class, proxy.country).find(candidate => candidate.methods.includes(method));
+    if (profile) return { kind: 'public', profile, url };
+  }
+  function draftHeaders(policy: DraftPolicy | undefined) {
+    if (execution() !== 'http') return [];
+    return policy?.kind === 'public' ? policy.profile.headers ?? [] : currentExecutionCapability()?.headers ?? [];
   }
   function clearPreparation() {
     clearTimeout(prepareTimer); ++prepareVersion;
@@ -758,7 +774,7 @@ async function initWorkspace(root: HTMLElement) {
     if (ready && draftOpen && !sending && !(hasUnifiedCredits() && paymentHeld()) && baseCapabilities() && url && !requestUrl?.validity.typeMismatch) {
       // The project matrix can be provisional for a profile-priced route. A
       // URL alone can resolve the actual matrix before any proxy is selectable.
-      const input = draft ?? {
+      const input: DraftInput = draft ?? {
         url, execution: execution(), method: methodSelect?.value || 'GET', proxy: { class: 'direct', country: null },
         ...(explicitKey() ? { key_id: explicitKey() } : {}),
       };
@@ -768,7 +784,7 @@ async function initWorkspace(root: HTMLElement) {
     }
     updateRunButton(); renderCode();
   }
-  async function prepareRequest(input: Json, id: string | undefined, version: number, chosenRoute: boolean) {
+  async function prepareRequest(input: DraftInput, id: string | undefined, version: number, chosenRoute: boolean) {
     const active = () => id === project?.id && version === prepareVersion && !leavingPage;
     if (!active() || !draftOpen || sending) return;
     try {
@@ -794,53 +810,54 @@ async function initWorkspace(root: HTMLElement) {
       if (active()) { checkingRequest = false; updateRunButton(); renderCode(); }
     }
   }
-  function requestIssue() {
+  function requestIssue(policy: DraftPolicy | undefined) {
     if (hasUnifiedCredits() && paymentHeld()) return 'This project’s credits are on hold while a payment is under review.';
     if (!requestUrl?.value.trim()) return 'Enter a URL to check the request.';
     if (requestUrl.validity.typeMismatch) return 'Enter a complete URL, including https://.';
-    if (purchasedHttp() && !validPublicDestination(requestUrl.value.trim())) return 'Use a public HTTPS hostname on port 443 without credentials or fragments.';
-    if (purchasedHttp() && !paidProfiles().length) return 'Public URL HTTP is unavailable for this project.';
-    if (!purchasedHttp() && !baseCapabilities() && !selectedProfile()) return 'No approved HTTP profile is configured for this project.';
-    if (baseCapabilities() && currentExecutionCapability()?.available !== true) return explainAvailability(currentExecutionCapability()?.reason);
+    const managed = Boolean(baseCapabilities()), publicOnly = !managed && !selectedProfile();
+    if ((policy?.kind === 'public' || publicOnly && paidProfiles().length > 0) && !validPublicDestination(requestUrl.value.trim()))
+      return 'Use a public HTTPS hostname on port 443 without credentials or fragments.';
+    if (publicOnly && !paidProfiles().length) return 'No approved HTTP routes are available for this project.';
+    if (execution() === 'browser' && currentExecutionCapability()?.available !== true) return explainAvailability(currentExecutionCapability()?.reason);
     if (!routeChoice() || !routeAvailability(routeChoice()!).available) return 'Choose an available route.';
     if (routeChoice() !== 'direct' && (countryFilter !== null || !selectedCountry())) return 'Choose a supported country.';
-    if ((purchasedHttp() || baseCapabilities()) && !keyChoice()) return keyOptions().length ? 'Choose an API key.' : 'A project API key is required.';
-    if (purchasedHttp()) {
-      if (!selectedPaidProfile()) return 'Choose a reviewed public URL route.';
-      if (paymentHeld()) return 'Purchased credits are on hold.';
-    }
+    if ((managed || publicOnly) && !keyChoice()) return keyOptions().length ? 'Choose an API key.' : 'A project API key is required.';
+    if (policy?.kind === 'public' && paymentHeld()) return 'Paid credits are on hold.';
     if (waitInput && !waitInput.disabled && !waitInput.validity.valid) return `Enter a whole number from 0 to ${waitInput.max} for the browser wait.`;
-    if (qa<HTMLInputElement>('[data-request-header]').some(input => !input.disabled && /[\u0000-\u0008\u000a-\u001f\u007f\u0100-\uffff]/u.test(input.value))) return 'Request headers must use printable HTTP characters.';
+    const allowedHeaders = draftHeaders(policy);
+    if (qa<HTMLInputElement>('[data-request-header]').some(input => allowedHeaders.includes(input.dataset.requestHeader || '') &&
+        /[\u0000-\u0008\u000a-\u001f\u007f\u0100-\uffff]/u.test(input.value))) return 'Request headers must use printable HTTP characters.';
     return '';
   }
-  function currentDraftBody(): Json | null {
-    const input = draftInput(), managed = Boolean(baseCapabilities());
-    const profile = managed ? preparedRequest?.access_profile : purchasedHttp() ? selectedPaidProfile() : selectedProfile();
-    if (!input || !profile || requestIssue()) return null;
-    if (managed && (!preparedRequest?.ready || preparedRequest.selected_key_id !== keyChoice() || preparedSignature !== JSON.stringify(input))) return null;
-    const maximum = preparedRequest?.quote?.max_estimated_micro_usd;
+  function currentDraftRequest(input = draftInput(), policy = effectivePolicy(input)) {
+    if (!input || !policy || requestIssue(policy)) return null;
+    const { profile, url } = policy;
+    const maximum = policy.kind === 'reviewed' ? policy.maximum : undefined;
+    const keyId = policy.kind === 'legacy' ? undefined : policy.kind === 'public' && !baseCapabilities() ? keyChoice() : input.key_id;
     const body: Json = {
       access_profile: { id: profile.id, version: profile.version },
-      url: managed ? preparedRequest?.url || input.url : input.url, proxy: input.proxy,
+      url, proxy: input.proxy,
       ...(typeof maximum === 'number' ? { max_estimated_micro_usd: maximum } : {}),
-      ...((managed || purchasedHttp()) && explicitKey() ? { key_id: explicitKey() } : {}),
+      ...(keyId ? { key_id: keyId } : {}),
     };
     if (input.execution === 'browser') {
       if (screenshotInput?.checked) body.screenshot = true;
       if (waitInput && !waitInput.disabled && waitInput.value !== '') body.wait_ms = waitInput.valueAsNumber;
     } else {
       body.method = input.method;
-      const headers = Object.fromEntries(qa<HTMLInputElement>('[data-request-header]').filter(header => !header.disabled && header.value.trim())
+      const allowedHeaders = draftHeaders(policy);
+      const headers = Object.fromEntries(qa<HTMLInputElement>('[data-request-header]').filter(header => allowedHeaders.includes(header.dataset.requestHeader || '') && header.value.trim())
         .map(header => [header.dataset.requestHeader, header.value.trim()]));
       if (Object.keys(headers).length) body.headers = headers;
     }
-    return body;
+    return { body, automaticTransfer: policy.kind === 'public' };
   }
   function updateRunButton() {
     q<HTMLSelectElement>('[data-project-select]')?.toggleAttribute('disabled', sending || mutating > 0 || !projects.length);
     const button = q<HTMLButtonElement>('[data-run-request]'); if (!button) return;
-    const body = ready && draftOpen && !sending ? currentDraftBody() : null;
-    button.disabled = !body;
+    const input = draftInput(), policy = effectivePolicy(input);
+    const draft = ready && draftOpen && !sending ? currentDraftRequest(input, policy) : null;
+    button.disabled = !draft;
     button.textContent = sending ? 'Waiting for result…' : 'Send request →';
     button.hidden = !draftOpen && !sending;
     const config = q<HTMLFieldSetElement>('[data-request-config]');
@@ -849,8 +866,9 @@ async function initWorkspace(root: HTMLElement) {
     if (fresh) { fresh.disabled = sending || !ready; fresh.hidden = draftOpen && !pendingKeys().length; }
     const recover = q<HTMLButtonElement>('[data-recover-result]'); if (recover) recover.disabled = sending || !ready || !recoveryKey();
     const pending = q<HTMLSelectElement>('[data-pending-operation]'); if (pending) pending.disabled = sending || !ready;
+    const issue = requestIssue(policy);
     const statusText = sending ? 'Waiting for the saved result…' : !draftOpen ? '' : checkingRequest ? 'Checking access and route…' :
-      prepareError || requestIssue() || (body ? 'Ready to send.' : 'Check the request settings before sending.');
+      draft ? 'Ready to send.' : (policy ? issue : prepareError || issue) || 'Check the request settings before sending.';
     const statusNode = q('[data-request-status]');
     if (statusNode) {
       if (statusNode.textContent !== statusText) statusNode.textContent = statusText;
@@ -1022,11 +1040,11 @@ async function initWorkspace(root: HTMLElement) {
   requestForm?.addEventListener('submit', async event => {
     event.preventDefault();
     if (!ready || !draftOpen || sending || !project) return;
-    const input = currentDraftBody();
-    if (!input || !requestForm.reportValidity()) return;
+    const draft = currentDraftRequest();
+    if (!draft || !requestForm.reportValidity()) return;
     const id = project.id, version = loadVersion, mode = execution(), key = (mode === 'browser' ? 'render_' : 'console_') + crypto.randomUUID(), path = projectPath(operationResource(mode));
-    const body = { ...input, idempotency_key: key };
-    const controlBody = purchasedHttp() ? { ...body, automatic_transfer: true } : body;
+    const body = { ...draft.body, idempotency_key: key };
+    const controlBody = draft.automaticTransfer ? { ...body, automatic_transfer: true } : body;
     clearError('[data-fetch-error]');
     try { savePending(id, key); } catch (error) { setError(error, '[data-fetch-error]'); return; } // A storage failure prevents dispatch.
     clearPreparation(); submittedRequest = { execution: mode, body };
@@ -1069,7 +1087,7 @@ async function initWorkspace(root: HTMLElement) {
     const recover = control.querySelector<HTMLOptionElement>('option[value="recover"]')!;
     recover.disabled = !key;
     if (!key && control.value === 'recover') control.value = 'send';
-    const recovery = control.value === 'recover', body = recovery ? null : submittedRequest?.body ?? (draftOpen ? currentDraftBody() : null);
+    const recovery = control.value === 'recover', body = recovery ? null : submittedRequest?.body ?? (draftOpen ? currentDraftRequest()?.body : null) ?? null;
     copyButton.disabled = !recovery && !body;
     if (copyButton.disabled) {
       textAll('[data-generated-code]', key ? 'Choose Recover this request to look up the saved operation, or prepare a new request.' : 'Prepare a request to generate code.');
@@ -1084,13 +1102,6 @@ async function initWorkspace(root: HTMLElement) {
     if (resetMatrix) { preparedCapabilities = null; renderRequestControls(); }
     schedulePreparation();
   }
-  walletSelect?.addEventListener('change', () => {
-    preparedCapabilities = null; preparedKeys = null; hasRouteChoice = false;
-    if (routeSelect) routeSelect.value = '';
-    closeCountryPicker();
-    hide('[data-request-profile-field]', purchasedHttp() || Boolean(baseCapabilities()) || (q<HTMLSelectElement>('[data-request-profile]')?.options.length ?? 0) <= 1);
-    renderRequestControls(); changeDraft();
-  });
   q('[data-request-profile]')?.addEventListener('change', () => { renderRequestControls(); changeDraft(); });
   qa('input[name="mode"]').forEach(input => input.addEventListener('change', () => {
     closeCountryPicker();
@@ -1150,7 +1161,7 @@ async function initWorkspace(root: HTMLElement) {
     if (project) { if (keySelect.value) preferredKeys.set(project.id, keySelect.value); else preferredKeys.delete(project.id); }
     changeDraft();
   });
-  methodSelect?.addEventListener('change', () => changeDraft());
+  methodSelect?.addEventListener('change', () => { renderRequestControls(); changeDraft(); });
   requestUrl?.addEventListener('input', () => changeDraft(true));
   qa('[data-request-wait],[data-request-screenshot],[data-request-header]').forEach(input => input.addEventListener('input', () => { updateRunButton(); renderCode(); }));
   q('[data-pending-operation]')?.addEventListener('change', renderCode);

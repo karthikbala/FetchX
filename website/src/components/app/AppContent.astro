@@ -20,7 +20,7 @@ const { view } = Astro.props as { view: PreviewView };
       <h2 id="paid-credits-heading" data-paid-credits-heading>Paid credit balance</h2>
       <dl class="pp-live-facts"><div data-paid-credits-available-row><dt>Available</dt><dd data-paid-credits-available>—</dd></div><div><dt>Used</dt><dd data-paid-credits-used>—</dd></div><div><dt>Reserved</dt><dd data-paid-credits-reserved>—</dd></div><div><dt>Held</dt><dd data-paid-credits-held>—</dd></div></dl>
       <p class="pp-inline-error" data-paid-credits-hold role="alert" hidden>Payment hold. Contact FetchX to review this project’s credits.</p>
-      <div class="pp-stripe-history" data-paid-credits-use hidden><p data-paid-credits-use-description>To use paid credits, select Purchased HTTP in the playground, then choose an available datacenter or residential route.</p><div class="pp-stripe-actions"><a href="/app/playground" class="pp-text-link">Open playground <Icon name="arrow" size={15}/></a><a href="/docs/fetch#paid-public-urls" class="pp-text-link">See the API example <Icon name="arrow" size={15}/></a></div></div>
+      <div class="pp-stripe-history" data-paid-credits-use hidden><p>Choose HTTP and an available proxy route in the playground. Credit usage appears with each result.</p><div class="pp-stripe-actions"><a href="/app/playground" class="pp-text-link">Open playground <Icon name="arrow" size={15}/></a><a href="/docs/fetch#paid-public-urls" class="pp-text-link">See the API example <Icon name="arrow" size={15}/></a></div></div>
     </section>
     <section class="pp-card pp-info-card pp-stripe-billing" data-stripe-billing aria-labelledby="stripe-billing-heading" hidden>
       <div class="pp-stripe-heading"><h2 id="stripe-billing-heading">Prepaid credit packs</h2><span class="pp-soft-tag" data-stripe-mode></span></div>
@@ -37,7 +37,6 @@ const { view } = Astro.props as { view: PreviewView };
 {view === 'playground' && <div class="pp-playground-grid">
   <section class="pp-card pp-request-panel" aria-label="Configure request"><form data-playground-form autocomplete="off">
     <fieldset class="pp-request-config" data-request-config aria-label="Request settings">
-      <label class="pp-field" data-request-wallet-field hidden><span data-request-wallet-label>Credit balance</span><select data-request-wallet><option value="trial">Trial credits</option><option value="paid">Purchased HTTP</option></select></label>
       <label class="pp-field">Destination URL<input type="url" name="url" data-request-url placeholder="https://example.com/" required maxlength="12000" spellcheck="false" autocomplete="off" aria-describedby="request-url-help"/><small id="request-url-help">Enter a public website URL.</small></label>
       <fieldset class="pp-mode-field"><legend>Execution</legend><div class="pp-mode-options">
         <label><input type="radio" name="mode" value="http" checked aria-describedby="request-http-help"/><span><Icon name="code" size={19}/><strong>HTTP</strong><small id="request-http-help" data-execution-help="http">Source response</small></span></label>

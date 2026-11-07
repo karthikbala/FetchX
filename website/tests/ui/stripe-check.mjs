@@ -24,7 +24,7 @@ const previewText = 'Retained preview';
 const fullText = `${previewText} plus the full body with café and Montréal.`;
 const trialProfile = { id: 'trial', version: 1, origins: ['https://trial.example.com'], methods: ['GET'], proxy_classes: ['direct'], countries: [] };
 const publicRef = { id: 'public-url-http', version: 1 };
-const publicProfile = { ...publicRef, kind: 'public_url_http', origins: [], methods: ['GET', 'HEAD'], proxy_classes: ['datacenter', 'residential'], countries: ['US'], max_daily_operations: 1000, route_reservations: [
+const publicProfile = { ...publicRef, kind: 'public_url_http', origins: [], methods: ['GET', 'HEAD'], headers: ['accept'], proxy_classes: ['datacenter', 'residential'], countries: ['US'], max_daily_operations: 1000, route_reservations: [
   { class: 'datacenter', country: 'US', paid_credit_reservation: { route_class: 'datacenter', block_bytes: 1_000_000, credits_per_block: 1, max_transfer_bytes: 1_000_000, reserved_credits: 1 } },
   { class: 'residential', country: 'US', paid_credit_reservation: { route_class: 'residential', block_bytes: 250_000, credits_per_block: 5, max_transfer_bytes: 250_000, reserved_credits: 5 } },
 ] };
@@ -33,6 +33,23 @@ const publicProfileV2 = { ...publicProfile, ...publicRefV2, countries: ['US', 'C
   { class: 'datacenter', country: 'CA', paid_credit_reservation: { route_class: 'datacenter', block_bytes: 1_000_000, credits_per_block: 2, max_transfer_bytes: 2_000_000, reserved_credits: 4 } },
   { class: 'datacenter', country: 'US', paid_credit_reservation: { route_class: 'datacenter', block_bytes: 1_000_000, credits_per_block: 3, max_transfer_bytes: 1_000_000, reserved_credits: 3 } },
 ] };
+const reviewedRef = execution => ({ id: `playground:fixture-${execution}`, version: 1 });
+function reviewedMatrix(url) {
+  const scoped = !url || url.hostname === 'reviewed.example';
+  return {
+    executions: [
+      { id: 'http', available: true, methods: ['GET', 'HEAD'], headers: ['accept', 'accept-language'] },
+      { id: 'browser', available: true, methods: ['GET'], max_wait_ms: 750 },
+    ],
+    routes: [
+      { class: 'direct', executions: { http: { available: true, countries: [] }, browser: { available: true, countries: [] } } },
+      { class: 'datacenter', executions: {
+        http: { available: true, countries: scoped ? ['GB', 'US'] : ['GB'] },
+        browser: { available: true, countries: ['US'] },
+      } },
+    ],
+  };
+}
 const checkoutUrl = mode => `https://checkout.stripe.com/c/pay/cs_${mode}_Synthetic#fixture`;
 const billing = [
   { project: primary, mode: 'test', pending: null, available: 0, purchases: [] },
@@ -40,7 +57,7 @@ const billing = [
 ];
 const writeKey = { id: '00000000-0000-4000-8000-000000000007', name: 'Fixture write key', scopes: ['fetch:read', 'fetch:write'] };
 const alternateKey = { ...writeKey, id: '00000000-0000-4000-8000-000000000008', name: 'Alternate key' };
-const paidFetches = [], countryFetches = [], paidLookups = [], checkoutPosts = [], lookupKeys = [], unexpected = [], errors = [], consoleErrors = [], hostedVisits = [];
+const paidFetches = [], countryFetches = [], reviewedFetches = [], publicOnlyFetches = [], preflightCalls = [], paidLookups = [], checkoutPosts = [], lookupKeys = [], unexpected = [], errors = [], consoleErrors = [], hostedVisits = [];
 let signedIn = false, failFirstCheckout = true, hideSavedCheckout = false, invalidCheckout = true;
 let delayedResponse, delayedLogout, delayedBalance;
 let unknownPaidFetch;
@@ -92,16 +109,36 @@ await page.route('**/api/control/**', async route => {
     ...(fixture.merged ? { credit_balance: { mode: 'unified', ...paid_credits } } : { trial }) };
   if (fixture.project.id === secondary.id && delayedBalance && (resource === '/usage' || resource === '/billing')) await delayedBalance;
   const paidReady = fixture.mode === 'live' && !fixture.routeDown;
-  if (resource === '') return send({ project: fixture.project, access_profiles: [trialProfile, ...(paidReady ? [publicProfileV2, publicProfile] : [])], capabilities: {
+  if (resource === '') return send({ project: fixture.project, access_profiles: [...(fixture.publicOnly ? [] : [trialProfile]), ...(paidReady ? [publicProfileV2, publicProfile] : [])], capabilities: {
     routes: paidReady ? ['direct', 'datacenter', 'residential'] : ['direct'],
-    ...(paidReady ? { playground: { executions: [
-      { id: 'http', available: true, methods: ['GET'], headers: [] },
-      { id: 'browser', available: true, methods: ['GET'] },
-    ], routes: [{ class: 'direct', executions: { http: { available: true, countries: [] }, browser: { available: true, countries: [] } } }] } } : {}),
+    ...(paidReady && !fixture.publicOnly ? { playground: reviewedMatrix() } : {}),
     paid_http: { public_url_access_profile: paidReady ? publicRef : null, public_url_access_profiles: paidReady ? [publicRefV2, publicRef] : [],
       proxy_classes: { datacenter: paidReady, residential: paidReady } },
   } });
-  if (resource === '/keys') return send({ keys: paidReady ? [writeKey, alternateKey] : [] });
+  if (resource === '/keys') return send({ keys: paidReady ? fixture.publicOnly ? [writeKey] : [writeKey, alternateKey] : [] });
+  if (resource === '/playground/prepare' && method === 'POST') {
+    assert.ok(paidReady && !fixture.publicOnly);
+    const body = request.postDataJSON(), target = new URL(body.url);
+    preflightCalls.push(body);
+    if (target.pathname === '/failed-check') return deny('fixture_preflight_failed', 503);
+    const capabilities = reviewedMatrix(target);
+    const routeAvailability = capabilities.routes.find(route => route.class === body.proxy.class)?.executions[body.execution];
+    const routeAllowed = routeAvailability?.available &&
+      (body.proxy.class === 'direct' ? body.proxy.country === null : routeAvailability.countries.includes(body.proxy.country));
+    const key = [writeKey, alternateKey].find(item => item.id === body.key_id);
+    const invalidUrl = target.protocol !== 'https:' || target.hostname === '127.0.0.1';
+    const blocked = target.pathname === '/spending-limit';
+    const quote = routeAllowed && !blocked ? { credits: 2, max_estimated_micro_usd: 1500 } : null;
+    const errors = [
+      ...(invalidUrl ? [{ field: 'url', code: 'playground_destination_rejected', message: 'Use a public HTTPS hostname.' }] : []),
+      ...(!key ? [{ field: 'key_id', code: 'playground_key_selection_required', message: 'Choose an API key.' }] : []),
+      ...(!quote ? [{ field: 'proxy', code: blocked ? 'cost_ceiling_exceeded' : 'playground_route_unreviewed',
+        message: blocked ? 'The project spending limit prevents this request.' : 'This route and country are unavailable.' }] : []),
+    ];
+    return send({ ready: !errors.length, url: invalidUrl ? null : target.href, execution: body.execution,
+      access_profile: invalidUrl ? null : reviewedRef(body.execution), selected_key_id: key?.id ?? null,
+      keys: [writeKey, alternateKey], capabilities, quote, errors });
+  }
   if (resource === '/requests') return send({ operations: [] });
   if (resource === '/usage') return send(accounting);
   if (resource === '/billing') {
@@ -122,6 +159,19 @@ await page.route('**/api/control/**', async route => {
     assert.equal(request.headers()['x-csrf-token'], csrf);
     const { idempotency_key, ...actual } = body;
     assert.match(idempotency_key, /^console_[a-f0-9-]{36}$/);
+    if (fixture.publicOnly) {
+      assert.deepEqual(actual, { access_profile: publicRef, url: 'https://example.com/', method: 'GET',
+        proxy: { class: 'residential', country: 'US' }, key_id: writeKey.id, automatic_transfer: true });
+      publicOnlyFetches.push(actual);
+      return send({ success: false, state: 'rejected', operation_id: null, error: { code: 'fixture_rejected', message: 'Fixture rejection.' } });
+    }
+    if (body.access_profile.id === reviewedRef('http').id) {
+      assert.deepEqual(actual, { access_profile: reviewedRef('http'), url: 'https://reviewed.example/', method: 'HEAD',
+        proxy: { class: 'datacenter', country: 'US' }, max_estimated_micro_usd: 1500, key_id: writeKey.id, headers: { 'accept-language': 'en-US' } });
+      reviewedFetches.push(actual);
+      return send({ success: false, state: 'rejected', operation_id: null,
+        error: { code: 'playground_route_unreviewed', message: 'The reviewed route changed before admission.' } });
+    }
     if (body.proxy.class === 'datacenter') {
       const canada = body.proxy.country === 'CA';
       assert.deepEqual(actual, { access_profile: canada ? publicRefV2 : publicRef, url: 'https://example.com/', method: 'GET',
@@ -336,23 +386,71 @@ try {
   await page.setViewportSize({ width: 360, height: 850 });
   await page.screenshot({ path: `${out}/credit-billing-mobile.png`, fullPage: true });
   await page.locator('[data-paid-credits-use] a[href="/app/playground"]').click();
-  await expect(page.locator('[data-request-profile]')).toHaveValue('trial@1');
   const creditUsage = page.getByRole('region', { name: 'Credit usage' });
   const usageSummary = page.locator('[data-credit-usage-summary]');
   const requestStatus = page.locator('[data-request-status]');
-  await expect(creditUsage).toBeHidden();
-  await expect(page.getByLabel('Access mode')).toHaveValue('trial');
-  await expect(page.locator('[data-request-wallet] option')).toHaveText(['Reviewed routes', 'Public URL HTTP']);
-  await expect(page.locator('input[name="mode"][value="browser"]')).toBeEnabled();
-  await page.locator('input[name="mode"][value="browser"]').check();
-  await page.locator('[data-request-wallet]').selectOption('paid');
-  await expect(page.locator('input[name="mode"][value="http"]')).toBeChecked();
-  await expect(page.locator('input[name="mode"][value="browser"]')).toBeDisabled();
+  const http = page.locator('input[name="mode"][value="http"]');
+  const browserMode = page.locator('input[name="mode"][value="browser"]');
   const paidRoute = page.locator('[data-request-route]');
   const proxyCountry = page.getByRole('combobox', { name: 'Proxy country' });
   const runRequest = page.locator('[data-run-request]');
+  const destination = page.locator('[data-request-url]');
+  const requestKey = page.locator('[data-request-key]');
+  const requestMethod = page.locator('[data-request-method]');
+  const generatedCode = page.locator('[data-generated-code]');
+  const chooseExecution = mode => page.locator('.pp-mode-options label').filter({ has: mode }).click();
+  await expect(creditUsage).toBeHidden();
+  await expect(page.getByLabel('Access mode')).toHaveCount(0);
+  await expect(http).toBeChecked();
+  await expect(browserMode).toBeEnabled();
+  await expect(paidRoute).toHaveValue('direct');
+  await expect(proxyCountry).toBeHidden();
+
+  // A project with only public profiles has no reviewed check to wait for.
+  billing[1].publicOnly = true;
+  await page.reload();
+  await expect(browserMode).toBeDisabled();
+  await paidRoute.selectOption('residential');
+  await expect(proxyCountry).toHaveValue('United States (US)');
+  await destination.fill('https://example.com/');
+  await expect(page.locator('[data-selected-key]')).toContainText('Fixture write key');
+  await expect(runRequest).toBeEnabled();
+  await expect(generatedCode).toContainText('"id":"public-url-http","version":1');
+  await runRequest.click();
+  await expect(page.locator('[data-response-state]')).toHaveText('Rejected');
+  assert.equal(publicOnlyFetches.length, 1);
+  assert.equal(preflightCalls.length, 0);
+  billing[1].publicOnly = false;
+  await page.reload();
+  await expect(browserMode).toBeEnabled();
   await paidRoute.selectOption('datacenter');
-  await expect(proxyCountry).toHaveValue('');
+  await proxyCountry.click();
+  await expect(page.getByRole('listbox', { name: 'Proxy country' }).getByRole('option')).toHaveText(['Canada (CA)', 'United Kingdom (GB)', 'United States (US)']);
+  await proxyCountry.press('Escape');
+  await chooseExecution(browserMode);
+  await expect(proxyCountry).toHaveValue('United States (US)');
+  await expect(paidRoute.locator('option[value="residential"]')).toHaveAttribute('disabled', '');
+  await proxyCountry.click();
+  await expect(page.getByRole('listbox', { name: 'Proxy country' }).getByRole('option')).toHaveText(['United States (US)']);
+  await proxyCountry.press('Escape');
+  await chooseExecution(http);
+  await proxyCountry.fill('US');
+  await proxyCountry.press('Enter');
+  await destination.fill('https://reviewed.example/');
+  await requestKey.selectOption(writeKey.id);
+  await page.locator('[data-request-advanced] summary').click();
+  await requestMethod.selectOption('HEAD');
+  await page.locator('[data-request-header="accept-language"]').fill('en-US');
+  await expect(runRequest).toBeEnabled();
+  await expect(generatedCode).toContainText('"id":"playground:fixture-http"');
+  await runRequest.click();
+  await expect(page.locator('[data-response-state]')).toHaveText('Rejected');
+  assert.equal(reviewedFetches.length, 1);
+  assert.equal(paidFetches.length + countryFetches.length, 0, 'A rejected dispatch must not trigger public routing');
+  await page.locator('[data-new-request]').click();
+  await requestMethod.selectOption('GET');
+
+  await paidRoute.selectOption('datacenter');
   await proxyCountry.fill('AU');
   await expect(page.getByText('No matching proxy countries.')).toBeVisible();
   await proxyCountry.press('Escape');
@@ -360,10 +458,19 @@ try {
   await expect(page.getByRole('option', { name: 'Canada (CA)' })).toBeVisible();
   await proxyCountry.press('Enter');
   await expect(proxyCountry).toHaveValue('Canada (CA)');
-  await page.locator('[data-request-url]').fill('https://example.com/');
-  await page.locator('[data-request-key]').selectOption(writeKey.id);
+  await destination.fill('https://example.com/spending-limit');
+  await expect(requestStatus).toContainText('The project spending limit prevents this request.');
+  await expect(runRequest).toBeDisabled();
+  await destination.fill('https://example.com/failed-check');
+  await expect(requestStatus).toContainText('Fixture error');
+  await expect(runRequest).toBeDisabled();
+  await destination.fill('https://example.com/');
   await expect(runRequest).toBeEnabled();
   await expect(requestStatus).toHaveText('Ready to send.');
+  await expect(generatedCode).toContainText('"id":"public-url-http","version":2');
+  await expect(page.locator('[data-request-header="accept-language"]')).toBeHidden();
+  assert.deepEqual(preflightCalls.at(-1), { url: 'https://example.com/', execution: 'http', method: 'GET',
+    proxy: { class: 'datacenter', country: 'CA' }, key_id: writeKey.id });
   await expect(page.getByLabel('Max transfer in MB')).toHaveCount(0);
   await expect(page.getByLabel('Credit cap')).toHaveCount(0);
   await proxyCountry.press('Enter');
@@ -443,7 +550,7 @@ try {
   await expect(page.locator('[data-generated-code]')).toBeEmpty();
   await page.reload();
   await expect(page.locator('[data-response-state]')).toHaveText('Pending recovery');
-  await expect(page.locator('[data-request-wallet]')).toHaveValue('trial');
+  await expect(http).toBeChecked();
   await page.locator('[data-recover-result]').click();
   await expect.poll(() => paidLookups).toEqual([paidFetches[1].idempotency_key]);
   await expect(page.locator('[data-response-state]')).toHaveText('Unknown');
@@ -464,11 +571,12 @@ try {
   await page.locator('[data-confirm-action]').click();
   await expect(requestStatus).toContainText('credits are on hold');
   await expect(page.locator('[data-run-request]')).toBeDisabled();
-  await page.locator('input[name="mode"][value="browser"]').check();
+  await chooseExecution(browserMode);
   await page.locator('[data-request-url]').fill('https://trial.example.com/');
   await expect(requestStatus).toContainText('credits are on hold');
   await expect(page.locator('[data-run-request]')).toBeDisabled();
-  await page.getByLabel('Access mode').selectOption('paid');
+  await chooseExecution(http);
+  await paidRoute.selectOption('residential');
   await expect(page.locator('[data-run-request]')).toBeDisabled();
   await go('/app/billing');
   billing[1].hold = false;
