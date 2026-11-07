@@ -56,6 +56,7 @@ async function initWorkspace(root: HTMLElement) {
   const validOperation = (key: unknown): key is string => typeof key === 'string' && /^[A-Za-z0-9_.:-]{1,160}$/.test(key);
   let csrf = '', projects: Project[] = [], project: Project | null = null, profiles: Profile[] = [], capabilities: Json = {};
   let service: Json = {}, keys: Json[] = [], operations: Json[] = [], usage: Json | null = null, billing: Json | null = null;
+  const unifiedProjects = new Set<string>();
   let challenge = '', email = '', revealedSecret = '', currentKey = '', currentResult: Json | null = null;
   let signingOut = false;
   let signedIn = false, ready = false, sending = false, draftOpen = true, loadVersion = 0, mutating = 0;
@@ -280,11 +281,13 @@ async function initWorkspace(root: HTMLElement) {
     const selected = projects.find(item => item.id === id); if (!selected || signingOut) return;
     if (sending || (mutating && !created)) { toast('Wait for the active action before switching projects.'); const select = q<HTMLSelectElement>('[data-project-select]'); if (select && project) select.value = project.id; return; }
     const version = ++loadVersion; project = selected; ready = false; stripeBilling?.reset(); concealSecret(); q<HTMLDialogElement>('[data-key-dialog]')?.close(); q<HTMLDialogElement>('[data-request-dialog]')?.close(); saveProject(id); setProjectOptions(); clearError(); gate('Loading project…', 'Reading approved profiles, keys, history, and current balances.'); textAll('[data-project-name]', selected.name);
+    usage = billing = null;
+    renderCreditSummary(true);
     resetPlayground();
     const result = await Promise.allSettled([api(projectPath()), api(projectPath('/keys')), api(projectPath('/requests')), api(projectPath('/usage')), api(projectPath('/billing'))]);
     if (version !== loadVersion || signingOut || leavingPage) return;
     const detail = result[0];
-    if (detail.status !== 'fulfilled') { gate('Project unavailable', 'The service could not load this project. Refresh to try reading it again.'); setError(detail.reason); return; }
+    if (detail.status !== 'fulfilled') { renderCreditSummary(); gate('Project unavailable', 'The service could not load this project. Refresh to try reading it again.'); setError(detail.reason); return; }
     project = detail.value.project; profiles = Array.isArray(detail.value.access_profiles) ? detail.value.access_profiles : []; capabilities = detail.value.capabilities || {};
     keys = result[1].status === 'fulfilled' ? result[1].value.keys || [] : [];
     operations = result[2].status === 'fulfilled' ? result[2].value.operations || [] : [];
@@ -293,14 +296,54 @@ async function initWorkspace(root: HTMLElement) {
     const failures = result.slice(1).filter(item => item.status === 'rejected');
     if (failures.length) setError('Some project data could not be loaded. ' + failures.map(item => item.status === 'rejected' ? item.reason.message : '').join(' '));
     ready = true; draftOpen = true; currentResult = null; currentKey = pendingKeys().at(-1) || ''; if (currentKey) draftOpen = false;
-    renderProfiles(); renderKeys(); renderRequests(); renderUsage(); renderChecklist(); renderResult(null);
+    renderUsage(); renderProfiles(); renderKeys(); renderRequests(); renderChecklist(); renderResult(null);
     stripeBilling?.setProject(id, stripeView());
     q('[data-workspace-gate]')!.hidden = true; q('[data-workspace-content]')!.hidden = false; updateRunButton();
   }
   async function refreshKeys() { const id = project?.id; const data = await api(projectPath('/keys')); if (id !== project?.id) return; keys = data.keys || []; renderKeys(); renderChecklist(); }
   async function refreshHistory() { const version = loadVersion; const data = await api(projectPath('/requests')); if (version !== loadVersion) return; operations = data.operations || []; renderRequests(); renderChecklist(); }
-  async function refreshAccounting() { const version = loadVersion; const results = await Promise.allSettled([api(projectPath('/usage')), api(projectPath('/billing')), refreshHistory()]); if (version !== loadVersion) return; usage = results[0].status === 'fulfilled' ? results[0].value : null; billing = results[1].status === 'fulfilled' ? results[1].value : null; renderUsage(); if (results.some(result => result.status === 'rejected')) setError('The request result is shown, but some usage or history data could not be refreshed. Use Refresh to read it again.'); }
-  const paymentHeld = () => billing?.paid_credits?.payment_hold === true || usage?.paid_credits?.payment_hold === true;
+  async function refreshAccounting() { const version = loadVersion; const results = await Promise.allSettled([api(projectPath('/usage')), api(projectPath('/billing')), refreshHistory()]); if (version !== loadVersion) return; usage = results[0].status === 'fulfilled' ? results[0].value : null; billing = results[1].status === 'fulfilled' ? results[1].value : null; renderUsage(); updateRunButton(); if (results.some(result => result.status === 'rejected')) setError('The request result is shown, but some usage or history data could not be refreshed. Use Refresh to read it again.'); }
+  const hasUnifiedCredits = () => !!project && unifiedProjects.has(project.id);
+  const isUnifiedBalance = (value: Json | undefined) => value?.mode === 'unified' && value.unit === 'credits';
+  const paymentHeld = () => [billing, usage].some(data =>
+    data?.paid_credits?.payment_hold === true || (isUnifiedBalance(data?.credit_balance) && data?.credit_balance.payment_hold === true));
+  const creditAmount = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  const confirmedAvailable = (balance: Json | undefined) =>
+    balance?.payment_hold === false ? creditAmount(balance.available) : undefined;
+  const paidAvailable = (data: Json | null | undefined) =>
+    data?.paid_credits?.unit === 'credits' ? confirmedAvailable(data.paid_credits) : undefined;
+
+  function renderCreditSummary(loading = false) {
+    const sources = [billing, usage];
+    const unified = sources.map(data => data?.credit_balance).filter(isUnifiedBalance);
+    if (project && unified.length) unifiedProjects.add(project.id);
+    const merged = hasUnifiedCredits(), held = paymentHeld();
+    const completeLegacy = sources.find(data =>
+      creditAmount(data?.credits?.available) !== undefined && paidAvailable(data) !== undefined);
+    const trial = creditAmount(completeLegacy?.credits.available) ??
+      creditAmount(billing?.credits?.available) ?? creditAmount(usage?.credits?.available);
+    const paid = paidAvailable(completeLegacy) ?? paidAvailable(billing) ?? paidAvailable(usage);
+    const pool = unified.find(balance => confirmedAvailable(balance) !== undefined) ?? unified[0];
+    const combined = merged ? confirmedAvailable(pool)
+      : completeLegacy && trial !== undefined && paid !== undefined ? creditAmount(trial + paid) : undefined;
+    const state = loading ? 'loading' : held ? 'held' : combined === undefined ? 'unavailable' : 'available';
+    const breakdown = !loading && !merged && (trial !== undefined || paid !== undefined || held);
+    let note = '';
+    if (held) note = merged ? 'This project’s credits are on hold while a payment is under review.'
+      : 'Paid credits are on hold. Trial credits still follow the project’s trial limits.';
+    else if (merged && state === 'available') note = 'Your remaining signup credits and purchased credits share this project balance.';
+    else if (breakdown) note = state === 'available' ? 'Trial credits apply to eligible routes. Use Purchased HTTP to spend paid credits.'
+      : 'Only the balances FetchX could verify are shown.';
+    else if (state === 'unavailable') note = 'Refresh to check the current project balance.';
+    qa('[data-credit-summary]').forEach(node => { node.dataset.creditSummary = state; });
+    qa('[data-credit-breakdown]').forEach(node => { node.hidden = !breakdown; });
+    textAll('[data-credit-total]', { loading: 'Loading…', held: 'On hold', unavailable: 'Unavailable', available: formatCredits(combined) }[state]);
+    textAll('[data-credit-trial]', trial === undefined ? 'Unavailable' : formatCredits(trial));
+    textAll('[data-credit-paid]', held ? 'On hold' : paid === undefined ? 'Unavailable' : formatCredits(paid));
+    textAll('[data-credit-summary-note]', note);
+    return { pool, merged, held };
+  }
   function stripeView() { return billing?.stripe && paymentHeld() ? { ...billing.stripe, payment_hold: true } : billing?.stripe; }
   async function refreshStripeAccounting(id: string) {
     const version = loadVersion;
@@ -332,28 +375,44 @@ async function initWorkspace(root: HTMLElement) {
     });
   }
   function renderUsage() {
-    const credits = usage?.credits, gateway = usage?.gateway, outcomes = gateway?.outcomes;
+    const { pool, merged, held } = renderCreditSummary();
+    renderRequestCreditLabels(merged);
+    const credits = merged ? pool : usage?.credits ?? billing?.credits;
+    const billingView = root.dataset.view === 'billing';
+    const gateway = usage?.gateway, outcomes = gateway?.outcomes;
     const total = Array.isArray(gateway?.by_key_and_state) ? gateway.by_key_and_state.reduce((sum: number, row: Json) => sum + (Number(row.operations) || 0), 0) : null;
-    textAll('[data-credits-available]', number(credits?.available)); textAll('[data-credits-granted]', credits ? `${number(credits.granted)} credits allocated` : 'Balance unavailable');
-    textAll('[data-credits-used]', number(credits?.settled)); textAll('[data-reserved-credits]', credits ? number(credits.reserved + credits.held) : '—'); textAll('[data-credit-fraction]', credits ? `${number(credits.available)} available` : 'Unavailable');
+    textAll('[data-credits-available-label]', merged ? billingView ? 'Credits allocated' : 'Available credits' : 'Available trial credits');
+    const metricBalance = merged ? billingView ? credits?.granted : confirmedAvailable(pool) : credits?.available;
+    textAll('[data-credits-available]', merged && held && !billingView ? 'On hold' : formatCredits(metricBalance));
+    textAll('[data-credits-granted]', merged && billingView ? 'Added to this balance' : credits ? `${number(credits.granted)} credits allocated` : 'Balance unavailable');
+    textAll('[data-credits-used-label]', merged ? 'Credits used' : 'Trial credits used');
+    textAll('[data-credits-used]', number(merged ? credits?.used : credits?.settled));
+    textAll('[data-reserved-credits]', credits ? number(credits.reserved + credits.held) : '—');
     for (const field of ['reserved', 'held', 'released']) textAll(`[data-credits-${field}]`, number(credits?.[field]));
+    hide('[data-credits-released-row]', merged);
     textAll('[data-request-count]', number(total));
     for (const [selector, field] of [['source-successes', 'source_successes'], ['source-failures', 'source_failures'], ['gateway-failures', 'gateway_failures'], ['unknown-outcomes', 'unknown']]) textAll(`[data-${selector}]`, number(outcomes?.[field]));
     const latency = gateway?.latency_ms; textAll('[data-mean-latency]', typeof latency?.mean === 'number' ? `${number(Math.round(latency.mean))} ms` : 'Unavailable'); textAll('[data-p95-latency]', typeof latency?.p95 === 'number' ? `${number(Math.round(latency.p95))} ms` : 'Unavailable');
-    qa('[data-credit-meter]').forEach(node => { node.style.width = credits?.granted > 0 ? `${Math.max(0, Math.min(100, (credits.settled + credits.reserved + credits.held) / credits.granted * 100))}%` : '0%'; });
     const status = billing?.status;
     const trial = billing?.trial ?? usage?.trial;
     const dailyLimit = trial?.max_daily_operations ?? (gateway?.entitlement?.mode === 'metered' ? gateway.entitlement.max_daily_operations : null);
     const trialRoutes = Array.isArray(trial?.eligible_routes) ? trial.eligible_routes.filter((route: unknown) => route === 'direct' || route === 'datacenter').join(' or ') : '';
     const trialInfo = q('[data-trial-daily-limit]');
     if (trialInfo) {
-      trialInfo.hidden = !Number.isSafeInteger(dailyLimit) || dailyLimit < 1;
+      trialInfo.hidden = merged || !Number.isSafeInteger(dailyLimit) || dailyLimit < 1;
       trialInfo.textContent = trialInfo.hidden ? '' : `Project limit for scoped routes: ${number(dailyLimit)} requests per day.`;
     }
-    textAll('[data-billing-status]', status === 'trial' ? 'Trial access' : status === 'approval_required' ? 'Approval required' : 'Status unavailable');
-    textAll('[data-billing-description]', status === 'trial' ? `Your configured trial allocation is active. Use approved ${trialRoutes || 'trial'} routes. The playground also shows any reviewed trial residential and browser options for this project.` : status === 'approval_required' ? 'This project has no available trial credits. Check your account’s other projects or contact FetchX for help.' : 'The service did not return a billing status. Refresh to read it again.');
-    textAll('[data-billing-policy]', trial?.trial_target === 1_000 && trial.grant_scope === 'account' && trial.grant_frequency === 'once' ? 'Eligible accounts receive 1,000 trial credits once. Paid credits have a separate balance.' : 'Trial credits follow the project’s configured allowance. Paid credits have a separate balance.');
-    const paidCredits = billing?.paid_credits ?? usage?.paid_credits;
+    textAll('[data-billing-eyebrow]', merged ? 'PROJECT CREDITS' : 'PROJECT TRIAL ACCESS');
+    textAll('[data-billing-status]', merged ? held ? 'Payment hold' : 'Unified balance'
+      : status === 'trial' ? 'Trial access' : status === 'approval_required' ? 'Approval required' : 'Status unavailable');
+    textAll('[data-billing-description]', merged ? 'The playground shows the HTTP and Browser routes approved for this project.'
+      : status === 'trial' ? `Your configured trial allocation is active. Use approved ${trialRoutes || 'trial'} routes. The playground also shows any reviewed trial residential and browser options for this project.`
+      : status === 'approval_required' ? 'This project has no available trial credits. Check your account’s other projects or contact FetchX for help.'
+      : 'The service did not return a billing status. Refresh to read it again.');
+    textAll('[data-billing-policy]', merged ? 'Reviewed routes use fixed credits per operation. Public URL HTTP charges by measured wire traffic.'
+      : trial?.trial_target === 1_000 && trial.grant_scope === 'account' && trial.grant_frequency === 'once' ? 'Eligible accounts receive 1,000 trial credits once.'
+      : 'Trial credits follow the project’s configured allowance.');
+    const paidCredits = merged ? pool : billing?.paid_credits ?? usage?.paid_credits;
     const unavailable = q('[data-paid-credits-unavailable]');
     if (unavailable) {
       unavailable.hidden = !!billing?.stripe;
@@ -362,9 +421,14 @@ async function initWorkspace(root: HTMLElement) {
     const paidCreditPanel = q('[data-paid-credits-panel]');
     if (paidCreditPanel) {
       paidCreditPanel.hidden = paidCredits?.unit !== 'credits';
+      textAll('[data-paid-credits-heading]', merged ? 'Credit activity' : 'Paid credit balance');
+      hide('[data-paid-credits-available-row]', merged);
       for (const field of ['available', 'used', 'reserved', 'held']) textAll(`[data-paid-credits-${field}]`, formatCredits(paidCredits?.[field]));
-      q('[data-paid-credits-hold]')!.hidden = !paymentHeld();
-      q('[data-paid-credits-use]')!.hidden = paymentHeld() || !profiles.some(advertisesPublicRoute);
+      hide('[data-paid-credits-hold]', !held);
+      hide('[data-paid-credits-use]', held || !profiles.some(advertisesPublicRoute));
+      textAll('[data-paid-credits-use-description]', merged
+        ? 'Select Public URL HTTP in the playground to see its transfer limits and credit estimate.'
+        : 'To use paid credits, select Purchased HTTP in the playground, then choose an available datacenter or residential route.');
     }
   }
   function renderChecklist() { const states = [signedIn, Boolean(project), keys.some(key => !key.revoked_at), operations.length > 0]; textAll('[data-onboarding-count]', `${states.filter(Boolean).length} of 4 complete`); ['email','project','key','request'].forEach((name, index) => { const node = q(`[data-checklist-${name}]`); node?.classList.toggle('is-complete', states[index]); const mark = node?.querySelector('.pp-step-check'); if (mark) mark.textContent = states[index] ? '✓' : String(index + 1); }); }
@@ -520,6 +584,14 @@ async function initWorkspace(root: HTMLElement) {
       Boolean(profile?.proxy_classes.includes(value)) && (value === 'direct' || countries.length > 0);
     return { available, reason: available ? null : 'playground_route_unreviewed', countries };
   }
+  function renderRequestCreditLabels(merged: boolean) {
+    if (!walletSelect) return;
+    textAll('[data-request-wallet-label]', merged ? 'Access mode' : 'Credit balance');
+    const trialOption = walletSelect.querySelector('option[value="trial"]');
+    const paidOption = walletSelect.querySelector('option[value="paid"]');
+    if (trialOption) trialOption.textContent = merged ? 'Reviewed routes' : 'Trial credits';
+    if (paidOption) paidOption.textContent = merged ? 'Public URL HTTP' : 'Purchased HTTP';
+  }
   function renderProfiles() {
     const select = q<HTMLSelectElement>('[data-request-profile]'); if (!select) return;
     const scoped = profiles.filter(profile => profile.id !== publicUrlId && profile.kind !== publicUrlKind);
@@ -539,7 +611,7 @@ async function initWorkspace(root: HTMLElement) {
       input.disabled = purchasedHttp() ? input.value !== 'http' || !profile
         : matrix ? capability?.available !== true : input.value === 'browser' || capabilities.native_http === false;
       const description = input.disabled
-        ? purchasedHttp() && input.value === 'browser' ? 'Purchased credits support HTTP only'
+        ? purchasedHttp() && input.value === 'browser' ? 'This access mode supports HTTP only'
           : matrix ? explainAvailability(capability?.reason) : input.value === 'browser' ? 'Unavailable on this service' : 'HTTP service is unavailable'
         : input.value === 'browser' ? 'Rendered page' : 'Source response';
       textAll(`[data-execution-help="${input.value}"]`, description);
@@ -583,7 +655,7 @@ async function initWorkspace(root: HTMLElement) {
       if (hasWait) waitInput.max = String(waitMax);
     }
     textAll('[data-profile-summary]', purchasedHttp()
-      ? 'Public HTTPS destinations on US routes. Measured wire traffic uses purchased credits.'
+      ? 'Public HTTPS destinations on US routes. The charge follows measured wire traffic.'
       : matrix
       ? preparedRequest?.access_profile ? 'FetchX matched an access policy for this website and execution mode.' : 'FetchX checks the destination and chooses an access policy automatically.'
       : profile ? `Approved destinations: ${profile.origins.join(', ')}${profile.paths?.length ? ' · Paths: ' + profile.paths.join(', ') : ''}` : 'No approved HTTP access profile is configured.');
@@ -647,7 +719,7 @@ async function initWorkspace(root: HTMLElement) {
   function schedulePreparation() {
     clearPreparation();
     const draft = draftInput(), url = requestUrl?.value.trim();
-    if (ready && draftOpen && !sending && baseCapabilities() && url && !requestUrl?.validity.typeMismatch) {
+    if (ready && draftOpen && !sending && !(hasUnifiedCredits() && paymentHeld()) && baseCapabilities() && url && !requestUrl?.validity.typeMismatch) {
       // The project matrix can be provisional for a profile-priced route. A
       // URL alone can resolve the actual matrix before any proxy is selectable.
       const input = draft ?? {
@@ -687,10 +759,11 @@ async function initWorkspace(root: HTMLElement) {
     }
   }
   function requestIssue() {
+    if (hasUnifiedCredits() && paymentHeld()) return 'This project’s credits are on hold while a payment is under review.';
     if (!requestUrl?.value.trim()) return 'Enter a URL to check the request.';
     if (requestUrl.validity.typeMismatch) return 'Enter a complete URL, including https://.';
     if (purchasedHttp() && !validPublicDestination(requestUrl.value.trim())) return 'Use a public HTTPS hostname on port 443 without credentials or fragments.';
-    if (purchasedHttp() && !paidProfile()) return 'Purchased HTTP is unavailable for this project.';
+    if (purchasedHttp() && !paidProfile()) return 'Public URL HTTP is unavailable for this project.';
     if (!baseCapabilities() && !selectedProfile()) return 'No approved HTTP profile is configured for this project.';
     if (baseCapabilities() && currentExecutionCapability()?.available !== true) return explainAvailability(currentExecutionCapability()?.reason);
     if (!routeChoice() || !routeAvailability(routeChoice()!).available) return 'Choose an available route.';
@@ -698,7 +771,7 @@ async function initWorkspace(root: HTMLElement) {
     if ((purchasedHttp() || baseCapabilities()) && !keyChoice()) return keyOptions().length ? 'Choose an API key.' : 'A project API key is required.';
     if (purchasedHttp()) {
       const quote = selectedPaidQuote();
-      if (!quote) return 'Choose a reviewed purchased HTTP route.';
+      if (!quote) return 'Choose a reviewed public URL route.';
       if (paymentHeld()) return 'Purchased credits are on hold.';
       if (transferInput?.validity.badInput || transferInput?.value && !validTransferMb(transferInput.valueAsNumber))
         return 'Enter a transfer ceiling from 0.25 to 20 MB in 0.25 MB steps.';
@@ -753,7 +826,7 @@ async function initWorkspace(root: HTMLElement) {
     const pending = q<HTMLSelectElement>('[data-pending-operation]'); if (pending) pending.disabled = sending || !ready;
     const quote = preparedRequest?.quote;
     const credits = quote?.credits;
-    const estimate = purchasedHttp() ? 'This request uses purchased HTTP credits.' : typeof credits === 'number'
+    const estimate = purchasedHttp() ? 'This request is billed by measured wire traffic.' : typeof credits === 'number'
       ? `Reserves up to ${number(credits)} ${credits === 1 ? 'credit' : 'credits'}${quote?.max_estimated_micro_usd != null && quote.max_estimated_micro_usd > 0 ? ' · cost ceiling $' + (quote.max_estimated_micro_usd / 1_000_000).toFixed(6) : ''}.`
       : 'Approved profile limits apply.';
     const quoteText = sending ? 'Waiting for the saved result…' : !draftOpen ? '' : checkingRequest ? 'Checking access, route, and cost…' :
@@ -833,8 +906,9 @@ async function initWorkspace(root: HTMLElement) {
     hide('[data-response-transfer]', !suggestion);
     const paid = result?.usage?.accounting?.paid_credits;
     hide('[data-response-accounting]', !paid);
+    const creditLabel = hasUnifiedCredits() ? 'Credits' : 'Paid credits';
     textAll('[data-response-accounting]', paid
-      ? `Paid credits reserved: ${formatCredits(paid.reserved_credits)}. Paid credits used: ${formatCredits(paid.used_credits)}.${paid.state === 'held' ? ' The reservation remains held.' : ''}`
+      ? `${creditLabel} reserved: ${formatCredits(paid.reserved_credits)}. ${creditLabel} used: ${formatCredits(paid.used_credits)}.${paid.state === 'held' ? ' The reservation remains held.' : ''}`
       : '');
     const route = result?.routing;
     const duration = [result?.usage?.duration_ms, result?.duration_ms]
@@ -1062,6 +1136,8 @@ async function initWorkspace(root: HTMLElement) {
     disposeGithub?.(); disposeGithub = undefined;
     loadVersion++; ready = false; signedIn = false; csrf = ''; projects = []; project = null; stripeBilling?.reset(); concealSecret(); clearError();
     qa('[data-logout],[data-session-account],[data-auth-account]').forEach(node => { node.hidden = true; }); setProjectOptions();
+    usage = billing = null;
+    renderCreditSummary(true);
     textAll('[data-user-email]', 'Not signed in');
     if (!authPage) gate('Opening your workspace…', 'Checking the service and your session.');
     try {
@@ -1091,6 +1167,8 @@ async function initWorkspace(root: HTMLElement) {
     } catch (error) {
       textAll('[data-service-status]', 'Service unavailable'); setError(error);
       if (!authPage) gate('Workspace unavailable.', 'The configured control service could not be reached. No account, request, or credit data has been simulated.');
+    } finally {
+      if (!project) renderCreditSummary();
     }
   }
   await start();

@@ -29,15 +29,16 @@ const publicProfile = { ...publicRef, kind: 'public_url_http', origins: [], meth
 const checkoutUrl = mode => `https://checkout.stripe.com/c/pay/cs_${mode}_Synthetic#fixture`;
 const billing = [
   { project: primary, mode: 'test', pending: null, available: 0, purchases: [] },
-  { project: secondary, mode: 'live', pending: null, available: 80, purchases: [], routeDown: true },
+  { project: secondary, mode: 'live', pending: null, trialAvailable: 998, available: 10_000, purchases: [], routeDown: true },
 ];
 const writeKey = { id: '00000000-0000-4000-8000-000000000007', name: 'Fixture write key', scopes: ['fetch:read', 'fetch:write'] };
 const alternateKey = { ...writeKey, id: '00000000-0000-4000-8000-000000000008', name: 'Alternate key' };
 const paidFetches = [], paidLookups = [], checkoutPosts = [], lookupKeys = [], unexpected = [], errors = [], consoleErrors = [], hostedVisits = [];
 let signedIn = false, failFirstCheckout = true, hideSavedCheckout = false, invalidCheckout = true;
-let delayedResponse, delayedLogout;
+let delayedResponse, delayedLogout, delayedBalance;
 let unknownPaidFetch;
 const stripe = name => page.locator(`[data-stripe-${name}]`);
+const balance = name => page.locator(`[data-credit-${name}]`);
 const buy = () => page.locator(`[data-stripe-plan="${plan.id}"]`);
 const go = path => page.goto(base + path);
 const assertStoredCheckout = async (mode, project, key) => {
@@ -76,9 +77,13 @@ await page.route('**/api/control/**', async route => {
   const fixture = billing.find(value => value.project.id === match?.[1]);
   if (!fixture) return deny('project_not_found');
   const resource = match[2];
-  const credits = { granted: 1000, available: 20, settled: 980, held: 0, reserved: 0, released: 0 };
+  const trialAvailable = fixture.trialAvailable ?? 20;
+  const credits = { granted: 1000, available: fixture.merged ? 0 : trialAvailable, settled: 1000 - trialAvailable, held: 0, reserved: 0, released: 0 };
   const trial = { trial_target: 1000, grant_scope: 'account', grant_frequency: 'once', max_daily_operations: 25, eligible_routes: ['direct', 'datacenter'] };
-  const paid_credits = { unit: 'credits', granted: fixture.available + (fixture.used || 0) + (fixture.held || 0), available: fixture.available, reserved: 0, used: fixture.used || 0, held: fixture.held || 0, revoked_unused: 0, payment_hold: !!fixture.hold };
+  const paid_credits = { unit: 'credits', granted: fixture.available + (fixture.used || 0) + (fixture.held || 0), available: fixture.hold ? 0 : fixture.available, reserved: 0, used: fixture.used || 0, held: fixture.held || 0, revoked_unused: 0, payment_hold: !!fixture.hold };
+  const accounting = { credits, ...(fixture.omitPaidBalance ? {} : { paid_credits }),
+    ...(fixture.merged ? { credit_balance: { mode: 'unified', ...paid_credits } } : { trial }) };
+  if (fixture.project.id === secondary.id && delayedBalance && (resource === '/usage' || resource === '/billing')) await delayedBalance;
   const paidReady = fixture.mode === 'live' && !fixture.routeDown;
   if (resource === '') return send({ project: fixture.project, access_profiles: [trialProfile, ...(paidReady ? [publicProfile] : [])], capabilities: {
     routes: paidReady ? ['direct', 'datacenter', 'residential'] : ['direct'],
@@ -90,8 +95,9 @@ await page.route('**/api/control/**', async route => {
   } });
   if (resource === '/keys') return send({ keys: paidReady ? [writeKey, alternateKey] : [] });
   if (resource === '/requests') return send({ operations: [] });
-  if (resource === '/usage') return send({ credits, paid_credits, trial });
+  if (resource === '/usage') return send(accounting);
   if (resource === '/billing') {
+    if (fixture.billingReadFails) return deny('fixture_billing_unavailable', 503);
     const { mode, purchases } = fixture;
     const pending = hideSavedCheckout ? null : fixture.pending;
     const catalog = [extraPlans[0], { ...plan, can_purchase: true }, ...extraPlans.slice(1)].map(item => ({ ...item, can_purchase: item.can_purchase && !fixture.capacityDown }));
@@ -100,7 +106,7 @@ await page.route('**/api/control/**', async route => {
       pending_checkout: pending?.open ? { plan_id: plan.id, idempotency_key: pending.key, state: pending.state } : null,
       ...(pending?.open ? { can_resume_checkout: !fixture.hold && !fixture.routeDown && !fixture.capacityDown } : {}),
       ...(fixture.routeDown ? { checkout_unavailable_reason: 'paid_credit_route_unavailable' } : fixture.capacityDown ? { checkout_unavailable_reason: 'paid_credit_capacity_unavailable' } : {}) };
-    return send({ status: 'trial', credits, paid_credits, trial, commercial_enabled: mode === 'live' && !fixture.routeDown, stripe });
+    return send({ status: fixture.merged ? 'active' : 'trial', ...accounting, commercial_enabled: mode === 'live' && !fixture.routeDown, stripe });
   }
   if (resource === '/fetch' && method === 'POST') {
     assert.ok(paidReady);
@@ -183,6 +189,9 @@ try {
   await page.locator('[data-signup-verify] button').click();
   await expect(page).toHaveURL(base + '/app/billing?plan=credits-50000');
   await expect(stripe('mode')).toHaveText('STRIPE SANDBOX');
+  await expect(balance('total')).toHaveText(['20', '20']);
+  await expect(balance('trial')).toHaveText(['20', '20']);
+  await expect(balance('paid')).toHaveText(['0', '0']);
   await expect(page.locator('[data-billing-policy]')).toContainText('1,000 trial credits once');
   await expect(page.locator('[data-trial-daily-limit]')).toHaveText('Project limit for scoped routes: 25 requests per day.');
   await expect(page.locator('.pp-stripe-plan-preferred')).toContainText('50,000 credits');
@@ -193,7 +202,7 @@ try {
   for (const width of [320, 1200]) {
     await page.setViewportSize({ width, height: 900 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-    const audit = await new AxeBuilder({ page }).include('[data-stripe-billing]').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+    const audit = await new AxeBuilder({ page }).include('[data-stripe-billing]').include('.pp-credit-summary').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
     assert.deepEqual(audit.violations, [], `Billing accessibility at ${width}px`);
   }
   await expect(stripe('plans')).toHaveCSS('display', 'grid');
@@ -239,8 +248,23 @@ try {
   await expect(buy()).toHaveCount(0);
 
   const select = page.locator('[data-project-select]');
+  let releaseBalance;
+  delayedBalance = new Promise(resolve => { releaseBalance = resolve; });
   await select.selectOption(secondary.id);
+  await expect(balance('total')).toHaveText(['Loading…', 'Loading…']);
+  await expect(page.locator('.pp-sidebar-credits [data-credit-breakdown]')).toBeHidden();
+  releaseBalance();
+  delayedBalance = null;
   await expect(stripe('mode')).toHaveText('LIVE BILLING');
+  await expect(balance('total')).toHaveText(['10,998', '10,998']);
+  await expect(balance('trial')).toHaveText(['998', '998']);
+  await expect(balance('paid')).toHaveText(['10,000', '10,000']);
+  billing[1].omitPaidBalance = true;
+  await page.locator('[data-refresh-workspace]').click();
+  await expect(balance('total')).toHaveText(['Unavailable', 'Unavailable']);
+  await expect(balance('trial')).toHaveText(['998', '998']);
+  await expect(balance('paid')).toHaveText(['Unavailable', 'Unavailable']);
+  billing[1].omitPaidBalance = false;
   await expect(stripe('status')).toContainText('Checkout will open when a paid route is ready');
   await expect(buy()).toBeHidden();
   await expect(page.locator('[data-paid-credits-use]')).toBeHidden();
@@ -270,20 +294,32 @@ try {
   assert.equal(lookupKeys.at(-1).key, checkoutPosts[3].key);
   billing[1].pending = { ...billing[1].pending, state: 'paid', open: false };
   billing[1].purchases.push(purchase('paid'));
-  billing[1].available = 50_080;
+  billing[1].available += plan.credits + billing[1].trialAvailable;
+  billing[1].merged = true;
   await stripe('check').click();
   await expect(stripe('status')).toContainText('Payment confirmed');
-  await expect(page.locator('[data-paid-credits-available]')).toHaveText('50,080');
-  await expect(page.locator('[data-credits-available]')).toHaveText('20');
+  await expect(balance('total')).toHaveText(['60,998', '60,998']);
+  for (const breakdown of await balance('breakdown').all()) await expect(breakdown).toBeHidden();
+  await expect(page.locator('[data-credits-available-label]')).toHaveText('Credits allocated');
+  await expect(page.locator('[data-credits-granted]')).toHaveText('Added to this balance');
+  await expect(page.locator('[data-trial-daily-limit]')).toBeHidden();
   await expect(stripe('purchases')).toContainText('50,000 credits · $8.00 · Paid');
   await expect(page.locator('[data-paid-credits-use] a[href="/docs/fetch#paid-public-urls"]')).toBeVisible();
+  billing[1].billingReadFails = true;
+  await page.locator('[data-refresh-workspace]').click();
+  await expect(page.locator('[data-page-error]')).toContainText('Some project data could not be loaded.');
+  await expect(balance('total')).toHaveText(['60,998', '60,998']);
+  billing[1].billingReadFails = false;
+  await page.locator('[data-refresh-workspace]').click();
+  await expect(stripe('purchases')).toContainText('50,000 credits · $8.00 · Paid');
   await page.screenshot({ path: `${out}/credit-billing-populated.png`, fullPage: true });
   await page.setViewportSize({ width: 360, height: 850 });
   await page.screenshot({ path: `${out}/credit-billing-mobile.png`, fullPage: true });
   await page.locator('[data-paid-credits-use] a[href="/app/playground"]').click();
   await expect(page.locator('[data-request-profile]')).toHaveValue('trial@1');
   await expect(page.locator('[data-paid-transfer]')).toBeHidden();
-  await expect(page.locator('[data-request-wallet]')).toHaveValue('trial');
+  await expect(page.getByLabel('Access mode')).toHaveValue('trial');
+  await expect(page.locator('[data-request-wallet] option')).toHaveText(['Reviewed routes', 'Public URL HTTP']);
   await expect(page.locator('input[name="mode"][value="browser"]')).toBeEnabled();
   await page.locator('input[name="mode"][value="browser"]').check();
   await page.locator('[data-request-wallet]').selectOption('paid');
@@ -319,7 +355,7 @@ try {
   await expect(page.locator('[data-response-transfer]')).toHaveText('Suggested limit for a new request is 1.25 MB with a 25-credit reservation. Use a new operation key.');
   await expect(page.locator('[data-max-transfer]')).toHaveValue('1');
   await expect(page.locator('[data-max-credits]')).toHaveValue('20');
-  await expect(page.locator('[data-response-accounting]')).toHaveText('Paid credits reserved: 20. Paid credits used: 20.');
+  await expect(page.locator('[data-response-accounting]')).toHaveText('Credits reserved: 20. Credits used: 20.');
   assert.equal(paidFetches.length, 1);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.evaluate(() => { document.activeElement.blur(); window.scrollTo({ top: 0, behavior: 'instant' }); });
@@ -349,15 +385,29 @@ try {
   await expect(page.locator('[data-response-transfer]')).toBeHidden();
   assert.equal(paidFetches.length, 2);
   await go('/app/billing');
-  await expect(page.locator('[data-paid-credits-available]')).toHaveText('50,040');
+  await expect(balance('total')).toHaveText(['60,958', '60,958']);
   await expect(page.locator('[data-paid-credits-held]')).toHaveText('20');
   billing[1].hold = true;
-  billing[1].available = 0;
   await page.locator('[data-refresh-workspace]').click();
   await expect(page.locator('[data-paid-credits-hold]')).toBeVisible();
+  await expect(balance('total')).toHaveText(['On hold', 'On hold']);
   await expect(buy()).toBeHidden();
+  await go('/app/playground');
+  await expect(balance('total')).toHaveText('On hold');
+  await page.locator('[data-new-request]').click();
+  await page.locator('[data-confirm-action]').click();
+  await expect(page.locator('[data-request-quote]')).toContainText('credits are on hold');
+  await expect(page.locator('[data-run-request]')).toBeDisabled();
+  await page.locator('input[name="mode"][value="browser"]').check();
+  await page.locator('[data-request-url]').fill('https://trial.example.com/');
+  await expect(page.locator('[data-request-quote]')).toContainText('credits are on hold');
+  await expect(page.locator('[data-run-request]')).toBeDisabled();
+  await page.getByLabel('Access mode').selectOption('paid');
+  await expect(page.locator('[data-run-request]')).toBeDisabled();
+  await go('/app/billing');
   billing[1].hold = false;
   await page.locator('[data-refresh-workspace]').click();
+  await expect(balance('total')).toHaveText(['60,958', '60,958']);
   delayedResponse = new Promise(resolve => { release = resolve; });
   let releaseLogout;
   delayedLogout = new Promise(resolve => { releaseLogout = resolve; });
@@ -374,7 +424,7 @@ try {
   assert.deepEqual(unexpected, []);
   assert.deepEqual(errors, []);
   assert.deepEqual(consoleErrors, []);
-  console.log('Stripe fixture passed: pricing intent, mobile accessibility, saved checkout recovery, signed status display, hosted URL validation, project and sign-out isolation, separate prepaid balance and trial credits, purchase history, route readiness and hold, measured transfer guidance and unknown recovery');
+  console.log('Stripe fixture passed: pricing intent, mobile accessibility, saved checkout recovery, signed status display, hosted URL validation, project and sign-out isolation, separate and unified balances, partial reads and holds, purchase history, route readiness, measured transfer guidance and unknown recovery');
 } finally {
   await browser.close();
 }

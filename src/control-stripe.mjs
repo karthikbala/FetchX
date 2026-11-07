@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {fail} from './policy.mjs';
-import {PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES,outstandingPaidCreditLiabilitySql} from './control-paid-credits.mjs';
+import {PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES,outstandingPaidCreditLiabilitySql,unifiedCreditsEnabled} from './control-paid-credits.mjs';
 import {
  STRIPE_BODY_LIMIT,STRIPE_CREATE_WINDOW_MS,STRIPE_UUID,STRIPE_VERSION,StripeProvider,lockStripeSales,stripeHash,stripeHostedUrl,
  stripeId,stripeObject,stripeProjectAllowed,stripeSettings,verifiedStripeEvent,verifiedStripeRelay,
@@ -66,8 +66,8 @@ function savedCheckoutState(row){
 }
 
 export class ControlStripe {
- constructor({store,config,paidCredits,paidCreditReady,fetchStripe}){
-  this.store=store;this.config=config;this.paidCredits=paidCredits;this.paidCreditReady=paidCreditReady;
+ constructor({store,config,paidCredits,paidCreditReady,hydrateProject,fetchStripe}){
+  this.store=store;this.config=config;this.paidCredits=paidCredits;this.paidCreditReady=paidCreditReady;this.hydrateProject=hydrateProject;
   this.allowDirect=typeof fetchStripe==='function';
   this.provider=new StripeProvider(fetchStripe);
   this.events=new StripeEvents({store,provider:this.provider,paidCredits});
@@ -121,15 +121,49 @@ export class ControlStripe {
   });
  }
  async salesObligations(client,except=null){
-  const {rows:[row]}=await client.query(`SELECT COALESCE(sum((plan->>'credits')::bigint * $2::bigint),0) AS pending_bytes,
-   (${outstandingPaidCreditLiabilitySql}) AS outstanding_bytes FROM control_stripe_orders
-   WHERE mode='live' AND state IN ('creating','awaiting_payment') AND ($1::uuid IS NULL OR id<>$1)`,[except,PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES]);
+  const {rows:[row]}=await client.query(`SELECT COALESCE(sum(((o.plan->>'credits')::bigint+
+   CASE WHEN $3 AND u.project IS NULL THEN COALESCE(a.granted_credits,0) ELSE 0 END)*$2::bigint),0) AS pending_bytes,
+   (${outstandingPaidCreditLiabilitySql}) AS outstanding_bytes FROM control_stripe_orders o
+   LEFT JOIN control_credit_accounts a ON a.project=o.project LEFT JOIN control_credit_upgrades u ON u.project=o.project
+   WHERE o.mode='live' AND o.state IN ('creating','awaiting_payment') AND ($1::uuid IS NULL OR o.id<>$1)`,
+  [except,PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES,unifiedCreditsEnabled(this.config)]);
   const pendingLiabilityBytes=BigInt(row.pending_bytes),outstandingLiabilityBytes=BigInt(row.outstanding_bytes);
   if(pendingLiabilityBytes<0n||outstandingLiabilityBytes<0n)fail('paid_credit_capacity_unavailable',409);
   return {pendingLiabilityBytes,outstandingLiabilityBytes};
  }
  async packageFits(project,config,plan,obligations,client){
-  return config.mode==='test'||await this.paidCreditReady(project,{publicOnly:true,purchaseCredits:plan.credits,...obligations,client});
+  if(config.mode==='test')return true;
+  const signupCredits=unifiedCreditsEnabled(this.config)?await this.unconvertedSignupCredits(client,project):0;
+  return this.paidCreditReady(project,{publicOnly:true,purchaseCredits:plan.credits+signupCredits,...obligations,client});
+ }
+ async unconvertedSignupCredits(client,project){
+  // Reserve against the full grant so concurrent signup settlement can only
+  // reduce the obligation before a Checkout opens or completes.
+  const row=(await client.query(`SELECT a.granted_credits FROM control_credit_accounts a WHERE a.project=$1
+   AND NOT EXISTS(SELECT 1 FROM control_credit_upgrades u WHERE u.project=a.project)`,[project])).rows[0];
+  return Number(row?.granted_credits??0);
+ }
+ async upgradeExistingProjects(){
+  if(!unifiedCreditsEnabled(this.config))return 0;
+  return this.withSalesCapacity({mode:'live'},async c=>{
+   const {rows}=await c.query(`SELECT DISTINCT p.project FROM control_stripe_purchases p
+    JOIN control_projects cp ON cp.id=p.project AND cp.status='active'
+    JOIN paid_credit_grants g ON g.project=p.project AND g.account_id=p.account_id AND g.mode=p.mode
+     AND g.checkout_session_id=p.session_id AND g.payment_intent_id=p.payment_intent_id
+    WHERE p.mode='live' AND p.state='paid' AND g.revoked_at IS NULL AND g.credits IS NOT NULL
+    AND NOT EXISTS(SELECT 1 FROM control_credit_upgrades u WHERE u.project=p.project) ORDER BY p.project`);
+   let upgraded=0;
+   for(const {project} of rows){
+    // Managed project policies are loaded from PostgreSQL, not the static
+    // gateway config. Startup has no incoming request to hydrate them.
+    if(!this.config.projects?.[project])await this.hydrateProject?.(project);
+    const signupCredits=await this.unconvertedSignupCredits(c,project);
+    if(signupCredits>0&&!await this.paidCreditReady(project,{publicOnly:true,purchaseCredits:signupCredits,...await this.salesObligations(c),client:c}))
+     fail('unified_credit_activation_capacity_unavailable',503);
+    if(await this.paidCredits.upgradeEligibleProject(c,project))upgraded++;
+   }
+   return upgraded;
+  });
  }
  async assertCapacity(project,config,plan,client=this.store.pool,except=null){
   if(config.mode!=='live')return;

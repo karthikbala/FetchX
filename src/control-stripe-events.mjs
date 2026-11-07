@@ -117,6 +117,7 @@ export class StripeEvents{
    if(config.mode==='live'&&payment.charge.disputed===true){
     await this.paidCredits.setPaymentHold(c,{...binding,holdId:'charge:'+payment.charge.id,active:true});
    }
+   if(state==='paid')await this.paidCredits.upgradeEligibleProject(c,order.project);
   });
  }
  async payment(config,session,order){

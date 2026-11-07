@@ -44,8 +44,8 @@ Same-origin website calls `/api/control/*`. A Pages Function proxies only known 
 - `GET /projects/:id/fetch/:key`: original-key recovery; no redispatch.
 - `GET /projects/:id/requests`: bounded `{operations}` list with real IDs, state, timestamps, route/profile context and latency. No raw source captures in list.
 - `GET /projects/:id/requests/:operationId`: retained public fetch projection by operation ID.
-- `GET /projects/:id/usage`: `{gateway,credits}` with outcome and latency counts and authoritative balances. Active or held paid allocations also expose `paid_credits`.
-- `GET /projects/:id/billing`: `{status:'trial'|'approval_required',credits,commercial_enabled}`. Configured projects can buy [prepaid credit packs](stripe-payments.md) through separate Stripe checkout routes. The reviewed free-plan policy adds `trial:{trial_target:1000,grant_scope:'account',grant_frequency:'once',eligible_routes,max_daily_operations}` to billing and usage.
+- `GET /projects/:id/usage`: `{gateway,credits}` with outcome and latency counts and authoritative balances. Active or held paid allocations also expose `paid_credits`. Upgraded projects additionally expose `credit_balance` with `mode:'unified'` on both control usage and `/v2/usage`.
+- `GET /projects/:id/billing`: `{status:'trial'|'approval_required'|'active',credits,commercial_enabled}`. Configured projects can buy [prepaid credit packs](stripe-payments.md) through separate Stripe checkout routes. Before upgrade, the reviewed free-plan policy adds `trial:{trial_target:1000,grant_scope:'account',grant_frequency:'once',eligible_routes,max_daily_operations}` to billing and usage. After upgrade, billing returns `status:'active'` and `credit_balance` instead of trial terms.
 
 Errors use `{error:{code,message}}` for control paths; public fetch envelopes remain unchanged. All authenticated responses are no-store. Source content is rendered as text, never inserted as HTML. The browser stores only selected project and pending operation keys; never session tokens, API keys, source URLs/bodies or private account data in web storage.
 

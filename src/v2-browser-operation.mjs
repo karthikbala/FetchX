@@ -43,7 +43,8 @@ export async function browserProbeOperation(v2,project,raw,identity){
  const policy={...configured,max_requests:maximum,settle_ms:raw.wait_ms??configured.settle_ms},id=randomUUID(),reservedBytes=policy.max_network_bytes,reservedTunnel=route.class==='direct'?0:reservedBytes;
  if(policy.settle_ms>configured.settle_ms)fail('browser_wait_ceiling_rejected');
  await admitPlaygroundRoute(v2,project,profile,{class:route.class,country:route.country,affinity:'session'},'browser',route);
- let replay,pricingDecision;
+ const attribution={project,keyId,userId:identity?.userId,requireSoleKey:identity?.requireSoleKey};
+ let replay,pricingDecision,fixedCredits=false;
  await v2.store.tx(async c=>{
   await c.query('SELECT pg_advisory_xact_lock(1002)');
   const prior=(await c.query('SELECT * FROM v2_operations WHERE project=$1 AND key=$2',[project,raw.idempotency_key])).rows[0];if(prior){if(prior.input_hash!==hash)fail('idempotency_conflict',409);replay=prior;return;}
@@ -51,7 +52,8 @@ export async function browserProbeOperation(v2,project,raw,identity){
   if(current.state!=='open'||new Date(current.expires_at)<=new Date())fail('session_expired',409);
   if((await c.query("SELECT 1 FROM v2_operations WHERE session_id=$1 AND ($2 OR state IN ('reserved','running','unknown'))",[session.id,route.transport==='browser'])).rowCount)fail('session_busy_or_unknown',409);
   if(current.requests+maximum>profile.limits.max_requests||Number(current.encoded_bytes)+reservedBytes>profile.limits.max_session_encoded_bytes)fail('session_limit',429);
-  await v2.checkDailyOperationQuota(c,project);
+  fixedCredits=await v2.unifiedAdmission(c,project);
+  await v2.checkDailyOperationQuota(c,project,{unified:fixedCredits});
   const active=(await c.query("SELECT count(*)::int n FROM v2_operations WHERE state IN ('reserved','running')")).rows[0].n+Number((await c.query("SELECT count(*) AS n FROM attempts WHERE state IN ('reserved','sent')")).rows[0].n);
   if(active>=(v2.config.maxConcurrentRequests??4))fail('capacity_wait',503);
   if(Number((await c.query("SELECT count(*) AS n FROM v2_operations WHERE kind='browser_probe' AND state IN ('reserved','running')")).rows[0].n)>=(v2.config.browser?.maxConcurrent??1))fail('browser_capacity',503);
@@ -63,7 +65,7 @@ export async function browserProbeOperation(v2,project,raw,identity){
   const creditEstimate=estimate===null?null:Math.max(estimate,pricingDecision.customer_traffic_reservation?.max_estimated_micro_usd??0);
   if(raw.max_estimated_micro_usd!==undefined){if(creditEstimate===null)fail('cost_estimate_unavailable',409);if(creditEstimate>raw.max_estimated_micro_usd)fail('cost_ceiling_exceeded',429);}
   await c.query("INSERT INTO v2_operations(id,project,key_id,key,session_id,input_hash,input,kind) VALUES($1,$2,$3,$4,$5,$6,$7,'browser_probe')",[id,project,keyId,raw.idempotency_key,session.id,hash,v2.sealer.seal(raw)]);
-  await v2.controlCredits.reserve(c,{project,operation:id,keyId,userId:identity?.userId,requireSoleKey:identity?.requireSoleKey,route,profile,transport:'browser',estimatedMicroUsd:creditEstimate});
+  await v2.reserveRequestCredits(c,{...attribution,operation:id,unified:fixedCredits,route,profile,transport:'browser',estimatedMicroUsd:creditEstimate});
   if(managed)await materializePlaygroundProfile(v2,c,project,profile);
   await c.query('INSERT INTO v2_ledger(operation,project,session_id,provider,proxy_class,reserved_requests,accounted_requests,reserved_encoded_bytes,accounted_encoded_bytes,reserved_tunnel_bytes,accounted_tunnel_bytes,estimated_micro_usd,customer_traffic,customer_traffic_reservation) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$7,$8,$8,$9,$10,$11)',[id,project,session.id,route.provider,route.class,maximum,reservedBytes,reservedTunnel,estimate,route.class==='residential'?residentialTrafficCharge({status:'pending'}):null,pricingDecision.customer_traffic_reservation??null]);
   await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'reserve',$2)",[id,{kind:'browser_network_probe',requests:maximum,max_network_bytes:reservedBytes,reserved_tunnel_bytes:reservedTunnel,artifact_bytes:artifactBytes,pricing_decision:pricingDecision}]);
@@ -72,7 +74,7 @@ export async function browserProbeOperation(v2,project,raw,identity){
  if(replay)return v2.operationView(replay);
  const runtimeExpires=Date.parse(runtime.runtime?.expires_at);
  const deadline=Math.min(Date.now()+profile.limits.timeout_ms,new Date(session.expires_at).getTime(),pricingDecision.dispatch_deadline_ms??Infinity,Number.isFinite(runtimeExpires)?runtimeExpires:Infinity),result=emptyResult();
- const pricingContext={profile,route,decision:pricingDecision,transport:'browser'},pinnedDestinations=new Map();
+ const pricingContext={profile,route,decision:pricingDecision,transport:'browser',fixedCredits},pinnedDestinations=new Map();
  let relay=null,requests=0,dispatched=false,error=null,stage='dns',failure=null,cookieState=null,encodedSum=0,decodedSum=0,domSum=0,screenshotBytes=0,domArtifact=null,screenshotArtifact=null;
  const artifacts=[],seenKinds=new Set(),mainArtifacts=new Map();let admission=Promise.resolve(),callbackFailed=false,parentBlocked=0,runnerStarted=false,outputReceived=false,relayCloseUnknown=false;
  try{
@@ -155,7 +157,8 @@ export async function browserProbeOperation(v2,project,raw,identity){
   await c.query('UPDATE v2_ledger SET state=$2,accounted_requests=$3,accounted_encoded_bytes=$4,observed_tunnel_bytes=$5,accounted_tunnel_bytes=$6,estimated_micro_usd=CASE WHEN $7 THEN estimated_micro_usd ELSE 0 END,customer_traffic=$8 WHERE operation=$1',[id,unknown?'unknown':networkDispatched?'unreconciled':'cancelled_before_dispatch',usedRequests,usedEncoded,observed,heldTunnel,networkDispatched,customerTraffic]);
   await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'finish',$2)",[id,{kind:'browser_network_probe',state,error,physical_requests:requests,network_dispatched:networkDispatched,observed_network_bytes:observed,...(customerTraffic?{customer_traffic:customerTraffic}:{})}]);
   await c.query('UPDATE v2_sessions SET requests=requests-$2+$3,encoded_bytes=encoded_bytes-$4+$5 WHERE id=$1',[session.id,ledger.reserved_requests,usedRequests,ledger.reserved_encoded_bytes,usedEncoded]);
-  await v2.controlCredits.finish(c,{project,operation:id,dispatched:networkDispatched,unknown});
+  const credits=fixedCredits?v2.controlPaidCredits:v2.controlCredits;
+  await credits.finish(c,{project,operation:id,dispatched:networkDispatched,unknown});
   if(cookieState&&!unknown)await c.query('UPDATE v2_sessions SET cookie_jar=$2 WHERE id=$1',[session.id,v2.sealer.seal(cookieState)]);
  });
  return v2.readOperation(project,id);

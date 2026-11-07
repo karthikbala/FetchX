@@ -1,6 +1,6 @@
 import {createHmac,createHash,timingSafeEqual} from 'node:crypto';
 import {GatewayError,fail} from './policy.mjs';
-import {TRIAL_CREDITS_PER_ACCOUNT,reviewedCreditPolicy} from './control-credits.mjs';
+import {TRIAL_CREDITS_PER_ACCOUNT,creditSnapshot,reviewedCreditPolicy} from './control-credits.mjs';
 import {PublicFetchGateway,publicFetchFailure} from './v2-public-fetch.mjs';
 import {publicRenderFailure} from './v2-public-render.mjs';
 import {googleConfiguration} from './control-google.mjs';
@@ -123,15 +123,15 @@ async function history(v2,project,raw){
   ...(r.paid_credits?{paid_credits:pick(r.paid_credits,['reserved_credits','used_credits','state','unit'])}:{})})),limit,scope:'v2_project_recent'};
 }
 async function usage(v2,credits,project,config){
- const gateway=await v2.usage(project),account=await credits.usage(project);
+ const gateway=await v2.usage(project),account=gateway.request_credits??await credits.usage(project);
  const row=(await v2.store.pool.query(`SELECT count(*)::int AS completed_operations,
   avg(EXTRACT(EPOCH FROM (finished_at-created_at))*1000)::float8 AS mean,
   percentile_cont(0.5) WITHIN GROUP(ORDER BY EXTRACT(EPOCH FROM (finished_at-created_at))*1000)::float8 AS p50,
   percentile_cont(0.95) WITHIN GROUP(ORDER BY EXTRACT(EPOCH FROM (finished_at-created_at))*1000)::float8 AS p95
   FROM v2_operations WHERE project=$1 AND finished_at IS NOT NULL`,[project])).rows[0];
- const trial=trialTerms(v2,project,config);
+ const trial=gateway.credit_balance?null:trialTerms(v2,project,config);
  return {gateway:{...gateway,latency_ms:row??{completed_operations:0,mean:null,p50:null,p95:null}},credits:account,
-  ...(gateway.paid_credits?{paid_credits:gateway.paid_credits}:{}),...(trial?{trial}:{})};
+  ...(gateway.paid_credits?{paid_credits:gateway.paid_credits}:{}),...(gateway.credit_balance?{credit_balance:gateway.credit_balance}:{}),...(trial?{trial}:{})};
 }
 
 export function registerControl(app,gateway,{identity=gateway.controlIdentity,credits=gateway.controlCredits??app.v2?.controlCredits,paidCredits,stripe}={}){
@@ -274,11 +274,13 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,cr
   route('GET','/projects/:id/usage',async req=>{query(req);const auth=await member(req);return usage(v2,credits,auth.id,config);});
   route('GET','/projects/:id/billing',async req=>{
    query(req);const auth=await member(req);
-   const [account,payment,paid]=await Promise.all([credits.usage(auth.id),stripe?.billing(auth.id),paidCredits?.usage(auth.id)]);
-   const trial=trialTerms(v2,auth.id,config);
-   return {status:Number(account.available??account.available_credits??0)>0?'trial':'approval_required',credits:account,
+   const [{trial:account,paid,unified},payment]=await Promise.all([
+    paidCredits?creditSnapshot(credits,paidCredits,auth.id):credits.usage(auth.id).then(trial=>({trial})),stripe?.billing(auth.id)]);
+   const trial=unified?null:trialTerms(v2,auth.id,config);
+   return {status:unified?'active':Number(account.available??account.available_credits??0)>0?'trial':'approval_required',credits:account,
     commercial_enabled:payment?.mode==='live'&&(payment.can_checkout||payment.can_resume_checkout===true||payment.purchases.length>0),...(payment?{stripe:payment}:{}),
-    ...(paid&&(payment||paid.granted>0||paid.payment_hold)?{paid_credits:paid}:{}),...(trial?{trial}:{})};
+    ...(paid&&(unified||payment||paid.granted>0||paid.payment_hold)?{paid_credits:paid}:{}),
+    ...(unified?{credit_balance:{mode:'unified',...paid}}:{}),...(trial?{trial}:{})};
   });
   route('POST','/projects/:id/billing/stripe/checkout',async req=>{
    query(req);const auth=await member(req),body=input(req,['plan_id','idempotency_key']);

@@ -110,8 +110,22 @@ export function creditWeight(policy,transport,routeClass,playground=false){
 export async function recoverControlCredits(c){
  // Gateway recovery marks provably undispatched operations and their provider
  // ledger together. All other interrupted reservations remain held.
- await c.query(`UPDATE control_credit_reservations r SET state=CASE WHEN o.error='interrupted_before_dispatch' AND l.state='cancelled_before_dispatch' THEN 'released' ELSE 'held' END,finished_at=clock_timestamp()
-  FROM v2_operations o JOIN v2_ledger l ON l.operation=o.id WHERE r.operation=o.id AND r.state='reserved'`);
+ const {rows}=await c.query(`UPDATE control_credit_reservations r SET state=CASE WHEN o.error='interrupted_before_dispatch' AND l.state='cancelled_before_dispatch' THEN 'released' ELSE 'held' END,finished_at=clock_timestamp()
+  FROM v2_operations o JOIN v2_ledger l ON l.operation=o.id WHERE r.operation=o.id AND r.state='reserved' RETURNING r.project,r.state`);
+ return [...new Set(rows.filter(row=>row.state==='released').map(row=>row.project))];
+}
+
+// All balance fields and the upgrade receipt must describe the same instant.
+// Otherwise a checkout could appear to credit signup funds in both balances.
+export async function creditSnapshot(credits,paidCredits,project){
+ if(!credits.managed(project))return {trial:null,paid:null,unified:false};
+ return credits.store.tx(async c=>{
+  await c.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+  const trial=await credits.usage(project,c);
+  const unified=await paidCredits.isUnified(project,c);
+  const paid=await paidCredits.usage(project,c);
+  return {trial,paid,unified};
+ });
 }
 
 // Keep the project and key authorization locked through either form of admission.
@@ -128,7 +142,7 @@ export async function lockActiveCreditProject(c,project,keyId,{userId,requireSol
 }
 
 export class ControlCredits{
- constructor({store,config}){this.store=store;this.config=config;}
+ constructor({store,config,restoreReleasedTrialCredits}){this.store=store;this.config=config;this.restoreReleasedTrialCredits=restoreReleasedTrialCredits;}
  managed(project){return managed(project);}
  keyId(project,identity){
   if(!managed(project))return this.config.projects[project]?.keyId??project;
@@ -157,6 +171,7 @@ export class ControlCredits{
   if(!account)fail('credit_account_unavailable',503);
   const prior=(await c.query('SELECT * FROM control_credit_reservations WHERE operation=$1 AND project=$2',[operation,project])).rows[0];
   if(prior)return view(prior);
+  if((await c.query('SELECT 1 FROM control_credit_upgrades WHERE project=$1',[project])).rowCount)fail('credit_balance_upgraded',409);
   const used=Number((await c.query("SELECT COALESCE(sum(credits),0) AS credits FROM control_credit_reservations WHERE project=$1 AND state<>'released'",[project])).rows[0].credits);
   if(used+quote.credits>Number(account.granted_credits))fail('credit_balance_exhausted',429);
   const row=(await c.query('INSERT INTO control_credit_reservations(operation,project,key_id,credits,policy_version,proxy_class,transport) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[operation,project,keyId,quote.credits,quote.policyVersion,route.class,transport])).rows[0];
@@ -168,24 +183,27 @@ export class ControlCredits{
   const state=unknown?'held':dispatched?'settled':'released';
   // Only pending reservations can be finalized. Recovery holds and settled
   // debits require an explicit future operator reconciliation, never a replay.
-  await c.query("UPDATE control_credit_reservations SET state=$3,finished_at=clock_timestamp() WHERE operation=$1 AND project=$2 AND state='reserved'",[operation,project,state]);
+  const updated=await c.query("UPDATE control_credit_reservations SET state=$3,finished_at=clock_timestamp() WHERE operation=$1 AND project=$2 AND state='reserved'",[operation,project,state]);
+  if(updated.rowCount&&state==='released')await this.restoreReleasedTrialCredits?.(c,project);
   return this.operation(project,operation,c);
  }
  async operation(project,operationId,c=this.store.pool){
   if(!managed(project))return null;
   return view((await c.query('SELECT * FROM control_credit_reservations WHERE project=$1 AND operation=$2',[project,operationId])).rows[0]);
  }
- async usage(project){
+ async usage(project,c=this.store.pool){
   if(!managed(project))return null;
-  const account=(await this.store.pool.query('SELECT granted_credits FROM control_credit_accounts WHERE project=$1',[project])).rows[0];
+  const account=(await c.query(`SELECT granted_credits,
+   EXISTS(SELECT 1 FROM control_credit_upgrades WHERE project=$1) AS upgraded
+   FROM control_credit_accounts WHERE project=$1`,[project])).rows[0];
   if(!account)fail('credit_account_unavailable',503);
-  const rows=(await this.store.pool.query('SELECT state,COALESCE(sum(credits),0) AS credits,bool_or(transport=\'browser\') AS browser FROM control_credit_reservations WHERE project=$1 GROUP BY state',[project])).rows;
+  const rows=(await c.query('SELECT state,COALESCE(sum(credits),0) AS credits,bool_or(transport=\'browser\') AS browser FROM control_credit_reservations WHERE project=$1 GROUP BY state',[project])).rows;
   const totals={reserved:0,settled:0,held:0,released:0};
   for(const row of rows)totals[row.state]=Number(row.credits);
   const granted=Number(account.granted_credits);
-  return {granted,available:granted-totals.reserved-totals.settled-totals.held,...totals,unit:rows.some(row=>row.browser)?'logical_request_operation':unit('http'),basis:'customer_request_credits_separate_from_provider_cost',commercial_enabled:false};
+  return {granted,available:account.upgraded?0:granted-totals.reserved-totals.settled-totals.held,...totals,unit:rows.some(row=>row.browser)?'logical_request_operation':unit('http'),basis:'customer_request_credits_separate_from_provider_cost',commercial_enabled:false};
  }
  async recover(c){
-  await recoverControlCredits(c);
+  for(const project of await recoverControlCredits(c))await this.restoreReleasedTrialCredits?.(c,project);
  }
 }

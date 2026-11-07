@@ -457,7 +457,7 @@ export FETCHX_TOKEN='YOUR_PROJECT_API_KEY_OR_TOKEN'` }] },
           { kind: 'text', text: 'Datacenter uses 1 credit per started 1 MB and defaults to a 1 MB limit. Residential uses 5 credits per started 250 KB and defaults to 250 KB. The gateway reserves the maximum before dispatch. The example reserves up to 20 credits. Final charges follow measured wire traffic across all hops. Inspect `usage.accounting.paid_credits` for reserved and used amounts.' },
           { kind: 'text', text: 'The `max_transfer_mb` cap applies separately to bidirectional wire traffic, total encoded response bytes, and total decoded response bytes across all hops. Each limit is `max_transfer_mb × 1,000,000` bytes, up to 20 MB. Decoding also has a separate 100× expansion limit. Credit settlement uses measured wire bytes.' },
           { kind: 'note', title: 'Transfer limit and recovery', text: 'Wire, encoded-body, and decoded-body limits can return `max_transfer_bytes_exceeded`, `encoded_body_limit`, or `decoded_body_limit`. For paid public URLs, `error.details` includes `max_transfer_mb`, `max_allowed_transfer_mb`, and `reserved_credits`. A verified terminal outcome below 20 MB may include `next` with a suggested `max_transfer_mb`, `max_credits`, and `requires_new_idempotency_key: true`. An uncertain outcome omits the suggestion. Recover it using the original key.' },
-          { kind: 'link', label: 'Review paid and trial balances', href: '/app/billing' },
+          { kind: 'link', label: 'Review your project’s credit balance', href: '/app/billing' },
         ],
       },
       {

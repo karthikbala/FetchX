@@ -15,10 +15,10 @@ import {browserProbeOperation} from './v2-browser-operation.mjs';
 import {estimateRoutePricing,estimatePaidPublicDatacenter} from './v2-pricing.mjs';
 import {residentialTrafficCharge,finishResidentialTrafficCharge} from './customer-traffic.mjs';
 import {distinctNativeRetryRoute,nativeRetryIdentityBinding,pristineNativeRetry,transientNativeTransport,transientNativeResponse,successfulNativeResponse} from './v2-native-retry.mjs';
-import {ControlCredits,creditWeight,recoverControlCredits,reviewedCreditPolicy} from './control-credits.mjs';
+import {ControlCredits,creditSnapshot,creditWeight,recoverControlCredits,reviewedCreditPolicy} from './control-credits.mjs';
 import {PLAYGROUND_PREFIX,admitPlaygroundRoute,isPlaygroundRef,materializePlaygroundProfile,playgroundOperationProfile,playgroundPolicy,readPlaygroundProfile} from './control-playground.mjs';
 import {lockStripeSales} from './control-stripe-provider.mjs';
-import {ControlPaidCredits,PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES,outstandingPaidCreditLiabilitySql,recoverControlPaidCredits,reviewedPaidCreditRoutes,quotePaidHttpCredits} from './control-paid-credits.mjs';
+import {ControlPaidCredits,PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES,outstandingPaidCreditLiabilitySql,recoverControlPaidCredits,restoreReleasedTrialCredits,reviewedPaidCreditRoutes,quotePaidHttpCredits} from './control-paid-credits.mjs';
 import {PUBLIC_URL_ID,PUBLIC_URL_KIND,PUBLIC_URL_REF,PUBLIC_URL_ROUTES,RESERVED_PUBLIC_URL_IDS,PUBLIC_URL_MAX_BODY_BYTES,PUBLIC_URL_TRANSFER_LIMITS,checkedPublicRedirect,checkedPublicSourceUrl,checkedPublicAddresses,
  isPublicUrlProfile,publicUrlProfile,reviewedPublicUrlPolicy} from './v2-public-url.mjs';
 
@@ -62,7 +62,7 @@ export async function recoverV2(pool){
    (SELECT l.session_id,sum(l.accounted_requests)::int requests,sum(l.accounted_encoded_bytes) bytes FROM v2_ledger l JOIN v2_operations o ON o.id=l.operation WHERE o.error='interrupted_before_dispatch' AND l.state='reserved' GROUP BY l.session_id) u WHERE s.id=u.session_id;
   UPDATE v2_ledger l SET state='cancelled_before_dispatch',accounted_requests=0,accounted_encoded_bytes=0,accounted_tunnel_bytes=0,estimated_micro_usd=0,customer_traffic=CASE WHEN l.customer_traffic IS NOT NULL THEN l.customer_traffic || '{"status":"no_traffic","metered_bytes":0,"billable_bytes":0,"cost_usd":"0.000000000"}'::jsonb ELSE NULL END FROM v2_operations o WHERE l.operation=o.id AND o.error='interrupted_before_dispatch' AND l.state='reserved';
   INSERT INTO v2_ledger_events(operation,event,detail) SELECT id,'recovery',jsonb_build_object('state',state,'error',error) FROM v2_operations WHERE error IN ('interrupted_unknown','interrupted_before_dispatch') ON CONFLICT DO NOTHING;`);
- await recoverControlCredits(pool);
+ for(const project of await recoverControlCredits(pool))await restoreReleasedTrialCredits(pool,project);
  await recoverControlPaidCredits(pool);
 }
 
@@ -108,7 +108,7 @@ const operationExecution=kind=>kind==='browser_probe'?'browser':'http';
 
 export class V2Gateway{
  constructor(gateway,{http=nativeHttp,dnsHttp=nativeHttp,browserRuntime=browserProbeRuntime,browserRunner=runBrowserProbe,relayFactory=browserRelay}={}){this.gateway=gateway;this.store=gateway.store;this.config=gateway.config;this.sealer=gateway.sealer;this.http=http;this.resolve=createSourceResolver(this.config.v2?.dns,{systemLookup:gateway.resolve,http:dnsHttp});Object.assign(this,{browserRuntime,browserRunner,browserRelay:relayFactory});
-  this.controlCredits=gateway.controlCredits??new ControlCredits({store:this.store,config:this.config});
+  this.controlCredits=gateway.controlCredits??new ControlCredits({store:this.store,config:this.config,restoreReleasedTrialCredits});
   this.controlPaidCredits=gateway.controlPaidCredits??new ControlPaidCredits({store:this.store,config:this.config});
   this.dnsHttp=dnsHttp;
   if(Object.entries(this.config.v2?.accessProfiles??{}).some(([k,p])=>k.startsWith(DISCOVERY_PREFIX)||typeof p?.id==='string'&&p.id.startsWith(DISCOVERY_PREFIX)))fail('discovery_namespace_reserved',503);
@@ -138,8 +138,8 @@ export class V2Gateway{
   }
   return browserProbeOperation(this,project,raw,identity);
  }
- entitlement(project){
-  const e=this.config.projects[project]?.v2_entitlement??{mode:'unmetered'};
+ entitlement(project,{unified=false}={}){
+  const e=unified?{mode:'unmetered'}:this.config.projects[project]?.v2_entitlement??{mode:'unmetered'};
   if(!['unmetered','metered'].includes(e.mode))fail('entitlement_configuration',503);
   if(e.mode==='metered')positive(e.max_daily_operations,'entitlement_configuration');
   return {mode:e.mode,max_daily_operations:e.mode==='metered'?e.max_daily_operations:null};
@@ -426,7 +426,20 @@ export class V2Gateway{
   if(!budget&&(!Number.isSafeInteger(pc.microUsdPerGB)||pc.microUsdPerGB<0))fail('residential_rate_unconfigured',503);
   return row;
  }
- async checkDailyOperationQuota(c,project,{publicUrl=false}={}){
+ async unifiedAdmission(c,project){
+  if(!this.controlCredits.managed(project))return false;
+  // Stripe locks the project before changing its wallet. Keep admission and
+  // quota checks on the same side of that boundary as the reservation.
+  await c.query('SELECT id FROM control_projects WHERE id=$1 FOR SHARE',[project]);
+  return this.controlPaidCredits.isUnified(project,c);
+ }
+ async reserveRequestCredits(c,{unified,profile,transport,estimatedMicroUsd,...reservation}){
+  if(!unified)return this.controlCredits.reserve(c,{...reservation,profile,transport,estimatedMicroUsd});
+  const weight=this.controlCredits.quote({profile,route:reservation.route,transport,estimatedMicroUsd});
+  return this.controlPaidCredits.reserveFixed(c,{...reservation,weight});
+ }
+ async checkDailyOperationQuota(c,project,{publicUrl=false,unified=false}={}){
+  if(unified&&!publicUrl)return;
   const usage=(await c.query(`SELECT count(*)::int AS n FROM v2_operations o JOIN v2_sessions s ON s.id=o.session_id
    WHERE o.project=$1 AND o.created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
    AND ((s.policy->>'id'=$2) IS TRUE)=$3`,[project,PUBLIC_URL_ID,publicUrl])).rows[0];
@@ -480,7 +493,8 @@ export class V2Gateway{
    let url;try{url=new URL(input.url);}catch{fail('destination_rejected');}
    await this.rejectControlCredentials(this.headers(input,p,url));
   }
-  let reused,pricingDecision,paidQuote,publicBodyLimit=null,retryPlan=raw.retry===true?{requested:true,eligible:false,stop_reason:'retry_ineligible'}:null,reservationRequests=hops;
+  const attribution={project,keyId,userId:identity?.userId,requireSoleKey:identity?.requireSoleKey};
+  let reused,pricingDecision,paidQuote,unified=false,publicBodyLimit=null,retryPlan=raw.retry===true?{requested:true,eligible:false,stop_reason:'retry_ineligible'}:null,reservationRequests=hops;
   await this.store.tx(async c=>{
    if(paid&&route.class==='residential')await lockStripeSales(c,'live');
    await c.query('SELECT pg_advisory_xact_lock(1002)');
@@ -505,7 +519,8 @@ export class V2Gateway{
    if(retryPlan?.eligible&&(!pricingDecision.binding||pricingDecision.estimated_micro_usd!==0||pricingDecision.pricing?.provider!=='oxylabs'||pricingDecision.pricing?.basis!=='operator_fixed_fee_pool'))retryPlan={...retryPlan,eligible:false,stop_reason:'retry_ineligible'};
    if(retryPlan?.eligible)reservationRequests=Math.min(hops+1,p.limits.max_requests-locked.requests);
    if(locked.requests+reservationRequests>p.limits.max_requests||reservationRequests<1||Number(locked.encoded_bytes)+reservedBytes>p.limits.max_session_encoded_bytes)fail('session_limit',429);
-   await this.checkDailyOperationQuota(c,project,{publicUrl});
+   if(!publicUrl)unified=await this.unifiedAdmission(c,project);
+   await this.checkDailyOperationQuota(c,project,{publicUrl,unified});
    const active=(await c.query("SELECT count(*)::int n FROM v2_operations WHERE state IN ('reserved','running')")).rows[0].n+Number((await c.query("SELECT count(*) AS n FROM attempts WHERE state IN ('reserved','sent')")).rows[0].n);
    if(active>=(this.config.maxConcurrentRequests??4))fail('capacity_wait',503);
    const artifactBytes=publicUrl?Math.ceil((reservedBytes+publicBodyLimit)*1.4)+hops*512*1024:
@@ -516,15 +531,15 @@ export class V2Gateway{
    if(raw.max_estimated_micro_usd!==undefined){if(estimated===null)fail('cost_estimate_unavailable',409);if(estimated>raw.max_estimated_micro_usd||!paid&&(pricingDecision.customer_traffic_reservation?.max_estimated_micro_usd??0)>raw.max_estimated_micro_usd)fail('cost_ceiling_exceeded',429);}
    await c.query('INSERT INTO v2_operations(id,project,key_id,key,session_id,input_hash,input,recipe) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[id,project,keyId,raw.idempotency_key,session.id,hash,this.sealer.seal(raw),recipe]);
    const creditEstimate=playground&&estimated!==null?Math.max(estimated,pricingDecision.customer_traffic_reservation?.max_estimated_micro_usd??0):estimated;
-   if(paidQuote)await this.controlPaidCredits.reserve(c,{project,operation:id,keyId,userId:identity?.userId,requireSoleKey:identity?.requireSoleKey,quote:paidQuote});
-   else await this.controlCredits.reserve(c,{project,operation:id,keyId,userId:identity?.userId,requireSoleKey:identity?.requireSoleKey,route,profile:p,transport:'http',estimatedMicroUsd:creditEstimate});
+   if(paidQuote)await this.controlPaidCredits.reserve(c,{...attribution,operation:id,quote:paidQuote});
+   else await this.reserveRequestCredits(c,{...attribution,operation:id,unified,route,profile:p,transport:'http',estimatedMicroUsd:creditEstimate});
    if(playground)await materializePlaygroundProfile(this,c,project,p);
    await c.query('INSERT INTO v2_ledger(operation,project,session_id,provider,proxy_class,reserved_requests,accounted_requests,reserved_encoded_bytes,accounted_encoded_bytes,reserved_tunnel_bytes,accounted_tunnel_bytes,estimated_micro_usd,customer_traffic,customer_traffic_reservation) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$7,$8,$8,$9,$10,$11)',[id,project,session.id,route.provider,route.class,reservationRequests,reservedBytes,reservedTunnel,estimated,route.class==='residential'&&!paid?residentialTrafficCharge({status:'pending'}):null,paid?null:pricingDecision.customer_traffic_reservation??null]);
    await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'reserve',$2)",[id,{requests:reservationRequests,encoded_bytes:reservedBytes,tunnel_bytes:reservedTunnel,artifact_bytes:artifactBytes,pricing_decision:pricingDecision,...(publicUrl?{body_limits:{max_encoded_bytes:publicBodyLimit,max_decoded_bytes:publicBodyLimit}}:{}),...(paidQuote?{paid_credit_quote:paidQuote}:{}),...(retryPlan?{native_retry:{requested:true,eligible:retryPlan.eligible,stop_reason:retryPlan.stop_reason}}:{})}]);
    await c.query('UPDATE v2_sessions SET requests=requests+$2,encoded_bytes=encoded_bytes+$3 WHERE id=$1',[session.id,reservationRequests,reservedBytes]);
   });
   if(reused)return this.operationView(reused);
-  await this.execute(project,id,session,p,route,input,recipe,pricingDecision,retryPlan?{...retryPlan,request_limit:reservationRequests}:null,paidQuote,publicBodyLimit);
+  await this.execute(project,id,session,p,route,input,recipe,pricingDecision,retryPlan?{...retryPlan,request_limit:reservationRequests}:null,paidQuote,publicBodyLimit,unified&&!paidQuote);
   return this.readOperation(project,id);
  }
  async pace(url,limits,deadline){
@@ -553,10 +568,8 @@ export class V2Gateway{
    if(!row||!['reserved','running'].includes(row.operation_state))fail('operation_not_dispatchable',409);
    if(row.state!=='open'||new Date(row.expires_at)<=new Date())fail('session_expired',409);
    if((await c.query('SELECT 1 FROM source_limits WHERE source=$1 AND cooldown_until>now()',['origin:'+url.hostname])).rowCount)fail('source_cooldown',429);
-   if(pricingContext?.paidQuote){
-    if(!this.approvedPaidRoute(project,pricingContext.profile,pricingContext.route))fail('paid_credit_route_forbidden',403);
-    await this.controlPaidCredits.assertDispatch(c,{project,operation:id});
-   }
+   if(pricingContext?.paidQuote&&!this.approvedPaidRoute(project,pricingContext.profile,pricingContext.route))fail('paid_credit_route_forbidden',403);
+   if(pricingContext?.paidQuote||pricingContext?.fixedCredits)await this.controlPaidCredits.assertDispatch(c,{project,operation:id});
    this.assertPricingDispatch(project,pricingContext);
    await c.query("UPDATE v2_operations SET state='running' WHERE id=$1",[id]);
   });
@@ -615,9 +628,9 @@ export class V2Gateway{
   });
   return next;
  }
- async execute(project,id,session,p,route,input,recipe,pricingDecision,retryPlan=null,paidQuote=null,publicBodyLimit=null){
+ async execute(project,id,session,p,route,input,recipe,pricingDecision,retryPlan=null,paidQuote=null,publicBodyLimit=null,fixedCredits=false){
   const jar=CookieJar.deserializeSync(this.sealer.open(session.cookie_jar));
-  const deadline=Math.min(Date.now()+p.limits.timeout_ms,pricingDecision?.binding?pricingDecision.dispatch_deadline_ms:Infinity),pricingContext={profile:p,route,decision:pricingDecision,paidQuote},artifacts=[],dns=[],attempts=[];
+  const deadline=Math.min(Date.now()+p.limits.timeout_ms,pricingDecision?.binding?pricingDecision.dispatch_deadline_ms:Infinity),pricingContext={profile:p,route,decision:pricingDecision,paidQuote,fixedCredits},artifacts=[],dns=[],attempts=[];
   const hops=p.limits.max_redirects+1,tunnelBudget=p.limits.max_tunnel_bytes*hops,encodedBudget=publicBodyLimit??p.limits.max_encoded_bytes*hops,decodedBudget=publicBodyLimit??p.limits.max_decoded_bytes*hops,retryEnabled=!!retryPlan?.eligible;
   let requests=0,nativeDispatches=0,dnsRequests=0,dnsNotDispatched=0,dnsUncertain=false,encoded=0,decoded=0,tunnel=route.class==='direct'?null:0,error=null,unknown=false,last=null,stage='route',failure=null,finalArtifact=null,routeChanged=false,stopReason=retryPlan?.stop_reason??null;
   const remainingTunnel=()=>tunnel===null?0:Math.max(0,tunnelBudget-tunnel),remainingEncoded=()=>Math.max(0,encodedBudget-encoded);
@@ -799,7 +812,10 @@ export class V2Gateway{
     const invalidDestination=nativeDispatches===0&&(error==='destination_rejected'||stage==='request_policy');
     const fetchxFailure=['operation_internal_error','sensitive_provider_response','provider_account_rejected','proxy_configuration_invalid','proxy_configuration_unavailable','paid_dns_unavailable','proxy_response_invalid','pricing_attestation_unavailable'].includes(error);
     await this.controlPaidCredits.finish(c,{project,operation:id,dispatched:providerDispatched&&!invalidDestination,unknown,measuredBytes:wire,confirmedAtCap:wireLower>=wireCap,fetchxFailure});
-   }else await this.controlCredits.finish(c,{project,operation:id,dispatched:providerDispatched,unknown});
+   }else{
+    const credits=fixedCredits?this.controlPaidCredits:this.controlCredits;
+    await credits.finish(c,{project,operation:id,dispatched:providerDispatched,unknown});
+   }
    await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'finish',$2)",[id,{state,error,physical_requests:requests,dns_requests:dnsRequests,encoded_bytes:encoded,observed_tunnel_bytes:tunnel,...(retryPlan?{retry:result.retry,attempts}:{}),...(customerTraffic?{customer_traffic:customerTraffic}:{})}]);
    await c.query('UPDATE v2_sessions SET requests=requests-$2+$3,encoded_bytes=encoded_bytes-$4+$5 WHERE id=$1',[session.id,ledger.reserved_requests,requestsAccounted,ledger.reserved_encoded_bytes,encodedAccounted]);
   });
@@ -824,11 +840,20 @@ export class V2Gateway{
     result={...result,status:null,final_url:null,final_artifact_id:null,artifacts:retained.map(a=>({id:a.id,kind:a.kind,status:a.status,encoded_bytes:a.encoded_bytes,decoded_bytes:a.decoded_bytes,content_encoding:a.content_encoding,attempt:a.attempt??1})),physical_requests:null,dns_requests:null,partial:true,additional_dispatches_unknown:true,diagnostics:{stage:'unknown',failure:null,dns:[],attempts:[...(admission?.diagnostics?[admission.diagnostics]:[]),incomplete]},retry:{requested:true,attempts:admission?2:1,route_changed:!!admission,effective_session_id:row.session_id,stop_reason:'interrupted_unknown'}};
    }
   }
-  const requestCredits=await this.controlCredits.operation(row.project,row.id);
-  const paidCredits=this.controlCredits.managed(row.project)?await this.controlPaidCredits.operation(row.project,row.id):null;
+  const {requestCredits,paidCredits}=await this.operationCredits(row.project,row);
   const traffic=ledger.customer_traffic;
   const billing=paidCredits?{paid_credits:paidCredits}:traffic?{customer_traffic:traffic,customer_traffic_reservation:ledger.customer_traffic_reservation}:{};
   return {id:row.id,key_id:row.key_id,idempotency_key:row.key,session_id:row.session_id,state:row.state,error:row.error??null,execution:operationExecution(row.kind),access_profile:{id:session.policy.id,version:session.policy.version},recipe:row.recipe?{id:row.recipe.id,version:row.recipe.version}:null,created_at:row.created_at,finished_at:row.finished_at??null,result,accounting:{provider:ledger.provider,reserved_tunnel_bytes:Number(ledger.reserved_tunnel_bytes),observed_tunnel_bytes:ledger.observed_tunnel_bytes===null?null:Number(ledger.observed_tunnel_bytes),estimated_micro_usd:ledger.estimated_micro_usd===null?null:Number(ledger.estimated_micro_usd),invoice_micro_usd:ledger.invoice_micro_usd===null?null:Number(ledger.invoice_micro_usd),basis:ledger.proxy_class==='direct'?'direct_no_provider_invoice':'conservative_bandwidth_reservation_not_invoice',...(requestCredits?{request_credits:requestCredits}:{}),...(pricing?{pricing:providerPricing(pricing,paidCredits)}:{}),...billing}};
+ }
+ async operationCredits(project,row){
+  if(!this.controlCredits.managed(project))return {};
+  const paidCredits=await this.controlPaidCredits.operation(project,row.id);
+  if(paidCredits?.basis==='prepaid_logical_operation_credits'){
+   const {reserved_credits:credits,state,policy_version}=paidCredits;
+   const unit=row.kind==='browser_probe'?'logical_browser_operation':'logical_http_operation';
+   return {requestCredits:{credits,state,key_id:row.key_id,policy_version,unit}};
+  }
+  return {requestCredits:await this.controlCredits.operation(project,row.id),paidCredits};
  }
  async readOperation(project,id){const row=(await this.store.pool.query('SELECT * FROM v2_operations WHERE id=$1 AND project=$2',[uuid(id),project])).rows[0];if(!row)fail('operation_not_found',404);return this.operationView(row);}
  async lookup(project,k){const row=(await this.store.pool.query('SELECT * FROM v2_operations WHERE project=$1 AND key=$2',[project,key(k)])).rows[0];if(!row)fail('operation_not_found',404);return this.operationView(row);}
@@ -844,8 +869,7 @@ export class V2Gateway{
    WHERE o.project=$1 ORDER BY o.created_at DESC,o.id DESC LIMIT $2`,[project,limit])).rows;
   const operations=[];
   for(const row of rows){
-   const route=this.sealer.open(row.route),requestCredits=await this.controlCredits.operation(project,row.id);
-   const paidCredits=this.controlCredits.managed(project)?await this.controlPaidCredits.operation(project,row.id):null;
+   const route=this.sealer.open(row.route),{requestCredits,paidCredits}=await this.operationCredits(project,row);
    operations.push({id:row.id,key_id:row.key_id,state:row.state,error:row.error,execution:operationExecution(row.kind),created_at:row.created_at,finished_at:row.finished_at,latency_ms:row.latency_ms===null?null:Number(row.latency_ms),routing:{class:route.class,country:route.country,provider:route.provider},access_profile:{id:row.profile_id,version:row.profile_version},...(row.summary??operationSummary(row.legacy_result?this.sealer.open(row.legacy_result):null)),provider:row.provider,estimated_micro_usd:row.estimated_micro_usd===null?null:Number(row.estimated_micro_usd),invoice_micro_usd:row.invoice_micro_usd===null?null:Number(row.invoice_micro_usd),...(requestCredits?{request_credits:requestCredits}:{}),...(paidCredits?{paid_credits:paidCredits}:{})});
   }
   return {operations,scope:'v2_project_recent',limit};
@@ -870,10 +894,9 @@ export class V2Gateway{
    for(const target of [outcome,byKey[o.key_id]]){if(category)target[category]++;for(const k of ['physical_requests','encoded_bytes','decoded_bytes'])target[k]+=r?.[k]??0;}
   }
   const usage=rows.map(r=>Object.fromEntries(Object.entries(r).map(([k,v])=>[k,v===null||['key_id','state'].includes(k)?v:Number(v)])));
-  const credits=await this.controlCredits.usage(project);
-  const paidCredits=credits?await this.controlPaidCredits.usage(project):null;
-  return {project,key_id:this.config.projects[project].keyId??project,entitlement:this.entitlement(project),outcomes:outcome,outcomes_by_key:byKey,by_key_and_state:usage,
-   ...(credits?{request_credits:credits}:{}),...(paidCredits?{paid_credits:paidCredits}:{}),
+  const {trial:credits,paid:paidCredits,unified}=await creditSnapshot(this.controlCredits,this.controlPaidCredits,project);
+  return {project,key_id:this.config.projects[project].keyId??project,entitlement:this.entitlement(project,{unified}),outcomes:outcome,outcomes_by_key:byKey,by_key_and_state:usage,
+   ...(credits?{request_credits:credits}:{}),...(paidCredits?{paid_credits:paidCredits}:{}),...(unified?{credit_balance:{mode:'unified',...paidCredits}}:{}),
    scope:'v2_project_lifetime',application_acceptance:'not_measured',invoice_basis:'unknown_until_authoritative_reconciliation'};
  }
 }

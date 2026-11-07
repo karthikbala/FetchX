@@ -303,6 +303,7 @@ const messages={
  cost_estimate_unavailable:'The gateway has no reviewed cost estimate for this route and execution mode.',
  cost_ceiling_exceeded:'This route exceeds the project’s spending limit.',
  credit_balance_exhausted:'The project has insufficient available request credits.',
+ paid_credit_payment_hold:'The project’s credit balance is on hold.',
  playground_profile_limit:'The project has reached its playground profile limit.'
 };
 
@@ -338,8 +339,10 @@ export async function preparePlayground(v2,project,raw,keys){
    if(!quote)add('proxy',mode.issues.get(pair)??mode.routes[raw.proxy.class].reason??'playground_route_unreviewed');
   }
   if(quote){
-   const usage=await v2.controlCredits.usage(project);
-   if(usage.available<quote.credits)add('credits','credit_balance_exhausted');
+   const trial=await v2.controlCredits.usage(project);
+   const usage=await v2.controlPaidCredits.isUnified(project)?await v2.controlPaidCredits.usage(project):trial;
+   if(usage.payment_hold)add('credits','paid_credit_payment_hold');
+   else if(usage.available<quote.credits)add('credits','credit_balance_exhausted');
    try{await assertOriginLimit(v2.store.pool,project,url.origin,policy.maxProfilesPerProject);}
    catch(error){add('url',expectedFailure(error));}
   }

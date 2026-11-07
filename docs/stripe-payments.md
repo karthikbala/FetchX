@@ -2,7 +2,7 @@
 
 ## Packages
 
-FetchX sells one-time prepaid credit packs. Paid balances carry forward without scheduled expiry or automatic renewal. The $0 free plan grants 1,000 trial credits once per account. The trial and paid ledgers track their balances separately.
+FetchX sells one-time prepaid credit packs. Paid balances carry forward without scheduled expiry or automatic renewal. The $0 free plan grants 1,000 trial credits once per account. Before a project's first verified live purchase, trial access uses its existing route and daily limits. When unified credits are enabled, that purchase combines the project's unspent trial credits with its purchased credits. A purchase in another project does not move credits or unlock the trial project.
 
 | Package ID | USD price | Minor units | Credits |
 | --- | ---: | ---: | ---: |
@@ -68,11 +68,13 @@ The Worker verifies the Stripe signature against the original raw bytes. It sign
 
 After the inbox write, the gateway retrieves canonical Stripe objects through the broker. It verifies the saved project/customer, Checkout Session, Price and quantity, captured PaymentIntent and Charge, currency and amount. A live paid event atomically records the receipt, adds the pack to the paid credit ledger and marks the inbox event applied. Test evidence remains `test_paid_unapplied`. Refunds revoke the associated unused balance, including when reversal evidence arrives first. Disputes place a hold on the project's paid credits until resolution. A lost dispute revokes the affected pack's unused credits. [Checkout line items](https://docs.stripe.com/api/checkout/sessions/line_items).
 
+An upgraded project has one spendable balance. Public HTTP uses the reviewed transfer tariff; scoped HTTP and Browser use their reviewed per-operation prices. The trial-only daily quota no longer applies, while route, destination, transfer, provider-budget and concurrency protections still apply. The original grant and purchase evidence stays in the ledger. A refund removes the affected pack's unused credits without undoing the conversion or removing signup credits; a dispute hold blocks spending until cleared. In-flight and uncertain trial work remains reserved or held, and a verified release returns those credits to the unified balance.
+
 ## Account API
 
 The browser calls the existing trusted same-origin bridge. Each project request requires the owner session, and Checkout POST additionally requires session-bound CSRF.
 
-- `GET /control/projects/:id/billing` exposes the configured `stripe` catalog, per-pack `can_purchase`, current pending checkout and recent purchase history. `paid_credits` exposes the prepaid balance and payment hold. `credits` continues to describe trial usage. The usage endpoint also projects paid credits when a paid allocation or hold exists.
+- `GET /control/projects/:id/billing` exposes the configured `stripe` catalog, per-pack `can_purchase`, current pending checkout and recent purchase history. `paid_credits` exposes the prepaid balance and payment hold. For an upgraded project, billing and usage expose `credit_balance: {mode:'unified',unit:'credits',available,granted,used,reserved,held,revoked_unused,payment_hold}` and `paid_credits` mirrors that balance for existing clients. `credits` retains historical trial usage with no spendable amount after conversion.
 - `POST /control/projects/:id/billing/stripe/checkout` accepts `{plan_id,idempotency_key}` with a lowercase UUID. Save the key before submitting. An open response includes a Stripe-hosted `checkout_url` in a no-store response.
 - `GET /control/projects/:id/billing/stripe/checkout/:key` reads saved evidence without calling Stripe. A return to the website does not update payment state.
 
@@ -93,6 +95,8 @@ node src/stripe-reconcile-cli.mjs --checkout-order ORDER_UUID SESSION_ID
 ```
 
 ## Verification and cutover
+
+Set `controlPlane.unifiedCredits.enabled: true` only after testing the matching website and gateway together, reconciling open live checkouts, and verifying approved residential capacity for existing paid projects and the credits they can convert. Startup backfills existing verified, unreversed live purchases in an atomic transaction under the Stripe sales lock and rejects the activation if approved capacity is insufficient. New live Checkout orders reserve capacity for the pack and any trial credits that could join it. The flag defaults off. Turning it off stops new conversions; existing upgraded projects retain their unified balances. Keep a gateway version that recognizes unified reservations and grants once any conversion has occurred.
 
 Run the local Worker and broker checks with synthetic keys and fake Stripe responses. The Wrangler dry run checks bundling and the rate bindings. The Worker pins compatibility date `2026-10-30` to match the installed workerd runtime used for local smoke verification.
 

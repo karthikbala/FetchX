@@ -113,8 +113,8 @@ test('Stripe prepaid checkout and signed reconciliation through the gateway',{sk
  };
  function price(live){return {id:PLAN.priceId,object:'price',livemode:live,active:true,type:'one_time',unit_amount:AMOUNT,currency:'usd',billing_scheme:'per_unit',recurring:null};}
  app=server(gateway,{stripeFetch,stripeAutoProcess:false});
- app.v2.paidCreditReady=async(_project,{publicOnly,purchaseCredits=0,pendingLiabilityBytes=0n,outstandingLiabilityBytes=0n}={})=>
-  publicOnly===true&&routeReady&&(purchaseCredits===0||BigInt(purchaseCredits)*RESIDENTIAL_BYTES_PER_CREDIT+
+ app.v2.paidCreditReady=async(project,{publicOnly,purchaseCredits=0,pendingLiabilityBytes=0n,outstandingLiabilityBytes=0n}={})=>
+  !!config.projects[project]&&publicOnly===true&&routeReady&&(purchaseCredits===0||BigInt(purchaseCredits)*RESIDENTIAL_BYTES_PER_CREDIT+
    BigInt(pendingLiabilityBytes)+BigInt(outstandingLiabilityBytes)<=capacityLiabilityBytes);
  const bridge={origin:ORIGIN,'x-fetchx-control-secret':config.controlPlane.bridgeSecret};
  const control=(method,path,actor={},payload,headers={})=>app.inject({method,url:'/control'+path,headers:{...bridge,...actor,...headers},
@@ -379,6 +379,60 @@ test('Stripe prepaid checkout and signed reconciliation through the gateway',{sk
   assert.equal((await deliver(JSON.stringify({...fixtureEvent,created:1}))).status,502,'a conflicting signed source payload receives no success acknowledgment');
   const receiptCount=(await store.pool.query('SELECT count(*)::int AS n FROM control_stripe_purchases WHERE session_id=$1',[session.id])).rows[0].n;
   assert.equal(receiptCount,1);
+ });
+
+ await t.test('verified live purchases upgrade each project once; signup credits survive a payment refund',async()=>{
+  brokerRuntime=undefined;
+  config.controlPlane.stripe={...settings('live'),allowedProjects:[a.id,b.id]};
+  config.controlPlane.unifiedCredits={enabled:true};
+  const bPath=`/projects/${b.id}/billing`,bBilling=async()=>{
+   const response=await control('GET',bPath,b.actor);assert.equal(response.statusCode,200,response.body);return response.json();
+  };
+  assert.equal((await bBilling()).credit_balance,undefined);
+  assert.equal((await bBilling()).trial.max_daily_operations,10);
+  capacityLiabilityBytes=0n;
+  delete config.projects[a.id]; // A fresh gateway has not served this project yet.
+  await assert.rejects(app.stripe.upgradeExistingProjects(),{code:'unified_credit_activation_capacity_unavailable'});
+  assert.ok(config.projects[a.id], 'activation hydrates the policy before evaluating capacity');
+  assert.equal((await readBilling()).credit_balance,undefined);
+  capacityLiabilityBytes=1_000_000_000_000n;
+  const credits=app.v2.controlCredits,readTrial=credits.usage;
+  const snapshotRead=Promise.withResolvers(),continueRead=Promise.withResolvers();
+  credits.usage=async function(project,client){
+   const value=await readTrial.call(this,project,client);
+   if(project===a.id&&client){snapshotRead.resolve();await continueRead.promise;}
+   return value;
+  };
+  const duringUpgrade=readBilling();
+  try{
+   await Promise.race([snapshotRead.promise,duringUpgrade.then(()=>{throw new Error('billing skipped the shared credit snapshot');})]);
+   assert.equal(await app.stripe.upgradeExistingProjects(),1);
+  }finally{credits.usage=readTrial;continueRead.resolve();}
+  const beforeUpgrade=await duringUpgrade;
+  assert.equal(beforeUpgrade.credit_balance,undefined);
+  assert.equal(beforeUpgrade.credits.available,TRIAL_CREDITS_PER_ACCOUNT);
+  assert.equal(beforeUpgrade.paid_credits.available,CREDITS);
+  assert.equal(await app.stripe.upgradeExistingProjects(),0);
+  const upgraded=await readBilling();
+  assert.equal(upgraded.credit_balance.mode,'unified');
+  assert.equal(upgraded.credit_balance.available,CREDITS+TRIAL_CREDITS_PER_ACCOUNT);
+  assert.equal(upgraded.credits.available,0);assert.equal(upgraded.trial,undefined);
+  assert.equal((await bBilling()).credit_balance,undefined);
+  const beforePayment=await control('POST',bPath+'/stripe/checkout',b.actor,{idempotency_key:randomUUID(),plan_id:PLAN.id});
+  assert.equal(beforePayment.statusCode,200,beforePayment.body);
+  assert.equal((await bBilling()).credit_balance,undefined);
+  const fixture=paid(lastSession());
+  await receive('checkout.session.completed',fixture.session);
+  await receive('checkout.session.async_payment_succeeded',fixture.session);
+  assert.equal((await bBilling()).credit_balance.available,CREDITS+TRIAL_CREDITS_PER_ACCOUNT);
+  const usage=await control('GET',`/projects/${b.id}/usage`,b.actor);
+  assert.equal(usage.statusCode,200,usage.body);
+  assert.equal(usage.json().credit_balance.available,CREDITS+TRIAL_CREDITS_PER_ACCOUNT);
+  assert.equal(usage.json().trial,undefined);
+  fixture.charge.amount_refunded=AMOUNT;
+  await receive('charge.refunded',fixture.charge);
+  assert.equal((await bBilling()).credit_balance.available,TRIAL_CREDITS_PER_ACCOUNT);
+  assert.equal((await bBilling()).trial,undefined);
  });
 
 });
