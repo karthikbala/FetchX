@@ -5,6 +5,7 @@ import {TRIAL_CREDITS_PER_ACCOUNT,grantAccountTrialCredits,grantInitialCredits,r
 import {initPlayground} from './control-playground.mjs';
 import {createControlGoogle,googleConfiguration} from './control-google.mjs';
 import {createControlGithub,githubConfiguration,githubSettings,githubAuthorizationUrl} from './control-github.mjs';
+import {initControlConnect} from './control-connect.mjs';
 
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const PROJECT=/^cp_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -51,6 +52,7 @@ export async function initControlIdentity(pool){await pool.query(`
  CREATE TABLE IF NOT EXISTS control_github_identities(subject text PRIMARY KEY CHECK(subject ~ '^[1-9][0-9]{0,15}$'),user_id uuid NOT NULL UNIQUE REFERENCES control_users(id),created_at timestamptz NOT NULL DEFAULT now());
  `);
  await initPlayground(pool);
+ await initControlConnect(pool);
 }
 
 export class ControlIdentity{
@@ -84,7 +86,8 @@ export class ControlIdentity{
     const row=(await c.query('INSERT INTO control_rates(bucket,attempts,expires_at) VALUES($1,1,to_timestamp($2)) ON CONFLICT(bucket) DO UPDATE SET attempts=control_rates.attempts+1 RETURNING attempts',[bucket,(window+2)*seconds])).rows[0];
     if(row.attempts>limit)ok=false;
    }
-   await c.query('DELETE FROM control_rates WHERE expires_at<clock_timestamp()');
+   await c.query(`DELETE FROM control_rates WHERE bucket IN (SELECT bucket FROM control_rates
+    WHERE expires_at<statement_timestamp() ORDER BY expires_at LIMIT 64 FOR UPDATE SKIP LOCKED)`);
    return ok;
   });
   if(!allowed)fail('rate_limited',429);
@@ -248,9 +251,10 @@ export class ControlIdentity{
  }
  async revokeSession(token){this.settings();if(tokenValid(token,'fxs'))await this.store.pool.query('UPDATE control_sessions SET revoked_at=COALESCE(revoked_at,clock_timestamp()) WHERE token_hash=$1',[hash(token)]);return {revoked:true};}
  assertProject(row){if(!row)fail('project_not_found',404);if(row.status!=='active')fail('project_disabled',403);if(row.template_hash!==this.template().hash)fail('project_template_changed',403);return row;}
- async projectRow(userId,projectId,c=this.store.pool){
+ async projectRow(userId,projectId,c=this.store.pool,{lock=false}={}){
   this.settings();if(typeof userId!=='string'||!UUID.test(userId)||typeof projectId!=='string'||!PROJECT.test(projectId))fail('project_not_found',404);
-  return this.assertProject((await c.query('SELECT p.* FROM control_projects p JOIN control_memberships m ON m.project=p.id WHERE p.id=$1 AND m.user_id=$2',[projectId,userId])).rows[0]);
+  return this.assertProject((await c.query(`SELECT p.* FROM control_projects p JOIN control_memberships m ON m.project=p.id
+   WHERE p.id=$1 AND m.user_id=$2${lock?' FOR UPDATE OF p FOR SHARE OF m':''}`,[projectId,userId])).rows[0]);
  }
  async requireProject(userId,projectId){const row=await this.projectRow(userId,projectId);await this.hydrateProject(projectId);return projectView(row);}
  async projects(userId){
@@ -295,26 +299,31 @@ export class ControlIdentity{
   if(!Array.isArray(input.scopes)||!input.scopes.length||input.scopes.length>SCOPES.length||input.scopes.some(scope=>!SCOPES.includes(scope))||new Set(input.scopes).size!==input.scopes.length)fail('key_scopes_invalid');
   return {name,scopes:[...input.scopes].sort()};
  }
- async insertKey(c,project,input){
-  const token=tokenFor('fxk');
+ async insertKey(c,project,input,token){
   const row=(await c.query('INSERT INTO control_keys(id,project,name,prefix,token_hash,scopes) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[randomUUID(),project,input.name,token.slice(0,12),hash(token),JSON.stringify(input.scopes)])).rows[0];
-  return {...keyView(row),token};
+  return keyView(row);
+ }
+ async assertCanCreateKey(c,userId,projectId){
+  await this.projectRow(userId,projectId,c,{lock:true});
+  if(Number((await c.query('SELECT count(*) AS n FROM control_keys WHERE project=$1 AND revoked_at IS NULL',[projectId])).rows[0].n)>=20)fail('key_limit',429);
+ }
+ async createKeyInTransaction(c,userId,projectId,input,token){
+  await this.assertCanCreateKey(c,userId,projectId);
+  return this.insertKey(c,projectId,input,token);
  }
  async createKey(userId,projectId,input){
-  const value=this.keyInput(input);
-  return this.store.tx(async c=>{
-   await this.projectRow(userId,projectId,c);await c.query('SELECT id FROM control_projects WHERE id=$1 FOR UPDATE',[projectId]);
-   if(Number((await c.query('SELECT count(*) AS n FROM control_keys WHERE project=$1 AND revoked_at IS NULL',[projectId])).rows[0].n)>=20)fail('key_limit',429);
-   return this.insertKey(c,projectId,value);
-  });
+  const value=this.keyInput(input),token=tokenFor('fxk');
+  const key=await this.store.tx(c=>this.createKeyInTransaction(c,userId,projectId,value,token));
+  return {...key,token};
  }
  async rotateKey(userId,projectId,keyId){
   if(typeof keyId!=='string'||!UUID.test(keyId))fail('key_not_found',404);
   return this.store.tx(async c=>{
-   await this.projectRow(userId,projectId,c);await c.query('SELECT id FROM control_projects WHERE id=$1 FOR UPDATE',[projectId]);
+   await this.projectRow(userId,projectId,c,{lock:true});
    const row=(await c.query('SELECT * FROM control_keys WHERE id=$1 AND project=$2 FOR UPDATE',[keyId,projectId])).rows[0];
    if(!row)fail('key_not_found',404);if(row.revoked_at)fail('key_revoked',409);
-   const next=await this.insertKey(c,projectId,row);await c.query('UPDATE control_keys SET revoked_at=clock_timestamp() WHERE id=$1',[row.id]);return next;
+   const token=tokenFor('fxk'),next=await this.insertKey(c,projectId,row,token);
+   await c.query('UPDATE control_keys SET revoked_at=clock_timestamp() WHERE id=$1',[row.id]);return {...next,token};
   });
  }
  async revokeKey(userId,projectId,keyId){

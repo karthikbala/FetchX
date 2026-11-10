@@ -2,6 +2,7 @@
 // operation recovery details can cross page boundaries. Credentials stay in memory.
 import { mountGoogleSignIn } from './google-sign-in';
 import { consumeGithubResult, mountGithubSignIn } from './github-sign-in';
+import { clearConnectReturn, readConnectReturn } from './connect-return';
 import { countryName } from '../data/countries';
 import { operationExecution, operationResource, requestCode, routeClasses, routeLabels, type Execution, type PlaygroundCapabilities, type Preparation, type RouteClass, type SafeKey } from '../data/playground';
 import { mountStripeBilling } from './stripe-billing';
@@ -180,8 +181,15 @@ async function initWorkspace(root: HTMLElement) {
     disposeGithub?.(); disposeGithub = undefined;
     acceptSession(data); email = ''; challenge = ''; clearError();
     const code = q<HTMLInputElement>('[data-signup-verify] input'); if (code) code.value = '';
+    if (resumeConnect()) return;
+    if (readConnectReturn()?.purpose === 'create') { stage(2); return; }
     if (projects.length && githubResult?.connectRequired) { showExistingAccount(); toast('Signed in. Choose Connect GitHub to connect this account.'); requestAnimationFrame(() => q('[data-github-connect]')?.focus()); }
     else if (projects.length) window.location.assign(authDestination); else stage(2);
+  }
+  function resumeConnect(projectCreated = false): boolean {
+    const intent = readConnectReturn();
+    if (!intent || intent.purpose === 'create' && !projectCreated && !projects.some(item => item.status === 'active')) return false;
+    clearConnectReturn(); window.location.replace(intent.href); return true;
   }
   function showExistingAccount() { qa('[data-signup-stage]').forEach(node => { node.hidden = true; }); q('[data-auth-existing]')!.hidden = false; q('[data-auth-progress]')?.setAttribute('hidden', ''); }
   async function googleRequest(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -246,6 +254,7 @@ async function initWorkspace(root: HTMLElement) {
   onForm('[data-signup-project]', async (_form, values) => {
     const data = await api('/projects', { method: 'POST', body: { name: String(values.get('project') || '').trim() } });
     project = data.project; if (!project || !validProject(project.id)) throw new ControlError('The service did not return the created project.', 'invalid_response');
+    if (resumeConnect(true)) return;
     saveProject(project.id); textAll('[data-project-name]', project.name); stage(3);
   });
   onForm('[data-signup-key]', async (_form, values) => {
@@ -1270,8 +1279,9 @@ async function initWorkspace(root: HTMLElement) {
       try { session = await api('/session'); } catch (error) { if (!(error instanceof ControlError) || error.status !== 401) throw error; }
       if (session) {
         acceptSession(session);
+        if (resumeConnect()) return;
         if (authPage) {
-          if (projects.length) showExistingAccount();
+          if (projects.length && readConnectReturn()?.purpose !== 'create') showExistingAccount();
           else stage(2);
         } else { setProjectOptions(); if (projects.length) await selectProject(projects.some(item => item.id === selectedId()) ? selectedId() : projects[0].id); else gate('Create your first project.', 'Your email is verified. Create a project to receive its configured access and allocation.', 'project'); }
       } else if (authPage) {

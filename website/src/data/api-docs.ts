@@ -261,27 +261,43 @@ export FETCHX_TOKEN='YOUR_PROJECT_API_KEY_OR_TOKEN'` }] },
         id: 'set-up-the-agent',
         title: '1. Confirm the task and set up access',
         blocks: [
-          { kind: 'text', text: 'If the user has not provided both an HTTPS source URL and the expected output, ask for them. Use the agent runtime’s `FETCHX_URL` and `FETCHX_TOKEN`. If either is missing, guide the user through the setup below and wait for both to be available.' },
-          { kind: 'text', text: 'The user signs up or signs in to FetchX in their own browser, completes account verification and selects or creates a project. Under API keys, they create a key with `profiles:read`, `fetch:write` and `fetch:read`. FetchX shows the key once.' },
+          { kind: 'text', text: 'If the user has not provided both an HTTPS source URL and the expected output, ask for them. If the agent runtime already has `FETCHX_URL` and `FETCHX_TOKEN` for the intended project, continue to step 2. Otherwise use FetchX Connect where enabled.' },
+          { kind: 'note', title: 'Connect availability', text: 'Connect requires both the website and gateway to support it and the operator to enable it. If Connect is unavailable or your runtime cannot keep a process open for approval, use the manual key setup below.' },
+          { kind: 'text', text: 'Download the dependency-free Node.js 24 helper from the official FetchX site. Continue only after the download succeeds and reports HTTP 200.' },
+          { kind: 'link', label: 'Get the FetchX Connect helper', href: '/connect-client.mjs' },
+          { kind: 'code', title: 'Download the Connect helper', snippets: [{ label: 'Shell', language: 'bash', code: `curl --disable --fail --silent --show-error --proto '=https' \\
+  --output connect-client.mjs --write-out 'HTTP %{http_code}\\n' \\
+  https://fetchx.ai/connect-client.mjs` }] },
+          { kind: 'text', text: 'Run the helper around a new Codex CLI session or use your existing DeepSeek harness command in place of `codex`. If an agent is already running, wrap its selected workload command and do steps 2–6 inside that same child process. Keep the command running while the user approves.' },
+          { kind: 'code', title: 'Start Connect and run Codex after approval', snippets: [{ label: 'Shell', language: 'bash', code: 'node ./connect-client.mjs -- codex' }] },
+          { kind: 'text', text: 'Show the user the displayed link and short Connect code. Codex can open the link in its in-app browser for the user. With a browserless agent, the user opens it in a regular browser. The user signs in, enters the code and selects a project to approve within ten minutes. Connect grants `profiles:read`, `fetch:write` and `fetch:read` on that project.' },
+          { kind: 'text', text: 'After approval the helper starts the command with `FETCHX_URL` and `FETCHX_TOKEN` in its environment. A Node.js integration can also import `connectFetchX` from the helper, use its `onApproval` callback to display `verificationUri` and `userCode`, and keep its returned `token` and `apiBaseUrl` in the process doing the work.' },
+          { kind: 'text', text: 'For a verified self-hosted deployment, set `--origin` to its site origin and `--api-origin` if the gateway has a different origin. Use HTTPS except for loopback development.' },
+          { kind: 'text', text: 'For manual setup, the user signs up or signs in to FetchX in their own browser, completes account verification and selects or creates a project. Under API keys, they create a key with `profiles:read`, `fetch:write` and `fetch:read`. FetchX shows the key once.' },
           { kind: 'link', label: 'Create a FetchX account', href: '/signup' },
           { kind: 'link', label: 'Sign in to FetchX', href: '/login' },
           { kind: 'link', label: 'Open API keys', href: '/app/keys' },
           { kind: 'text', text: 'Set `FETCHX_URL` to `' + hostedGateway + '` for hosted FetchX or the user’s provisioned HTTPS gateway. Leave off the trailing slash. Store the key as the runtime secret `FETCHX_TOKEN`. A CLI user can load it from a secret manager or enter it at a masked prompt, then launch the agent from that shell.' },
-          { kind: 'code', title: 'Set variables and then launch your CLI agent', snippets: [{ label: 'Bash (interactive)', language: 'bash', code: `set +x
+          { kind: 'code', title: 'Set a manual key and then launch your CLI agent', snippets: [{ label: 'Bash (interactive)', language: 'bash', code: `set +x
 export FETCHX_URL='${hostedGateway}'
 read -r -s -p 'FetchX project API key: ' FETCHX_TOKEN
 printf '\\n'
 export FETCHX_TOKEN` }] },
-          { kind: 'note', title: 'Keep credentials private', text: 'Never ask for keys, passwords, session tokens or one-time codes in chat. Keep secrets out of prompts, files, logs and shell traces. Expand `FETCHX_TOKEN` only for Bearer authentication to the configured FetchX gateway. Download documentation without credentials, and never send the key to the source website.' },
+          { kind: 'note', title: 'Keep credentials private', text: 'Share only the Connect link and its short matching code. Keep the private device code, API key, passwords, session tokens and account verification codes out of chat, command arguments, files, logs and shell traces. Use `FETCHX_TOKEN` only for Bearer authentication to the configured FetchX gateway. Download documentation without credentials.' },
         ],
       },
       {
         id: 'choose-an-approved-profile',
         title: '2. Find an approved profile and route',
         blocks: [
-          { kind: 'text', text: 'Call `GET /v2/access-profiles` on `FETCHX_URL` using the project token. Listing profiles does not fetch the source. The following examples use cURL; the agent can use its existing HTTP client with redirects and automatic retries disabled.' },
-          { kind: 'code', title: 'List project access profiles', snippets: [{ label: 'cURL', language: 'bash', code: `curl --disable --silent --show-error "$FETCHX_URL/v2/access-profiles" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN"` }] },
+          { kind: 'text', text: 'Call `GET /v2/access-profiles` on `FETCHX_URL` using the project token. Listing profiles does not fetch the source. Use the following Node.js examples in the workload process or use your existing HTTP client with redirects and automatic retries disabled.' },
+          { kind: 'code', title: 'List project access profiles', snippets: [{ label: 'Node.js', language: 'javascript', code: `const response = await fetch(process.env.FETCHX_URL + '/v2/access-profiles', {
+  headers: { Authorization: 'Bearer ' + process.env.FETCHX_TOKEN },
+  redirect: 'error',
+  signal: AbortSignal.timeout(30_000),
+});
+if (!response.ok) throw new Error('FetchX profile lookup failed (' + response.status + ')');
+const { access_profiles } = await response.json();` }] },
           { kind: 'text', text: 'From `access_profiles`, choose the exact `id` and `version` that permit the HTTPS URL, the `GET` method and the intended route. Match the approved `proxy.class` and `proxy.country` exactly. For `direct`, set `country` to JSON `null`; for a proxy route use the approved uppercase country code. Review `route_reservations` for the approved combinations and reservation estimates. If no profile matches, tell the user what access is missing and stop.' },
           { kind: 'link', label: 'Read the access profile reference', href: '/docs/profiles' },
           { kind: 'link', label: 'Prepare a browser render if the task needs JavaScript', href: '/docs/profiles#browser-profiles' },
@@ -300,12 +316,20 @@ export FETCHX_TOKEN` }] },
         title: '4. Authorize and send one live fetch',
         blocks: [
           { kind: 'text', text: 'Show the user the target URL, profile and route. One live fetch may use credits, so obtain authorization for that specific request before dispatch. Submit the saved JSON once to `POST /v2/fetch`. Record the gateway HTTP status and keep the response private.' },
-          { kind: 'code', title: 'Submit the saved Fetch request once', snippets: [{ label: 'cURL', language: 'bash', code: `umask 077
-curl --disable --silent --show-error "$FETCHX_URL/v2/fetch" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN" \\
-  -H 'Content-Type: application/json' \\
-  --data-binary @fetch-request.json \\
-  --output fetch-response.json --write-out 'Gateway HTTP %{http_code}\\n'` }] },
+          { kind: 'code', title: 'Submit the saved Fetch request once', snippets: [{ label: 'Node.js', language: 'javascript', code: `import { readFile, writeFile } from 'node:fs/promises';
+
+const response = await fetch(process.env.FETCHX_URL + '/v2/fetch', {
+  method: 'POST',
+  headers: {
+    Authorization: 'Bearer ' + process.env.FETCHX_TOKEN,
+    'Content-Type': 'application/json',
+  },
+  body: await readFile('fetch-request.json'),
+  redirect: 'error',
+  signal: AbortSignal.timeout(90_000),
+});
+await writeFile('fetch-response.json', await response.text(), { mode: 0o600 });
+console.log('Gateway HTTP', response.status);` }] },
         ],
       },
       {
@@ -320,11 +344,17 @@ curl --disable --silent --show-error "$FETCHX_URL/v2/fetch" \\
         id: 'recover-the-result',
         title: '6. Recover uncertain work and report back',
         blocks: [
-          { kind: 'text', text: 'If the connection drops or the outcome is uncertain, use `GET /v2/fetch/:idempotency_key` with the original key from `fetch-request.json` and the same project. Set `FETCHX_ENCODED_KEY` to that key encoded as one URL path segment; a UUID needs no escaping. This lookup only reads the saved operation. Apply the checks in step 5 to any retained result.' },
-          { kind: 'code', title: 'Recover using the original key', snippets: [{ label: 'cURL', language: 'bash', code: `umask 077
-curl --disable --silent --show-error "$FETCHX_URL/v2/fetch/\${FETCHX_ENCODED_KEY}" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN" \\
-  --output fetch-recovery.json --write-out 'Gateway HTTP %{http_code}\\n'` }] },
+          { kind: 'text', text: 'If the connection drops or the outcome is uncertain, use `GET /v2/fetch/:idempotency_key` with the original key from `fetch-request.json` and the same project. This lookup only reads the saved operation. Apply the checks in step 5 to any retained result.' },
+          { kind: 'code', title: 'Recover using the original key', snippets: [{ label: 'Node.js', language: 'javascript', code: `import { readFile, writeFile } from 'node:fs/promises';
+
+const { idempotency_key } = JSON.parse(await readFile('fetch-request.json', 'utf8'));
+const response = await fetch(process.env.FETCHX_URL + '/v2/fetch/' + encodeURIComponent(idempotency_key), {
+  headers: { Authorization: 'Bearer ' + process.env.FETCHX_TOKEN },
+  redirect: 'error',
+  signal: AbortSignal.timeout(30_000),
+});
+await writeFile('fetch-recovery.json', await response.text(), { mode: 0o600 });
+console.log('Gateway HTTP', response.status);` }] },
           { kind: 'text', text: 'If the result remains unresolved, report that uncertainty. Do not resubmit, change the key or switch routes. Tell the user the outcome and whether the content met their requirements. Wait for separate authorization before more source requests or batch work.' },
           { kind: 'link', label: 'Read the recovery reference', href: '/docs/recovery' },
         ],

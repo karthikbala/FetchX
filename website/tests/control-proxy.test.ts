@@ -31,6 +31,68 @@ describe('same-origin control bridge',()=>{
   expect((await send('/projects',{method:'POST',body:'{}',headers:{Origin:''}})).status).toBe(403);
   expect(calls).toHaveLength(1);
  });
+ it('allows only a credentialless CLI POST to start or claim a Connect request',async()=>{
+  const start='/connect/start',claim='/connect/claim',requestId='00000000-0000-4000-8000-000000000002';
+  const sendCli=(path:string,body:object,headers:Record<string,string>={},url=origin,method='POST')=>handleControl(new Request(url+'/api/control'+path,{
+   method,headers:{'Content-Type':'application/json',...headers},...(method==='POST'?{body:JSON.stringify(body)}:{})
+  }),env);
+  upstream=()=>Response.json({state:'pending'},{headers:{'Set-Cookie':`fetchx_session=${token}`}});
+  const startResult=await sendCli(start,{client_name:'Synthetic agent'},{Authorization:'Bearer caller-token','X-FetchX-Control-Secret':'caller-secret'});
+  const claimResult=await sendCli(claim,{request_id:requestId,device_code:'synthetic-device-code'});
+  expect([startResult.status,claimResult.status]).toEqual([200,200]);
+  for(const result of [startResult,claimResult]){
+   expect(result.headers.get('Cache-Control')).toBe('no-store');expect(result.headers.get('Set-Cookie')).toBeNull();
+  }
+  expect(calls.map(({url})=>url)).toEqual([`https://gateway.example/control${start}`,`https://gateway.example/control${claim}`]);
+  for(const {init} of calls){
+   const headers=new Headers(init.headers);
+   expect(headers.get('Origin')).toBe(origin);expect(headers.get('X-FetchX-Control-Secret')).toBe(secret);
+   for(const name of ['Authorization','Cookie','Sec-Fetch-Site','X-CSRF-Token'])expect(headers.get(name)).toBeNull();
+   expect(init.redirect).toBe('manual');
+  }
+  const rejected:Record<string,string>[]=[{Origin:origin},{Origin:''},{'Sec-Fetch-Site':'same-origin'},{'Sec-Fetch-Site':''},{Cookie:'unrelated=1'},{Cookie:''},{'X-CSRF-Token':'c'.repeat(43)},{'X-CSRF-Token':''}];
+  for(const path of [start,claim]){
+   for(const headers of rejected){
+    expect((await sendCli(path,{},headers)).status).toBe(403);
+   }
+   expect((await sendCli(path,{}, {},'https://other.example')).status).toBe(403);
+   expect((await sendCli(path+'?code=private',{})).status).toBe(400);
+   expect((await sendCli(path,{}, {},origin,'GET')).status).toBe(405);
+  }
+  expect((await sendCli('/projects',{})).status).toBe(403);
+  expect((await sendCli('/connect/unknown',{})).status).toBe(404);
+  expect(calls).toHaveLength(2);
+  upstream=()=>new Response(null,{status:307,headers:{Location:'https://other.example'}});
+  expect((await sendCli(claim,{request_id:requestId,device_code:'synthetic-device-code'})).status).toBe(502);
+  expect(calls).toHaveLength(3);
+ });
+ it('requires browser session, same origin and CSRF for Connect review and decision, and strips private response fields',async()=>{
+  const requestId='00000000-0000-4000-8000-000000000002';
+  const review={state:'pending',client_name:'Synthetic agent',scopes:['fetch:read'],expires_at:'2030-01-01T00:00:00Z'};
+  for(const path of ['/connect/review','/connect/decision']){
+   const body=JSON.stringify(path.endsWith('/review')?{request_id:requestId}:{request_id:requestId,user_code:'TEST-CODE',decision:'approve',project_id:project});
+   expect((await send(path,{method:'POST',body,headers:{Origin:''}})).status).toBe(403);
+   expect((await send(path,{method:'POST',body,headers:{Origin:'https://other.example'}})).status).toBe(403);
+   expect((await send(path,{method:'POST',body,headers:{'Sec-Fetch-Site':'cross-site'}})).status).toBe(403);
+   expect((await send(path,{method:'POST',body,headers:{Cookie:'unrelated=private'}})).status).toBe(401);
+   for(const csrf of ['', 'malformed'])expect((await send(path,{method:'POST',body,headers:{'X-CSRF-Token':csrf}})).status).toBe(403);
+   const safe=path.endsWith('/review')?review:{state:'approved'};
+   upstream=()=>Response.json({...safe,device_code:'synthetic-device-code',api_key:'synthetic-key',user_code:'TEST-CODE'},{headers:{'Set-Cookie':`fetchx_session=${token}`}});
+   const result=await send(path,{method:'POST',body,headers:{'Sec-Fetch-Site':'same-origin',Authorization:'Bearer caller-secret'}});
+   expect(result.status).toBe(200);expect(await result.json()).toEqual(safe);expect(result.headers.get('Set-Cookie')).toBeNull();
+   const call=calls.at(-1)!;const headers=new Headers(call.init.headers);
+   expect(call.init.body).toBe(body);expect(headers.get('Cookie')).toBe(`fetchx_session=${token}`);
+   expect(headers.get('X-CSRF-Token')).toBe('c'.repeat(43));expect(headers.get('Authorization')).toBeNull();
+  }
+  expect(calls).toHaveLength(2);
+  const body=JSON.stringify({request_id:requestId,user_code:'TEST-CODE',decision:'deny'});
+  for(const [upstreamCode,publicCode] of [['connect_code_invalid','connect_code_invalid'],['synthetic-secret','connect_unavailable']]){
+   upstream=()=>Response.json({error:{code:upstreamCode,message:'private upstream detail'},device_code:'synthetic-device-code'},{status:400});
+   const result=await send('/connect/decision',{method:'POST',body});
+   expect(result.status).toBe(400);const failure=await result.json() as {error:{code:string}};
+   expect(failure.error.code).toBe(publicCode);expect(JSON.stringify(failure)).not.toContain('private upstream detail');expect(JSON.stringify(failure)).not.toContain('synthetic-device-code');
+  }
+ });
  it('restricts paths, methods and bounded query parameters before contacting the gateway',async()=>{
   for(const path of ['/anything','/projects/a/keys','/status/extra','/projects/'+project+'/fetch/key%2Fextra','/status?upstream=https://attacker.example'])expect((await send(path)).status).toBeGreaterThanOrEqual(400);
   const method=await send('/status',{method:'POST',body:'{}'});expect(method.status).toBe(405);expect(method.headers.get('Allow')).toBe('GET');

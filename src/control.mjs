@@ -5,6 +5,7 @@ import {PublicFetchGateway,publicFetchFailure} from './v2-public-fetch.mjs';
 import {publicRenderFailure} from './v2-public-render.mjs';
 import {googleConfiguration} from './control-google.mjs';
 import {githubConfiguration} from './control-github.mjs';
+import {CONNECT_INTERVAL,ControlConnect,connectApiBase} from './control-connect.mjs';
 import {isPlaygroundRef,playgroundCapabilities,playgroundMessage,preparePlayground,selectPlaygroundKey} from './control-playground.mjs';
 
 export const CONTROL_COOKIE='fetchx_session';
@@ -61,6 +62,9 @@ function message(code){
  if(code==='unauthorized'||code==='session_invalid')return 'Sign in to continue.';
  if(code==='bridge_rejected'||code==='origin_rejected'||code==='csrf_rejected')return 'This request could not be authorized.';
  if(code==='control_disabled'||code==='control_configuration_invalid')return 'Account access is currently unavailable.';
+ if(code==='connect_disabled')return 'FetchX Connect is currently unavailable.';
+ if(code==='connect_slow_down')return 'Wait before checking this connection again.';
+ if(code==='connect_request_closed')return 'This connection request is closed. Start a new one from your agent if needed.';
  if(code.startsWith('playground_'))return playgroundMessage(code);
  if(code==='stripe_checkout_disabled')return 'Checkout is unavailable for this project.';
  if(code==='stripe_checkout_already_open')return 'This project already has an open checkout.';
@@ -141,8 +145,15 @@ async function usage(v2,credits,project,config){
 
 export function registerControl(app,gateway,{identity=gateway.controlIdentity,credits=gateway.controlCredits??app.v2?.controlCredits,paidCredits,stripe}={}){
  const config=gateway.config.controlPlane??{},v2=app.v2,fetch=app.publicFetch??new PublicFetchGateway(v2),render=app.publicRender;
+ const connect=identity?.store?new ControlConnect(identity):null;
+ const connectBase=req=>connect&&connectApiBase(config,req.headers.origin);
+ function requireConnect(req){const base=connectBase(req);if(!base)fail('connect_disabled',503);return base;}
  app.register(async control=>{
-  control.setErrorHandler((error,req,reply)=>{const result=controlFailure(error);reply.code(result.status).send(result.body);});
+  control.setErrorHandler((error,req,reply)=>{
+   const result=controlFailure(error);
+   if(result.body.error.code==='connect_slow_down')reply.header('Retry-After',String(CONNECT_INTERVAL));
+   reply.code(result.status).send(result.body);
+  });
   control.addHook('onRequest',async(req,reply)=>{
    reply.header('Cache-Control','no-store').header('Pragma','no-cache').header('X-Content-Type-Options','nosniff').header('X-Robots-Tag','noindex, nofollow');
    if(!config.enabled)return reply.code(503).send(req.url.split('?')[0]==='/control/status'?{enabled:false,capability_scope:'service',mail_configured:false,google:{enabled:false,client_id:null},github:{enabled:false},api_base_url:null,capabilities:{native_http:false,render:false,routes:[]}}:{error:{code:'control_disabled',message:message('control_disabled')}});
@@ -181,9 +192,25 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,cr
   route('GET','/status',async req=>{
    query(req);
    const localMail=config.allowLoopbackDevelopment===true&&config.origins.every(loopback)&&identity.mail?.delivery==='local_private_mailbox'&&(identity.mailConfigured===true||identity.mail?.configured===true);
-   return {enabled:true,capability_scope:'service',mail_configured:identity.mailConfigured===true||identity.mail?.configured===true,google:googleConfiguration(gateway.config),github:githubConfiguration(gateway.config),...(localMail?{mail_delivery:'local_private_mailbox'}:{}),api_base_url:config.apiBaseUrl??null,capabilities:{native_http:true,render:false,routes:routes(config)}};
+   return {enabled:true,capability_scope:'service',mail_configured:identity.mailConfigured===true||identity.mail?.configured===true,google:googleConfiguration(gateway.config),github:githubConfiguration(gateway.config),...(localMail?{mail_delivery:'local_private_mailbox'}:{}),...(connectBase(req)?{connect_enabled:true}:{}),api_base_url:config.apiBaseUrl??null,capabilities:{native_http:true,render:false,routes:routes(config)}};
   });
   const clientIp=req=>typeof req.headers['x-fetchx-client-ip']==='string'&&/^[a-fA-F0-9:.]{3,64}$/.test(req.headers['x-fetchx-client-ip'])?req.headers['x-fetchx-client-ip']:req.ip;
+  route('POST','/connect/start',async req=>{
+   requireConnect(req);query(req);const body=input(req,['client_name']);
+   return connect.start({...body,origin:req.headers.origin,ip:clientIp(req)});
+  });
+  route('POST','/connect/claim',async req=>{
+   const apiBaseUrl=requireConnect(req);query(req);const body=input(req,['request_id','device_code']);
+   return connect.claim({...body,origin:req.headers.origin,apiBaseUrl,ip:clientIp(req)});
+  });
+  route('POST','/connect/review',async req=>{
+   requireConnect(req);query(req);const auth=await authenticated(req),body=input(req,['request_id']);
+   return connect.review({...body,origin:req.headers.origin,userId:auth.user.id,ip:clientIp(req)});
+  });
+  route('POST','/connect/decision',async req=>{
+   requireConnect(req);query(req);const auth=await authenticated(req),body=input(req,['request_id','user_code','decision','project_id']);
+   return connect.decision({...body,origin:req.headers.origin,userId:auth.user.id,ip:clientIp(req)});
+  });
   route('POST','/auth/code',async req=>{query(req);const body=input(req,['email']);return identity.requestCode({email:body.email,ip:clientIp(req)});});
   route('POST','/auth/verify',async(req,reply)=>{
    query(req);const body=input(req,['email','challenge_id','code']),result=await identity.verifyCode({...body,ip:clientIp(req)});
