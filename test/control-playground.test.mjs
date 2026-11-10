@@ -49,6 +49,10 @@ test('playground and credit policies require explicit review and preserve legacy
  const browserProfile={id:'playground:synthetic-browser',kind:'playground',playground_execution:'browser'};
  assert.equal(playgroundPolicy(config).routes.http.datacenter.join(','),'GB,US');
  assert.equal(playgroundPolicy({controlPlane:{playground:{enabled:false}}}),null);
+ const scopedBrowserPlayground={...playground,browserResidentialProviderPolicy:'reviewed-http-v2'};
+ assert.notEqual(playgroundPolicy({controlPlane:{playground:scopedBrowserPlayground}}).hash,playgroundPolicy(config).hash);
+ assert.equal(playgroundPolicy({controlPlane:{playground:{...scopedBrowserPlayground,enabled:false}}}),null);
+ assert.throws(()=>playgroundPolicy({controlPlane:{playground:{...playground,browserResidentialProviderPolicy:'unreviewed'}}}),{code:'playground_policy_invalid'});
  assert.throws(()=>playgroundPolicy({controlPlane:{playground:{...playground,reviewed:false}}}),{code:'playground_policy_invalid'});
  assert.throws(()=>playgroundPolicy({controlPlane:{playground:{...playground,routes:{http:{direct:true,residential:null}}}}}),{code:'playground_policy_invalid'});
  assert.deepEqual(credits.quote({route:direct,estimatedMicroUsd:0}),{credits:1,policyVersion:'synthetic-legacy'});
@@ -58,6 +62,21 @@ test('playground and credit policies require explicit review and preserve legacy
  assert.throws(()=>credits.quote({profile:browserProfile,route:datacenter,transport:'browser',estimatedMicroUsd:30_001}),{code:'cost_ceiling_exceeded'});
  for(const args of [{route:direct,transport:'browser'},{route:{class:'residential'}},{profile:httpProfile,route:direct,transport:'browser'}])
   assert.throws(()=>credits.quote({...args,estimatedMicroUsd:0}),{code:'credit_route_forbidden'});
+ const browserResidential={profile:browserProfile,route:{class:'residential'},transport:'browser'};
+ const scoped={...policy,modeWeights:{...policy.modeWeights,browserResidentialMaxEstimatedMicroUsd:40_000}};
+ config.controlPlane.creditPolicy=scoped;
+ assert.equal(credits.quote({...browserResidential,estimatedMicroUsd:40_000}).credits,6);
+ assert.throws(()=>credits.quote({...browserResidential,estimatedMicroUsd:40_001}),{code:'cost_ceiling_exceeded'});
+ assert.throws(()=>credits.quote({profile:httpProfile,route:{class:'residential'},estimatedMicroUsd:30_001}),{code:'cost_ceiling_exceeded'});
+ assert.throws(()=>credits.quote({profile:browserProfile,route:datacenter,transport:'browser',estimatedMicroUsd:30_001}),{code:'cost_ceiling_exceeded'});
+ for(const modeWeights of [
+  {...scoped.modeWeights,browserResidentialMaxEstimatedMicroUsd:0},
+  {...scoped.modeWeights,browserResidentialMaxEstimatedMicroUsd:'40000'},
+  {...scoped.modeWeights,browser:{direct:4}}
+ ]){
+  config.controlPlane.creditPolicy={...scoped,modeWeights};
+  assert.throws(()=>credits.quote({...browserResidential,estimatedMicroUsd:0}),{code:'credit_policy_invalid'});
+ }
  config.controlPlane.creditPolicy={...creditPolicy,modeWeights:undefined};
  assert.throws(()=>credits.quote({profile:browserProfile,route:direct,transport:'browser',estimatedMicroUsd:0}),{code:'credit_route_forbidden'});
 });

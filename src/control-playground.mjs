@@ -5,6 +5,7 @@ import {discoveryOrigins} from './v2-discovery.mjs';
 
 export const PLAYGROUND_PREFIX='playground:';
 export const RENDER_PREPARATION_PATH='/v2/render/prepare';
+export const REVIEWED_BROWSER_RESIDENTIAL_PROVIDER_POLICY='reviewed-http-v2';
 const EXECUTIONS=['http','browser'];
 const ROUTES=['direct','datacenter','residential'];
 const METHODS={http:['GET','HEAD'],browser:['GET']};
@@ -37,10 +38,12 @@ export async function initPlayground(pool){
 
 export function playgroundPolicy(config){
  const raw=config.controlPlane?.playground;
- if(raw===undefined||exact(raw,['enabled','reviewed','version','maxProfilesPerProject','routes'])&&raw.enabled===false)return null;
- if(!exact(raw,['enabled','reviewed','version','maxProfilesPerProject','routes'])||raw.enabled!==true||raw.reviewed!==true||
+ const keys=['enabled','reviewed','version','maxProfilesPerProject','routes','browserResidentialProviderPolicy'];
+ if(raw===undefined||exact(raw,keys)&&raw.enabled===false)return null;
+ if(!exact(raw,keys)||raw.enabled!==true||raw.reviewed!==true||
     typeof raw.version!=='string'||!ID.test(raw.version)||!Number.isSafeInteger(raw.maxProfilesPerProject)||raw.maxProfilesPerProject<1||raw.maxProfilesPerProject>1000||
-    !exact(raw.routes,EXECUTIONS))fail('playground_policy_invalid',503);
+    !exact(raw.routes,EXECUTIONS)||raw.browserResidentialProviderPolicy!==undefined&&
+    raw.browserResidentialProviderPolicy!==REVIEWED_BROWSER_RESIDENTIAL_PROVIDER_POLICY)fail('playground_policy_invalid',503);
  const routes={};
  for(const execution of EXECUTIONS){
   const mode=raw.routes[execution]===undefined?{}:raw.routes[execution];
@@ -52,7 +55,8 @@ export function playgroundPolicy(config){
    routes[execution][route]=[...countries].sort();
   }
  }
- const body={version:raw.version,maxProfilesPerProject:raw.maxProfilesPerProject,routes,limits:LIMITS,browser:BROWSER,methods:METHODS,headers:HTTP_HEADERS};
+ const body={version:raw.version,maxProfilesPerProject:raw.maxProfilesPerProject,routes,limits:LIMITS,browser:BROWSER,methods:METHODS,headers:HTTP_HEADERS,
+  ...(raw.browserResidentialProviderPolicy?{browserResidentialProviderPolicy:raw.browserResidentialProviderPolicy}:{})};
  return {...body,hash:sha(JSON.stringify(body))};
 }
 
@@ -75,7 +79,8 @@ function buildProfile(project,policy,origin,execution){
   playground_execution:execution,playground_policy_version:policy.version,
   origins:[origin],paths:['^/'],methods:methods(execution),method_paths:Object.fromEntries(methods(execution).map(method=>[method,['^/']])),
   headers:headers(execution),credential_headers:[],proxy_classes,countries:[...new Set([...mode.datacenter,...mode.residential])].sort(),limits:{...policy.limits},
-  ...(execution==='browser'?{browser_probe:{...policy.browser}}:{})
+  ...(execution==='browser'?{browser_probe:{...policy.browser},
+   ...(policy.browserResidentialProviderPolicy?{browser_residential_provider_policy:policy.browserResidentialProviderPolicy}:{})}:{})
  };
 }
 
@@ -115,7 +120,7 @@ function validateProxy(proxy){
 const modeAllows=(mode,route,country)=>route==='direct'?mode.direct:mode[route].includes(country);
 const tunnelBytes=(profile,route,execution)=>route.class==='direct'?0:execution==='browser'?profile.browser_probe.max_network_bytes:profile.limits.max_tunnel_bytes*(profile.limits.max_redirects+1);
 
-async function quoteRoute(v2,project,profile,policy,execution,proxy,selectedRoute,{originKnown=true}={}){
+async function quoteRoute(v2,project,profile,policy,execution,proxy,selectedRoute,{originKnown=true,residentialCapacity}={}){
  if(!modeAllows(policy.routes[execution],proxy.class,proxy.country))fail('playground_route_unreviewed',403);
  if(!creditWeight(reviewedCreditPolicy(v2.config),execution,proxy.class,true))fail('credit_route_forbidden',403);
  const route=selectedRoute??v2.route(profile,{class:proxy.class,country:proxy.country,affinity:'session'});
@@ -129,9 +134,13 @@ async function quoteRoute(v2,project,profile,policy,execution,proxy,selectedRout
   }
   if((await v2.store.pool.query('SELECT 1 FROM route_health WHERE proxy_id=ANY($1::text[]) AND quarantined_until>clock_timestamp() LIMIT 1',[pool.map(member=>member.id)])).rowCount)fail('playground_route_unhealthy',503);
  }else if(route.class==='residential'){
-  // The existing reservation helper checks provider holds and all bandwidth
-  // caps with read-only queries. Admission repeats these checks under its lock.
-  await v2.reserveResidential(v2.store.pool,project,null,route,bytes);
+  // Country eligibility was checked when selecting the route. For this
+  // project's mode, all countries on the same provider reserve the same bytes.
+  if(residentialCapacity){
+   if(!residentialCapacity.has(route.provider))
+    residentialCapacity.set(route.provider,v2.reserveResidential(v2.store.pool,project,null,route,bytes));
+   await residentialCapacity.get(route.provider);
+  }else await v2.reserveResidential(v2.store.pool,project,null,route,bytes);
  }
  const decision=v2.pricing(project,profile,route,bytes,execution);
  if(!Number.isSafeInteger(decision.estimated_micro_usd)||decision.estimated_micro_usd<0){
@@ -217,7 +226,7 @@ async function inspectMode(v2,project,policy,execution,origin){
  if(!disabled){
   try{await assertRuntime(v2,execution);}catch(error){disabled=expectedFailure(error);}
  }
- const routes={},quotes=new Map(),issues=new Map();
+ const routes={},quotes=new Map(),issues=new Map(),residentialCapacity=new Map();
  for(const route of ROUTES){
   const countries=route==='direct'?(mode?.direct?[null]:[]):mode?.[route]??[];
   if(disabled||!countries.length){routes[route]=unavailable(disabled??'playground_route_unreviewed');continue;}
@@ -225,7 +234,7 @@ async function inspectMode(v2,project,policy,execution,origin){
   const supported=[];
   for(const country of countries){
    try{
-   quotes.set(JSON.stringify([route,country]),await quoteRoute(v2,project,profile,policy,execution,{class:route,country},undefined,{originKnown:!!origin}));
+   quotes.set(JSON.stringify([route,country]),await quoteRoute(v2,project,profile,policy,execution,{class:route,country},undefined,{originKnown:!!origin,residentialCapacity}));
     supported.push(country);
    }catch(error){
     const code=expectedFailure(error);

@@ -94,9 +94,11 @@ export function reviewedCreditPolicy(config){
  if(typeof policy.version!=='string'||!ID.test(policy.version)||!creditAmount(trialCredits)||trialCredits>TRIAL_CREDITS_PER_ACCOUNT||!validWeights(policy.weights,['direct','datacenter'])||
   !Object.hasOwn(policy.weights,'direct')||!Number.isSafeInteger(policy.maxEstimatedMicroUsdPerOperation)||policy.maxEstimatedMicroUsdPerOperation<0)fail('credit_policy_invalid',503);
  const mode=policy.modeWeights;
- if(mode!==undefined&&(!plain(mode)||Object.keys(mode).some(key=>!['reviewed','version',...TRANSPORTS].includes(key))||mode.reviewed!==true||
+ if(mode!==undefined&&(!plain(mode)||Object.keys(mode).some(key=>!['reviewed','version','browserResidentialMaxEstimatedMicroUsd',...TRANSPORTS].includes(key))||mode.reviewed!==true||
   typeof mode.version!=='string'||!ID.test(mode.version)||mode.version===policy.version||
-  TRANSPORTS.some(transport=>mode[transport]!==undefined&&!validWeights(mode[transport],ROUTES))))fail('credit_policy_invalid',503);
+  TRANSPORTS.some(transport=>mode[transport]!==undefined&&!validWeights(mode[transport],ROUTES))||
+  Object.hasOwn(mode,'browserResidentialMaxEstimatedMicroUsd')&&(!Object.hasOwn(mode.browser??{},'residential')||
+   !Number.isSafeInteger(mode.browserResidentialMaxEstimatedMicroUsd)||mode.browserResidentialMaxEstimatedMicroUsd<1)))fail('credit_policy_invalid',503);
  return trialCredits===policy.trialCredits?policy:{...policy,trialCredits};
 }
 
@@ -159,7 +161,9 @@ export class ControlCredits{
   const weight=TRANSPORTS.includes(transport)&&ROUTES.includes(route?.class)?creditWeight(policy,transport,route.class,playground):null;
   if(!weight)fail('credit_route_forbidden',403);
   if(!Number.isSafeInteger(estimatedMicroUsd)||estimatedMicroUsd<0)fail('cost_estimate_unavailable',409);
-  if(estimatedMicroUsd>policy.maxEstimatedMicroUsdPerOperation)fail('cost_ceiling_exceeded',429);
+  const routeCeiling=playground&&transport==='browser'&&route.class==='residential'
+   ?policy.modeWeights?.browserResidentialMaxEstimatedMicroUsd:undefined;
+  if(estimatedMicroUsd>(routeCeiling??policy.maxEstimatedMicroUsdPerOperation))fail('cost_ceiling_exceeded',429);
   return weight;
  }
  async reserve(c,{project,operation,keyId,userId,requireSoleKey,profile,route,transport='http',estimatedMicroUsd}){

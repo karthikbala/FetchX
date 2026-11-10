@@ -12,9 +12,11 @@ import {Store} from '../src/store.mjs';
 import {V2Gateway} from '../src/v2.mjs';
 import {PublicFetchGateway} from '../src/v2-public-fetch.mjs';
 import {PublicRenderGateway} from '../src/v2-public-render.mjs';
-import {PUBLIC_URL_REF} from '../src/v2-public-url.mjs';
+import {PUBLIC_URL_REF,PUBLIC_URL_V2_REF} from '../src/v2-public-url.mjs';
 
 const direct={class:'direct',country:null},residential={class:'residential',country:'US'};
+const browserResidential={class:'residential',country:'CA'};
+const browserResidentialCap=16_778;
 const address={address:'93.184.216.34',family:4};
 
 test('verified purchase unifies scoped HTTP, browser and metered public HTTP while preserving legacy in-flight billing',
@@ -24,14 +26,20 @@ test('verified purchase unifies scoped HTTP, browser and metered public HTTP whi
  const store=new Store(db),root=await mkdtemp(join(tmpdir(),'fetchx-unified-routes-'));
  const user=randomUUID(),project='cp_'+user,keyId=randomUUID(),identity={keyId,userId:user,requireSoleKey:true};
  const accountId='acct_fixture',checkoutSessionId='cs_live_'+user.replaceAll('-',''),paymentIntentId='pi_'+user.replaceAll('-','');
- const provider={enabled:true,username:'fixture-user',password:'fixture-password',countries:['US'],maxTotalBytes:1e9,microUsdPerGB:1e6};
+ const provider={enabled:true,username:'fixture-user',password:'fixture-password',maxTotalBytes:1e9,microUsdPerGB:1e6};
  const config={release:'unified-routes',artifactDir:root,artifactKey:'51'.repeat(32),maxDailyFallbackCredits:0,proxies:[],v2:{},
-  projects:{[project]:{v2_entitlement:{mode:'metered',max_daily_operations:1}}},
-  residential:{maxTotalBytes:1e9,maxDailyBytes:1e9,providers:{evomi:provider}},
+  projects:{[project]:{v2_entitlement:{mode:'metered',max_daily_operations:2}}},
+  residential:{maxTotalBytes:1e9,maxDailyBytes:1e9,providers:{evomi:provider,dataimpulse:{...provider}}},
   controlPlane:{enabled:true,unifiedCredits:{enabled:true},creditPolicy:{reviewed:true,version:'legacy-v1',weights:{direct:2},maxEstimatedMicroUsdPerOperation:0,
-   modeWeights:{reviewed:true,version:'scoped-v1',browser:{direct:4}}},
-   playground:{enabled:true,reviewed:true,version:'unified-routes-v1',maxProfilesPerProject:4,routes:{http:{direct:true},browser:{direct:true}}},
-   paidCreditPolicy:{reviewed:true,version:'paid-v1',routes:[{accessProfile:PUBLIC_URL_REF,...residential,provider:'evomi'}],
+   modeWeights:{reviewed:true,version:'scoped-v1',browser:{direct:4,residential:100},browserResidentialMaxEstimatedMicroUsd:browserResidentialCap}},
+   playground:{enabled:true,reviewed:true,version:'unified-routes-v1',maxProfilesPerProject:4,browserResidentialProviderPolicy:'reviewed-http-v2',
+    routes:{http:{direct:true},browser:{direct:true,residential:['CA','DE','GB','NL']}}},
+   paidCreditPolicy:{reviewed:true,version:'paid-v1',routes:[
+    {accessProfile:PUBLIC_URL_REF,...residential,provider:'evomi'},
+    {accessProfile:PUBLIC_URL_V2_REF,...browserResidential,provider:'evomi'},
+    {accessProfile:PUBLIC_URL_V2_REF,...browserResidential,provider:'dataimpulse'},
+    {accessProfile:PUBLIC_URL_V2_REF,class:'residential',country:'GB',provider:'evomi'},
+    {accessProfile:PUBLIC_URL_V2_REF,class:'residential',country:'NL',provider:'dataimpulse'}],
     dns:{reviewed:true,endpoint:'https://resolver.example.net/resolve',address:'1.1.1.1'},publicUrl:{reviewed:true,maxDailyOperations:1},
     residentialBudget:{reviewed:true,provider:'evomi',maxTotalBytes:1e9,maxDailyBytes:1e9,microUsdPerGB:1e6}}}};
  const dnsStarted=Promise.withResolvers(),dnsReleased=Promise.withResolvers();
@@ -40,7 +48,7 @@ test('verified purchase unifies scoped HTTP, browser and metered public HTTP whi
   dnsStarted.resolve();await dnsReleased.promise;
   return [{address:'127.0.0.1',family:4}];
  }});
- let targetCalls=0,browserCalls=0,legacy,holdDuringBrowser=false;
+ let targetCalls=0,browserCalls=0,legacy,holdDuringBrowser=false,relayOptions;
  const v2=new V2Gateway(gateway,{
   dnsHttp:async(_input,{url})=>{
    const name=url.searchParams.get('name'),type=Number(url.searchParams.get('type'));
@@ -53,13 +61,16 @@ test('verified purchase unifies scoped HTTP, browser and metered public HTTP whi
    return {status:200,headers:{},encoded:Buffer.from('fixture'),...(wireMeter?{wire_bytes:300,wire_bytes_lower_bound:300,tunnel_bytes:300}:{})};
   },
   browserRuntime:async()=>({available:true,runtime:{synthetic:true}}),
-  relayFactory:async()=>{
+  relayFactory:async options=>{
+   relayOptions=options;
    const before=browserCalls;
    return {url:'http://127.0.0.1:1',get dispatched(){return browserCalls>before;},bytes:0,close:async()=>{}};
   },
   browserRunner:async({url},hooks)=>{
    if(holdDuringBrowser)await store.tx(c=>v2.controlPaidCredits.setPaymentHold(c,{project,mode:'live',accountId,holdId:'fixture-hold',active:true}));
    await hooks.admit({url,method:'GET',headers:{},body_base64:null,redirect_depth:0});
+   if(new URL(url).pathname==='/canada')assert.match(relayOptions.proxy.url,/_country-CA_session-/);
+   if(new URL(url).pathname==='/netherlands')assert.equal(new URL(relayOptions.proxy.url).hostname,'gw.dataimpulse.com');
    browserCalls++;
    return {status:200,final_url:url};
   }
@@ -67,8 +78,8 @@ test('verified purchase unifies scoped HTTP, browser and metered public HTTP whi
  v2.pace=async()=>{};
  const fetch=new PublicFetchGateway(v2),render=new PublicRenderGateway(v2);
  const legacyUrl='https://legacy.example.com/',url='https://scoped.example.com/';
- const prepare=(execution,target)=>preparePlayground(v2,project,{url:target,execution,proxy:direct},[{id:keyId,scopes:['fetch:write']}]);
- const scoped=(idempotency_key,quote)=>({idempotency_key,url:quote.url,access_profile:quote.access_profile,proxy:direct});
+ const prepare=(execution,target,proxy=direct)=>preparePlayground(v2,project,{url:target,execution,proxy},[{id:keyId,scopes:['fetch:write']}]);
+ const scoped=(idempotency_key,quote,proxy=direct)=>({idempotency_key,url:quote.url,access_profile:quote.access_profile,proxy});
  const publicFetch=(idempotency_key)=>fetch.fetch(project,{idempotency_key,url:'https://paid.example.com/',proxy:residential,max_transfer_mb:0.25,max_credits:5},identity);
  const credits=(weight,state,policy_version,unit)=>({credits:weight,state,key_id:keyId,policy_version,unit});
 
@@ -93,11 +104,19 @@ test('verified purchase unifies scoped HTTP, browser and metered public HTTP whi
   await c.query('INSERT INTO control_memberships(user_id,project) VALUES($1,$2)',[user,project]);
   await c.query(`INSERT INTO control_keys(id,project,name,prefix,token_hash,scopes)
    VALUES($1,$2,'Fixture','fixture',$3,'["fetch:write"]')`,[keyId,project,keyId]);
-  await grantInitialCredits(c,project,12);
+  await grantInitialCredits(c,project,112);
  });
 
  const before=await prepare('http',legacyUrl),http=await prepare('http',url),browser=await prepare('browser',url);
  assert.equal(before.ready,true);assert.equal((await v2.usage(project)).credit_balance,undefined);
+ const canadaUrl=url+'canada',canada=await prepare('browser',canadaUrl,browserResidential);
+ assert.equal(canada.ready,true);
+ assert.deepEqual(canada.capabilities.routes.find(route=>route.class==='residential').countries,['CA','GB','NL']);
+ assert.deepEqual(canada.quote,{credits:100,max_estimated_micro_usd:browserResidentialCap});
+ const canadaTrialBody=scoped('trial-canada-browser',canada,browserResidential);
+ const trialResidential=await render.render(project,canadaTrialBody,identity);
+ assert.deepEqual(trialResidential.usage.accounting.request_credits,credits(100,'settled','scoped-v1','logical_browser_operation'));
+ assert.equal((await v2.usage(project)).request_credits.available,12);
  legacy=fetch.fetch(project,scoped('legacy',before),identity);
  await Promise.race([dnsStarted.promise,legacy.then(()=>assert.fail('Legacy request returned before the simulated resolver'))]);
  await assert.rejects(fetch.fetch(project,scoped('scoped-http',http),identity),{code:'client_quota_exhausted'});
@@ -126,6 +145,19 @@ test('verified purchase unifies scoped HTTP, browser and metered public HTTP whi
  const rendered=await render.render(project,scoped('scoped-browser',browser),identity);
  assert.deepEqual(rendered.usage.accounting.request_credits,credits(4,'settled','scoped-v1','logical_browser_operation'));
  assert.deepEqual((await v2.recentOperations(project)).operations.find(op=>op.id===rendered.operation_id).request_credits,rendered.usage.accounting.request_credits);
+ const modeWeights=config.controlPlane.creditPolicy.modeWeights;
+ modeWeights.browserResidentialMaxEstimatedMicroUsd=browserResidentialCap-1;
+ assert.ok((await prepare('browser',canadaUrl,browserResidential)).errors.some(issue=>issue.code==='cost_ceiling_exceeded'));
+ await assert.rejects(render.render(project,scoped('cap-canada-browser',canada,browserResidential),identity),{code:'cost_ceiling_exceeded'});
+ assert.equal(browserCalls,2);
+ modeWeights.browserResidentialMaxEstimatedMicroUsd=browserResidentialCap;
+ const netherlands={class:'residential',country:'NL'};
+ const purchasedPrepare=await prepare('browser',url+'netherlands',netherlands);
+ assert.deepEqual(purchasedPrepare.quote,canada.quote);
+ const purchasedResidential=await render.render(project,scoped('paid-netherlands-browser',purchasedPrepare,netherlands),identity);
+ assert.deepEqual(purchasedResidential.routing,{...netherlands,provider:'dataimpulse'});
+ assert.deepEqual(purchasedResidential.usage.accounting.request_credits,credits(100,'settled','scoped-v1','logical_browser_operation'));
+ assert.equal((await v2.usage(project)).credit_balance.available,9_906);
  const paid=await publicFetch('paid-http');
  assert.equal(paid.usage.accounting.paid_credits.used_credits,5);
  assert.equal(paid.usage.accounting.paid_credits.billable_bytes,700);
@@ -139,13 +171,16 @@ test('verified purchase unifies scoped HTTP, browser and metered public HTTP whi
  const usage=await v2.usage(project);
  assert.deepEqual(usage.entitlement,{mode:'unmetered',max_daily_operations:null});
  assert.deepEqual(usage.credit_balance,{mode:'unified',...usage.paid_credits});
- assert.equal(usage.request_credits.available,0);assert.equal(usage.credit_balance.available,9_999);
+ assert.equal(usage.request_credits.available,0);assert.equal(usage.credit_balance.available,9_899);
 
  holdDuringBrowser=true;
  const blocked=await render.render(project,scoped('held-browser',browser),identity);
  assert.equal(blocked.error.code,'paid_credit_payment_hold');assert.equal(blocked.usage.accounting.request_credits.state,'released');
- assert.equal(browserCalls,1);
+ assert.equal(browserCalls,3);
  assert.equal((await prepare('http',url)).errors.find(issue=>issue.field==='credits').code,'paid_credit_payment_hold');
  await assert.rejects(fetch.fetch(project,scoped('held-http',http),identity),{code:'paid_credit_payment_hold'});
  assert.equal(targetCalls,3);
+ config.controlPlane.playground.version='unified-routes-v2';
+ assert.equal((await render.lookup(project,canadaTrialBody.idempotency_key)).operation_id,trialResidential.operation_id);
+ assert.equal(browserCalls,3);
 });

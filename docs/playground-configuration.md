@@ -38,6 +38,7 @@ This example allows HTTP and Browser over Direct and reviewed US proxy routes. T
       "modeWeights": {
         "reviewed": true,
         "version": "playground-credits-v1",
+        "browserResidentialMaxEstimatedMicroUsd": 16778,
         "http": {
           "direct": 1,
           "datacenter": 2,
@@ -60,7 +61,8 @@ HTTP allows GET and HEAD. Browser accepts GET navigation. Both use a single exac
 
 - **Direct** uses `country: null` and a zero provider-cost estimate. It still consumes the configured operation credits.
 - **US datacenter** requires a configured US pool, available proxy members, and reviewed pricing for the selected transport. A fixed-fee pool that covers both transports uses schema version 2 with `transports: ["http", "browser"]`. A project and profile scoped browser attestation uses schema version 2 with `transport: "browser"`. Target-scoped pricing is checked after the user supplies a URL. See the [V2 API pricing policies](api-v2.md).
-- **US residential** requires an enabled provider for US, a configured bandwidth rate, and enough provider, gateway, daily, and project allowance for the reservation. The operation ceiling must cover both the provider estimate and the customer traffic estimate. A provider hold makes the route unavailable.
+- **Residential** requires a reviewed country for the execution mode, an enabled provider for that country, a configured bandwidth rate, and enough provider, gateway, daily, and project allowance for the reservation. A provider hold makes the route unavailable. For Browser, an optional `creditPolicy.modeWeights.browserResidentialMaxEstimatedMicroUsd` sets a positive per-operation estimate ceiling for the Playground residential Browser route only. It requires an explicit `modeWeights.browser.residential` credit price, which applies to both trial and upgraded projects. The ceiling must cover the higher of the provider estimate and the customer traffic reservation. With the current 8 MiB network limit and a $2/GB customer traffic estimate, the latter reserves 16,778 microdollars. If the field is omitted, the existing global operation ceiling applies. All other routes always use that existing ceiling.
+- **Reviewed Browser residential providers** can be enabled with `playground.browserResidentialProviderPolicy: "reviewed-http-v2"`. The Browser country list then permits only provider-country pairs reviewed for public HTTP v2. FetchX prefers Evomi when both providers qualify and pins the selected provider to the session. This setting reuses provider and country review; Browser still has separate spending and traffic limits.
 - **Browser** requires a pinned executable with a matching version and SHA-256 digest. For standard Chromium, set `v2.browser_probe.engine` to `chromium` and put `executablePath`, `version`, and `sha256` under `v2.browser_probe.runtime`. The accepted, unexpired `pinned-relay-egress-v2` evidence must match the engine, binary, platform, and architecture. An explicitly configured free CloakBrowser build also requires a reviewed unlicensed entitlement. The runtime check applies across projects. See the [browser probe runtime requirements](api-v2-browser-probe.md).
 
 ## Validate before enabling dispatch

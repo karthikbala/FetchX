@@ -16,7 +16,7 @@ import {estimateRoutePricing,estimatePaidPublicDatacenter} from './v2-pricing.mj
 import {residentialTrafficCharge,finishResidentialTrafficCharge} from './customer-traffic.mjs';
 import {distinctNativeRetryRoute,nativeRetryIdentityBinding,pristineNativeRetry,transientNativeTransport,transientNativeResponse,successfulNativeResponse} from './v2-native-retry.mjs';
 import {ControlCredits,creditSnapshot,creditWeight,recoverControlCredits,reviewedCreditPolicy} from './control-credits.mjs';
-import {PLAYGROUND_PREFIX,RENDER_PREPARATION_PATH,admitPlaygroundRoute,isPlaygroundRef,materializePlaygroundProfile,playgroundCapabilities,playgroundOperationProfile,readPlaygroundProfile} from './control-playground.mjs';
+import {PLAYGROUND_PREFIX,RENDER_PREPARATION_PATH,REVIEWED_BROWSER_RESIDENTIAL_PROVIDER_POLICY,admitPlaygroundRoute,isPlaygroundRef,materializePlaygroundProfile,playgroundCapabilities,playgroundOperationProfile,readPlaygroundProfile} from './control-playground.mjs';
 import {lockStripeSales} from './control-stripe-provider.mjs';
 import {ControlPaidCredits,PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES,outstandingPaidCreditLiabilitySql,recoverControlPaidCredits,restoreReleasedTrialCredits,reviewedPaidCreditRoutes,quotePaidHttpCredits} from './control-paid-credits.mjs';
 import {PUBLIC_URL_ID,PUBLIC_URL_KIND,PUBLIC_URL_REF,PUBLIC_URL_V2_REF,RESERVED_PUBLIC_URL_IDS,PUBLIC_URL_MAX_BODY_BYTES,PUBLIC_URL_TRANSFER_LIMITS,checkedPublicRedirect,checkedPublicSourceUrl,checkedPublicAddresses,
@@ -243,9 +243,14 @@ export class V2Gateway{
    reviewedPaidResidentialBudget(this.config,route.provider)?.provider===route.provider;
  }
  residentialProvider(profile,country,project){
+  const scopedBrowser=isPlaygroundRef(profile)&&profile.playground_execution==='browser'&&
+   profile.browser_residential_provider_policy===REVIEWED_BROWSER_RESIDENTIAL_PROVIDER_POLICY;
+  const reviewed=scopedBrowser?reviewedPaidCreditRoutes(this.config):null;
   return ['evomi','dataimpulse'].find(provider=>{
    const settings=this.config.residential?.providers?.[provider],route={class:'residential',country,provider};
    return settings?.enabled&&settings.username&&settings.password&&(!settings.countries||settings.countries.includes(country))&&
+    (!reviewed||reviewed.some(rule=>rule.accessProfile.id===PUBLIC_URL_V2_REF.id&&rule.accessProfile.version===PUBLIC_URL_V2_REF.version&&
+     rule.class===route.class&&rule.country===country&&rule.provider===provider))&&
     (!this.controlCredits.managed(project)||isPlaygroundRef(profile)||this.approvedPaidRoute(project,profile,route));
   });
  }
