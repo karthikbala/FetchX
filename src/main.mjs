@@ -21,7 +21,12 @@ import {ControlIdentity} from './control-identity.mjs';
 import {ControlCredits,TRIAL_CREDITS_PER_ACCOUNT,migrateAccountTrialCredits,reviewedCreditPolicy} from './control-credits.mjs';
 import {ControlPaidCredits,restoreReleasedTrialCredits} from './control-paid-credits.mjs';
 import {isControlRequest,registerControl} from './control.mjs';
+import {RENDER_PREPARATION_PATH} from './control-playground.mjs';
 import {ControlStripe,isStripeWebhookRequest,registerStripeWebhook} from './control-stripe.mjs';
+
+// GET on this same path is still a render lookup for the original key "prepare".
+const isRenderOperationRequest=req=>isPublicRenderRequest(req)&&
+ !(req.method==='POST'&&req.url.split('?')[0]===RENDER_PREPARATION_PATH);
 
 // New self-service credentials have an explicit endpoint allowlist. Existing
 // provisioned project tokens retain their established v1/v2 contract.
@@ -29,7 +34,7 @@ export function controlKeyScope(method,url){
  const path=url.split('?')[0];
  if(method==='GET'&&['/v2/capabilities','/v2/access-profiles','/v2/recipes'].includes(path))return 'profiles:read';
  if(method==='GET'&&path==='/v2/usage')return 'usage:read';
- if(method==='POST'&&['/v2/fetch','/v2/render'].includes(path))return 'fetch:write';
+ if(method==='POST'&&['/v2/fetch','/v2/render',RENDER_PREPARATION_PATH].includes(path))return 'fetch:write';
  if(method==='GET'&&(path==='/v2/operations'||/^\/v2\/render\/[^/]+$/.test(path)||/^\/v2\/(?:fetch|operations|artifacts)\/[^/]+(?:\/[^/]+)?$/.test(path)))return 'fetch:read';
  return null;
 }
@@ -51,7 +56,7 @@ export function server(gateway,{stripeFetch,stripeAutoProcess=true}={}){
   if(isControlRequest(req)||isStripeWebhookRequest(req))return;
   const unauthorized=()=>{
    const error=new GatewayError('unauthorized',401);
-   return reply.code(401).send(isPublicRenderRequest(req)?publicRenderFailure(error,{key:req.params?.key}):isPublicFetchRequest(req)?publicFetchFailure(error):{error:'unauthorized'});
+   return reply.code(401).send(isRenderOperationRequest(req)?publicRenderFailure(error,{key:req.params?.key}):isPublicFetchRequest(req)?publicFetchFailure(error):{error:'unauthorized'});
   };
   const token=/^Bearer (\S+)$/i.exec(req.headers.authorization??'')?.[1];
   if(!token)return unauthorized();
@@ -68,7 +73,7 @@ export function server(gateway,{stripeFetch,stripeAutoProcess=true}={}){
  app.setErrorHandler((error,req,reply)=>{
   const clientError=error.validation||error.statusCode===400||error.statusCode===413||error.statusCode===415;
   const status=error instanceof GatewayError?error.status:clientError?(error.statusCode??400):500;
-  if(isPublicRenderRequest(req))return reply.code(status).send(publicRenderFailure(error,{key:req.body?.idempotency_key??req.params?.key,status}));
+  if(isRenderOperationRequest(req))return reply.code(status).send(publicRenderFailure(error,{key:req.body?.idempotency_key??req.params?.key,status}));
   if(isPublicFetchRequest(req))return reply.code(status).send(publicFetchFailure(error,{key:req.body?.idempotency_key??req.params?.key,status}));
   reply.code(status).send({error:error instanceof GatewayError?error.code:clientError?'request_invalid':'internal_error',...(error instanceof GatewayError&&error.details?{details:error.details}:{}),...(req.url.startsWith('/v2/')?{diagnostics:safeFailure(error,'request_admission')}:{} )});
  });

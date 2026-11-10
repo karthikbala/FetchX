@@ -94,12 +94,12 @@ function trialTerms(v2,project,config){
   eligible_routes:routes(config),max_daily_operations:v2.entitlement(project).max_daily_operations};
 }
 async function capabilities(v2,project,config){
- const value=await v2.capabilities(project),allowed=routes(config),playground=await playgroundCapabilities(v2,project);
+ const playground=await playgroundCapabilities(v2,project),value=await v2.capabilities(project,{playground}),allowed=routes(config);
  for(const cls of ['datacenter','residential']){
   if(value.paid_http?.proxy_classes?.[cls]===true&&value.proxy_classes?.[cls]===true&&!allowed.includes(cls))allowed.push(cls);
  }
- const render=playground.executions.find(value=>value.id==='browser').available;
- return {...value,native_http:true,render,routes:allowed,transports:{...value.transports,http:true,browser:render},proxy_classes:{direct:allowed.includes('direct'),datacenter:allowed.includes('datacenter'),residential:allowed.includes('residential')},features:{...value.features,browser_network_probe:false},browser_probe:{available:false,reason:'self_service_http_only'},playground};
+ const render=value.features?.browser_render===true;
+ return {...value,capability_scope:'project',native_http:true,render,routes:allowed,transports:{...value.transports,http:true,browser:false},proxy_classes:{direct:allowed.includes('direct'),datacenter:allowed.includes('datacenter'),residential:allowed.includes('residential')},features:{...value.features,browser_network_probe:false},browser_probe:{available:false,reason:render?'managed_render_endpoint_required':'self_service_http_only'},playground};
 }
 async function profiles(v2,project,allowed){
  const value=await v2.profiles(project);
@@ -145,7 +145,7 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,cr
   control.setErrorHandler((error,req,reply)=>{const result=controlFailure(error);reply.code(result.status).send(result.body);});
   control.addHook('onRequest',async(req,reply)=>{
    reply.header('Cache-Control','no-store').header('Pragma','no-cache').header('X-Content-Type-Options','nosniff').header('X-Robots-Tag','noindex, nofollow');
-   if(!config.enabled)return reply.code(503).send(req.url.split('?')[0]==='/control/status'?{enabled:false,mail_configured:false,google:{enabled:false,client_id:null},github:{enabled:false},api_base_url:null,capabilities:{native_http:false,render:false,routes:[]}}:{error:{code:'control_disabled',message:message('control_disabled')}});
+   if(!config.enabled)return reply.code(503).send(req.url.split('?')[0]==='/control/status'?{enabled:false,capability_scope:'service',mail_configured:false,google:{enabled:false,client_id:null},github:{enabled:false},api_base_url:null,capabilities:{native_http:false,render:false,routes:[]}}:{error:{code:'control_disabled',message:message('control_disabled')}});
    if(typeof config.bridgeSecret!=='string'||Buffer.byteLength(config.bridgeSecret)<32||!Array.isArray(config.origins)||!config.origins.length||!identity||!credits||config.sessionSecure===false&&!(config.allowLoopbackDevelopment===true&&config.origins.every(loopback)))fail('control_configuration_invalid',503);
    if(!constantEqual(req.headers[CONTROL_BRIDGE_HEADER],config.bridgeSecret))fail('bridge_rejected',403);
    const origin=req.headers.origin;
@@ -181,7 +181,7 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,cr
   route('GET','/status',async req=>{
    query(req);
    const localMail=config.allowLoopbackDevelopment===true&&config.origins.every(loopback)&&identity.mail?.delivery==='local_private_mailbox'&&(identity.mailConfigured===true||identity.mail?.configured===true);
-   return {enabled:true,mail_configured:identity.mailConfigured===true||identity.mail?.configured===true,google:googleConfiguration(gateway.config),github:githubConfiguration(gateway.config),...(localMail?{mail_delivery:'local_private_mailbox'}:{}),api_base_url:config.apiBaseUrl??null,capabilities:{native_http:true,render:false,routes:routes(config)}};
+   return {enabled:true,capability_scope:'service',mail_configured:identity.mailConfigured===true||identity.mail?.configured===true,google:googleConfiguration(gateway.config),github:githubConfiguration(gateway.config),...(localMail?{mail_delivery:'local_private_mailbox'}:{}),api_base_url:config.apiBaseUrl??null,capabilities:{native_http:true,render:false,routes:routes(config)}};
   });
   const clientIp=req=>typeof req.headers['x-fetchx-client-ip']==='string'&&/^[a-fA-F0-9:.]{3,64}$/.test(req.headers['x-fetchx-client-ip'])?req.headers['x-fetchx-client-ip']:req.ip;
   route('POST','/auth/code',async req=>{query(req);const body=input(req,['email']);return identity.requestCode({email:body.email,ip:clientIp(req)});});

@@ -63,6 +63,8 @@ test('control checks membership for every project resource and never accepts bod
 test('control projects expose only HTTP routes and safe real history, usage and billing projections',async t=>{
  const f=await fixture();t.after(()=>f.app.close());
  const detail=await f.send('GET',`/projects/${project}`),data=detail.json();
+ assert.equal((await f.send('GET','/status')).json().capability_scope,'service');
+ assert.equal(data.capabilities.capability_scope,'project');
  assert.equal(data.capabilities.render,false);assert.equal(data.capabilities.transports.browser,false);assert.deepEqual(data.capabilities.routes,['direct']);assert.deepEqual(data.access_profiles[0].proxy_classes,['direct']);assert.deepEqual(data.access_profiles[0].browser_probe,{enabled:false});
  const recent=await f.send('GET',`/projects/${project}/requests?limit=5`);assert.equal(recent.json().operations[0].latency_ms,400);assert.equal(recent.json().operations[0].routing.class,'direct');assert.ok(!recent.body.includes('secret'));assert.ok(!recent.body.includes('diagnostics'));
  assert.deepEqual(f.queries.at(-1).args,[project,5]);

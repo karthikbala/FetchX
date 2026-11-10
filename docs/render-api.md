@@ -9,6 +9,28 @@ Check `features.browser_render` in `GET /v2/capabilities` with
 `profiles:read` before submitting. Each request still requires an approved
 destination, route, qualified browser runtime and sufficient allowance.
 
+## Prepare a managed render
+
+Send `POST /v2/render/prepare` with the project's Bearer key (`fetch:write`)
+and a JSON body containing the target URL and proxy:
+
+```json
+{
+  "url": "https://example.com/",
+  "proxy": {"class": "direct", "country": null}
+}
+```
+
+Preparation checks the same policy as the signed-in Playground. It does not
+resolve or contact the source, reserve credits, or create a profile record.
+The response includes `ready`, `execution`, `url`, `access_profile`, `quote`,
+and `errors`. If `ready` is false, inspect `errors` before proceeding. If it
+is true, use the returned URL and access profile, the same proxy, and a new
+idempotency key for `POST /v2/render`. The quote reflects current conditions.
+Admission checks the destination, route and allowance again before dispatch.
+
+## Submit and recover
+
 ```json
 {
   "idempotency_key": "caller-generated-operation-key",
@@ -22,10 +44,12 @@ destination, route, qualified browser runtime and sufficient allowance.
 ```
 
 An access profile must explicitly permit browser execution. Managed project keys
-use the browser profile reference issued by their playground for the selected URL,
-with a reviewed browser credit weight for that route. The `fetch:write` scope
-authorizes submission to the Render endpoint. Native browser probes require a
-provisioned credential with the applicable profile and runtime policy.
+use a reference returned by preparation with a reviewed browser credit weight for
+the route. An HTTP profile such as `public-url-http` cannot be used to render.
+Profile-related render errors can include `diagnostics.requested_execution` and,
+for profiles visible to the project, `profile_kind` and `approved_executions`.
+Native browser probes require a provisioned credential with the applicable
+profile and runtime policy.
 Use `direct` with `country: null`, or an approved `datacenter` or `residential`
 route with an uppercase country code. The optional `wait_ms` is an integer from
 zero through the profile's post-load wait limit, at most 2,000 milliseconds.

@@ -32,13 +32,16 @@ Managed v2 operations receive explicit identity `{keyId}` from trusted route cod
 
 Same-origin website calls `/api/control/*`. A Pages Function proxies only known paths/methods to gateway `/control/*` with an operator-configured bridge secret; it forwards the website origin, session cookie and CSRF header but never a customer API key. The gateway verifies the bridge and exact origin. Session cookie is HttpOnly, SameSite=Lax, path `/api/control`; Secure in production. State-changing authenticated routes also require `X-CSRF-Token`; derive it with HMAC from the session token and private bridge secret and return it from session/verification responses.
 
-- `GET /status`: `{enabled,mail_configured,api_base_url,capabilities}`; no secrets.
+- `GET /status`: `{enabled,mail_configured,api_base_url,capability_scope,capabilities}`.
+  The public service status has `capability_scope: "service"`. Use the authenticated
+  project details for project-specific render and route readiness.
 - `POST /auth/code`: `{email}` → `{challenge_id,expires_in,accepted:true}`.
 - `POST /auth/verify`: `{email,challenge_id,code}` → `{user,csrf_token,projects}` plus cookie.
 - `GET /session`: `{user,csrf_token,projects}`; unauthenticated 401.
 - `POST /auth/logout`: revoke session, clear cookie.
 - `GET, POST /projects`: `{projects}` / `{project}`.
-- `GET /projects/:id`: `{project,capabilities,access_profiles}`.
+- `GET /projects/:id`: `{project,capabilities,access_profiles}` with
+  `capabilities.capability_scope: "project"`.
 - `GET, POST /projects/:id/keys`; `POST /projects/:id/keys/:key/rotate`; `DELETE /projects/:id/keys/:key`.
 - `POST /projects/:id/fetch`: exact current `/v2/fetch` body, including `max_transfer_mb` and `max_credits` for eligible paid HTTP requests. Persist operation key before sending, return the real public fetch envelope.
 - `GET /projects/:id/fetch/:key`: original-key recovery; no redispatch.

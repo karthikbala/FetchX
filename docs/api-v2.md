@@ -25,8 +25,11 @@ after a lost response. Recovery never replays dispatched operations.
 {"api_version":"2","transports":{"http":true,"browser":false},"proxy_classes":{"direct":true,"datacenter":true,"residential":true},"features":{"native_responses":true,"downloads":true,"encoded_bodies":true,"cookie_jar":true,"json_pointers":true,"dom_selectors":false,"websockets":false,"local_storage":false,"live_leases":false},"retries":{"owner":"gateway","max_physical_retries":1,"default_physical_retries":0,"opt_in":"retry:true","scope":"pristine_native_http_dedicated_datacenter"},"profile_approval":"server_configuration"}
 ```
 
-`features.browser_render` reports the one-shot render capability when an approved
-browser runtime and project policy are available. `transports.browser` describes
+`capability_scope: "project"` identifies the authenticated project's capability
+view. For managed keys, `features.browser_render` uses the Playground's browser
+route checks, including runtime, reviewed route pricing, and route health.
+Use [render preparation](render-api.md#prepare-a-managed-render) for the
+target-specific check. `transports.browser` describes
 the low-level sessions API, which still opens HTTP sessions only. Recent
 operations and operation details include `execution` (`http` or `browser`).
 
@@ -40,6 +43,13 @@ and the shared `paths` restrictions apply on every request/redirect.
 `route_reservations` contains `{class,country,provider,reserved_tunnel_bytes,
 estimated_micro_usd}` and optional safe `pricing` metadata for each reviewed route. A null provider/estimate means
 availability/pricing is unknown, and never means a free paid route.
+
+Use `?execution=http` for HTTP profiles or `?execution=browser` for browser
+profiles. Unsupported filters return `400 unsupported_filter`. For managed
+keys, the browser filter returns an empty list and `browser_preparation` with
+the method and path for obtaining a URL-specific profile. Managed browser
+references are issued by preparation instead of listed as static profiles.
+
 `GET /v2/recipes` returns `{ "recipes": [...] }`. Each recipe is separately
 versioned and binds to one access-profile version. The supported kind is `http`,
 with optional `request:{method,path_pattern}` and
@@ -352,10 +362,13 @@ application its server-side URL/token through its own secret mechanism.
 client operation quota while retaining source/session limits, shared provider
 caps, physical request limits, pacing and accounting. `metered` additionally
 requires positive `max_daily_operations`, measured on UTC dates and counting
-every reserved v2 operation. It does not create or fund a vendor allowance.
+every reserved v2 operation. This mode describes the operation quota. Paid
+credit settlement follows the applicable credit policy independently.
 
 `GET /v2/usage` returns `{project,key_id,entitlement,outcomes,outcomes_by_key,
-by_key_and_state,scope,application_acceptance,invoice_basis}`. `outcomes` and each
+by_key_and_state,scope,application_acceptance,invoice_basis}`. For a managed
+Bearer key, `key_id` is the authenticating key's UUID. A key without historical
+operations may be absent from `outcomes_by_key`. `outcomes` and each
 entry in `outcomes_by_key` count source HTTP successes (2xx/3xx), source HTTP
 failures (4xx/5xx), gateway failures, unknown outcomes, actual known physical
 requests and encoded/decoded bytes. `by_key_and_state` adds reserved-or-actual

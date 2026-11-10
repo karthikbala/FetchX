@@ -4,6 +4,7 @@ import {creditWeight,reviewedCreditPolicy} from './control-credits.mjs';
 import {discoveryOrigins} from './v2-discovery.mjs';
 
 export const PLAYGROUND_PREFIX='playground:';
+export const RENDER_PREPARATION_PATH='/v2/render/prepare';
 const EXECUTIONS=['http','browser'];
 const ROUTES=['direct','datacenter','residential'];
 const METHODS={http:['GET','HEAD'],browser:['GET']};
@@ -348,4 +349,13 @@ export async function preparePlayground(v2,project,raw,keys){
   }
  }
  return {ready:!errors.length&&!!quote,execution,url:url?.href??null,access_profile:accessProfile,selected_key_id:selection.key?.id??null,keys:selection.keys,capabilities,quote,errors};
+}
+
+export async function prepareBearerRender(v2,project,body,keyId){
+ if(!keyId||!managed(v2,project))fail('capability_unsupported',403);
+ if(!exact(body,['url','proxy'])||typeof body.url!=='string'||!body.url.length||body.url.length>12000||
+  !exact(body.proxy,['class','country'])||typeof body.proxy.class!=='string'||!(body.proxy.country===null||typeof body.proxy.country==='string'))fail('request_invalid');
+ // The Bearer authentication hook has already checked ownership and write scope.
+ const {ready,execution,url,access_profile,quote,errors}=await preparePlayground(v2,project,{...body,execution:'browser'},[{id:keyId,scopes:['fetch:write']}]);
+ return {ready,execution,url,access_profile,quote,errors};
 }

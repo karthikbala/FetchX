@@ -284,6 +284,7 @@ export FETCHX_TOKEN` }] },
   -H "Authorization: Bearer $FETCHX_TOKEN"` }] },
           { kind: 'text', text: 'From `access_profiles`, choose the exact `id` and `version` that permit the HTTPS URL, the `GET` method and the intended route. Match the approved `proxy.class` and `proxy.country` exactly. For `direct`, set `country` to JSON `null`; for a proxy route use the approved uppercase country code. Review `route_reservations` for the approved combinations and reservation estimates. If no profile matches, tell the user what access is missing and stop.' },
           { kind: 'link', label: 'Read the access profile reference', href: '/docs/profiles' },
+          { kind: 'link', label: 'Prepare a browser render if the task needs JavaScript', href: '/docs/profiles#browser-profiles' },
         ],
       },
       {
@@ -637,6 +638,18 @@ curl --disable --silent --show-error "$FETCHX_URL/v2/fetch/\${FETCHX_ENCODED_KEY
   ]
 }` }] },
           { kind: 'text', text: 'The excerpt uses fictional values and omits the full `limits` object. Your authenticated response is the source of truth for your project.' },
+        ],
+      },
+      {
+        id: 'browser-profiles',
+        title: 'Prepare a browser render',
+        blocks: [
+          { kind: 'text', text: 'Use `GET /v2/access-profiles?execution=http` for HTTP profiles or `?execution=browser` for browser profiles. Managed keys receive `browser_preparation` in the browser response because their profiles are issued for a specific URL. Check `features.browser_render` in `GET /v2/capabilities` for project readiness.' },
+          { kind: 'code', title: 'Check a target and route with fetch:write', snippets: [{ label: 'cURL', language: 'bash', code: `curl --disable --silent --show-error "$FETCHX_URL/v2/render/prepare" \\
+  -H "Authorization: Bearer $FETCHX_TOKEN" \\
+  -H 'Content-Type: application/json' \\
+  --data '{"url":"https://example.com/","proxy":{"class":"direct","country":null}}'` }] },
+          { kind: 'text', text: 'Preparation makes no source request and reserves no credits. If `ready` is true, send the returned `url` and `access_profile` with the same `proxy` and a new `idempotency_key` to `POST /v2/render` using `fetch:write`. Review `errors` if preparation reports `ready: false`. When the render outcome is uncertain, recover with `GET /v2/render/:key` and `fetch:read` using the saved original key.' },
         ],
       },
       {

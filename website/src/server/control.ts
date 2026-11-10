@@ -128,7 +128,7 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
  if(!(env.ALLOWED_ORIGINS??'').split(',').map(v=>v.trim()).includes(incoming.origin))return error(403,'origin_rejected','Submit this request from the FetchX website.');
  const development=env.SITE_ENV==='development'&&env.FETCHX_CONTROL_ALLOW_LOOPBACK==='true'&&loopback(incoming);
  if(!env.FETCHX_CONTROL_URL||!env.FETCHX_CONTROL_SECRET){
-  if(path==='/status')return response(503,{enabled:false,mail_configured:false,github:{enabled:false},api_base_url:null,capabilities:{native_http:false,render:false,routes:[]}});
+  if(path==='/status')return response(503,{enabled:false,mail_configured:false,github:{enabled:false},api_base_url:null,capability_scope:'service',capabilities:{native_http:false,render:false,routes:[]}});
   return error(503,'control_disabled','Account access is currently unavailable.');
  }
  let upstream:URL;

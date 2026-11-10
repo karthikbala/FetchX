@@ -1,6 +1,7 @@
 import {sha} from './crypto.mjs';
 import {GatewayError,ID,fail} from './policy.mjs';
-import {ensurePlaygroundProfile,isPlaygroundRef} from './control-playground.mjs';
+import {RENDER_PREPARATION_PATH,ensurePlaygroundProfile,isPlaygroundRef,playgroundPolicy,prepareBearerRender,readPlaygroundProfile} from './control-playground.mjs';
+import {PUBLIC_URL_KIND,isPublicUrlRef} from './v2-public-url.mjs';
 import {hasHtmlChallenge} from './source-challenge.mjs';
 import {BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
 import {isPublicOperationAdmissionError,publicFetchFailure,publicOperationErrorCode,publicOperationErrorMessage,publicResponseHeaders} from './v2-public-fetch.mjs';
@@ -22,6 +23,8 @@ const messages={
  browser_probe_invalid:'Check the render URL and options. Browser rendering accepts GET navigation, an optional wait and an optional viewport screenshot.',
  browser_wait_ceiling_rejected:'The requested wait exceeds the browser limit for this access profile.',
  browser_probe_profile_unapproved:'Browser rendering is unavailable for the selected access profile.',
+ render_profile_execution_mismatch:'The selected access profile is for HTTP execution. Choose an access profile approved for browser rendering.',
+ render_profile_preparation_required:'Use the browser access profile returned by render preparation for this URL.',
  browser_probe_disabled:'Browser rendering is currently unavailable.',
  browser_request_limit:'The rendered page exceeded its browser network request limit.',
  browser_dom_byte_limit:'The rendered HTML exceeded its capture limit.',
@@ -64,7 +67,43 @@ export function publicRenderFailure(error,{key=null,status,stage}={}){
  const code=base.error.code,state=context?.state??base.state;
  return {...base,state,operation_id:context?.operationId??null,session_id:context?.sessionId??null,routing:context?.routing??null,
   ...(context?.keyScope?{idempotency_key_scope:context.keyScope}:{}),execution:'browser',supported:{transport:'browser',render:true},
-  error:{code,message:message(code),stage:context?.stage??base.error.stage},retry:retry(base.idempotency_key,code,state,{recoveryUrl:context?.recoveryUrl,replaySafe:context?.keyScope===undefined||context.keyScope==='caller'})};
+  diagnostics:context?.diagnostics??base.diagnostics,
+  error:{code,message:context?.message??message(code),stage:context?.stage??base.error.stage},retry:retry(base.idempotency_key,code,state,{recoveryUrl:context?.recoveryUrl,replaySafe:context?.keyScope===undefined||context.keyScope==='caller'})};
+}
+
+function rejectRenderProfile(code,{profile,managed,unavailable=false}={}){
+ const error=new GatewayError(code,403),diagnostics={requested_execution:'browser'};
+ if(profile){
+  diagnostics.profile_kind=[PUBLIC_URL_KIND,'playground','discovery'].includes(profile.kind)?profile.kind:'static';
+  diagnostics.approved_executions=profile.playground_execution==='browser'?['browser']:['http'];
+ }
+ if(managed)diagnostics.preparation_path=RENDER_PREPARATION_PATH;
+ const hint=unavailable?'Browser rendering is unavailable for this project.':managed&&code==='access_profile_forbidden'?messages.render_profile_preparation_required:undefined;
+ failureContexts.set(error,{diagnostics,message:hint});
+ throw error;
+}
+
+async function managedRenderProfile(v2,project,input){
+ const browser=playgroundPolicy(v2.config)?.routes.browser;
+ if(!browser||!browser.direct&&!browser.datacenter.length&&!browser.residential.length)rejectRenderProfile('capability_unsupported',{unavailable:true});
+ const ref=input.access_profile;
+ if(!isPlaygroundRef(ref)){
+  const key=ref.id+'@'+ref.version;
+  const approvedStatic=v2.config.projects[project]?.v2_access_profiles?.includes(key);
+  const profile=isPublicUrlRef(ref)&&v2.publicUrlPolicy(project,ref)?{kind:PUBLIC_URL_KIND}:approvedStatic&&v2.config.v2?.accessProfiles?.[key];
+  if(!profile)rejectRenderProfile('access_profile_forbidden',{managed:true});
+  rejectRenderProfile(profile.browser_probe?.enabled?'render_profile_preparation_required':'render_profile_execution_mismatch',{profile,managed:true});
+ }
+ try{return await ensurePlaygroundProfile(v2,project,ref,input.url,'browser',input.proxy,'GET');}
+ catch(error){
+  if(!(error instanceof GatewayError)||error.code!=='access_profile_forbidden')throw error;
+  let profile;
+  try{profile=await readPlaygroundProfile(v2,project,ref);}
+  catch(lookupError){
+   if(!(lookupError instanceof GatewayError)||lookupError.code!=='access_profile_forbidden')throw lookupError;
+  }
+  rejectRenderProfile(profile?.playground_execution==='http'?'render_profile_execution_mismatch':'access_profile_forbidden',{profile,managed:true});
+ }
 }
 
 function mainDocument(result,artifacts){
@@ -144,11 +183,17 @@ export class PublicRenderGateway{
    try{retained=await this.v2.lookup(project,internalKey);}catch(error){if(!(error instanceof GatewayError)||error.code!=='operation_not_found')throw error;}
    if(retained)return this.respond(project,key,retained);
   }
-  const playground=isPlaygroundRef(input.access_profile);
-  if(this.v2.controlCredits.managed(project)&&!playground)fail('access_profile_forbidden',403);
-  const candidate=playground?await ensurePlaygroundProfile(this.v2,project,input.access_profile,input.url,'browser',input.proxy,'GET'):null;
-  const profile=candidate??await this.v2.profile(project,input.access_profile);
-  if(!profile.browser_probe?.enabled)fail('browser_probe_profile_unapproved',403);
+  const managed=this.v2.controlCredits.managed(project);
+  const candidate=managed?await managedRenderProfile(this.v2,project,input):null;
+  let profile=candidate;
+  if(!profile){
+   try{profile=await this.v2.profile(project,input.access_profile);}
+   catch(error){
+    if(!(error instanceof GatewayError)||error.code!=='access_profile_forbidden')throw error;
+    rejectRenderProfile('access_profile_forbidden');
+   }
+  }
+  if(!profile.browser_probe?.enabled)rejectRenderProfile('browser_probe_profile_unapproved',{profile});
   if(input.wait_ms!==undefined&&input.wait_ms>profile.browser_probe.settle_ms)fail('browser_wait_ceiling_rejected');
   const request=this.v2.request({url:input.url,method:'GET'},profile);
   let url;try{url=new URL(request.url);}catch{fail('destination_rejected');}
@@ -188,6 +233,7 @@ export class PublicRenderGateway{
 export function registerPublicRender(app){
  const render=new PublicRenderGateway(app.v2);
  app.decorate('publicRender',render);
+ app.post(RENDER_PREPARATION_PATH,{bodyLimit:96*1024},req=>prepareBearerRender(app.v2,req.project,req.body,req.apiKeyId));
  app.post('/v2/render',{bodyLimit:96*1024},req=>render.render(req.project,req.body,{keyId:req.apiKeyId}));
  app.get('/v2/render/:key',req=>render.lookup(req.project,req.params.key));
 }

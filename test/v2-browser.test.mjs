@@ -176,6 +176,31 @@ test('browser probe API conserves admission/ledger, isolates artifacts, persists
   for(const url of ['https://source.gov/redirect','https://source.gov/fetch-redirect','https://source.gov/xhr-redirect'])assert.equal((await post('/v2/browser-probes',{...payload,url})).body.error,'browser_probe_runtime_unqualified');
   assert.equal(runs,0);assert.equal(relayOptions,undefined);assert.equal(Number((await store.pool.query('SELECT count(*) AS n FROM v2_operations')).rows[0].n),0);
   gateway.v2.browserRuntime=fixtureRuntime;
+  const discoveryPolicy={enabled:true,max_profiles:4,max_origins:1};
+  const foreignHeaders={authorization:'Bearer key-b'};
+  config.projects.a.v2_discovery_policy={...discoveryPolicy};
+  const createDiscovery=async(label,auth=headers)=>{
+   const response=await post('/v2/discovery-profiles',{idempotency_key:label,origins:['https://'+label+'.gov']},auth);
+   assert.equal(response.status,200,JSON.stringify(response.body));
+   return response.body.access_profile.id;
+  };
+  const httpDiscovery=await createDiscovery('http-profile');
+  config.projects.a.v2_discovery_policy.browser_probe={...profile.browser_probe};
+  config.projects.b.v2_discovery_policy={...discoveryPolicy,browser_probe:{...profile.browser_probe}};
+  const browserDiscovery=await createDiscovery('browser-profile');
+  const foreignDiscovery=await createDiscovery('foreign-browser-profile',foreignHeaders);
+  const listProfiles=async(execution,auth=headers)=>{
+   const response=await app.inject({url:'/v2/access-profiles?execution='+execution,headers:auth});
+   assert.equal(response.statusCode,200,response.body);
+   return response.json().access_profiles.map(p=>p.id);
+  };
+  assert.deepEqual(await listProfiles('http'),['probe',httpDiscovery,browserDiscovery]);
+  assert.deepEqual(await listProfiles('browser'),['probe',browserDiscovery]);
+  assert.deepEqual(await listProfiles('browser',foreignHeaders),[foreignDiscovery]);
+  config.projects.a.v2_discovery_policy.browser_probe.max_requests=2;
+  assert.deepEqual(await listProfiles('browser'),['probe']);
+  delete config.projects.a.v2_discovery_policy;
+  delete config.projects.b.v2_discovery_policy;
   qualified=false;assert.equal((await post('/v2/browser-probes',payload)).body.error,'browser_probe_runtime_unqualified');assert.equal(runs,0);qualified=true;
   assert.equal((await post('/v2/browser-probes',{...payload,max_physical_requests:4})).body.error,'browser_request_ceiling_rejected');
   assert.equal((await post('/v2/browser-probes',{...payload,wait_ms:1})).body.error,'browser_wait_ceiling_rejected');

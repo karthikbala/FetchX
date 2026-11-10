@@ -17,6 +17,8 @@ import {paidResidentialLedgerSql} from '../src/residential.mjs';
 
 test('managed Bearer scopes classify render send and original-key recovery separately',()=>{
  assert.equal(controlKeyScope('POST','/v2/render'),'fetch:write');
+ assert.equal(controlKeyScope('POST','/v2/render/prepare'),'fetch:write');
+ assert.equal(controlKeyScope('GET','/v2/render/prepare'),'fetch:read');
  assert.equal(controlKeyScope('GET','/v2/render/saved%3Akey'),'fetch:read');
  for(const [method,path] of [['GET','/v2/render'],['POST','/v2/render/saved'],['GET','/v2/render/saved/extra'],['POST','/v2/browser-probes']])assert.equal(controlKeyScope(method,path),null);
 });
@@ -65,7 +67,8 @@ test('trial Playground HTTP and render coexist with independently reviewed purch
    {accessProfile:PUBLIC_URL_REF,...datacenter,provider:'oxylabs'},
    {accessProfile:PUBLIC_URL_REF,...residential,provider:'evomi'}
   ]};
- const gateway=new Gateway({store,config,profiles:{},resolve:async()=>[{address:'93.184.216.34',family:4}]});
+ let systemDnsCalls=0;
+ const gateway=new Gateway({store,config,profiles:{},resolve:async()=>{systemDnsCalls++;return [{address:'93.184.216.34',family:4}];}});
  const {promise:runnerEntered,resolve:notifyRunner}=Promise.withResolvers();
  let runs=0,mode='blocked',relayOptions,httpCalls=0,dnsCalls=0;
  gateway.v2=new V2Gateway(gateway,{browserRuntime:async()=>({available:true,runtime:{synthetic:true}}),
@@ -104,7 +107,8 @@ test('trial Playground HTTP and render coexist with independently reviewed purch
  await store.pool.query('INSERT INTO control_users(id,email) VALUES($1,$2),($3,$4)',[user,'owner@fixture.test',foreignUser,'other@fixture.test']);
  await store.pool.query("INSERT INTO control_sessions(id,user_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 day')",[randomUUID(),user,sha(sessionToken)]);
  const identity=gateway.controlIdentity,project=(await identity.createProject(user,{name:'Render owner'})).id,foreign=(await identity.createProject(foreignUser,{name:'Other tenant'})).id;
- const writer=await identity.createKey(user,project,{name:'Writer',scopes:['fetch:write','fetch:read']}),reader=await identity.createKey(user,project,{name:'Reader',scopes:['fetch:read']});
+ const writer=await identity.createKey(user,project,{name:'Writer',scopes:['fetch:write','fetch:read','profiles:read','usage:read']}),
+  reader=await identity.createKey(user,project,{name:'Reader',scopes:['fetch:read','usage:read']});
  const other=await identity.createKey(foreignUser,foreign,{name:'Other writer',scopes:['fetch:read','fetch:write']});
  const native=(method,path,payload,token)=>app.inject({method,url:path,...(token?{headers:{authorization:'Bearer '+token}}:{}),...(payload===undefined?{}:{payload})});
  const signed=(method,path,payload)=>app.inject({method,url:`/control/projects/${project}${path}`,headers:{origin:site,'x-fetchx-control-secret':bridge,cookie:`fetchx_session=${sessionToken}`,'x-csrf-token':controlCsrf(sessionToken,bridge)},...(payload===undefined?{}:{payload})});
@@ -112,6 +116,27 @@ test('trial Playground HTTP and render coexist with independently reviewed purch
  const details=(await signed('GET','')).json();
  assert.deepEqual(details.capabilities.paid_http.public_url_access_profile,PUBLIC_URL_REF);
  assert.equal(details.capabilities.render,true);
+ assert.equal((await native('GET','/v2/capabilities',undefined,writer.token)).json().features.browser_render,true);
+ const discovery=await native('GET','/v2/access-profiles?execution=browser',undefined,writer.token);
+ assert.equal(discovery.statusCode,200,discovery.body);
+ assert.deepEqual(discovery.json(),{access_profiles:[],browser_preparation:{method:'POST',path:'/v2/render/prepare'}});
+ const httpProfiles=await native('GET','/v2/access-profiles?execution=http',undefined,writer.token);
+ assert.equal(httpProfiles.statusCode,200,httpProfiles.body);
+ assert.ok(httpProfiles.json().access_profiles.some(profile=>profile.id===PUBLIC_URL_REF.id));
+ for(const query of ['execution=invalid','extra=browser','execution=http&execution=browser']){
+  const reply=await native('GET','/v2/access-profiles?'+query,undefined,writer.token);
+  assert.equal(reply.statusCode,400,reply.body);
+  assert.equal(reply.json().error,'unsupported_filter');
+ }
+ const reviewedPricing=config.datacenterFixedFeePool;
+ config.datacenterFixedFeePool={...reviewedPricing,transports:['http']};
+ try{
+  const gatewayCapabilities=(await native('GET','/v2/capabilities',undefined,writer.token)).json();
+  const controlCapabilities=(await signed('GET','')).json().capabilities;
+  assert.equal(gatewayCapabilities.features.browser_render,false);
+  assert.equal(controlCapabilities.render,false);
+  assert.equal(controlCapabilities.playground.executions.find(mode=>mode.id==='browser').available,false);
+ }finally{config.datacenterFixedFeePool=reviewedPricing;}
  const paidBody={idempotency_key:'paid-fixture',url:source,access_profile:PUBLIC_URL_REF,proxy:datacenter,max_transfer_mb:.25,max_credits:1};
  const alternate=await identity.createKey(user,project,{name:'Alternate',scopes:['fetch:write']});
  assert.equal((await signed('POST','/fetch',paidBody)).json().error.code,'playground_key_selection_required');
@@ -156,16 +181,52 @@ test('trial Playground HTTP and render coexist with independently reviewed purch
  assert.equal(prepare.statusCode,200,prepare.body);
  const prepared=prepare.json();assert.equal(prepared.ready,true,prepare.body);assert.deepEqual(prepared.quote,{credits:2,max_estimated_micro_usd:0});
  assert.equal(prepared.selected_key_id,writer.id);
- assert.equal(runs,0);
- const body={idempotency_key:'render:fixture',url:prepared.url,access_profile:prepared.access_profile,proxy:datacenter,max_estimated_micro_usd:0,wait_ms:0,screenshot:true};
+ const preparationInput={url:source,proxy:datacenter};
+ const beforePreparation=(await native('GET','/v2/usage',undefined,writer.token)).json();
+ const networkBefore=[httpCalls,dnsCalls,systemDnsCalls,runs];
+ const bearerPrepare=await native('POST','/v2/render/prepare',preparationInput,writer.token);
+ assert.equal(bearerPrepare.statusCode,200,bearerPrepare.body);
+ assert.deepEqual(bearerPrepare.json(),{ready:true,execution:'browser',url:prepared.url,access_profile:prepared.access_profile,quote:prepared.quote,errors:[]});
+ const readerPrepare=await native('POST','/v2/render/prepare',preparationInput,reader.token);
+ assert.equal(readerPrepare.statusCode,403,readerPrepare.body);
+ assert.equal(readerPrepare.json().error,'api_key_scope_forbidden');
+ const missingToken=await native('POST','/v2/render/prepare',preparationInput);
+ assert.equal(missingToken.statusCode,401,missingToken.body);
+ const suppliedKey=await native('POST','/v2/render/prepare',{...preparationInput,key_id:other.id},writer.token);
+ assert.equal(suppliedKey.statusCode,400,suppliedKey.body);
+ assert.equal(suppliedKey.json().error,'request_invalid');
+ const foreignPrepare=await native('POST','/v2/render/prepare',preparationInput,other.token);
+ assert.equal(foreignPrepare.statusCode,200,foreignPrepare.body);
+ assert.equal(foreignPrepare.json().ready,true,foreignPrepare.body);
+ assert.notDeepEqual(foreignPrepare.json().access_profile,prepared.access_profile);
+ assert.deepEqual([httpCalls,dnsCalls,systemDnsCalls,runs],networkBefore);
+ assert.deepEqual((await native('GET','/v2/usage',undefined,writer.token)).json(),beforePreparation);
+ assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_sessions WHERE project=$1',[project])).rows[0].n,3);
+ assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM control_playground_profiles WHERE project=$1',[project])).rows[0].n,1);
+ const target=bearerPrepare.json();
+ const body={idempotency_key:'render:fixture',url:target.url,access_profile:target.access_profile,proxy:datacenter,max_estimated_micro_usd:0,wait_ms:0,screenshot:true};
  const keyPath='/v2/render/'+encodeURIComponent(body.idempotency_key);
  assert.equal((await native('POST','/v2/render',body)).json().error.code,'unauthorized');
  assert.equal((await native('POST','/v2/render',body,reader.token)).json().error.code,'api_key_scope_forbidden');
  assert.equal((await native('POST','/v2/render',{...body,method:'POST'},writer.token)).json().error.code,'browser_probe_invalid');
- assert.equal((await native('POST','/v2/render',{...body,idempotency_key:'static-browser',access_profile:{id:staticProfile.id,version:1}},writer.token)).json().error.code,'access_profile_forbidden');
- const pending=signed('POST','/render',{...body,key_id:writer.id});
+ const staticDenied=await native('POST','/v2/render',{...body,idempotency_key:'static-browser',access_profile:{id:staticProfile.id,version:1}},writer.token);
+ assert.equal(staticDenied.statusCode,403,staticDenied.body);
+ assert.equal(staticDenied.json().error.code,'render_profile_preparation_required');
+ const wrongExecution=await native('POST','/v2/render',{...body,idempotency_key:'http-profile',access_profile:PUBLIC_URL_REF},writer.token);
+ assert.equal(wrongExecution.statusCode,403,wrongExecution.body);
+ assert.equal(wrongExecution.json().error.code,'render_profile_execution_mismatch');
+ assert.deepEqual(wrongExecution.json().diagnostics,{requested_execution:'browser',profile_kind:'public_url_http',approved_executions:['http'],preparation_path:'/v2/render/prepare'});
+ const deniedRefs=[foreignPrepare.json().access_profile,{id:'playground:unrecognized',version:1}];
+ const deniedProfiles=await Promise.all(deniedRefs.map(access_profile=>native('POST','/v2/render',{...body,idempotency_key:'denied-profile',access_profile},writer.token)));
+ for(const response of deniedProfiles){
+  assert.equal(response.statusCode,403,response.body);
+  assert.equal(response.json().error.code,'access_profile_forbidden');
+  assert.deepEqual(response.json().diagnostics,{requested_execution:'browser',preparation_path:'/v2/render/prepare'});
+ }
+ assert.deepEqual(deniedProfiles[0].json(),deniedProfiles[1].json());
+ const pending=native('POST','/v2/render',body,writer.token);
  await Promise.race([runnerEntered,pending.then(reply=>assert.fail(reply.body))]);
- const duplicate=await native('POST','/v2/render',body,writer.token);
+ const duplicate=await signed('POST','/render',{...body,key_id:writer.id});
  assert.equal(duplicate.statusCode,200,duplicate.body);assert.equal(duplicate.json().state,'running');assert.equal(duplicate.json().retry.safe_to_retry,false);
  const changed=await native('POST','/v2/render',{...body,wait_ms:1},writer.token);
  assert.equal(changed.statusCode,409,changed.body);assert.equal(changed.json().error.code,'idempotency_conflict');
@@ -180,6 +241,11 @@ test('trial Playground HTTP and render coexist with independently reviewed purch
  assert.equal(result.artifacts.find(a=>a.kind==='browser_response').body_base64,undefined);
  for(const secret of ['fixture-secret','fixture-private','fixture-password','fixture-evidence'])assert.ok(!completed.body.includes(secret),secret);
  assert.equal(result.usage.accounting.request_credits.key_id,writer.id);assert.equal(result.usage.accounting.request_credits.state,'settled');
+ const writerUsage=(await native('GET','/v2/usage',undefined,writer.token)).json();
+ const readerUsage=(await native('GET','/v2/usage',undefined,reader.token)).json();
+ assert.equal(writerUsage.key_id,writer.id);
+ assert.ok(writerUsage.outcomes_by_key[writer.id].source_successes>0);
+ assert.deepEqual(readerUsage,{...writerUsage,key_id:reader.id});
  assert.equal((await native('GET',keyPath,undefined,reader.token)).json().operation_id,result.operation_id);
  assert.equal((await native('GET',keyPath,undefined,other.token)).statusCode,404);
  assert.equal((await native('GET','/v2/fetch/operations/'+result.operation_id,undefined,reader.token)).statusCode,409);
@@ -188,10 +254,10 @@ test('trial Playground HTTP and render coexist with independently reviewed purch
  assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_sessions WHERE project=$1',[project])).rows[0].n,4);
 
  mode='unknown';
- const uncertainBody={...body,idempotency_key:'uncertain'},uncertain=await native('POST','/v2/render',uncertainBody,writer.token);
+ const uncertainBody={...body,idempotency_key:'prepare'},uncertain=await native('POST','/v2/render',uncertainBody,writer.token);
  assert.equal(uncertain.json().state,'unknown',uncertain.body);assert.equal(uncertain.json().usage.accounting.request_credits.state,'held');
  await recoverV2(store.pool);
- assert.deepEqual((await native('GET','/v2/render/uncertain',undefined,reader.token)).json(),uncertain.json());
+ assert.deepEqual((await native('GET','/v2/render/prepare',undefined,reader.token)).json(),uncertain.json());
  assert.deepEqual((await native('POST','/v2/render',uncertainBody,writer.token)).json(),uncertain.json());
  assert.equal(runs,2);
  const deniedPrepare=(await signed('POST','/playground/prepare',{execution:'browser',proxy:datacenter,url:'https://another.example.com/'})).json();
@@ -204,6 +270,10 @@ test('trial Playground HTTP and render coexist with independently reviewed purch
  assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM control_playground_profiles WHERE project=$1',[project])).rows[0].n,2);
  assert.equal(runs,2);
  controlPlane.playground={enabled:false};
+ const unavailable=await native('POST','/v2/render',{...body,idempotency_key:'unavailable'},writer.token);
+ assert.equal(unavailable.statusCode,403,unavailable.body);
+ assert.equal(unavailable.json().error.code,'capability_unsupported');
+ assert.deepEqual(unavailable.json().diagnostics,{requested_execution:'browser'});
  assert.equal((await native('GET',keyPath,undefined,reader.token)).json().operation_id,result.operation_id);
  assert.equal((await native('POST','/v2/render',body,writer.token)).json().operation_id,result.operation_id);
  assert.equal(runs,2);

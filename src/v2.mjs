@@ -16,7 +16,7 @@ import {estimateRoutePricing,estimatePaidPublicDatacenter} from './v2-pricing.mj
 import {residentialTrafficCharge,finishResidentialTrafficCharge} from './customer-traffic.mjs';
 import {distinctNativeRetryRoute,nativeRetryIdentityBinding,pristineNativeRetry,transientNativeTransport,transientNativeResponse,successfulNativeResponse} from './v2-native-retry.mjs';
 import {ControlCredits,creditSnapshot,creditWeight,recoverControlCredits,reviewedCreditPolicy} from './control-credits.mjs';
-import {PLAYGROUND_PREFIX,admitPlaygroundRoute,isPlaygroundRef,materializePlaygroundProfile,playgroundOperationProfile,playgroundPolicy,readPlaygroundProfile} from './control-playground.mjs';
+import {PLAYGROUND_PREFIX,RENDER_PREPARATION_PATH,admitPlaygroundRoute,isPlaygroundRef,materializePlaygroundProfile,playgroundCapabilities,playgroundOperationProfile,readPlaygroundProfile} from './control-playground.mjs';
 import {lockStripeSales} from './control-stripe-provider.mjs';
 import {ControlPaidCredits,PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES,outstandingPaidCreditLiabilitySql,recoverControlPaidCredits,restoreReleasedTrialCredits,reviewedPaidCreditRoutes,quotePaidHttpCredits} from './control-paid-credits.mjs';
 import {PUBLIC_URL_ID,PUBLIC_URL_KIND,PUBLIC_URL_REF,PUBLIC_URL_V2_REF,RESERVED_PUBLIC_URL_IDS,PUBLIC_URL_MAX_BODY_BYTES,PUBLIC_URL_TRANSFER_LIMITS,checkedPublicRedirect,checkedPublicSourceUrl,checkedPublicAddresses,
@@ -115,12 +115,12 @@ export class V2Gateway{
   if(Object.entries(this.config.v2?.accessProfiles??{}).some(([k,p])=>k.startsWith(PLAYGROUND_PREFIX)||typeof p?.id==='string'&&p.id.startsWith(PLAYGROUND_PREFIX)))fail('playground_namespace_reserved',503);
   if(Object.entries(this.config.v2?.accessProfiles??{}).some(([k,p])=>RESERVED_PUBLIC_URL_IDS.some(id=>k.startsWith(id+'@')||p?.id===id)||[PUBLIC_URL_KIND,'public_url_residential'].includes(p?.kind)))fail('public_url_profile_reserved',503);
  }
- async capabilities(project){
-  const policy=discoveryPolicy(this.config,project),runtime=await this.browserRuntime(this.config),selfService=this.controlCredits.managed(project),creditPolicy=selfService?reviewedCreditPolicy(this.config):null;
+ async capabilities(project,{playground}={}){
+  const policy=discoveryPolicy(this.config,project),selfService=this.controlCredits.managed(project),creditPolicy=selfService?reviewedCreditPolicy(this.config):null;
+  const runtime=selfService?null:await this.browserRuntime(this.config);
   const approved=!!policy.browser_probe?.enabled||(this.config.projects[project]?.v2_access_profiles??[]).some(k=>this.config.v2?.accessProfiles?.[k]?.browser_probe?.enabled===true),available=!selfService&&runtime.available&&approved;
   const routes=['direct','datacenter','residential'];
-  const playground=runtime.available&&selfService?playgroundPolicy(this.config)?.routes.browser:null;
-  const render=runtime.available&&(selfService?routes.some(route=>creditWeight(creditPolicy,'browser',route,true)&&(route==='direct'?playground?.direct:playground?.[route].length)):approved);
+  const render=selfService?(playground??await playgroundCapabilities(this,project)).executions.find(mode=>mode.id==='browser').available:available;
   let paidHttp;
   if(selfService){
    const proxyClasses={};
@@ -132,7 +132,7 @@ export class V2Gateway{
     ...(regionalReady?{public_url_access_profiles:publicRefs}:{}),
     ...(publicRefs.length?{public_url_transfer_limits:PUBLIC_URL_TRANSFER_LIMITS}:{})};
   }
-  return {...V2_CAPABILITIES,...(selfService?{proxy_classes:Object.fromEntries(routes.map(route=>[route,!!creditWeight(creditPolicy,'http',route)||paidHttp.proxy_classes[route]])),paid_http:paidHttp}:{}),features:{...V2_CAPABILITIES.features,discovery_profiles:policy.enabled,browser_network_probe:available,browser_render:render},browser_probe:{available,reason:selfService?(render?'managed_render_endpoint_required':'self_service_http_only'):!runtime.available?runtime.reason:!approved?'browser_probe_profile_unapproved':null,original_encoded_available:false,max_requests:32,max_decoded_bytes:8388608,max_dom_bytes:1048576,proxy_classes:selfService?[]:routes,methods:['GET','HEAD'],live_leases:false},discovery_profile_policy:policy.enabled?{enabled:true,max_profiles:policy.max_profiles,max_origins:policy.max_origins,methods:['GET','HEAD'],proxy_classes:['direct'],max_paid_cost_micro_usd:0,limits:policy.limits,...(!selfService&&policy.browser_probe?{browser_probe:policy.browser_probe}:{})}:{enabled:false}};
+  return {...V2_CAPABILITIES,capability_scope:'project',...(selfService?{proxy_classes:Object.fromEntries(routes.map(route=>[route,!!creditWeight(creditPolicy,'http',route)||paidHttp.proxy_classes[route]])),paid_http:paidHttp}:{}),features:{...V2_CAPABILITIES.features,discovery_profiles:policy.enabled,browser_network_probe:available,browser_render:render},browser_probe:{available,reason:selfService?(render?'managed_render_endpoint_required':'self_service_http_only'):!runtime.available?runtime.reason:!approved?'browser_probe_profile_unapproved':null,original_encoded_available:false,max_requests:32,max_decoded_bytes:8388608,max_dom_bytes:1048576,proxy_classes:selfService?[]:routes,methods:['GET','HEAD'],live_leases:false},discovery_profile_policy:policy.enabled?{enabled:true,max_profiles:policy.max_profiles,max_origins:policy.max_origins,methods:['GET','HEAD'],proxy_classes:['direct'],max_paid_cost_micro_usd:0,limits:policy.limits,...(!selfService&&policy.browser_probe?{browser_probe:policy.browser_probe}:{})}:{enabled:false}};
  }
  async browserProbe(project,raw,identity){
   if(this.controlCredits.managed(project)){
@@ -173,15 +173,34 @@ export class V2Gateway{
   if(refKey(p)!==k)fail('access_profile_configuration',503);
   return this.registered('access_profile',p);
  }
- async profiles(project){
-  const profiles=[];for(const k of this.config.projects[project]?.v2_access_profiles??[]){const p=this.config.v2?.accessProfiles?.[k];if(p)profiles.push(await this.profile(project,{id:p.id,version:p.version}));}
-  const publicRoutes=new Map();
-  for await(const {profile,route} of this.readyPaidRoutes(project,{publicOnly:true,publicVersion:null})){
-   if(!publicRoutes.has(profile.version))publicRoutes.set(profile.version,[]);
-   publicRoutes.get(profile.version).push(route);
+ async profiles(project,query={}){
+  if(!exact(query,['execution'])||Object.hasOwn(query,'execution')&&!['http','browser'].includes(query.execution))fail('unsupported_filter');
+  const browser=query.execution==='browser';
+  if(browser&&this.controlCredits.managed(project))return {access_profiles:[],browser_preparation:{method:'POST',path:RENDER_PREPARATION_PATH}};
+  if(browser&&!(await this.browserRuntime(this.config)).available)return {access_profiles:[]};
+  const profiles=[];
+  for(const k of this.config.projects[project]?.v2_access_profiles??[]){
+   const p=this.config.v2?.accessProfiles?.[k];
+   if(p&&(!browser||p.browser_probe?.enabled===true))profiles.push(await this.profile(project,{id:p.id,version:p.version}));
   }
-  for(const ref of [PUBLIC_URL_REF,PUBLIC_URL_V2_REF])if(publicRoutes.has(ref.version))profiles.push(await this.profile(project,ref));
-  if(discoveryPolicy(this.config,project).enabled)for(const row of (await this.store.pool.query('SELECT id,version FROM v2_discovery_profiles WHERE project=$1 ORDER BY created_at,id',[project])).rows){try{profiles.push(await this.profile(project,{id:row.id,version:row.version}));}catch(error){if(error.code!=='discovery_policy_changed')throw error;}}
+  const publicRoutes=new Map();
+  if(!browser){
+   for await(const {profile,route} of this.readyPaidRoutes(project,{publicOnly:true,publicVersion:null})){
+    if(!publicRoutes.has(profile.version))publicRoutes.set(profile.version,[]);
+    publicRoutes.get(profile.version).push(route);
+   }
+   for(const ref of [PUBLIC_URL_REF,PUBLIC_URL_V2_REF])if(publicRoutes.has(ref.version))profiles.push(await this.profile(project,ref));
+  }
+  const policy=discoveryPolicy(this.config,project);
+  if(policy.enabled&&(!browser||policy.browser_probe?.enabled)){
+   const {rows}=await this.store.pool.query('SELECT id,version FROM v2_discovery_profiles WHERE project=$1 ORDER BY created_at,id',[project]);
+   for(const {id,version} of rows){
+    try{
+     const p=await this.profile(project,{id,version});
+     if(!browser||p.browser_probe?.enabled)profiles.push(p);
+    }catch(error){if(error.code!=='discovery_policy_changed')throw error;}
+   }
+  }
   return {access_profiles:profiles.map(p=>this.publicProfile(p,project,publicRoutes.get(p.version)))};
  }
  pricing(project,profile,route,bytes,transport='http',duration=profile.limits.timeout_ms){
@@ -911,7 +930,7 @@ export class V2Gateway{
   }
   return {operations,scope:'v2_project_recent',limit};
  }
- async usage(project){
+ async usage(project,keyId){
   const rows=(await this.store.pool.query(`SELECT o.key_id,o.state,count(*)::int AS operations,
    COALESCE(sum(l.accounted_requests),0)::text AS reserved_or_actual_requests,
    COALESCE(sum(l.accounted_encoded_bytes),0)::text AS reserved_or_actual_encoded_bytes,
@@ -932,7 +951,7 @@ export class V2Gateway{
   }
   const usage=rows.map(r=>Object.fromEntries(Object.entries(r).map(([k,v])=>[k,v===null||['key_id','state'].includes(k)?v:Number(v)])));
   const {trial:credits,paid:paidCredits,unified}=await creditSnapshot(this.controlCredits,this.controlPaidCredits,project);
-  return {project,key_id:this.config.projects[project].keyId??project,entitlement:this.entitlement(project,{unified}),outcomes:outcome,outcomes_by_key:byKey,by_key_and_state:usage,
+  return {project,key_id:keyId??this.config.projects[project].keyId??project,entitlement:this.entitlement(project,{unified}),outcomes:outcome,outcomes_by_key:byKey,by_key_and_state:usage,
    ...(credits?{request_credits:credits}:{}),...(paidCredits?{paid_credits:paidCredits}:{}),...(unified?{credit_balance:{mode:'unified',...paidCredits}}:{}),
    scope:'v2_project_lifetime',application_acceptance:'not_measured',invoice_basis:'unknown_until_authoritative_reconciliation'};
  }
@@ -942,9 +961,9 @@ export function registerV2(app,gateway){
  const v2=gateway.v2??new V2Gateway(gateway);app.decorate('v2',v2);
  app.get('/v2/capabilities',req=>v2.capabilities(req.project));
  app.post('/v2/discovery-profiles',req=>v2.discoveryProfile(req.project,req.body));
- app.get('/v2/access-profiles',req=>v2.profiles(req.project));
+ app.get('/v2/access-profiles',req=>v2.profiles(req.project,req.query));
  app.get('/v2/recipes',req=>v2.recipes(req.project));
- app.get('/v2/usage',req=>v2.usage(req.project));
+ app.get('/v2/usage',req=>v2.usage(req.project,req.apiKeyId));
  app.post('/v2/sessions',req=>v2.session(req.project,req.body));
  app.get('/v2/sessions/:id',req=>v2.readSession(req.project,req.params.id));
  app.post('/v2/operations',req=>v2.operation(req.project,req.body,{keyId:req.apiKeyId}));
