@@ -1,13 +1,15 @@
+import { codingAgentGuidePath, codingAgentGuideSlug, codingAgentPrompt } from './coding-agent.ts';
+
 export type DocSnippet = {
   label: string;
-  language: 'bash' | 'javascript' | 'python' | 'json';
+  language: 'bash' | 'javascript' | 'python' | 'json' | 'text';
   code: string;
 };
 
 export type DocBlock =
   | { kind: 'text'; text: string }
   | { kind: 'note'; title: string; text: string }
-  | { kind: 'code'; title: string; snippets: DocSnippet[] }
+  | { kind: 'code'; title: string; snippets: DocSnippet[]; omitFromMarkdown?: boolean }
   | { kind: 'table'; headers: string[]; rows: string[][] }
   | { kind: 'link'; label: string; href: string };
 
@@ -33,6 +35,10 @@ const fetchRequest = `{
   "url": "https://source.example/data",
   "proxy": { "class": "direct", "country": null }
 }`;
+
+const hostedGateway = 'https://app.fetchx.ai';
+const agentFetchRequest = fetchRequest
+  .replace('"quickstart-001",', '"REPLACE_WITH_UNIQUE_KEY",\n  "method": "GET",');
 
 const fetchSnippets: DocSnippet[] = [
   {
@@ -180,6 +186,7 @@ export const docPages: DocPage[] = [
           { kind: 'text', text: 'FetchX provides a project-scoped gateway for HTTP fetching and reviewed collection workflows. On a service with account access enabled, sign up or log in, verify your email with its one-time code, create a project, then create a scoped `fxk_` API key. Your service supplies its gateway URL and operator-approved source profiles.' },
           { kind: 'note', title: 'Gateway availability', text: 'Confirm that account access and the v2 HTTP fetch API are enabled on your service. Use its supplied gateway endpoint for API calls. Existing provisioned project tokens remain usable with their approved API versions and profiles.' },
           { kind: 'text', text: 'For this walkthrough, grant `profiles:read` to list approved profiles, `fetch:write` to submit native HTTP requests and `fetch:read` to recover saved results. Add `usage:read` if your integration reads usage. New account keys support native HTTP; provisioned v1 and browser workflow contracts retain their existing behavior.' },
+          { kind: 'link', label: 'Quickstart for coding agents', href: codingAgentGuidePath },
           { kind: 'link', label: 'Account access, key scopes and rotation', href: '/docs/authentication' },
           { kind: 'link', label: 'Using a v1 gateway? Start with workflow fetch', href: '/docs/workflow-fetch' },
           { kind: 'code', title: 'Set your environment', snippets: [{ label: 'Shell', language: 'bash', code: `export FETCHX_URL='https://YOUR_PROVISIONED_ENDPOINT'
@@ -232,6 +239,93 @@ export FETCHX_TOKEN='YOUR_PROJECT_API_KEY_OR_TOKEN'` }] },
           { kind: 'note', title: 'Credits and uncertain outcomes', text: 'Account requests use conservative credit reservations within operator-approved limits. An unknown result retains its hold. Do not automatically retry unknown source work or submit a new operation key to bypass it; recover the original result first. Customer credits are separate from provider invoices.' },
           { kind: 'code', title: 'GET /v2/fetch/:idempotency_key', snippets: recoverySnippets },
           { kind: 'link', label: 'Understand idempotency and recovery', href: '/docs/recovery' },
+        ],
+      },
+    ],
+  },
+  {
+    slug: codingAgentGuideSlug,
+    title: 'FetchX for coding agents',
+    description: 'Use a terminal or HTTP client to set up FetchX, make one approved HTTP fetch and verify the returned content.',
+    group: 'Getting started',
+    sections: [
+      {
+        id: 'copy-prompt',
+        title: 'Copy the prompt into your coding agent',
+        blocks: [
+          { kind: 'text', text: 'The browser version has a copyable prompt. Paste it into your agent and tell it the source URL and what you want back. If your agent already downloaded this guide, start at step 1.' },
+          { kind: 'code', title: 'FetchX onboarding prompt', snippets: [{ label: 'Plain text', language: 'text', code: codingAgentPrompt }], omitFromMarkdown: true },
+        ],
+      },
+      {
+        id: 'set-up-the-agent',
+        title: '1. Confirm the task and set up access',
+        blocks: [
+          { kind: 'text', text: 'If the user has not provided both an HTTPS source URL and the expected output, ask for them. Use the agent runtime’s `FETCHX_URL` and `FETCHX_TOKEN`. If either is missing, guide the user through the setup below and wait for both to be available.' },
+          { kind: 'text', text: 'The user signs up or signs in to FetchX in their own browser, completes account verification and selects or creates a project. Under API keys, they create a key with `profiles:read`, `fetch:write` and `fetch:read`. FetchX shows the key once.' },
+          { kind: 'link', label: 'Create a FetchX account', href: '/signup' },
+          { kind: 'link', label: 'Sign in to FetchX', href: '/login' },
+          { kind: 'link', label: 'Open API keys', href: '/app/keys' },
+          { kind: 'text', text: 'Set `FETCHX_URL` to `' + hostedGateway + '` for hosted FetchX or the user’s provisioned HTTPS gateway. Leave off the trailing slash. Store the key as the runtime secret `FETCHX_TOKEN`. A CLI user can load it from a secret manager or enter it at a masked prompt, then launch the agent from that shell.' },
+          { kind: 'code', title: 'Set variables and then launch your CLI agent', snippets: [{ label: 'Bash (interactive)', language: 'bash', code: `set +x
+export FETCHX_URL='${hostedGateway}'
+read -r -s -p 'FetchX project API key: ' FETCHX_TOKEN
+printf '\\n'
+export FETCHX_TOKEN` }] },
+          { kind: 'note', title: 'Keep credentials private', text: 'Never ask for keys, passwords, session tokens or one-time codes in chat. Keep secrets out of prompts, files, logs and shell traces. Expand `FETCHX_TOKEN` only for Bearer authentication to the configured FetchX gateway. Download documentation without credentials, and never send the key to the source website.' },
+        ],
+      },
+      {
+        id: 'choose-an-approved-profile',
+        title: '2. Find an approved profile and route',
+        blocks: [
+          { kind: 'text', text: 'Call `GET /v2/access-profiles` on `FETCHX_URL` using the project token. Listing profiles does not fetch the source. The following examples use cURL; the agent can use its existing HTTP client with redirects and automatic retries disabled.' },
+          { kind: 'code', title: 'List project access profiles', snippets: [{ label: 'cURL', language: 'bash', code: `curl --disable --silent --show-error "$FETCHX_URL/v2/access-profiles" \\
+  -H "Authorization: Bearer $FETCHX_TOKEN"` }] },
+          { kind: 'text', text: 'From `access_profiles`, choose the exact `id` and `version` that permit the HTTPS URL, the `GET` method and the intended route. Match the approved `proxy.class` and `proxy.country` exactly. For `direct`, set `country` to JSON `null`; for a proxy route use the approved uppercase country code. Review `route_reservations` for the approved combinations and reservation estimates. If no profile matches, tell the user what access is missing and stop.' },
+          { kind: 'link', label: 'Read the access profile reference', href: '/docs/profiles' },
+        ],
+      },
+      {
+        id: 'prepare-the-request',
+        title: '3. Save the request and its key',
+        blocks: [
+          { kind: 'text', text: 'Generate a unique `idempotency_key` for the planned fetch, such as a UUID. Replace the example key, profile ID and version, URL and route with the generated key and approved values. Save the complete JSON as `fetch-request.json` in a private working directory before dispatch. Keep it out of version control and do not include credentials.' },
+          { kind: 'code', title: 'fetch-request.json', snippets: [{ label: 'JSON', language: 'json', code: agentFetchRequest }] },
+        ],
+      },
+      {
+        id: 'run-one-fetch',
+        title: '4. Authorize and send one live fetch',
+        blocks: [
+          { kind: 'text', text: 'Show the user the target URL, profile and route. One live fetch may use credits, so obtain authorization for that specific request before dispatch. Submit the saved JSON once to `POST /v2/fetch`. Record the gateway HTTP status and keep the response private.' },
+          { kind: 'code', title: 'Submit the saved Fetch request once', snippets: [{ label: 'cURL', language: 'bash', code: `umask 077
+curl --disable --silent --show-error "$FETCHX_URL/v2/fetch" \\
+  -H "Authorization: Bearer $FETCHX_TOKEN" \\
+  -H 'Content-Type: application/json' \\
+  --data-binary @fetch-request.json \\
+  --output fetch-response.json --write-out 'Gateway HTTP %{http_code}\\n'` }] },
+        ],
+      },
+      {
+        id: 'validate-the-result',
+        title: '5. Check the gateway, source and content',
+        blocks: [
+          { kind: 'text', text: 'Check the gateway HTTP status and `gateway_http_status` in the response, along with `state`, `success`, `error` and `retry.next_action`. `data.status` is the source website’s HTTP status. A gateway HTTP 200 can carry a source error. Inspect `data.final_url` and validate `data.text` or decoded `data.body_base64` against the user’s expected output. `application_acceptance` is `not_evaluated` by FetchX.' },
+          { kind: 'link', label: 'Read the Fetch response fields', href: '/docs/fetch' },
+        ],
+      },
+      {
+        id: 'recover-the-result',
+        title: '6. Recover uncertain work and report back',
+        blocks: [
+          { kind: 'text', text: 'If the connection drops or the outcome is uncertain, use `GET /v2/fetch/:idempotency_key` with the original key from `fetch-request.json` and the same project. Set `FETCHX_ENCODED_KEY` to that key encoded as one URL path segment; a UUID needs no escaping. This lookup only reads the saved operation. Apply the checks in step 5 to any retained result.' },
+          { kind: 'code', title: 'Recover using the original key', snippets: [{ label: 'cURL', language: 'bash', code: `umask 077
+curl --disable --silent --show-error "$FETCHX_URL/v2/fetch/\${FETCHX_ENCODED_KEY}" \\
+  -H "Authorization: Bearer $FETCHX_TOKEN" \\
+  --output fetch-recovery.json --write-out 'Gateway HTTP %{http_code}\\n'` }] },
+          { kind: 'text', text: 'If the result remains unresolved, report that uncertainty. Do not resubmit, change the key or switch routes. Tell the user the outcome and whether the content met their requirements. Wait for separate authorization before more source requests or batch work.' },
+          { kind: 'link', label: 'Read the recovery reference', href: '/docs/recovery' },
         ],
       },
     ],

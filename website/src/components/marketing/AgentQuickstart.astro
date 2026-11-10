@@ -1,0 +1,117 @@
+---
+import Icon from '../Icon.astro';
+import { codingAgentGuidePath, codingAgentMarkdownPath, codingAgentPrompt } from '../../data/coding-agent';
+
+const steps = [
+  { title: 'Copy the prompt', text: 'It points your agent to the FetchX setup guide.' },
+  { title: 'Paste it into your agent', text: 'Share the source URL and what you want back.' },
+  { title: 'Approve one fetch', text: 'Review the route and approve the first live request.' },
+];
+---
+<section class="mkt-container agent-quickstart" id="agent-quickstart" aria-labelledby="agent-quickstart-title">
+  <div class="agent-intro">
+    <p class="mkt-eyebrow"><span class="mkt-dot"></span> CODING AGENT QUICKSTART</p>
+    <h2 id="agent-quickstart-title">Give your coding agent FetchX.</h2>
+    <p>Start with any coding agent that has a terminal or HTTP client.</p>
+  </div>
+
+  <ol class="agent-steps" role="list">
+    {steps.map((step, index) => <li>
+      <span class="agent-step-number" aria-hidden="true">0{index + 1}</span>
+      <div><h3>{step.title}</h3><p>{step.text}</p></div>
+    </li>)}
+  </ol>
+
+  <div class="agent-prompt-box">
+    <p class="agent-prompt-label"><Icon name="code" size={16}/> PROMPT FOR YOUR AGENT</p>
+    <div class="agent-prompt-row">
+      <code data-agent-prompt>{codingAgentPrompt}</code>
+      <button class="mkt-button mkt-button-primary agent-copy" type="button" data-agent-copy hidden>
+        <Icon name="copy" size={17}/> Copy prompt
+      </button>
+    </div>
+  </div>
+
+  <div class="agent-quickstart-footer">
+    <div class="agent-guide-links">
+      <a class="mkt-text-link" href={codingAgentGuidePath}>Read the guide <Icon name="arrow" size={15}/></a>
+      <a class="mkt-text-link" href={codingAgentMarkdownPath}><Icon name="file" size={15}/> Raw Markdown</a>
+    </div>
+    <p class="agent-copy-status" data-agent-copy-status role="status"></p>
+  </div>
+</section>
+
+<style>
+  .agent-quickstart {
+    margin-top: clamp(38px, 5.5vw, 80px);
+    padding: clamp(20px, 3.7vw, 52px);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: radial-gradient(ellipse at top right, #62dce811, transparent 64%), #0c151c;
+  }
+  .agent-intro .mkt-eyebrow { color: var(--lime); margin-bottom: 15px; }
+  .agent-intro h2 { font-size: clamp(32px, 4vw, 52px); }
+  .agent-intro > p:last-child { color: var(--muted); font-size: 14px; margin-top: 12px; }
+  .agent-steps {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    list-style: none;
+    margin-block: 27px 16px;
+    padding: 0;
+  }
+  .agent-steps li {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 15px;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    background: #101a22;
+  }
+  .agent-step-number {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 29px;
+    height: 29px;
+    border: 1px solid #c7f36b43;
+    border-radius: 4px;
+    background: #c7f36b0b;
+    color: var(--lime);
+    font: 11px var(--mono);
+  }
+  .agent-steps h3 { font-size: 15px; font-weight: 650; letter-spacing: -.02em; line-height: 1.35; }
+  .agent-steps p { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 4px; }
+  .agent-prompt-box { border: 1px solid #c7f36b40; border-radius: 5px; background: #080e14; }
+  .agent-prompt-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 17px;
+    border-bottom: 1px solid var(--line);
+    color: var(--cyan);
+    font: 10px/1.6 var(--mono);
+    letter-spacing: .08em;
+  }
+  .agent-prompt-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 20px;
+    padding: 17px;
+  }
+  .agent-prompt-row code { color: var(--ink); font: 13px/1.75 var(--mono); overflow-wrap: anywhere; user-select: text; }
+  .agent-copy { min-height: 44px; gap: 9px; padding: 10px 15px; white-space: nowrap; }
+  .agent-quickstart-footer, .agent-guide-links { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 18px; }
+  .agent-quickstart-footer { justify-content: space-between; margin-top: 8px; }
+  .agent-guide-links .mkt-text-link { gap: 7px; min-height: 34px; }
+  .agent-copy-status { color: var(--lime); font-size: 12px; }
+  @media (max-width: 690px) {
+    .agent-steps { grid-template-columns: 1fr; gap: 8px; }
+    .agent-steps li { padding: 11px 13px; }
+    .agent-prompt-row { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 14px; }
+    .agent-prompt-label { padding-inline: 14px; }
+    .agent-copy { justify-self: start; }
+  }
+</style>

@@ -12,6 +12,7 @@ export function docMarkdown(page: DocPage): string {
         case 'note': lines.push('> **' + block.title + '**', '> ' + block.text, ''); break;
         case 'link': lines.push('[' + block.label + '](https://fetchx.ai' + block.href + ')', ''); break;
         case 'code':
+          if (block.omitFromMarkdown) break;
           lines.push('### ' + block.title, '');
           for (const snippet of block.snippets) lines.push('#### ' + snippet.label, '', '```' + snippet.language, snippet.code, '```', '');
           break;

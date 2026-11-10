@@ -2,6 +2,7 @@
 import Layout from '../layouts/Layout.astro';
 import Icon from '../components/Icon.astro';
 import HeroPipeline from '../components/marketing/HeroPipeline.astro';
+import AgentQuickstart from '../components/marketing/AgentQuickstart.astro';
 import ApiDemo from '../components/marketing/ApiDemo.astro';
 import Architecture from '../components/marketing/Architecture.astro';
 import Dashboard from '../components/marketing/Dashboard.astro';
@@ -28,10 +29,12 @@ const faqs = [
 <Layout title="FetchX — Unlock the web. With one API." description="FetchX brings proxy routing, browser rendering and challenge handling into one API for developers, data teams and AI agents.">
  <div class="mkt">
   <section class="mkt-hero mkt-container">
-   <div class="mkt-hero-copy"><p class="mkt-eyebrow"><span class="mkt-dot"></span> WEB SCRAPING API & WEB UNBLOCKER</p><h1>Unlock the web.<br/><span>With one API.</span></h1><p class="mkt-hero-description">FetchX brings proxy routing, browser rendering and challenge handling into one API for developers, data teams and AI agents.</p><div class="mkt-actions"><a class="mkt-button mkt-button-primary" href="/signup">Start building <Icon name="arrow" size={18}/></a><a class="mkt-button mkt-button-secondary" href="/docs">Explore the API <Icon name="code" size={18}/></a></div><div class="mkt-hero-note"><span class="mkt-micro">LESS INFRASTRUCTURE.</span><span>More room to build.</span></div></div>
+   <div class="mkt-hero-copy"><p class="mkt-eyebrow"><span class="mkt-dot"></span> WEB SCRAPING API & WEB UNBLOCKER</p><h1>Unlock the web.<br/><span>With one API.</span></h1><p class="mkt-hero-description">FetchX brings proxy routing, browser rendering and challenge handling into one API for developers, data teams and AI agents.</p><div class="mkt-actions"><a class="mkt-button mkt-button-primary" href="/signup">Start building <Icon name="arrow" size={18}/></a><a class="mkt-button mkt-button-secondary" href="/docs">Explore the API <Icon name="code" size={18}/></a></div><a class="mkt-text-link mkt-hero-agent-link" href="#agent-quickstart"><Icon name="code" size={15}/> Quickstart for coding agents <Icon name="down" size={14}/></a></div>
    <div class="mkt-hero-visual"><HeroPipeline/></div>
   </section>
   <div class="mkt-capabilities mkt-container"><span class="mkt-micro">ONE ACCESS LAYER</span><span><Icon name="route" size={16}/> Proxy routing</span><span><Icon name="code" size={16}/> Browser workflows</span><span><Icon name="lock" size={16}/> Project controls</span><span><Icon name="file" size={16}/> Response evidence</span></div>
+
+  <AgentQuickstart/>
 
   <section class="mkt-section mkt-container" id="api"><div class="mkt-section-heading"><div><span class="mkt-eyebrow">01 / THE DEVELOPER EXPERIENCE</span><h2>A familiar request.<br/><span class="mkt-muted">A clearer result.</span></h2></div><p>Choose an approved source profile. Send a request. Get the response and the context to decide what happens next.</p></div><ApiDemo/></section>
 
@@ -54,3 +57,8 @@ const faqs = [
  </div>
  <script>import '../scripts/marketing.ts';</script>
 </Layout>
+
+<style>
+ .mkt-hero-agent-link{gap:8px;margin-top:14px;min-height:36px}
+ .mkt-hero-agent-link:hover svg:last-child{transform:translateY(3px)}
+</style>
