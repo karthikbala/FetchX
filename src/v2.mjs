@@ -8,10 +8,11 @@ import {createSourceResolver,reviewedPaidDns,resolvePaidSource} from './v2-dns.m
 import {reviewedAddressPreference} from './v2-address-policy.mjs';
 import {safeFailure,proxyRefusedBeforeConnect} from './v2-diagnostics.mjs';
 import {DISCOVERY_PREFIX,discoveryPolicy,discoveryOrigins,discoveryProfileBody,assertDiscoveryCeiling} from './v2-discovery.mjs';
-import {browserProbePolicy,browserProbeRuntime,BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
+import {browserProbePolicy,browserProbePoolRuntime,browserProbeRuntime,BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
 import {browserRelay} from './v2-browser-relay.mjs';
 import {runBrowserProbe} from './v2-browser-runner.mjs';
 import {browserProbeOperation} from './v2-browser-operation.mjs';
+import {BrowserWorkerPool} from './v2-browser-pool.mjs';
 import {estimateRoutePricing,estimatePaidPublicDatacenter} from './v2-pricing.mjs';
 import {residentialTrafficCharge,finishResidentialTrafficCharge} from './customer-traffic.mjs';
 import {distinctNativeRetryRoute,nativeRetryIdentityBinding,pristineNativeRetry,transientNativeTransport,transientNativeResponse,successfulNativeResponse} from './v2-native-retry.mjs';
@@ -108,6 +109,14 @@ const operationExecution=kind=>kind==='browser_probe'?'browser':'http';
 
 export class V2Gateway{
  constructor(gateway,{http=nativeHttp,dnsHttp=nativeHttp,browserRuntime=browserProbeRuntime,browserRunner=runBrowserProbe,relayFactory=browserRelay}={}){this.gateway=gateway;this.store=gateway.store;this.config=gateway.config;this.sealer=gateway.sealer;this.http=http;this.resolve=createSourceResolver(this.config.v2?.dns,{systemLookup:gateway.resolve,http:dnsHttp});Object.assign(this,{browserRuntime,browserRunner,browserRelay:relayFactory});
+  if(this.config.v2?.browser_pool!==undefined){
+   this.browserPool=new BrowserWorkerPool(this.config.v2.browser_pool);
+   this.browserRuntime=async config=>{
+    const qualified=browserProbePoolRuntime(config);
+    if(!qualified.available)return qualified;
+    return await this.browserPool.ready(qualified.runtime)?qualified:{available:false,reason:'browser_probe_runtime_unavailable'};
+   };
+  }
   this.controlCredits=gateway.controlCredits??new ControlCredits({store:this.store,config:this.config,restoreReleasedTrialCredits});
   this.controlPaidCredits=gateway.controlPaidCredits??new ControlPaidCredits({store:this.store,config:this.config});
   this.dnsHttp=dnsHttp;
@@ -134,12 +143,12 @@ export class V2Gateway{
   }
   return {...V2_CAPABILITIES,capability_scope:'project',...(selfService?{proxy_classes:Object.fromEntries(routes.map(route=>[route,!!creditWeight(creditPolicy,'http',route)||paidHttp.proxy_classes[route]])),paid_http:paidHttp}:{}),features:{...V2_CAPABILITIES.features,discovery_profiles:policy.enabled,browser_network_probe:available,browser_render:render},browser_probe:{available,reason:selfService?(render?'managed_render_endpoint_required':'self_service_http_only'):!runtime.available?runtime.reason:!approved?'browser_probe_profile_unapproved':null,original_encoded_available:false,max_requests:32,max_decoded_bytes:8388608,max_dom_bytes:1048576,proxy_classes:selfService?[]:routes,methods:['GET','HEAD'],live_leases:false},discovery_profile_policy:policy.enabled?{enabled:true,max_profiles:policy.max_profiles,max_origins:policy.max_origins,methods:['GET','HEAD'],proxy_classes:['direct'],max_paid_cost_micro_usd:0,limits:policy.limits,...(!selfService&&policy.browser_probe?{browser_probe:policy.browser_probe}:{})}:{enabled:false}};
  }
- async browserProbe(project,raw,identity){
+ async browserProbe(project,raw,identity,options){
   if(this.controlCredits.managed(project)){
    const policy=reviewedCreditPolicy(this.config);
    if(!['direct','datacenter','residential'].some(route=>creditWeight(policy,'browser',route,true)))fail('self_service_http_only',403);
   }
-  return browserProbeOperation(this,project,raw,identity);
+  return browserProbeOperation(this,project,raw,identity,options);
  }
  entitlement(project,{unified=false}={}){
   const e=unified?{mode:'unmetered'}:this.config.projects[project]?.v2_entitlement??{mode:'unmetered'};
@@ -964,6 +973,10 @@ export class V2Gateway{
 
 export function registerV2(app,gateway){
  const v2=gateway.v2??new V2Gateway(gateway);app.decorate('v2',v2);
+ if(v2.browserPool){
+  app.addHook('onReady',()=>v2.browserPool.start());
+  app.addHook('onClose',()=>v2.browserPool.close());
+ }
  app.get('/v2/capabilities',req=>v2.capabilities(req.project));
  app.post('/v2/discovery-profiles',req=>v2.discoveryProfile(req.project,req.body));
  app.get('/v2/access-profiles',req=>v2.profiles(req.project,req.query));

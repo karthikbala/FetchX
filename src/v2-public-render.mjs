@@ -11,8 +11,6 @@ const plain=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const exact=(value,keys)=>plain(value)&&Object.keys(value).every(k=>keys.includes(k));
 const validKey=key=>typeof key==='string'&&ID.test(key);
 const lookupUrl=key=>validKey(key)?'/v2/render/'+encodeURIComponent(key):null;
-const operationKey=key=>'public-render.o.'+sha(key).slice(0,32);
-const sessionKey=key=>'public-render.s.'+sha(key).slice(0,32);
 const failureContexts=new WeakMap();
 const admissionCodes=new Set([
  'browser_probe_profile_unapproved','browser_probe_invalid','browser_request_ceiling_rejected','browser_session_required',
@@ -123,11 +121,15 @@ function responseArtifact(artifact,screenshot){
   ...(artifact===screenshot&&artifact.headers?.['content-type']==='image/jpeg'&&typeof artifact.decoded_body_base64==='string'&&artifact.decoded_bytes<=BROWSER_SCREENSHOT_MAX_BYTES&&artifact.decoded_body_base64.length<=4*Math.ceil(BROWSER_SCREENSHOT_MAX_BYTES/3)?{content_type:'image/jpeg',body_base64:artifact.decoded_body_base64}:{})};
 }
 
-async function renderResponse(v2,project,key,operation,{keyScope='caller',recoveryUrl=lookupUrl(key)}={}){
+async function renderResponse(v2,project,key,operation,{keyScope='caller',recoveryUrl=lookupUrl(key),documentOnly=false}={}){
  if(operation.execution!=='browser')fail('capability_unsupported',409);
  const session=await v2.readSession(project,operation.session_id),routing={class:session.proxy.class,country:session.proxy.country,provider:session.proxy.provider};
  const result=operation.result,artifacts=[];
- for(const item of result?.artifacts??[])artifacts.push(await v2.artifact(project,item.id));
+ for(const item of result?.artifacts??[]){
+  if(documentOnly&&item.kind!=='rendered_dom'&&
+   (item.kind!=='browser_response'||result.main_artifact_id&&result.main_artifact_id!==item.id))continue;
+  artifacts.push(await v2.artifact(project,item.id));
+ }
  const main=mainDocument(result,artifacts),dom=generatedArtifact(artifacts,'rendered_dom',result?.dom_artifact_id);
  const screenshot=generatedArtifact(artifacts,'browser_screenshot',result?.screenshot_artifact_id),headers=publicResponseHeaders(main?.headers);
  const bodyBase64=dom?.decoded_body_base64??null,text=bodyBase64===null?null:Buffer.from(bodyBase64,'base64').toString('utf8');
@@ -156,7 +158,10 @@ async function renderResponse(v2,project,key,operation,{keyScope='caller',recove
 }
 
 export class PublicRenderGateway{
- constructor(v2){this.v2=v2;}
+ constructor(v2,{kind=KIND,namespace='public-render'}={}){this.v2=v2;this.kind=kind;this.namespace=namespace;}
+
+ operationKey(key){return this.namespace+'.o.'+sha(key).slice(0,32);}
+ sessionKey(key){return this.namespace+'.s.'+sha(key).slice(0,32);}
 
  async respond(project,key,operation,options={}){
   try{return await renderResponse(this.v2,project,key,operation,options);}
@@ -168,7 +173,7 @@ export class PublicRenderGateway{
  }
 
  async fingerprint(project,key,hash,{bind=false}={}){
-  const args=[KIND,sha(JSON.stringify([project,key]))];
+  const args=[this.kind,sha(JSON.stringify([project,key]))];
   if(bind)await this.v2.store.pool.query('INSERT INTO v2_registry(kind,key,hash) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[...args,hash]);
   const row=(await this.v2.store.pool.query('SELECT hash FROM v2_registry WHERE kind=$1 AND key=$2',args)).rows[0];
   if(row&&hash!==undefined&&row.hash!==hash)fail('idempotency_conflict',409);
@@ -177,12 +182,20 @@ export class PublicRenderGateway{
 
  async render(project,raw,identity){
   this.v2.controlCredits.keyId(project,identity);
-  const input=normalize(raw),key=input.idempotency_key,hash=sha(JSON.stringify(input)),internalKey=operationKey(key);
+  const input=normalize(raw),key=input.idempotency_key,hash=sha(JSON.stringify(input));
+  return this.respond(project,key,await this.capture(project,key,hash,()=>input,identity));
+ }
+
+ // The caller contract is fingerprinted separately from the configured
+ // routing input. Existing captures can be recovered after route changes.
+ async capture(project,key,hash,resolveInput,identity,{timeoutMs}={}){
+  const internalKey=this.operationKey(key);
   if(await this.fingerprint(project,key,hash)){
    let retained;
    try{retained=await this.v2.lookup(project,internalKey);}catch(error){if(!(error instanceof GatewayError)||error.code!=='operation_not_found')throw error;}
-   if(retained)return this.respond(project,key,retained);
+   if(retained)return retained;
   }
+  const input=resolveInput();
   const managed=this.v2.controlCredits.managed(project);
   const candidate=managed?await managedRenderProfile(this.v2,project,input):null;
   let profile=candidate;
@@ -202,12 +215,12 @@ export class PublicRenderGateway{
   // Bind before opening a session so even concurrent conflicting submissions
   // cannot create sessions with different routes under the caller's key.
   await this.fingerprint(project,key,hash,{bind:true});
-  const session=await this.v2.renderSession(project,{idempotency_key:sessionKey(key),access_profile:input.access_profile,transport:'browser',proxy:{...input.proxy,affinity:'session'}},{profile:candidate});
+  const session=await this.v2.renderSession(project,{idempotency_key:this.sessionKey(key),access_profile:input.access_profile,transport:'browser',proxy:{...input.proxy,affinity:'session'}},{profile:candidate});
   let operation;
   try{
    const {max_estimated_micro_usd,screenshot,wait_ms}=input;
    operation=await this.v2.browserProbe(project,{idempotency_key:internalKey,session_id:session.id,url:input.url,
-    ...(max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd}),...(screenshot===true?{screenshot:true}:{}),...(wait_ms===undefined?{}:{wait_ms})},identity);
+    ...(max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd}),...(screenshot===true?{screenshot:true}:{}),...(wait_ms===undefined?{}:{wait_ms})},identity,{timeoutMs});
   }catch(error){
    if(error&&typeof error==='object'){
     const rejected=isPublicOperationAdmissionError(error)||error instanceof GatewayError&&admissionCodes.has(error.code);
@@ -215,17 +228,17 @@ export class PublicRenderGateway{
    }
    throw error;
   }
-  return this.respond(project,key,operation);
+  return operation;
  }
 
  async lookup(project,key){
   if(!validKey(key))fail('idempotency_key_required');
   if(!await this.fingerprint(project,key))fail('operation_not_found',404);
-  return this.respond(project,key,await this.v2.lookup(project,operationKey(key)));
+  return this.respond(project,key,await this.v2.lookup(project,this.operationKey(key)));
  }
 
  async lookupOperation(project,id,retained){
-  const operation=retained??await this.v2.readOperation(project,id),internal=/^public-render\.o\.[a-f0-9]{32}$/.test(operation.idempotency_key);
+  const operation=retained??await this.v2.readOperation(project,id),internal=/^public-(?:render|scrape)\.o\.[a-f0-9]{32}$/.test(operation.idempotency_key);
   return this.respond(project,internal?null:operation.idempotency_key,operation,{keyScope:internal?'internal_operation':'browser_probe',recoveryUrl:'/v2/operations/'+operation.id});
  }
 }

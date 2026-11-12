@@ -15,6 +15,7 @@ import {operationDiagnostics,recordOutcome} from './diagnostics.mjs';
 import {registerV2} from './v2.mjs';
 import {isPublicFetchRequest,publicFetchFailure,registerPublicFetch} from './v2-public-fetch.mjs';
 import {isPublicRenderRequest,publicRenderFailure,registerPublicRender} from './v2-public-render.mjs';
+import {isPublicScrapeRequest,publicScrapeFailure,registerPublicScrape,SCRAPE_PATH,setScrapeRequestKey} from './v2-public-scrape.mjs';
 import {safeFailure} from './v2-diagnostics.mjs';
 import {publicConsoleRequest,registerConsole} from './console.mjs';
 import {ControlIdentity} from './control-identity.mjs';
@@ -34,7 +35,7 @@ export function controlKeyScope(method,url){
  const path=url.split('?')[0];
  if(method==='GET'&&['/v2/capabilities','/v2/access-profiles','/v2/recipes'].includes(path))return 'profiles:read';
  if(method==='GET'&&path==='/v2/usage')return 'usage:read';
- if(method==='POST'&&['/v2/fetch','/v2/render',RENDER_PREPARATION_PATH].includes(path))return 'fetch:write';
+ if(method==='POST'&&['/v2/fetch','/v2/render',RENDER_PREPARATION_PATH,SCRAPE_PATH].includes(path))return 'fetch:write';
  if(method==='GET'&&(path==='/v2/operations'||/^\/v2\/render\/[^/]+$/.test(path)||/^\/v2\/(?:fetch|operations|artifacts)\/[^/]+(?:\/[^/]+)?$/.test(path)))return 'fetch:read';
  return null;
 }
@@ -54,8 +55,11 @@ export function server(gateway,{stripeFetch,stripeAutoProcess=true}={}){
   if(req.url==='/healthz')return;
   if(publicConsoleRequest(req))return;
   if(isControlRequest(req)||isStripeWebhookRequest(req))return;
+  const scrape=isPublicScrapeRequest(req);
+  if(scrape)setScrapeRequestKey(req,reply);
   const unauthorized=()=>{
    const error=new GatewayError('unauthorized',401);
+   if(scrape)return reply.code(401).send(publicScrapeFailure(error));
    return reply.code(401).send(isRenderOperationRequest(req)?publicRenderFailure(error,{key:req.params?.key}):isPublicFetchRequest(req)?publicFetchFailure(error):{error:'unauthorized'});
   };
   const token=/^Bearer (\S+)$/i.exec(req.headers.authorization??'')?.[1];
@@ -73,6 +77,7 @@ export function server(gateway,{stripeFetch,stripeAutoProcess=true}={}){
  app.setErrorHandler((error,req,reply)=>{
   const clientError=error.validation||error.statusCode===400||error.statusCode===413||error.statusCode===415;
   const status=error instanceof GatewayError?error.status:clientError?(error.statusCode??400):500;
+  if(isPublicScrapeRequest(req))return reply.code(status).send(publicScrapeFailure(error));
   if(isRenderOperationRequest(req))return reply.code(status).send(publicRenderFailure(error,{key:req.body?.idempotency_key??req.params?.key,status}));
   if(isPublicFetchRequest(req))return reply.code(status).send(publicFetchFailure(error,{key:req.body?.idempotency_key??req.params?.key,status}));
   reply.code(status).send({error:error instanceof GatewayError?error.code:clientError?'request_invalid':'internal_error',...(error instanceof GatewayError&&error.details?{details:error.details}:{}),...(req.url.startsWith('/v2/')?{diagnostics:safeFailure(error,'request_admission')}:{} )});
@@ -101,6 +106,7 @@ export function server(gateway,{stripeFetch,stripeAutoProcess=true}={}){
  registerV2(app,gateway);
  registerPublicFetch(app);
  registerPublicRender(app);
+ registerPublicScrape(app);
  registerConsole(app);
  registerControl(app,gateway,{identity:gateway.controlIdentity,credits:gateway.controlCredits,paidCredits,stripe});
  registerStripeWebhook(app,stripe,{autoProcess:stripeAutoProcess});

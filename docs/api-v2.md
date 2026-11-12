@@ -9,7 +9,7 @@ and caller-supplied scripts remain unsupported. Source access requires a
 server-reviewed profile, an explicitly enabled project discovery policy, or a
 profile issued by a reviewed project playground policy. Clients cannot expand
 methods, credentials or paid routes through discovery. No model inference occurs
-in FetchX. [Render API](render-api.md), [Browser network probe](api-v2-browser-probe.md).
+in FetchX. [Render API](render-api.md), [Scrape API](scrape-api.md), [Browser network probe](api-v2-browser-probe.md).
 
 All routes require a project Bearer token. IDs are UUIDs, and caller-generated
 idempotency keys match `[A-Za-z0-9_.:-]{1,160}`. Session creation and operation

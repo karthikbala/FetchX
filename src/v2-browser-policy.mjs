@@ -38,9 +38,16 @@ async function verifiedBinarySha(path){
  try{return await check.digest;}catch(error){if(verifiedBinary===check)verifiedBinary=undefined;throw error;}
 }
 
+export async function verifyBrowserExecutable(path,hash){
+ try{
+  await access(path,constants.X_OK);
+  return await verifiedBinarySha(path)===hash?null:'browser_probe_build_mismatch';
+ }catch{return 'browser_probe_runtime_unavailable';}
+}
+
 // An explicit Chromium pin and the legacy keyless Cloak pin are separate
 // platform contracts. Neither is discovered or downloaded at request time.
-export async function browserProbeRuntime(config){
+function probeQualification(config,remote){
  const settings=config.v2?.browser_probe;
  const unavailable=reason=>({available:false,reason});
  if(settings?.enabled!==true)return unavailable('browser_probe_disabled');
@@ -49,19 +56,29 @@ export async function browserProbeRuntime(config){
  if(engine==='chromium'){
   tier=settings.runtime;
   if(settings.tier!==undefined||!tier||typeof tier!=='object'||Array.isArray(tier)||Object.keys(tier).some(key=>!['executablePath','version','sha256'].includes(key))||
-   typeof tier.executablePath!=='string'||!isAbsolute(tier.executablePath)||typeof tier.version!=='string'||!/^\d+\.\d+\.\d+\.\d+$/.test(tier.version))return unavailable('browser_probe_runtime_unqualified');
- }else if(engine==='cloakbrowser'){
+   ((!remote||tier.executablePath!==undefined)&&(typeof tier.executablePath!=='string'||!isAbsolute(tier.executablePath)))||
+   typeof tier.version!=='string'||!/^\d+\.\d+\.\d+\.\d+$/.test(tier.version))return unavailable('browser_probe_runtime_unqualified');
+ }else if(engine==='cloakbrowser'&&!remote){
   tier=config.browser?.free;
   if(settings.tier!=='free'||!tier||tier.entitlement!=='unlicensed'||!tier.executablePath||!tier.version)return unavailable('browser_probe_runtime_unqualified');
  }else return unavailable('browser_probe_runtime_unqualified');
  if(typeof tier.sha256!=='string'||!/^[a-f0-9]{64}$/.test(tier.sha256))return unavailable('browser_probe_runtime_unqualified');
  const q=settings.qualification;
  if(!q||q.status!=='accepted'||q.kind!==BROWSER_PROBE_QUALIFICATION_KIND||q.binary_sha256!==tier.sha256||q.version!==tier.version||
-  q.platform!==process.platform||q.arch!==process.arch||!/^sha256:[a-f0-9]{64}$/.test(q.evidence??'')||
-  !Number.isFinite(Date.parse(q.expires_at))||Date.parse(q.expires_at)<=Date.now())return unavailable('browser_probe_runtime_unqualified');
+  (remote?typeof q.platform!=='string'||!q.platform||typeof q.arch!=='string'||!q.arch:q.platform!==process.platform||q.arch!==process.arch)||
+  !/^sha256:[a-f0-9]{64}$/.test(q.evidence??'')||!Number.isFinite(Date.parse(q.expires_at))||Date.parse(q.expires_at)<=Date.now())return unavailable('browser_probe_runtime_unqualified');
  if(engine==='chromium'?q.engine!==engine||q.entitlement!==undefined:q.engine!==undefined&&q.engine!==engine||q.entitlement!=='unlicensed')return unavailable('browser_probe_runtime_unqualified');
- try{await access(tier.executablePath,constants.X_OK);if(await verifiedBinarySha(tier.executablePath)!==tier.sha256)return unavailable('browser_probe_build_mismatch');}catch{return unavailable('browser_probe_runtime_unavailable');}
- return {available:true,runtime:{engine,executablePath:tier.executablePath,version:tier.version,sha256:tier.sha256,expires_at:q.expires_at,...(engine==='cloakbrowser'?{entitlement:'unlicensed'}:{})}};
+ return {available:true,runtime:{engine,version:tier.version,sha256:tier.sha256,expires_at:q.expires_at,
+  ...(remote?{platform:q.platform,arch:q.arch}:{executablePath:tier.executablePath}),...(engine==='cloakbrowser'?{entitlement:'unlicensed'}:{})}};
+}
+
+export const browserProbePoolRuntime=config=>probeQualification(config,true);
+
+export async function browserProbeRuntime(config){
+ const result=probeQualification(config,false);
+ if(!result.available)return result;
+ const reason=await verifyBrowserExecutable(result.runtime.executablePath,result.runtime.sha256);
+ return reason?{available:false,reason}:result;
 }
 
 export const BROWSER_PROBE_ARGS=Object.freeze(['--proxy-bypass-list=<-loopback>','--disable-quic','--disable-http2','--dns-prefetch-disable','--disable-background-networking','--disable-component-update','--disable-sync','--disable-default-apps','--no-first-run','--no-default-browser-check','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1']);

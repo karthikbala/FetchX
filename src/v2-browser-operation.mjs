@@ -5,6 +5,7 @@ import {sha} from './crypto.mjs';
 import {browserProbePolicy,BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
 import {admitPlaygroundRoute,isPlaygroundRef,materializePlaygroundProfile,playgroundOperationProfile} from './control-playground.mjs';
 import {safeFailure} from './v2-diagnostics.mjs';
+import {WORKER_TRANSPORT_ERROR} from './v2-browser-worker-wire.mjs';
 import {residentialTrafficCharge,finishResidentialTrafficCharge} from './customer-traffic.mjs';
 
 const plain=v=>v&&typeof v==='object'&&!Array.isArray(v);
@@ -24,10 +25,11 @@ async function savedCookies(values,origins){
 }
 const emptyResult=()=>({kind:'browser_network_probe',status:null,final_url:null,artifacts:[],physical_requests:0,physical_requests_basis:'admitted_browser_target_attempts',blocked_requests:0,blocked_reasons:{},capture_complete:false,encoded_bytes:null,decoded_bytes:0,dom_bytes:0,tunnel_bytes:null,provider_status:null,retry_after:null});
 
-export async function browserProbeOperation(v2,project,raw,identity){
+export async function browserProbeOperation(v2,project,raw,identity,{timeoutMs}={}){
  if(!plain(raw)||Object.keys(raw).some(k=>!['idempotency_key','session_id','url','max_physical_requests','max_estimated_micro_usd','screenshot','wait_ms'].includes(k))||typeof raw.idempotency_key!=='string'||!ID.test(raw.idempotency_key)||typeof raw.session_id!=='string'||!/^[a-f0-9-]{36}$/i.test(raw.session_id)||typeof raw.url!=='string'||raw.url.length>12000||raw.max_physical_requests!==undefined&&!Number.isSafeInteger(raw.max_physical_requests)||raw.max_estimated_micro_usd!==undefined&&!Number.isSafeInteger(raw.max_estimated_micro_usd)||raw.screenshot!==undefined&&typeof raw.screenshot!=='boolean'||raw.wait_ms!==undefined&&(!Number.isSafeInteger(raw.wait_ms)||raw.wait_ms<0||raw.wait_ms>2000))fail('browser_probe_invalid');
+ if(timeoutMs!==undefined&&(!Number.isSafeInteger(timeoutMs)||timeoutMs<1))fail('browser_probe_invalid');
  const keyId=v2.controlCredits.keyId(project,identity);
- const hash=sha(canonical({kind:'browser_network_probe',...raw}));
+ const hash=sha(canonical({kind:'browser_network_probe',...raw,...(timeoutMs===undefined?{}:{timeout_ms:timeoutMs})}));
  const old=(await v2.store.pool.query('SELECT * FROM v2_operations WHERE project=$1 AND key=$2',[project,raw.idempotency_key])).rows[0];
  if(old){if(old.input_hash!==hash)fail('idempotency_conflict',409);return v2.operationView(old);}
  const session=await v2.owned(project,raw.session_id),route=v2.sealer.open(session.route);
@@ -44,6 +46,13 @@ export async function browserProbeOperation(v2,project,raw,identity){
  if(policy.settle_ms>configured.settle_ms)fail('browser_wait_ceiling_rejected');
  await admitPlaygroundRoute(v2,project,profile,{class:route.class,country:route.country,affinity:'session'},'browser',route);
  const attribution={project,keyId,userId:identity?.userId,requireSoleKey:identity?.requireSoleKey};
+ const timeout=Math.min(profile.limits.timeout_ms,timeoutMs??Infinity);
+ const worker=await v2.browserPool?.acquire(runtime.runtime);
+ try{return await executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,managed,profile,runtime,maximum,policy,id,reservedBytes,reservedTunnel,attribution,timeout,worker});}
+ finally{worker?.release();}
+}
+
+async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,managed,profile,runtime,maximum,policy,id,reservedBytes,reservedTunnel,attribution,timeout,worker}){
  let replay,pricingDecision,fixedCredits=false;
  await v2.store.tx(async c=>{
   await c.query('SELECT pg_advisory_xact_lock(1002)');
@@ -56,11 +65,11 @@ export async function browserProbeOperation(v2,project,raw,identity){
   await v2.checkDailyOperationQuota(c,project,{unified:fixedCredits});
   const active=(await c.query("SELECT count(*)::int n FROM v2_operations WHERE state IN ('reserved','running')")).rows[0].n+Number((await c.query("SELECT count(*) AS n FROM attempts WHERE state IN ('reserved','sent')")).rows[0].n);
   if(active>=(v2.config.maxConcurrentRequests??4))fail('capacity_wait',503);
-  if(Number((await c.query("SELECT count(*) AS n FROM v2_operations WHERE kind='browser_probe' AND state IN ('reserved','running')")).rows[0].n)>=(v2.config.browser?.maxConcurrent??1))fail('browser_capacity',503);
+  if(!worker&&Number((await c.query("SELECT count(*) AS n FROM v2_operations WHERE kind='browser_probe' AND state IN ('reserved','running')")).rows[0].n)>=(v2.config.browser?.maxConcurrent??1))fail('browser_capacity',503);
   const artifactBytes=Math.ceil((policy.max_decoded_bytes+policy.max_dom_bytes+(raw.screenshot?BROWSER_SCREENSHOT_MAX_BYTES:0))*1.4)+maximum*131072;
   await v2.reserveArtifactCapacity(c,artifactBytes);
   await v2.reserveResidential(c,project,session,route,reservedTunnel);
-  pricingDecision=v2.pricing(project,profile,route,reservedTunnel,'browser',profile.limits.timeout_ms);
+  pricingDecision=v2.pricing(project,profile,route,reservedTunnel,'browser',timeout);
   const estimate=pricingDecision.estimated_micro_usd;
   const creditEstimate=estimate===null?null:Math.max(estimate,pricingDecision.customer_traffic_reservation?.max_estimated_micro_usd??0);
   if(raw.max_estimated_micro_usd!==undefined){if(creditEstimate===null)fail('cost_estimate_unavailable',409);if(creditEstimate>raw.max_estimated_micro_usd)fail('cost_ceiling_exceeded',429);}
@@ -73,16 +82,16 @@ export async function browserProbeOperation(v2,project,raw,identity){
  });
  if(replay)return v2.operationView(replay);
  const runtimeExpires=Date.parse(runtime.runtime?.expires_at);
- const deadline=Math.min(Date.now()+profile.limits.timeout_ms,new Date(session.expires_at).getTime(),pricingDecision.dispatch_deadline_ms??Infinity,Number.isFinite(runtimeExpires)?runtimeExpires:Infinity),result=emptyResult();
+ const deadline=Math.min(Date.now()+timeout,new Date(session.expires_at).getTime(),pricingDecision.dispatch_deadline_ms??Infinity,Number.isFinite(runtimeExpires)?runtimeExpires:Infinity),result=emptyResult();
  const pricingContext={profile,route,decision:pricingDecision,transport:'browser',fixedCredits},pinnedDestinations=new Map();
  let relay=null,requests=0,dispatched=false,error=null,stage='dns',failure=null,cookieState=null,encodedSum=0,decodedSum=0,domSum=0,screenshotBytes=0,domArtifact=null,screenshotArtifact=null;
- const artifacts=[],seenKinds=new Set(),mainArtifacts=new Map();let admission=Promise.resolve(),callbackFailed=false,parentBlocked=0,runnerStarted=false,outputReceived=false,relayCloseUnknown=false;
+ const artifacts=[],seenKinds=new Set(),mainArtifacts=new Map();let admission=Promise.resolve(),callbackFailed=false,parentBlocked=0,runnerStarted=false,outputReceived=false,relayCloseUnknown=false,workerUnknown=false;
  try{
   const first=await v2.destination(raw.url,profile,deadline);v2.headers({method:'GET',headers:{}},profile,first.url);
   const proxy=v2.resolveProxy(route),jar=CookieJar.deserializeSync(v2.sealer.open(session.cookie_jar));
   relay=await v2.browserRelay({profile,pinnedDestinations,proxy,limits:policy,deadline,beforeConnect:async destination=>{await v2.dispatchable(project,id,session.id,destination.url,pricingContext);dispatched=true;}});
   stage='browser';
-  runnerStarted=true;const output=await v2.browserRunner({url:raw.url,timeout_ms:Math.max(1,deadline-Date.now()),deadline,policy,runtime:runtime.runtime,relay:relay.url,deny_relay:relay.deny_url,screenshot:raw.screenshot===true,cookies:browserCookies(jar,profile.origins)},{
+  runnerStarted=true;const output=await (worker?.run??v2.browserRunner)({url:raw.url,timeout_ms:Math.max(1,deadline-Date.now()),deadline,policy,runtime:runtime.runtime,relay:relay.url,deny_relay:relay.deny_url,screenshot:raw.screenshot===true,cookies:browserCookies(jar,profile.origins)},{
    admit:(request,{signal}={})=>{const task=admission.then(async()=>{
     if(signal?.aborted||Date.now()>=deadline)fail('browser_probe_deadline_unknown',504);
     if(!request||!['GET','HEAD'].includes(request.method)||typeof request.url!=='string'||!plain(request.headers)||request.body_base64!==null)fail('method_rejected');
@@ -138,13 +147,13 @@ export async function browserProbeOperation(v2,project,raw,identity){
     }catch(error){callbackFailed=true;throw error;}
    }
   });
-  outputReceived=true;error=relay.error??output.error??null;
+  outputReceived=true;workerUnknown=!!worker&&/unknown|incomplete|deadline/.test(output.error??'');error=workerUnknown?output.error:relay.error??output.error??null;
   if(output.cookies)cookieState=await savedCookies(output.cookies,profile.origins);
   const native=artifacts.filter(a=>a.kind==='browser_response'),encodedComplete=native.length>0&&native.length===requests&&native.every(a=>Number.isSafeInteger(a.encoded_bytes));
   Object.assign(result,{status:output.status??null,final_url:output.final_url??null,blocked_requests:output.counts_complete===false?null:Math.max(parentBlocked,output.blocked_requests??0),blocked_reasons:output.blocked_reasons??{},capture_complete:!!output.capture_complete&&!parentBlocked&&!error&&native.length===requests&&seenKinds.has('rendered_dom')&&(!raw.screenshot||!!screenshotArtifact),encoded_bytes:encodedComplete?encodedSum:null,decoded_bytes:decodedSum,dom_bytes:domSum,screenshot_bytes:screenshotBytes,main_artifact_id:mainArtifacts.get(JSON.stringify([output.final_url,output.status]))??null,dom_artifact_id:domArtifact,screenshot_artifact_id:screenshotArtifact});
- }catch(e){error=e instanceof GatewayError?e.code:'browser_probe_internal_unknown';failure=safeFailure(e,stage,{dispatched:dispatched||requests>0});if(runnerStarted&&!outputReceived)result.blocked_requests=null;}
+ }catch(e){workerUnknown=!!worker&&e?.code===WORKER_TRANSPORT_ERROR;error=e instanceof GatewayError?e.code:'browser_probe_internal_unknown';failure=safeFailure(e,stage,{dispatched:dispatched||requests>0});if(runnerStarted&&!outputReceived)result.blocked_requests=null;}
  finally{if(relay){try{await relay.close();}catch(e){relayCloseUnknown=true;error??='browser_relay_close_unknown';failure??=safeFailure(e,'relay_close',{dispatched:dispatched||requests>0});}error??=relay.error??null;}}
- const rawObserved=relay?.bytes,observed=Number.isSafeInteger(rawObserved)&&rawObserved>=0?rawObserved:null,networkDispatched=dispatched||relay?.dispatched||false,meterIncomplete=relayCloseUnknown||relay?.meter_complete===false||/unknown|incomplete/.test(relay?.error??''),unknown=(networkDispatched||requests>0)&&(meterIncomplete||!!error&&(callbackFailed||/unknown|incomplete|deadline/.test(error)));
+ const rawObserved=relay?.bytes,observed=Number.isSafeInteger(rawObserved)&&rawObserved>=0?rawObserved:null,networkDispatched=dispatched||relay?.dispatched||false,meterIncomplete=relayCloseUnknown||relay?.meter_complete===false||/unknown|incomplete/.test(relay?.error??''),unknown=(networkDispatched||requests>0)&&(workerUnknown||meterIncomplete||!!error&&(callbackFailed||/unknown|incomplete|deadline/.test(error)));
  Object.assign(result,{artifacts,physical_requests:requests,tunnel_bytes:observed,provider_status:relay?.provider_status??null,target_connections:relay?.connections??0,capture_complete:result.capture_complete&&!unknown,diagnostics:{stage:error?stage:'completed',failure},network_byte_basis:route.class==='direct'?'bidirectional_origin_tls_stream_excludes_local_connect':'bidirectional_proxy_tunnel_includes_connect'});
  await v2.store.tx(async c=>{
   const ledger=(await c.query('SELECT * FROM v2_ledger WHERE operation=$1 FOR UPDATE',[id])).rows[0];
