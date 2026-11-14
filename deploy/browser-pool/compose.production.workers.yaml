@@ -1,0 +1,86 @@
+# Opt-in workers on the existing production host. Never combine with the gateway project.
+name: fetchx-browser-workers
+
+x-browser-worker: &browser-worker
+  image: ${FETCHX_POOL_IMAGE:?set the reviewed gateway image in the private worker env file}
+  platform: linux/amd64
+  pull_policy: never
+  user: "10001:10001"
+  command: [node, src/v2-browser-worker-service.mjs]
+  environment:
+    FETCHX_WORKER_RUNTIME: /run/fx/pin/runtime.json
+    FETCHX_WORKER_SOCKET: /run/fx/local/worker.sock
+    FETCHX_WORKER_CALLBACK_SOCKET: /run/fx/cb/gw.sock
+  network_mode: none
+  read_only: true
+  init: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777
+  shm_size: 256m
+  cap_drop: [ALL]
+  # Compose resolves this path from this file's directory; keep the release layout intact.
+  security_opt: [no-new-privileges:true, "seccomp=../chromium-seccomp.json"]
+  mem_limit: 2g
+  memswap_limit: 2g
+  pids_limit: 256
+  stop_grace_period: 45s
+  restart: unless-stopped
+  healthcheck:
+    test:
+      - CMD
+      - node
+      - -e
+      - >-
+        require('node:http').get({socketPath:process.env.FETCHX_WORKER_SOCKET,path:'/healthz',timeout:2000},r=>{
+          let body='';
+          r.setEncoding('utf8').on('data',chunk=>{body+=chunk;}).on('end',()=>{
+            try{process.exit(r.statusCode===200&&JSON.parse(body).ready===true?0:1);}catch{process.exit(1);}
+          });
+        }).on('timeout',function(){this.destroy();}).on('error',()=>process.exit(1));
+    interval: 15s
+    timeout: 3s
+    retries: 3
+  logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+
+x-browser-bundle: &browser-bundle
+  type: bind
+  source: ${FETCHX_BROWSER_HOME:-/opt/crawling-platform/browser}
+  target: /opt/gateway-browser
+  read_only: true
+  bind: {create_host_path: false}
+
+x-runtime-pin: &runtime-pin
+  type: bind
+  source: ${FETCHX_POOL_HOME:-/opt/crawling-platform/browser-pool}/pin
+  target: /run/fx/pin
+  read_only: true
+  bind: {create_host_path: false}
+
+x-gateway-callback: &gateway-callback
+  type: bind
+  source: ${FETCHX_POOL_HOME:-/opt/crawling-platform/browser-pool}/run/cb
+  target: /run/fx/cb
+  read_only: true
+  bind: {create_host_path: false}
+
+services:
+  browser-worker-1:
+    <<: *browser-worker
+    volumes:
+      - *browser-bundle
+      - *runtime-pin
+      - *gateway-callback
+      - type: bind
+        source: ${FETCHX_POOL_HOME:-/opt/crawling-platform/browser-pool}/run/worker-1
+        target: /run/fx/local
+        bind: {create_host_path: false}
+  browser-worker-2:
+    <<: *browser-worker
+    volumes:
+      - *browser-bundle
+      - *runtime-pin
+      - *gateway-callback
+      - type: bind
+        source: ${FETCHX_POOL_HOME:-/opt/crawling-platform/browser-pool}/run/worker-2
+        target: /run/fx/local
+        bind: {create_host_path: false}

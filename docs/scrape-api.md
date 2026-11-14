@@ -1,6 +1,6 @@
 # FetchX Scrape API
 
-`POST /v2/scrape` renders a single page using FetchX's browser capture path and converts the retained DOM into the requested formats. It accepts a project Bearer token and requires `fetch:write` for managed keys. The request and response follow the [Firecrawl v2 Scrape contract](https://docs.firecrawl.dev/api-reference/endpoint/scrape) for the fields below.
+`POST /v2/scrape` renders a single page using FetchX's browser capture path and converts the retained DOM into the requested formats. It accepts a project Bearer token and requires `fetch:write` for managed keys. The operator must enable either managed direct Scrape or a project-specific route. The request and response follow the [Firecrawl v2 Scrape contract](https://docs.firecrawl.dev/api-reference/endpoint/scrape) for the fields below.
 
 ```sh
 curl --silent --show-error "$FETCHX_URL/v2/scrape" \
@@ -42,7 +42,28 @@ The [OpenAPI contract](scrape-openapi.json) defines the wire types. To regenerat
 
 ## Operator configuration
 
-Add an entry for the project under `v2.scrape.projects` in the gateway configuration:
+To enable ordinary managed customer keys, add this opt-in to the gateway configuration:
+
+```json
+{
+  "v2": {
+    "scrape": {
+      "managed": {
+        "enabled": true,
+        "reviewed": true,
+        "proxy": {"class": "direct", "country": null},
+        "max_estimated_micro_usd": 0
+      }
+    }
+  }
+}
+```
+
+This mode reuses the existing reviewed [Playground policy](playground-configuration.md) and render preparation internally. That policy must already permit browser execution over Direct and have a reviewed browser Direct credit weight. Each new request prepares a profile bound to its project, current policy version, and exact public HTTPS origin. Admission still checks the browser runtime, public DNS, origin limit, project and key status, available credits, spending ceiling, and browser request, byte, and duration limits. Preparation itself does not contact the source or reserve credits. Direct has zero provider cost and still consumes the configured browser operation credits. No proxy fallback is attempted. Managed mode rejects proxy classes other than Direct.
+
+The optional `max_estimated_micro_usd` defaults to zero. Disable new managed Scrape requests with `"managed": {"enabled": false}`. Existing saved captures remain recoverable by replaying their original key and options with an active authorized key. A disabled project or revoked key remains blocked by authentication.
+
+For a project-specific route, add an entry under `v2.scrape.projects`:
 
 ```json
 {
@@ -60,4 +81,6 @@ Add an entry for the project under `v2.scrape.projects` in the gateway configura
 }
 ```
 
-Use a browser-enabled access profile already approved for the provisioned project. For managed projects, use the browser profile reference from [render preparation](render-api.md#prepare-a-managed-render) for the reviewed origin and the same proxy class and country. The optional `max_estimated_micro_usd` tightens the existing spending controls. Only projects with an explicit entry can submit new scrapes.
+Use a browser-enabled access profile already approved for the provisioned project. For managed projects, use the browser profile reference from [render preparation](render-api.md#prepare-a-managed-render) for the reviewed origin and the same proxy class and country. The optional `max_estimated_micro_usd` tightens the existing spending controls. A project-specific entry takes precedence over managed mode; an invalid or rejected entry cannot fall back to managed mode. Provisioned legacy project tokens require an explicit project-specific entry.
+
+Only the exact `POST /v2/scrape` path is supported. Configure the public API proxy to forward it and preserve the request and response `X-Idempotency-Key` header. Managed mode accepts public HTTPS hostnames on port 443 without embedded credentials or fragments; redirects and subresources must remain within the prepared origin. It does not enable crawl, map, batch, cross-origin browser access, or application-level extraction acceptance.

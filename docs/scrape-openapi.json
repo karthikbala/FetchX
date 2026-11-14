@@ -6,6 +6,7 @@
       "post": {
         "operationId": "scrape",
         "summary": "Render one page and convert its retained DOM",
+        "description": "Requires an enabled project-specific route or operator-reviewed managed Direct Scrape. Managed keys need fetch:write and use the existing project-bound public HTTPS Playground browser policy and operation credits. Saved captures replay by the original X-Idempotency-Key even when new Scrape admission is disabled; project and key authorization still apply.",
         "security": [{"bearerAuth": []}],
         "parameters": [
           {

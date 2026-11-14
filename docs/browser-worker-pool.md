@@ -345,3 +345,155 @@ Delete the Hetzner server from the operator account by the recorded server ID
 within 24 hours. Confirm deletion and release any IP or firewall created
 specifically for the test if it is unused. Stopping the container or VM still
 leaves the cloud server allocated.
+
+## Production on the existing host
+
+Production uses two local, one-slot containers on the existing Linux AMD64
+host. Keep the single gateway and database in Compose project
+`crawling-platform`. Run only `browser-worker-1` and `browser-worker-2` in the
+independent project `fetchx-browser-workers`. The gateway retains source egress,
+destination/profile policy, reservations, billing, encrypted artifacts and
+durable idempotency. This adds execution slots, not another gateway or database.
+
+Use `deploy/browser-pool/compose.production.gateway.yaml` as the final overlay
+after the preserved production `deploy/compose.yaml` and
+`deploy/github-override.yaml`. It appends four mounts by container target and
+does not set ports, environment, images, database services or existing mounts.
+Retain the configuration mount from
+`/opt/crawling-platform/secrets/gateway.json`, the artifacts bind from
+`/opt/crawling-platform/data/artifacts`, and the existing read-only browser bind
+from `/opt/crawling-platform/browser`. The staging overlays above change the
+database and port and must not be used for this deployment.
+
+### Production runtime contract
+
+`FETCHX_POOL_HOME` defaults to `/opt/crawling-platform/browser-pool` and
+`FETCHX_BROWSER_HOME` defaults to `/opt/crawling-platform/browser`. Create and
+check these directories before starting Compose; all binds reject missing host
+paths. Do not run the staging `prepare-layout.sh` for production.
+
+| Path under `FETCHX_POOL_HOME` | Owner and mode | Container access |
+| --- | --- | --- |
+| `run/worker-1`, `run/worker-2` | `10001:10001`, `0700` | Corresponding worker writes; gateway reads |
+| `run/cb` | `10001:10001`, `0700` | Gateway writes; both workers read |
+| `registry` | `root:root`, `0755` | Gateway reads |
+| `registry/workers.json` | `root:root`, `0644` | Gateway reads |
+| `pin` | `root:root`, `0755` | Both workers read |
+| `pin/runtime.json` | `root:root`, `0444` | Both workers read |
+| `worker.env` | `root:root`, `0600` | Compose interpolation only; never mounted |
+
+Keep parent directories traversable by UID 10001 and use Docker without UID
+remapping. Listener sockets are created as `10001:10001`, mode `0600`.
+The gateway sees `/run/fx/worker-1/worker.sock`,
+`/run/fx/worker-2/worker.sock`, `/run/fx/cb/gw.sock`, and
+`/run/fx/registry/workers.json`. Each worker sees only its own socket at
+`/run/fx/local/worker.sock`, the shared callback at `/run/fx/cb/gw.sock`, the
+read-only pin at `/run/fx/pin/runtime.json`, and the existing browser bundle at
+`/opt/gateway-browser`.
+
+Put the reviewed gateway image's immutable image ID or repository digest in
+`worker.env` as `FETCHX_POOL_IMAGE`; the worker definition has no default image
+and never pulls or builds one. The only other allowed entries in that file are
+the two absolute root paths, `FETCHX_POOL_HOME` and `FETCHX_BROWSER_HOME`.
+Do not source, copy or pass the private production `production.env` to the
+worker command. There is no worker `env_file` directive: its container
+environment declares only the three `FETCHX_WORKER_*` runtime paths, in addition
+to the reviewed image's built-in environment. Workers never receive database,
+OAuth, provider or customer credentials and never mount the secrets, artifacts
+or registry directories.
+
+Use the exact existing, qualified browser bundle. `pin/runtime.json` contains
+only `engine: "chromium"`, the absolute container `executablePath`, its
+four-part `version`, and its SHA-256 `sha256`. Match these values to the
+gateway's approved `v2.browser_probe` runtime and unexpired qualification for
+`linux`/`x64`. Verify the executable and bundle before start; do not download,
+replace or repin the production browser as part of enabling workers.
+
+Add only this opt-in configuration under the existing `v2` object:
+
+```json
+{
+  "browser_pool": {
+    "registry_path": "/run/fx/registry/workers.json",
+    "callback_socket": "/run/fx/cb/gw.sock"
+  }
+}
+```
+
+Retain `browser.maxConcurrent: 2`, `maxConcurrentRequests: 8`, the existing
+per-source caps, profiles, credentials, budgets and all other production policy.
+Initialize the registry as `[]` until both workers pass runtime, sandbox and
+callback checks. Then publish the following registry atomically by writing a
+new file in the same directory and renaming it over `workers.json`:
+
+```json
+[
+  {"id":"worker-1","socket_path":"/run/fx/worker-1/worker.sock","state":"active"},
+  {"id":"worker-2","socket_path":"/run/fx/worker-2/worker.sock","state":"active"}
+]
+```
+
+### Production configuration checks and cutover
+
+Use the candidate release directory in `release` below. Keep its relative
+`deploy/browser-pool/` and `deploy/chromium-seccomp.json` layout intact. Do not
+override Compose's project directory: the worker's seccomp path resolves from
+its Compose file directory. The worker command uses only its image/path file;
+the gateway command alone uses the existing private production environment.
+
+```bash
+gateway() {
+  sudo docker compose --env-file /opt/crawling-platform/secrets/production.env \
+    -p crawling-platform \
+    -f "$release/deploy/compose.yaml" \
+    -f "$release/deploy/github-override.yaml" \
+    -f "$release/deploy/browser-pool/compose.production.gateway.yaml" "$@"
+}
+worker() {
+  sudo docker compose --env-file /opt/crawling-platform/browser-pool/worker.env \
+    -p fetchx-browser-workers \
+    -f "$release/deploy/browser-pool/compose.production.workers.yaml" "$@"
+}
+
+gateway config --quiet
+worker config --quiet
+```
+
+Before cutover, compare the resolved gateway configuration with the preserved
+production configuration: services, database, ports, environment, volumes and
+source caps must be unchanged except for the four added pool mounts and the
+reviewed gateway image/config changes. Confirm the resolved worker project has
+exactly the two worker services and no networks, ports, secrets, database or
+artifact mounts. Check the same reviewed Linux AMD64 image is selected for all
+three containers, and that the host has capacity for two workers at 2 GiB and
+256 PIDs each alongside the existing gateway and database.
+
+Use the production drain, backup and rollback procedure before replacing the
+single gateway. Start the worker project with `worker up -d --no-build`; its
+workers remain unready while the gateway callback is absent. Recreate only the
+gateway using `gateway up -d --no-build --no-deps --force-recreate gateway`,
+with the reviewed production configuration. Never run `gateway down`, use a
+second gateway, or replace the database during this cutover.
+
+Inspect each worker's health over its host Unix socket and confirm
+`ready: true`, `busy: false`, and the exact approved runtime. Inspect its running
+security settings: UID/GID 10001, network `none` with only loopback, read-only
+root, read-only browser/pin/callback binds, only its own writable socket bind,
+`ALL` capabilities dropped, no new privileges, the supplied seccomp profile,
+init, and the configured resource limits. Run the sandbox smoke check above
+with `worker exec -T browser-worker-1` and `browser-worker-2` respectively.
+
+After registry publication, drain one worker at a time to verify each through
+an approved synthetic end-to-end `/v2/scrape` request; check expected content,
+worker activity, encrypted captures and the durable operation/ledger result.
+Then test both workers with distinct concurrent idempotency keys and confirm
+both return idle without leftover Chromium children. A health response alone
+does not establish scrape or source acceptance. Do not replay uncertain source
+work on the other worker; recover with the original idempotency key.
+
+For removal or rollback, atomically mark both entries `draining`, wait until
+both are idle and in-flight gateway work is settled, and stop only the worker
+project. Remove `v2.browser_pool` and the production gateway overlay only via
+the reviewed gateway rollback. Preserve the live database, artifacts, original
+ledger and uncertain reservations; do not restore an old spending ledger or
+delete the production layout as part of a code rollback.

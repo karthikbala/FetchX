@@ -193,3 +193,147 @@ test('Scrape API keeps project policy, ledger, encrypted capture and original-ke
  assert.equal(bodies.length,8);
  assert.ok(bodies.every(({body})=>!body.includes(Buffer.from('Fixture Catalog'))));
 });
+
+test('managed Scrape opts into reviewed direct Playground admission and preserves recovery and tenant boundaries',{skip:!process.env.TEST_DATABASE_URL,timeout:30000},async t=>{
+ const url=new URL(process.env.TEST_DATABASE_URL);
+ assert.match(decodeURIComponent(url.pathname),/^\/gateway_test_[A-Za-z0-9_]+$/);
+ const admin=new pg.Pool({connectionString:url.href,max:1}),schema='managed_scrape_'+randomUUID().replaceAll('-','');
+ const root=await mkdtemp(join(tmpdir(),'fetchx-managed-scrape-'));
+ let app,store;
+ t.after(async()=>{
+  await app?.close();await store?.close();
+  await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);await admin.end();
+  await rm(root,{recursive:true,force:true});
+ });
+ await admin.query(`CREATE SCHEMA ${schema}`);
+ url.searchParams.set('options',`-csearch_path=${schema}`);
+ store=new Store(url.href);await store.init();
+ const direct={class:'direct',country:null};
+ const managed={enabled:true,reviewed:true,proxy:direct,max_estimated_micro_usd:0};
+ const config={artifactDir:root,artifactKey:'47'.repeat(32),maxDailyFallbackCredits:0,proxies:[],projects:{
+  legacy:{profiles:[],tokenHash:sha('legacy-fixture')}
+ },controlPlane:{enabled:true,origins:['https://fetchx.test'],bridgeSecret:'managed-scrape-fixture-bridge-over-32-bytes',
+  projectTemplate:{id:'managed-scrape-fixture',v2_access_profiles:[],v2_entitlement:{mode:'unmetered'}},
+  creditPolicy:{reviewed:true,version:'fixture-native-v1',trialCredits:40,weights:{direct:1},maxEstimatedMicroUsdPerOperation:0,
+   modeWeights:{reviewed:true,version:'fixture-browser-v1',browser:{direct:4}}},
+  playground:{enabled:true,reviewed:true,version:'fixture-scrape-playground-v1',maxProfilesPerProject:2,routes:{browser:{direct:true}}}
+ },v2:{scrape:{managed}}};
+ let relay,runs=0,mode='success';
+ const destinations=[];
+ const gateway=new Gateway({store,config,profiles:{},resolve:async()=>[{address:'93.184.216.34',family:4}]});
+ gateway.v2=new V2Gateway(gateway,{
+  browserRuntime:async()=>({available:true,runtime:{synthetic:true}}),
+  relayFactory:async options=>{
+   relay=options;assert.equal(relay.proxy,null);
+   return {url:'http://127.0.0.1:1',bytes:512,meter_complete:true,connections:1,close:async()=>{}};
+  },browserRunner:async(input,hooks)=>{
+   runs++;destinations.push(input.url);
+   assert.ok(input.timeout_ms<=30000);
+   assert.equal(input.policy.settle_ms,0);
+   assert.equal(input.policy.max_requests,32);
+   const request={url:input.url,method:'GET',headers:{accept:'text/html'},body_base64:null,resource_type:'document',redirect_depth:0,redirected_from:null};
+   await hooks.admit(request);
+   await relay.beforeConnect(relay.pinnedDestinations.get(new URL(input.url).hostname).destination);
+   if(mode==='unknown')throw Error('synthetic uncertain browser outcome');
+   await hooks.artifact(artifact('browser_response',input.url,'<main>Native response</main>',{request,main_document:true}));
+   await hooks.artifact(artifact('rendered_dom',input.url,html,{generated:true}));
+   return {status:200,final_url:input.url,capture_complete:true,counts_complete:true};
+  }
+ });
+ app=server(gateway);
+ const user=randomUUID(),foreignUser=randomUUID();
+ await store.pool.query('INSERT INTO control_users(id,email) VALUES($1,$2),($3,$4)',[user,'scrape-owner@fixture.test',foreignUser,'scrape-other@fixture.test']);
+ const identity=gateway.controlIdentity,project=(await identity.createProject(user,{name:'Scrape owner'})).id,
+  foreign=(await identity.createProject(foreignUser,{name:'Scrape other'})).id;
+ const writer=await identity.createKey(user,project,{name:'Writer',scopes:['fetch:write','fetch:read']}),
+  reader=await identity.createKey(user,project,{name:'Reader',scopes:['fetch:read']}),
+  other=await identity.createKey(foreignUser,foreign,{name:'Other writer',scopes:['fetch:write']});
+ const post=(payload,{key=randomUUID(),token=writer.token,path='/v2/scrape'}={})=>app.inject({method:'POST',url:path,payload,
+  headers:{authorization:'Bearer '+token,'x-idempotency-key':key}});
+ const basic={url:source,formats:['markdown','html','links']};
+ assert.equal((await post(basic,{token:reader.token})).json().code,'api_key_scope_forbidden');
+ assert.equal((await post(basic,{token:'legacy-fixture'})).json().code,'scrape_unavailable');
+ delete config.v2.scrape.managed;
+ assert.equal((await post(basic)).json().code,'scrape_unavailable');
+ config.v2.scrape.managed={enabled:false};
+ assert.equal((await post(basic)).json().code,'scrape_unavailable');
+ for(const invalid of [
+  {...managed,reviewed:false},{...managed,proxy:{class:'residential',country:'US'}},
+  {...managed,proxy:{class:'datacenter',country:'US'}},{...managed,proxy:{class:'direct',country:'US'}},
+  {...managed,max_estimated_micro_usd:-1},{...managed,unexpected:true}
+ ]){
+  config.v2.scrape.managed=invalid;
+  const rejected=await post(basic);
+  assert.equal(rejected.statusCode,503,rejected.body);
+  assert.equal(rejected.json().code,'scrape_configuration_invalid');
+ }
+ config.v2.scrape.managed=managed;
+ const browserPolicy=config.controlPlane.playground;
+ config.controlPlane.playground={enabled:false};
+ assert.equal((await post(basic)).json().code,'playground_disabled');
+ config.controlPlane.playground={...browserPolicy,routes:{browser:{}}};
+ assert.equal((await post(basic)).json().code,'playground_execution_unreviewed');
+ config.controlPlane.playground=browserPolicy;
+ for(const rejected of ['https://127.0.0.1/','https://private.local/','https://source.gov:444/','https://source.gov/#fragment']){
+  assert.equal((await post({url:rejected})).json().success,false);
+ }
+ assert.equal((await post({...basic,waitFor:751})).json().code,'browser_wait_ceiling_rejected');
+ assert.equal(runs,0);
+ assert.equal((await store.pool.query('SELECT count(*)::int n FROM control_playground_profiles')).rows[0].n,0);
+
+ const key='retained-managed',first=await post(basic,{key});
+ assert.equal(first.statusCode,200,first.body);
+ assert.deepEqual(first.json().data.links,['https://source.gov/catalog/alpha']);
+ assert.match(first.json().data.markdown,/# Items/);
+ assert.match(first.json().data.html,/<table>/);
+ assert.equal(first.json().data.metadata.title,'Fixture Catalog');
+ assert.equal((await store.pool.query('SELECT count(*)::int n FROM control_playground_profiles WHERE project=$1',[project])).rows[0].n,1);
+ assert.deepEqual((await post(basic,{key})).json(),first.json());
+ assert.equal(runs,1);
+ const prepared=(await post({url:source,proxy:direct},{path:'/v2/render/prepare'})).json();
+ assert.equal(prepared.ready,true);
+ config.v2.scrape.projects={[project]:{access_profile:prepared.access_profile,proxy:direct,max_estimated_micro_usd:0}};
+ assert.equal((await post({url:'https://other.gov/'},{key:'project-origin-bound'})).json().code,'access_profile_forbidden');
+ config.v2.scrape.projects[project]=null;
+ assert.equal((await post(basic)).json().code,'scrape_configuration_invalid');
+ assert.equal(runs,1);
+ delete config.v2.scrape.projects;
+ const foreignReply=await post({...basic,url:'https://other.gov/'},{key,token:other.token});
+ assert.equal(foreignReply.statusCode,200,foreignReply.body);
+ assert.equal(foreignReply.json().data.metadata.sourceURL,'https://other.gov/');
+ assert.equal(runs,2);
+ const second=await post({...basic,url:'https://second.gov/'});
+ assert.equal(second.statusCode,200,second.body);
+ const limited=await post({url:'https://third.gov/'});
+ assert.equal(limited.statusCode,429,limited.body);
+ assert.equal(limited.json().code,'playground_profile_limit');
+ assert.equal(runs,3);
+
+ mode='unknown';
+ const uncertain=await post(basic,{key:'uncertain-managed'});
+ assert.equal(uncertain.statusCode,409,uncertain.body);
+ assert.equal(uncertain.json().code,'scrape_outcome_unknown');
+ const before=(await store.pool.query('SELECT project,key_id,state,credits,transport FROM control_credit_reservations ORDER BY created_at')).rows;
+ assert.equal(before.length,4);
+ assert.ok(before.every(row=>row.credits==='4'&&row.transport==='browser'));
+ assert.equal(before[0].key_id,writer.id);
+ assert.equal(before[1].key_id,other.id);
+ assert.equal(before[3].state,'held');
+ await store.pool.query('UPDATE control_credit_accounts SET granted_credits=12 WHERE project=$1',[project]);
+ const exhausted=await post(basic,{key:'exhausted-managed'});
+ assert.equal(exhausted.statusCode,429,exhausted.body);
+ assert.equal(exhausted.json().code,'credit_balance_exhausted');
+ await store.pool.query('UPDATE control_credit_accounts SET granted_credits=40 WHERE project=$1',[project]);
+ config.v2.scrape.managed={enabled:false};
+ assert.deepEqual((await post(basic,{key})).json(),first.json());
+ assert.deepEqual((await post(basic,{key:'uncertain-managed'})).json(),uncertain.json());
+ assert.equal((await post(basic,{key:'fresh-disabled'})).json().code,'scrape_unavailable');
+ assert.equal((await post({...basic,onlyMainContent:false},{key})).json().code,'idempotency_conflict');
+ assert.equal(runs,4);
+ assert.deepEqual((await store.pool.query('SELECT project,key_id,state,credits,transport FROM control_credit_reservations ORDER BY created_at')).rows,before);
+ assert.deepEqual(destinations,[source,'https://other.gov/','https://second.gov/',source]);
+ assert.equal((await store.pool.query("SELECT count(*)::int n FROM v2_ledger WHERE proxy_class<>'direct' OR estimated_micro_usd<>0")).rows[0].n,0);
+ await store.pool.query("UPDATE control_projects SET status='disabled' WHERE id=$1",[project]);
+ assert.equal((await post(basic,{key})).json().code,'project_disabled');
+ assert.equal(runs,4);
+});

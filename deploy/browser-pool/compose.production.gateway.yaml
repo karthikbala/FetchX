@@ -1,0 +1,24 @@
+# Append to the preserved production Compose files with project crawling-platform.
+# This overlay adds only the browser-pool mounts; existing gateway mounts merge by target.
+services:
+  gateway:
+    volumes:
+      - type: bind
+        source: ${FETCHX_POOL_HOME:-/opt/crawling-platform/browser-pool}/registry
+        target: /run/fx/registry
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FETCHX_POOL_HOME:-/opt/crawling-platform/browser-pool}/run/worker-1
+        target: /run/fx/worker-1
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FETCHX_POOL_HOME:-/opt/crawling-platform/browser-pool}/run/worker-2
+        target: /run/fx/worker-2
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FETCHX_POOL_HOME:-/opt/crawling-platform/browser-pool}/run/cb
+        target: /run/fx/cb
+        bind: {create_host_path: false}

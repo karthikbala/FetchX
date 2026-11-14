@@ -195,7 +195,7 @@ export class PublicRenderGateway{
    try{retained=await this.v2.lookup(project,internalKey);}catch(error){if(!(error instanceof GatewayError)||error.code!=='operation_not_found')throw error;}
    if(retained)return retained;
   }
-  const input=resolveInput();
+  const input=await resolveInput();
   const managed=this.v2.controlCredits.managed(project);
   const candidate=managed?await managedRenderProfile(this.v2,project,input):null;
   let profile=candidate;

@@ -4,6 +4,7 @@ import TurndownService from 'turndown';
 import {gfm} from 'turndown-plugin-gfm';
 import {sha} from './crypto.mjs';
 import {GatewayError,ID,fail} from './policy.mjs';
+import {prepareBearerRender} from './control-playground.mjs';
 import {publicOperationErrorCode,publicOperationErrorMessage} from './v2-public-fetch.mjs';
 import {PublicRenderGateway} from './v2-public-render.mjs';
 
@@ -63,9 +64,9 @@ function normalize(raw){
 
 function reviewedRoute(config,project){
  const projects=config.v2?.scrape?.projects;
- if(projects===undefined)fail('scrape_unavailable',403);
+ if(projects===undefined)return null;
  if(!plain(projects))fail('scrape_configuration_invalid',503);
- if(!Object.hasOwn(projects,project))fail('scrape_unavailable',403);
+ if(!Object.hasOwn(projects,project))return null;
  const entry=projects[project];
  if(!exact(entry,['access_profile','proxy','max_estimated_micro_usd']))fail('scrape_configuration_invalid',503);
  const {access_profile:ref,proxy,max_estimated_micro_usd:ceiling}=entry;
@@ -74,6 +75,25 @@ function reviewedRoute(config,project){
   (proxy.class==='direct'?proxy.country!==null:typeof proxy.country!=='string'||!/^[A-Z]{2}$/.test(proxy.country))||
   ceiling!==undefined&&!integer(ceiling,0,Number.MAX_SAFE_INTEGER))fail('scrape_configuration_invalid',503);
  return entry;
+}
+
+async function scrapeRoute(v2,project,url,identity){
+ const configured=reviewedRoute(v2.config,project);
+ if(configured)return configured;
+ const policy=v2.config.v2?.scrape?.managed;
+ if(policy===undefined||exact(policy,['enabled','reviewed','proxy','max_estimated_micro_usd'])&&policy.enabled===false)fail('scrape_unavailable',403);
+ if(!exact(policy,['enabled','reviewed','proxy','max_estimated_micro_usd'])||policy.enabled!==true||policy.reviewed!==true||
+  !exact(policy.proxy,['class','country'])||policy.proxy.class!=='direct'||policy.proxy.country!==null||
+  policy.max_estimated_micro_usd!==undefined&&!integer(policy.max_estimated_micro_usd,0,Number.MAX_SAFE_INTEGER))fail('scrape_configuration_invalid',503);
+ if(!v2.controlCredits.managed(project)||!Object.hasOwn(v2.config.projects??{},project))fail('scrape_unavailable',403);
+ const prepared=await prepareBearerRender(v2,project,{url,proxy:policy.proxy},identity.keyId);
+ if(!prepared.ready){
+  const code=prepared.errors.find(error=>error.field==='proxy')?.code??prepared.errors[0]?.code??'scrape_unavailable';
+  const status=['credit_balance_exhausted','cost_ceiling_exceeded','playground_profile_limit'].includes(code)?429:
+   code==='playground_policy_version_changed'?409:/browser_probe|unavailable|unhealthy/.test(code)?503:403;
+  fail(code,status);
+ }
+ return {access_profile:prepared.access_profile,proxy:policy.proxy,max_estimated_micro_usd:policy.max_estimated_micro_usd??0};
 }
 
 const discarded='script,style,noscript,template,iframe,frame,object,embed,svg,math,canvas,form,button,input,select,textarea,audio,video,[hidden],[aria-hidden="true"]';
@@ -241,8 +261,8 @@ export function registerPublicScrape(app){
   app.v2.controlCredits.keyId(req.project,identity);
   let operation;
   try{
-   operation=await browser.capture(req.project,key,sha(JSON.stringify(input)),()=>({
-    ...reviewedRoute(app.v2.config,req.project),url:input.url,wait_ms:input.waitFor
+   operation=await browser.capture(req.project,key,sha(JSON.stringify(input)),async()=>({
+    ...await scrapeRoute(app.v2,req.project,input.url,identity),url:input.url,wait_ms:input.waitFor
    }),identity,{timeoutMs:input.timeout??undefined});
   }catch(error){
    if(error instanceof GatewayError&&error.status!==502)throw error;
