@@ -10,6 +10,8 @@ curl --silent --show-error "$FETCHX_URL/v2/scrape" \
   -d '{"url":"https://example.com/","formats":["markdown","links"]}'
 ```
 
+For custom HTTP clients, send a descriptive application `User-Agent`, such as `MyFetchXClient/1.0`. Some generic library defaults can trigger [Cloudflare error 1010](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1010/) before the request reaches FetchX.
+
 | Field | Behavior |
 | --- | --- |
 | `url` | Required absolute HTTPS URL on the selected profile. |
