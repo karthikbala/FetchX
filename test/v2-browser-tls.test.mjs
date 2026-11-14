@@ -43,12 +43,17 @@ test('real Chromium admits every TLS redirect before dispatch and renders over o
  const runtime={engine,executablePath,sha256:await binarySha(executablePath),version:process.env.BROWSER_TEST_RUNTIME_VERSION??'156.0.0.0',...(engine==='cloakbrowser'?{entitlement:'unlicensed'}:{})};
  const certificate=join(directory,'certificate.pem'),key=join(directory,'key.pem');
  const hits=[],connects=[],sockets=new Set();
+ const timeline=[],started=performance.now();
+ const record=(event,details={})=>{if(timeline.length<128)timeline.push({elapsed_ms:Math.round(performance.now()-started),event,...details});};
+ const fixturePath=url=>{try{const parsed=new URL(url,origin);return [fixtureHost,'outside.example','private.example'].includes(parsed.hostname)?parsed.pathname:'other_fixture_origin';}catch{return 'invalid_fixture_url';}};
  let source,proxy;
  try{
   execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-days','1','-subj','/CN='+fixtureHost,'-keyout',key,'-out',certificate],{stdio:'ignore'});
   const cert=await readFile(certificate);
   const spki=createHash('sha256').update(new X509Certificate(cert).publicKey.export({type:'spki',format:'der'})).digest('base64');
   source=https.createServer({key:await readFile(key),cert},(req,res)=>{
+   record('source_hit',{path:fixturePath(req.url)});
+   res.on('finish',()=>record('source_finish',{path:fixturePath(req.url)}));
    hits.push({path:req.url,method:req.method,connection:req.headers.connection,socket:req.socket});
    const location=redirects.get(req.url);
    if(location){res.writeHead(302,{location});res.end();return;}
@@ -79,6 +84,7 @@ test('real Chromium admits every TLS redirect before dispatch and renders over o
   const profile={origins:[origin,'https://outside.example','https://private.example'],paths:['^/(?:start|blocked-navigation|document|data|reset|redirect-(?:fetch|xhr|cross|private)|forbidden-(?:auth|method|cross|private|worker|blob-worker|popup|frame|socket))$']};
   const resolve=async host=>[{address:host==='private.example'?'169.254.169.254':publicAddress}];
   async function run(path,{trustFixture=false,screenshot=false,maxRequests=16,isolatedWorker=false}={}){
+   const timelineStart=timeline.length,requestFailures=[];
    const policy={max_requests:maxRequests,max_network_bytes:1024*1024,max_decoded_bytes:65536,max_dom_bytes:65536,settle_ms:650};
    const pinnedDestinations=new Map();
    const deadline=Date.now()+12000;
@@ -89,6 +95,7 @@ test('real Chromium admits every TLS redirect before dispatch and renders over o
     const input={url:origin+path,timeout_ms:8000,deadline,screenshot};
     const hooks={
      admit:async request=>{
+      record('admit',{path:fixturePath(request.url)});
       attempts.push(request);
       const destination=await pinnedDestination(request.url,profile,resolve);
       if(request.redirected_from&&new URL(request.redirected_from).origin!==destination.url.origin)throw new GatewayError('redirect_origin_rejected');
@@ -110,8 +117,31 @@ test('real Chromium admits every TLS redirect before dispatch and renders over o
      if(trustFixture)options.args.push('--ignore-certificate-errors-spki-list='+spki);
      server=await chromium.launchServer(options);
      browser=await chromium.connect(server.wsEndpoint());
+     // Observe only this fixture's page events; capture behavior stays intact.
+     browser.on('disconnected',()=>record('browser_disconnected'));
+     const newContext=browser.newContext.bind(browser);
+     browser.newContext=async(...args)=>{
+      const context=await newContext(...args),newPage=context.newPage.bind(context);
+      context.newPage=async(...args)=>{
+       const page=await newPage(...args);
+       page.on('requestfinished',request=>record('request_finished',{path:fixturePath(request.url())}));
+       page.on('requestfailed',request=>{
+        const failure={path:fixturePath(request.url()),error_text:(request.failure()?.errorText??'unknown').slice(0,160)};
+        if(requestFailures.length<32)requestFailures.push(failure);
+        record('request_failed',failure);
+       });
+       return page;
+      };
+      return context;
+     };
      result=await captureBrowserProbe(browser,input,policy,hooks);
     }
+    if(path==='/start'&&trustFixture&&screenshot&&result.error!==null)console.error('TLS fixture failure '+JSON.stringify({
+     error:result.error,physical_requests:result.physical_requests,blocked_reasons:result.blocked_reasons,
+     attempts:attempts.slice(0,32).map(a=>({path:fixturePath(a.url),redirect_depth:a.redirect_depth})),
+     request_failures:requestFailures,timeline:timeline.slice(timelineStart),
+     relay:{error:relay.error,connections:relay.connections,dispatched:relay.dispatched,meter_complete:relay.meter_complete,bytes:relay.bytes,provider_status:relay.provider_status}
+    }));
     return {result,attempts,artifacts};
    }finally{await browser?.close().catch(()=>{});await server?.close().catch(()=>{});await relay.close();}
   }
