@@ -497,3 +497,57 @@ project. Remove `v2.browser_pool` and the production gateway overlay only via
 the reviewed gateway rollback. Preserve the live database, artifacts, original
 ledger and uncertain reservations; do not restore an old spending ledger or
 delete the production layout as part of a code rollback.
+
+### Add a remote host without restarting the gateway
+
+The gateway reloads `workers.json` on admission. Its existing read-only
+`registry` directory mount also exposes new host-created socket entries, so a
+third worker does not need a new mount or gateway restart. Forward the remote
+worker into `/opt/crawling-platform/browser-pool/registry/remote-worker-3.sock`;
+the gateway sees `/run/fx/registry/remote-worker-3.sock`. Keep the two existing
+local workers and all existing registry rows.
+
+On the new Linux AMD64 host, run only the isolated worker using the same
+reviewed image, exact browser bundle and runtime pin, with its own private
+layout (for example `/opt/fetchx-worker`). Give the remote worker and tunnel
+account UID/GID 10001; its `run/worker` and `run/cb` directories must be owned by
+that identity with mode `0700`. Use the authenticated Unix-socket-only SSH
+transport and restrictive account/key/firewall checks described above, adapting
+the remote `PermitOpen` path to
+`[/opt/fetchx-worker/run/worker/worker.sock]:*`. Verify both negative TCP-forward
+probes against the effective SSH configuration before registration.
+
+| SSH forwarding from the production host | Mapping |
+| --- | --- |
+| Local `-L` | `/opt/crawling-platform/browser-pool/registry/remote-worker-3.sock:/opt/fetchx-worker/run/worker/worker.sock` |
+| Reverse `-R` | `/opt/fetchx-worker/run/cb/gw.sock:/opt/crawling-platform/browser-pool/run/cb/gw.sock` |
+
+The production `registry` directory stays `root:root`, mode `0755`. A
+root-managed SSH client must bind the local listener there, then set that socket
+to `10001:10001`, mode `0600`, after every listener creation or reconnect.
+Do not grant the tunnel UID directory write access. Set `StreamLocalBindMask
+0177` on the client and remote SSH server; the remote tunnel account must be
+able to bind its private callback directory. Keep keys and pinned host keys
+outside worker mounts. Linux allows the gateway to connect through the
+read-only mount using the socket's write permission without granting registry
+file writes; see [Linux pathname-socket permissions](https://man7.org/linux/man-pages/man7/unix.7.html).
+
+Check the new forwarded socket from inside the running gateway: health must
+report `ready: true`, `busy: false` and the exact qualified runtime. Run the
+remote sandbox smoke check, then atomically append this row to the existing
+registry:
+
+```json
+{"id":"remote-worker-3","socket_path":"/run/fx/registry/remote-worker-3.sock","state":"active"}
+```
+
+Each additional ready worker adds one v2 browser slot; pool-backed v2 execution
+uses registry capacity rather than `browser.maxConcurrent`. Keep the global
+`maxConcurrentRequests: 8`, source/profile limits and budgets unchanged. The
+remote container remains `network_mode: none` without provider credentials;
+all source traffic and metering still pass through the authenticated gateway
+callback. Provisioning a worker does not authorize paid requests or bypass
+source admission. Verify new capacity with an approved synthetic request and
+distinct idempotency key. To remove it, mark its row `draining`, wait for idle,
+then stop its tunnel/worker and remove only its row and owned listener. Never
+reroute uncertain work to another worker.
