@@ -6,11 +6,12 @@ import datetime as dt
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 import unittest
 
 from ops.autoscaler.controller import Controller, metrics_snapshot
-from ops.autoscaler.core import InstanceLock, Ledger, SafetyError, monthly_costs, validate_config
+from ops.autoscaler.core import InstanceLock, Ledger, Registry, SafetyError, monthly_costs, validate_config
 from ops.autoscaler.hetzner import CloudError, UncertainCreate, approved_prices, micro_eur, select_machine
 
 
@@ -374,6 +375,29 @@ class ControllerTests(unittest.TestCase):
                 ledger.set_meta("must_not_write", True)
         finally:
             ledger.close()
+
+    def test_registry_edits_preserve_exact_mode_and_owner_under_private_umask(self):
+        path = self.path / 'registry.json'
+        registry = Registry(path)
+        baseline = registry.read()
+        for mode in (0o644, 0o640, 0o600):
+            with self.subTest(mode=oct(mode)):
+                path.chmod(mode)
+                original = path.stat()
+                prior_umask = os.umask(0o077)
+                try:
+                    for index in range(3):
+                        identity = 'synthetic-' + str(index)
+                        row = dict(id=identity, state='active', socket_path='/synthetic-' + str(index) + '.sock')
+                        for edit in (dict(row=row), dict(drain=True), dict(remove=True)):
+                            registry.edit(identity, **edit)
+                            current = path.stat()
+                            self.assertEqual(stat.S_IMODE(current.st_mode), mode)
+                            self.assertEqual((current.st_uid, current.st_gid), (original.st_uid, original.st_gid))
+                            self.assertIn(baseline[0], registry.read())
+                        self.assertEqual(registry.read(), baseline)
+                finally:
+                    os.umask(prior_umask)
 
     def test_live_price_caps_currency_and_integer_rounding(self):
         self.assertEqual(micro_eur("0.00880001"), 8801)

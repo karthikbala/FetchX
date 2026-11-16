@@ -313,6 +313,9 @@ class Registry:
             with os.fdopen(fd, "w") as f:
                 if os.geteuid() == 0:
                     os.fchown(f.fileno(), old.st_uid, old.st_gid)
+                # os.open's mode is filtered by the controller's private umask.
+                # Restore the existing reader contract after ownership changes.
+                os.fchmod(f.fileno(), stat.S_IMODE(old.st_mode))
                 json.dump(rows, f, separators=(",", ":"))
                 f.flush()
                 os.fsync(f.fileno())
