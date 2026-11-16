@@ -1,5 +1,5 @@
 """Private child transport. Reads validated request/config from stdin; emits JSON only."""
-import sys,json,base64
+import sys,json,base64,re
 
 class ResponseTooLarge(Exception):
     pass
@@ -8,6 +8,14 @@ def error_code(error):
     # A broken dependency/configuration must never buy a fallback request.
     from curl_cffi.requests.exceptions import ConnectionError, ProxyError, Timeout, SSLError, InvalidURL, InvalidSchema, InvalidHeader, ImpersonateError
     if isinstance(error, ResponseTooLarge):return 'response_too_large'
+    # curl reports a refused tunnel as "CONNECT tunnel failed, response NNN".
+    # Only the status is used; the text never leaves this process.
+    m=re.search(r'CONNECT tunnel failed, response (\d{3})',str(error))
+    if m:
+        status=int(m.group(1))
+        if status in (403,444,451):return 'provider_target_refused'
+        if status in (502,503,504):return 'source_unreachable'
+        return 'proxy_connect_failed'
     if isinstance(error, SSLError):return 'tls_verification_failed'
     if isinstance(error, (InvalidURL, InvalidSchema, InvalidHeader, ImpersonateError, ValueError, TypeError, KeyError)):return 'transport_request_invalid'
     if isinstance(error, (ConnectionError, ProxyError, Timeout)):return 'proxy_connect_failed'

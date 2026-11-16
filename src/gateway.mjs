@@ -8,7 +8,7 @@ import {checkBrowserTier} from './browser.mjs';
 import {randomUUID,randomInt,randomBytes} from 'node:crypto';
 import {mkdir,readFile,writeFile,rename} from 'node:fs/promises';
 import {join} from 'node:path';
-import {ID,GatewayError,fail,checkedURL,checkedHeaders,requestInput,FALLBACK_FAILURES,METERED_BLOCKING_ERRORS} from './policy.mjs';
+import {ID,GatewayError,fail,checkedURL,checkedHeaders,requestInput,FALLBACK_FAILURES,METERED_BLOCKING_ERRORS,providerExcluded,validateProviderExclusions} from './policy.mjs';
 import {sha,Sealer} from './crypto.mjs';
 import {oxylabsRequest,scrapeDoRequest,redactProviderSecrets} from './transport.mjs';
 import {artifactAdmission,recordArtifact} from './artifacts.mjs';
@@ -47,6 +47,7 @@ export class Gateway {
   this.captchaSolver=new CaptchaSolver(store,config);
   validateAdmissionConfig(config);
   validateRouteHealthConfig(config);
+  validateProviderExclusions(config.providerExclusions);
  }
  profile(project,id){if(typeof id!=='string'||!this.config.projects[project]?.profiles.includes(id)||!Object.hasOwn(this.profiles,id))fail('profile_forbidden',403);return residentialPolicy(this.profiles[id],this.config);}
  async workflow(project,input){
@@ -122,7 +123,16 @@ export class Gateway {
   try{
    let current=await this.owned(project,id),provider=current.route;
    const firstRestart=provider==='scrapedo'&&p.fallbackRestarted&&!(await this.store.pool.query("SELECT 1 FROM attempts WHERE workflow=$1 AND provider='scrapedo' LIMIT 1",[id])).rowCount;
-   const routingReason=firstRestart?'fallback_native_flow_incomplete':current.requests===0?(p.routingSelection??'oxylabs_default'):'sticky_session';
+   let routingReason=firstRestart?'fallback_native_flow_incomplete':current.requests===0?(p.routingSelection??'oxylabs_default'):'sticky_session';
+   // A provider known to refuse this kind of host (Oxylabs and .gov) is never
+   // tried: a first GET goes straight to the reviewed fallback, else it fails
+   // clearly without source traffic.
+   if(!isResidential(p)&&providerExcluded(this.config,provider,new URL(input.url).hostname)){
+    const fallbackOpen=provider==='oxylabs'&&current.requests===0&&input.method==='GET'&&p.maxFallbackCredits>0&&this.config.scrapeDoToken&&!providerExcluded(this.config,'scrapedo',new URL(input.url).hostname);
+    if(!fallbackOpen)fail('provider_excluded',422);
+    await this.store.pool.query("UPDATE workflows SET route='scrapedo' WHERE id=$1",[id]);
+    provider='scrapedo';routingReason='provider_excluded';
+   }
    let response=await this.attempt(current,opId,input,provider,routingReason);
    if(isResidential(p))response=await this.residentialFallback(current,opId,input,response);
    if(isResidential(p))response=await this.residentialRenewal(current,opId,input,response);
@@ -160,10 +170,10 @@ export class Gateway {
   if(!residentialFirstGet(w,input))return response;
   for(;;){
    const category=classifyOutcome(response,{...input,main_document:true});
-   const eligibleError=!response.error||['proxy_connect_failed','source_challenge','source_denied'].includes(response.error)||response.error==='browser_capture_failed'&&['source_denied','source_challenge'].includes(category);
+   const eligibleError=!response.error||['proxy_connect_failed','provider_target_refused','source_unreachable','source_challenge','source_denied'].includes(response.error)||response.error==='browser_capture_failed'&&['source_denied','source_challenge'].includes(category);
    // A 429 on the first GET limits that provider's egress, not the source:
    // move to the next provider (Evomi -> DataImpulse) in a fresh session.
-   if(!eligibleError||category!=='rate_limited'&&response.headers?.['retry-after']||!['source_denied','source_challenge','transport_failure','rate_limited'].includes(category))return response;
+   if(!eligibleError||category!=='rate_limited'&&response.headers?.['retry-after']||!['source_denied','source_challenge','transport_failure','provider_refused','source_unreachable','rate_limited'].includes(category))return response;
    if(response.actionsStarted)return {...response,fallbackBlocked:'browser_actions_not_replayable'};
    const next=(w.config.routeIndex??0)+1;
    if(next>=Math.min(routePlan(w.config).length,w.config.maxRouteAttempts??4))return response;
