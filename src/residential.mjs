@@ -13,8 +13,9 @@ export function residentialPolicy(p,config){
  if(!/^[A-Z]{2}$/.test(p.country)||p.ttlSeconds>1800)fail('residential_profile_invalid',500);
  if(p.maxRouteAttempts!==undefined&&(!Number.isInteger(p.maxRouteAttempts)||p.maxRouteAttempts<1||p.maxRouteAttempts>4))fail('residential_profile_invalid',500);
  if(p.execution&&!['http','browser'].includes(p.execution))fail('residential_profile_invalid',500);
+ if(p.maxSessionRenewals!==undefined&&(!Number.isInteger(p.maxSessionRenewals)||p.maxSessionRenewals<0||p.maxSessionRenewals>10))fail('residential_profile_invalid',500);
  return {...p,...(p.execution==='browser'?{browserEngine:newBrowserEngine(p,config)}:{}),routingPolicy:policy,execution:p.execution??'http',maxConcurrent:1,maxFallbackCredits:0,
-  routeIndex:0,residentialSession:randomBytes(5).toString('hex'),
+  routeIndex:0,residentialSession:randomBytes(5).toString('hex'),maxSessionRenewals:p.maxSessionRenewals??0,sessionRenewals:0,
   maxResidentialBytes:p.maxResidentialBytes??Math.min(p.maxBytes,16*1024*1024),
   maxAttemptBytes:p.maxAttemptBytes??Math.min(p.maxBytes,4*1024*1024)};
 }

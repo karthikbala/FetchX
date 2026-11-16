@@ -5,7 +5,7 @@ import {protectionView,PROTECTION_VERSION,PROTECTION_VENDORS,PROTECTION_KINDS} f
 
 const UUID=/^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 export const OUTCOME_CATEGORIES=Object.freeze(['transport_failure','source_denied','source_challenge','rate_limited','upstream_error','success','unknown','cancelled']);
-export const ROUTING_REASONS=Object.freeze(['evomi_default','residential_fallback','oxylabs_default','healthy_proxy_selected','quarantine_probe','sticky_session','fallback_source_denied','fallback_source_challenge','fallback_proxy_connect_failed','fallback_native_flow_incomplete']);
+export const ROUTING_REASONS=Object.freeze(['evomi_default','residential_fallback','session_renewal','oxylabs_default','healthy_proxy_selected','quarantine_probe','sticky_session','fallback_source_denied','fallback_source_challenge','fallback_proxy_connect_failed','fallback_native_flow_incomplete']);
 export const RECORD_REASON_CODES=Object.freeze(['accepted','partial','no_records','source_unavailable','source_denied','source_challenge','schema_mismatch','identity_mismatch','context_mismatch','incomplete','parse_error','other']);
 const allowed=(value,list)=>list.includes(value)?value:null;
 const numeric=value=>value===null||value===undefined?null:Number(value);

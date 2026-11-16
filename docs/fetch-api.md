@@ -250,7 +250,7 @@ all existing approvals and budgets. They never authorize automatic fallback.
 | --- | --- |
 | Datacenter GET returns 403 or a recognized challenge | If the saved profile also approves residential in the same country, suggest that route with a **new key and fresh session**. No suggested request is dispatched. |
 | Other 403/challenge | Review source access; no implicit escalation. |
-| 429 or source cooldown | Wait for source `Retry-After`; do not rotate countries. Residential sessions already moved a first-GET 429 from Evomi to DataImpulse inside the same operation; a 429 returned after that means every residential route was limited. |
+| 429 or source cooldown | Wait for source `Retry-After`; do not rotate countries. Residential sessions already moved a first-GET 429 from Evomi to DataImpulse inside the same operation; a 429 returned after that means every residential route was limited. Profiles with `maxSessionRenewals` also renew a walled later session automatically, up to that bound. |
 | 404 | Check the URL before considering another request. |
 | Permission, profile or route configuration failure | Fix the approved request/configuration. |
 | Quota or budget exhausted | Review the quota/budget; creating sessions does not bypass it. |
