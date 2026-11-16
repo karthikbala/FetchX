@@ -4,11 +4,11 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {fail} from './policy.mjs';
-import {browserEngine} from './browser-engines.mjs';
+import {browserEngine,verifyCamoufoxBuild} from './browser-engines.mjs';
 let active=0;
 export async function checkBrowserTier(config,tier,{fetchImpl=fetch,engine='cloakbrowser'}={}){
  browserEngine({browserEngine:engine});
- if(engine==='camoufox'){if(tier!=='free')fail('browser_tier_unsupported',503);fail('browser_runtime_unqualified',503);}
+ if(engine==='camoufox'){if(tier!=='free')fail('browser_tier_unsupported',503);return verifyCamoufoxBuild(config.browser?.camoufox?.free);}
  const t=config.browser?.[tier];if(!t?.executablePath||!t.sha256||!t.version)fail('browser_tier_unavailable',503);
  await access(t.executablePath).catch(()=>fail('browser_tier_unavailable',503));
  if(tier==='free'&&t.entitlement==='unlicensed')return t;
