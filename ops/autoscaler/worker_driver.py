@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from contextlib import closing
 import gzip
 import hashlib
 import http.client
@@ -380,7 +381,7 @@ class WorkerDriver:
             try:
                 info = sock.lstat()
                 if stat.S_ISSOCK(info.st_mode) and info.st_uid == 10001 and info.st_gid == 10001 and stat.S_IMODE(info.st_mode) == 0o600:
-                    with UnixHTTP(str(sock), min(2, max(.1, deadline - time.monotonic()))) as connection:
+                    with closing(UnixHTTP(str(sock), min(2, max(.1, deadline - time.monotonic())))) as connection:
                         connection.request("GET", "/healthz")
                         response = connection.getresponse()
                         raw = response.read(8193)

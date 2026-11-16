@@ -325,10 +325,8 @@ class WorkerDriverTests(unittest.TestCase):
             return result()
         body = {"ready": True, "busy": False, "runtime": runtime or {"engine": "chromium", "version": self.pin["version"], "sha256": self.pin["sha256"], "platform": "linux", "arch": "x64"}}
         http = Mock()
-        connection = http.return_value.__enter__ = Mock(return_value=http)
-        http.return_value.__exit__ = Mock(return_value=False)
-        http.getresponse.return_value.status = 200
-        http.getresponse.return_value.read.return_value = json.dumps(body).encode()
+        http.return_value.getresponse.return_value.status = 200
+        http.return_value.getresponse.return_value.read.return_value = json.dumps(body).encode()
         return remote, calls, http
 
     def test_bootstrap_transfers_assets_and_returns_only_gateway_socket(self):
@@ -341,6 +339,26 @@ class WorkerDriverTests(unittest.TestCase):
             self.assertEqual(self.worker.bootstrap(self.record, self.server), {"socket_path": "/run/fx/registry/worker-abc.sock"})
         self.assertEqual(calls, ["status", "renew", "install", "renew", "start"])
         self.assertFalse((self.registry / "workers.json").exists())
+
+    def test_bootstrap_real_http_connection_closes_after_qualified_health(self):
+        remote, _, _ = self.bootstrap_fixture()
+        sock = self.registry / (self.record["id"] + ".sock")
+        real_lstat = Path.lstat
+        def lstat(path):
+            return Mock(st_mode=stat.S_IFSOCK | 0o600, st_uid=10001, st_gid=10001) if path == sock else real_lstat(path)
+        body = json.dumps({"ready": True, "busy": False, "runtime": {
+            "engine": "chromium", "version": self.pin["version"], "sha256": self.pin["sha256"],
+            "platform": "linux", "arch": "x64"}}).encode()
+        transport = Mock()
+        transport.makefile.return_value = io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
+        def connect(connection):
+            connection.sock = transport
+        # Use the real HTTPConnection request/response lifecycle. Only the Unix
+        # socket transport is synthetic; HTTPConnection has no __enter__/__exit__.
+        with patch.object(self.worker, "_agent", side_effect=remote), patch.object(self.worker, "_negative_probes"), patch.object(self.worker, "_start_tunnel"), patch.object(Path, "lstat", lstat), patch.object(driver.UnixHTTP, "connect", connect):
+            self.assertEqual(self.worker.bootstrap(self.record, self.server), {"socket_path": "/run/fx/registry/worker-abc.sock"})
+        transport.close.assert_called_once()
+        self.assertIn(b"GET /healthz HTTP/1.1", b"".join(call.args[0] for call in transport.sendall.call_args_list))
 
     def test_restart_bootstrap_does_not_reinstall_pinned_assets(self):
         remote, calls, _ = self.bootstrap_fixture(installed=True)
