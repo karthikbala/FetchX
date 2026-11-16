@@ -180,10 +180,10 @@ export class Gateway {
   if(!residentialFirstGet(w,input))return response;
   for(;;){
    const category=classifyOutcome(response,{...input,main_document:true});
-   const eligibleError=!response.error||['proxy_connect_failed','provider_target_refused','source_challenge','source_denied'].includes(response.error)||response.error==='browser_capture_failed'&&['source_denied','source_challenge'].includes(category);
+   const eligibleError=!response.error||['proxy_connect_failed','provider_target_refused','source_unreachable','source_challenge','source_denied'].includes(response.error)||response.error==='browser_capture_failed'&&['source_denied','source_challenge'].includes(category);
    // A 429 on the first GET limits that provider's egress, not the source:
    // move to the next provider (Evomi -> DataImpulse) in a fresh session.
-   if(!eligibleError||category!=='rate_limited'&&response.headers?.['retry-after']||!['source_denied','source_challenge','transport_failure','rate_limited','provider_refused'].includes(category))return response;
+   if(!eligibleError||category!=='rate_limited'&&response.headers?.['retry-after']||!['source_denied','source_challenge','transport_failure','rate_limited','provider_refused','source_unreachable'].includes(category))return response;
    if(response.actionsStarted)return {...response,fallbackBlocked:'browser_actions_not_replayable'};
    const next=nextRoute(this.config,w.config,(w.config.routeIndex??0)+1,new URL(input.url).hostname);
    if(next<0)return response;

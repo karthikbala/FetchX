@@ -18,6 +18,8 @@ def error_code(error):
     refused=connect_refusal(error)
     if refused in (401,402,407):return 'provider_account_rejected'
     if refused is not None and 400<=refused<500:return 'provider_target_refused'
+    # 502-504: the proxy could not reach the target (a country or IP-type firewall).
+    if refused in (502,503,504):return 'source_unreachable'
     if isinstance(error, SSLError):return 'tls_verification_failed'
     if isinstance(error, (InvalidURL, InvalidSchema, InvalidHeader, ImpersonateError, ValueError, TypeError, KeyError)):return 'transport_request_invalid'
     if isinstance(error, (ConnectionError, ProxyError, Timeout)):return 'proxy_connect_failed'

@@ -4,7 +4,7 @@ import {hasHtmlChallenge} from './source-challenge.mjs';
 import {protectionView,PROTECTION_VERSION,PROTECTION_VENDORS,PROTECTION_KINDS} from './protection.mjs';
 
 const UUID=/^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
-export const OUTCOME_CATEGORIES=Object.freeze(['provider_refused','transport_failure','source_denied','source_challenge','rate_limited','upstream_error','success','unknown','cancelled']);
+export const OUTCOME_CATEGORIES=Object.freeze(['provider_refused','source_unreachable','transport_failure','source_denied','source_challenge','rate_limited','upstream_error','success','unknown','cancelled']);
 export const ROUTING_REASONS=Object.freeze(['evomi_default','residential_fallback','session_renewal','oxylabs_default','healthy_proxy_selected','quarantine_probe','sticky_session','fallback_source_denied','fallback_source_challenge','fallback_proxy_connect_failed','fallback_native_flow_incomplete']);
 export const RECORD_REASON_CODES=Object.freeze(['accepted','partial','no_records','source_unavailable','source_denied','source_challenge','schema_mismatch','identity_mismatch','context_mismatch','incomplete','parse_error','other']);
 const allowed=(value,list)=>list.includes(value)?value:null;
@@ -44,6 +44,8 @@ export function classifyOutcome(response={},input={}){
  if(response.error==='source_challenge')return 'source_challenge';
  // The proxy provider refused the destination (CONNECT 4xx): the source was never contacted.
  if(response.error==='provider_target_refused')return 'provider_refused';
+ // The proxy could not reach the target (CONNECT 502-504): a country or IP-type firewall, not the proxy's health.
+ if(response.error==='source_unreachable')return 'source_unreachable';
  const status=response.status;
  if(status===429||response.error==='rate_limited')return 'rate_limited';
  if(status===401||status===403||response.error==='source_denied')return 'source_denied';

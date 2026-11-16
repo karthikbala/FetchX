@@ -6,6 +6,7 @@ import {providerRule,providerRules,assertProviderAllowed,hostMatches} from '../s
 import {probeCell,probePlan,runProbe,summarizeProbe} from '../src/reachability.mjs';
 import {connectRelay} from '../src/connect-relay.mjs';
 import {classifyOutcome} from '../src/diagnostics.mjs';
+import {FALLBACK_FAILURES} from '../src/policy.mjs';
 
 test('default rule excludes Oxylabs for .gov hosts only',()=>{
  assert.equal(providerRule({},'oxylabs','myplace.cuyahogacounty.gov')?.id,'oxylabs-gov');
@@ -62,6 +63,18 @@ test('CONNECT relay reports a provider 4xx refusal as provider_target_refused',a
   assert.equal(relay.error,'provider_target_refused');
   assert.equal(classifyOutcome({status:null,error:'provider_target_refused'}),'provider_refused');
  }finally{await relay.close();proxy.close();}
+});
+test('CONNECT relay reports a proxy that cannot reach the target as source_unreachable',async()=>{
+ for(const answer of [502,503,504]){
+  const proxy=await fakeProxy(()=>answer,{port:1});
+  const relay=await connectRelay({proxy:{url:`http://u:p@127.0.0.1:${proxy.address().port}`},profile:{hosts:['geo.example.com']},maxBytes:4096,resolve:async()=>[{address:'93.184.216.34'}]});
+  try{
+   await new Promise((resolve,reject)=>{const q=http.request(relay.url,{method:'CONNECT',path:'geo.example.com:443'});q.on('connect',(r,s)=>{s.destroy();resolve(r.statusCode);});q.on('error',reject);q.end();});
+   assert.equal(relay.error,'source_unreachable',String(answer));
+  }finally{await relay.close();proxy.close();}
+ }
+ assert.equal(classifyOutcome({status:null,error:'source_unreachable'}),'source_unreachable');
+ assert.ok(FALLBACK_FAILURES.has('source_unreachable'));
 });
 test('probe plan skips rule-excluded providers and the summary infers country, provider and datacenter limits',async()=>{
  const config={proxies:[{id:'us-1',country:'US',url:'http://u:p@dc.invalid:1'},{id:'gb-1',country:'GB',url:'http://u:p@dc.invalid:2'}],residential:{providers:{evomi:{enabled:true,username:'u',password:'p'},dataimpulse:{enabled:false}}}};
