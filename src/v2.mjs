@@ -15,6 +15,7 @@ import {browserProbeOperation} from './v2-browser-operation.mjs';
 import {estimateRoutePricing} from './v2-pricing.mjs';
 import {residentialTrafficCharge,finishResidentialTrafficCharge} from './customer-traffic.mjs';
 import {distinctNativeRetryRoute,nativeRetryIdentityBinding,pristineNativeRetry,transientNativeTransport,transientNativeResponse,successfulNativeResponse} from './v2-native-retry.mjs';
+import {assertProviderAllowed} from './provider-rules.mjs';
 import {ControlCredits,recoverControlCredits,reviewedCreditPolicy} from './control-credits.mjs';
 
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -198,6 +199,8 @@ export class V2Gateway{
   providerProxy(this.config,{country:proxy.country,residentialSession},provider);
   return {...proxy,provider,proxy_id:null,residential_session:residentialSession};
  }
+ // Provider rules apply to every destination host, including redirects.
+ assertRouteProvider(route,host){if(route.class==='direct')return;assertProviderAllowed(this.config,route.class==='residential'?route.provider:(this.config.proxies?.find(p=>p.id===route.proxy_id)?.provider??'oxylabs'),host);}
  checkProxy(proxy){let u;try{u=new URL(proxy.url);}catch{fail('proxy_configuration_invalid',503);}if(!proxy.id||u.protocol!=='http:'||u.pathname!=='/'||u.search||u.hash)fail('proxy_configuration_invalid',503);}
  resolveProxy(route){
   if(route.class==='direct')return null;
@@ -279,6 +282,8 @@ export class V2Gateway{
   const session=await this.owned(project,raw.session_id),p=await this.profile(project,{id:session.policy.id,version:session.policy.version});
   const input=this.request(raw.request,p),recipe=await this.recipe(project,raw.recipe,p);let route=this.sealer.open(session.route);
   await this.rejectControlCredentials(input.headers);
+  // Before any reservation: an excluded provider is never reserved, dispatched or charged.
+  this.assertRouteProvider(route,new URL(input.url).hostname);
   const id=randomUUID(),hops=p.limits.max_redirects+1,reservedBytes=p.limits.max_encoded_bytes*hops,reservedTunnel=route.class==='direct'?0:p.limits.max_tunnel_bytes*hops;
   let reused,pricingDecision,retryPlan=raw.retry===true?{requested:true,eligible:false,stop_reason:'retry_ineligible'}:null,reservationRequests=hops;
   await this.store.tx(async c=>{
@@ -469,7 +474,7 @@ export class V2Gateway{
       if(hop>=p.limits.max_redirects)fail('redirect_limit',502);
       if(retryEnabled&&requests>=retryPlan.request_limit)fail('retry_request_limit',429);
       const target=new URL(response.headers.location,destination.url).href;
-      stage='dns';const checked=await this.destination(target,p,deadline,dnsContext);stage='redirect_policy';
+      stage='dns';const checked=await this.destination(target,p,deadline,dnsContext);stage='redirect_policy';this.assertRouteProvider(route,checked.url.hostname);
       if(checked.url.origin!==destination.url.origin&&!(p.id.startsWith(DISCOVERY_PREFIX)&&p.kind==='discovery'))fail('redirect_origin_rejected');
       const toGet=response.status===303&&current.method!=='HEAD'||[301,302].includes(response.status)&&current.method==='POST';
       checkedDestination=checked;

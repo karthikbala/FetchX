@@ -16,11 +16,19 @@ import {validateAdmissionConfig,enqueueAdmission,requireAdmissionTurn,completeAd
 import {classifyOutcome} from './diagnostics.mjs';
 import {hasHtmlChallenge} from './source-challenge.mjs';
 import {observeProtection} from './protection.mjs';
+import {validateProviderRules,providerRule,assertProviderAllowed} from './provider-rules.mjs';
 import {chooseHealthyProxy,recordRouteOutcome,validateRouteHealthConfig} from './route-health.mjs';
 
 // Residential route fallback applies only to a workflow's first, cookie-free GET.
 const cookieFreeGet=input=>input.method==='GET'&&!Object.keys(input.headers??{}).some(k=>['cookie','authorization'].includes(k.toLowerCase()));
 function residentialFirstGet(w,input){return w.requests===0&&cookieFreeGet(input);}
+// The next residential route index from `from` that is configured and not
+// excluded for this host by a provider rule, or -1 within the attempt bound.
+function nextRoute(config,p,from,host){
+ const limit=Math.min(routePlan(p).length,p.maxRouteAttempts??4);
+ for(let i=from;i<limit;i++)if(!providerRule(config,routePlan(p)[i].provider,host))return i;
+ return -1;
+}
 const routeConfigured=(config,p,index)=>{try{const q=routeConfig(p,index,'0000000000');providerProxy(config,q,selectedRoute(q).provider);return true;}catch{return false;}};
 // A profile may allow a bounded number of session renewals: a later
 // cookie-free GET that is rate-limited, denied or challenged restarts the
@@ -33,10 +41,11 @@ function residentialRenewable(w,input,r){
 }
 function residentialRotatable429(config,w,input,r){
  const p=w.config;if(!isResidential(p)||r.error||r.actionsStarted)return false;
- if(w.requests!==0)return residentialRenewable(w,input,r)&&routeConfigured(config,p,0);
+ const host=new URL(input.url).hostname;
+ if(w.requests!==0){const first=nextRoute(config,p,0,host);return residentialRenewable(w,input,r)&&first>=0&&routeConfigured(config,p,first);}
  if(!residentialFirstGet(w,input))return false;
- const next=(p.routeIndex??0)+1;if(next>=Math.min(routePlan(p).length,p.maxRouteAttempts??4))return false;
- return routeConfigured(config,p,next);
+ const next=nextRoute(config,p,(p.routeIndex??0)+1,host);
+ return next>=0&&routeConfigured(config,p,next);
 }
 export class Gateway {
  constructor({store,config,profiles,resolve,browserTierCheck=checkBrowserTier,transport={oxylabs:oxylabsRequest,scrapedo:scrapeDoRequest}}){
@@ -47,6 +56,7 @@ export class Gateway {
   this.captchaSolver=new CaptchaSolver(store,config);
   validateAdmissionConfig(config);
   validateRouteHealthConfig(config);
+  validateProviderRules(config);
  }
  profile(project,id){if(typeof id!=='string'||!this.config.projects[project]?.profiles.includes(id)||!Object.hasOwn(this.profiles,id))fail('profile_forbidden',403);return residentialPolicy(this.profiles[id],this.config);}
  async workflow(project,input){
@@ -121,6 +131,15 @@ export class Gateway {
   if(reused)return this.result(project,reused.id);
   try{
    let current=await this.owned(project,id),provider=current.route;
+   // A provider rule may exclude the workflow's first residential route for this
+   // host: start the first GET on the next allowed route instead (never later).
+   if(isResidential(p)&&current.requests===0&&providerRule(this.config,current.route,new URL(input.url).hostname)){
+    const host=new URL(input.url).hostname,next=nextRoute(this.config,current.config,current.config.routeIndex??0,host);
+    if(next<0)assertProviderAllowed(this.config,current.route,host);
+    const config=routeConfig(current.config,next,randomBytes(5).toString('hex')),route=selectedRoute(config);
+    await this.store.pool.query('UPDATE workflows SET route=$2,config=$3,proxy_id=$4 WHERE id=$1',[id,route.provider,config,`${route.provider}:${config.residentialSession}`]);
+    current={...current,config,route:route.provider,proxy_id:`${route.provider}:${config.residentialSession}`};provider=route.provider;
+   }
    const firstRestart=provider==='scrapedo'&&p.fallbackRestarted&&!(await this.store.pool.query("SELECT 1 FROM attempts WHERE workflow=$1 AND provider='scrapedo' LIMIT 1",[id])).rowCount;
    const routingReason=firstRestart?'fallback_native_flow_incomplete':current.requests===0?(p.routingSelection??'oxylabs_default'):'sticky_session';
    let response=await this.attempt(current,opId,input,provider,routingReason);
@@ -129,7 +148,7 @@ export class Gateway {
    const htmlChallenge=input.main_document&&hasHtmlChallenge(response);
    const category=response.error??([401,403].includes(response.status)?'source_denied':htmlChallenge?'source_challenge':null);
    // First request only. Never move an established cookie/browser session to a new egress.
-   if(provider==='oxylabs'&&FALLBACK_FAILURES.has(category)&&current.requests===0&&input.method==='GET'&&p.maxFallbackCredits>0&&this.config.scrapeDoToken){
+   if(provider==='oxylabs'&&FALLBACK_FAILURES.has(category)&&current.requests===0&&input.method==='GET'&&p.maxFallbackCredits>0&&this.config.scrapeDoToken&&!providerRule(this.config,'scrapedo',new URL(input.url).hostname)){
     await this.store.pool.query("UPDATE workflows SET route='scrapedo' WHERE id=$1",[id]);
     response=await this.attempt(current,opId,input,'scrapedo','fallback_'+category);
    }
@@ -143,7 +162,8 @@ export class Gateway {
  }
  async residentialRenewal(w,opId,input,response){
   if(!residentialRenewable(w,input,response))return response;
-  const config={...routeConfig(w.config,0,randomBytes(5).toString('hex')),sessionRenewals:(w.config.sessionRenewals??0)+1},route=selectedRoute(config);
+  const first=nextRoute(this.config,w.config,0,new URL(input.url).hostname);if(first<0)return {...response,fallbackBlocked:'provider_host_excluded'};
+  const config={...routeConfig(w.config,first,randomBytes(5).toString('hex')),sessionRenewals:(w.config.sessionRenewals??0)+1},route=selectedRoute(config);
   try{providerProxy(this.config,config,route.provider);if(route.tier)await this.browserTierCheck(this.config,route.tier,{engine:config.browserEngine??'cloakbrowser'});}catch(e){return {...response,fallbackBlocked:e.code??'route_unavailable'};}
   await this.store.tx(async c=>{
    const current=await this.owned(w.project,w.id,c);if(current.state!=='open')fail('workflow_closed',409);
@@ -160,13 +180,13 @@ export class Gateway {
   if(!residentialFirstGet(w,input))return response;
   for(;;){
    const category=classifyOutcome(response,{...input,main_document:true});
-   const eligibleError=!response.error||['proxy_connect_failed','source_challenge','source_denied'].includes(response.error)||response.error==='browser_capture_failed'&&['source_denied','source_challenge'].includes(category);
+   const eligibleError=!response.error||['proxy_connect_failed','provider_target_refused','source_challenge','source_denied'].includes(response.error)||response.error==='browser_capture_failed'&&['source_denied','source_challenge'].includes(category);
    // A 429 on the first GET limits that provider's egress, not the source:
    // move to the next provider (Evomi -> DataImpulse) in a fresh session.
-   if(!eligibleError||category!=='rate_limited'&&response.headers?.['retry-after']||!['source_denied','source_challenge','transport_failure','rate_limited'].includes(category))return response;
+   if(!eligibleError||category!=='rate_limited'&&response.headers?.['retry-after']||!['source_denied','source_challenge','transport_failure','rate_limited','provider_refused'].includes(category))return response;
    if(response.actionsStarted)return {...response,fallbackBlocked:'browser_actions_not_replayable'};
-   const next=(w.config.routeIndex??0)+1;
-   if(next>=Math.min(routePlan(w.config).length,w.config.maxRouteAttempts??4))return response;
+   const next=nextRoute(this.config,w.config,(w.config.routeIndex??0)+1,new URL(input.url).hostname);
+   if(next<0)return response;
    const config=routeConfig(w.config,next,randomBytes(5).toString('hex')),route=selectedRoute(config);
    try{providerProxy(this.config,config,route.provider);if(route.tier)await this.browserTierCheck(this.config,route.tier,{engine:config.browserEngine??'cloakbrowser'});}catch(e){return {...response,fallbackBlocked:e.code??'route_unavailable'};}
    await this.store.tx(async c=>{
@@ -179,6 +199,8 @@ export class Gateway {
   }
  }
  async attempt(w,opId,input,provider,routingReason='sticky_session'){
+  // Provider rules are checked before admission: an excluded provider is never dispatched or charged.
+  assertProviderAllowed(this.config,provider==='oxylabs'?(this.config.proxies.find(x=>x.id===w.proxy_id)?.provider??'oxylabs'):provider,new URL(input.url).hostname);
   const p=w.config,aid=randomUUID(),reserved=provider==='scrapedo'?p.fallbackMaxCost:0;
   if(isResidential(p)&&p.execution==='browser')await this.browserTierCheck(this.config,selectedRoute(p).tier,{engine:p.browserEngine??'cloakbrowser'});
   if(provider==='scrapedo'&&(!Number.isInteger(p.providerSession)||p.providerSession<0||p.providerSession>1000000))fail('provider_session_invalid',500);
