@@ -36,7 +36,6 @@ Native transport failures now say which layer failed:
 | Error | Outcome category | Meaning |
 | --- | --- | --- |
 | `provider_target_refused` | `provider_refused` | The proxy provider answered CONNECT with a 4xx (for example 403, 444, 451). The source was never contacted. It does not count against route health. Residential fallback and Scrape.do fallback may try another provider. |
-| `source_unreachable` | `source_unreachable` | The proxy answered CONNECT with 502, 503 or 504: it could not reach the target, the usual sign of a country or IP-type firewall. It does not count against route health. The same fallback rules as `provider_target_refused` apply. |
 | `provider_account_rejected` | — | CONNECT 401/402/407: provider credentials or access. |
 | `source_unreachable` | `source_unreachable` | The proxy answered CONNECT 502/503/504: it could not reach the destination, which is the usual sign of a country or IP-type firewall. It does not count against route health and may fall back to another provider. |
 | `proxy_connect_failed` | `transport_failure` | The proxy or the tunnel failed in another way. |
