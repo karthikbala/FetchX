@@ -4,8 +4,8 @@ import {hasHtmlChallenge} from './source-challenge.mjs';
 import {protectionView,PROTECTION_VERSION,PROTECTION_VENDORS,PROTECTION_KINDS} from './protection.mjs';
 
 const UUID=/^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
-export const OUTCOME_CATEGORIES=Object.freeze(['transport_failure','provider_refused','source_unreachable','source_denied','source_challenge','rate_limited','upstream_error','success','unknown','cancelled']);
-export const ROUTING_REASONS=Object.freeze(['evomi_default','provider_excluded','residential_fallback','session_renewal','oxylabs_default','healthy_proxy_selected','quarantine_probe','sticky_session','fallback_source_denied','fallback_source_challenge','fallback_proxy_connect_failed','fallback_native_flow_incomplete']);
+export const OUTCOME_CATEGORIES=Object.freeze(['transport_failure','source_denied','source_challenge','rate_limited','upstream_error','success','unknown','cancelled']);
+export const ROUTING_REASONS=Object.freeze(['evomi_default','residential_fallback','session_renewal','oxylabs_default','healthy_proxy_selected','quarantine_probe','sticky_session','fallback_source_denied','fallback_source_challenge','fallback_proxy_connect_failed','fallback_native_flow_incomplete']);
 export const RECORD_REASON_CODES=Object.freeze(['accepted','partial','no_records','source_unavailable','source_denied','source_challenge','schema_mismatch','identity_mismatch','context_mismatch','incomplete','parse_error','other']);
 const allowed=(value,list)=>list.includes(value)?value:null;
 const numeric=value=>value===null||value===undefined?null:Number(value);
@@ -47,8 +47,6 @@ export function classifyOutcome(response={},input={}){
  if(status===401||status===403||response.error==='source_denied')return 'source_denied';
  if(input.main_document&&hasHtmlChallenge(response))return 'source_challenge';
  if(Number.isInteger(status)&&status>=500&&status<=599)return 'upstream_error';
- if(response.error==='provider_target_refused'&&!status)return 'provider_refused';
- if(response.error==='source_unreachable'&&!status)return 'source_unreachable';
  if(['proxy_connect_failed','transport_failed','request_timeout','response_too_large','metered_outcome_unknown'].includes(response.error)&&!status)return 'transport_failure';
  if(response.error)return 'unknown';
  if(Number.isInteger(status)&&status>=200&&status<400)return 'success';

@@ -59,24 +59,4 @@ export function requestInput(input,profile){
   const browser=recipeInput(input.browser,profile);
   return {...input,...(browser?{browser}:{}),method,headers:input.headers??{},body};
 }
-export const FALLBACK_FAILURES=new Set(['proxy_connect_failed','provider_target_refused','source_unreachable','source_denied','source_challenge']);
-// What a proxy's non-200 CONNECT answer says about which layer refused. A
-// provider policy refusal (Oxylabs answers 444 for .gov targets) is not a
-// source block or an unhealthy IP; a 502-504 means the proxy could not reach
-// the target, the usual sign of a country or IP-type firewall.
-export function connectFailure(status){
- if([401,402,407].includes(status))return 'provider_account_rejected';
- if([403,444,451].includes(status))return 'provider_target_refused';
- if([502,503,504].includes(status))return 'source_unreachable';
- return 'proxy_connect_failed';
-}
-// Built-in provider exclusions; config.providerExclusions replaces them.
-export const DEFAULT_PROVIDER_EXCLUSIONS=Object.freeze([Object.freeze({provider:'oxylabs',hostSuffixes:Object.freeze(['.gov']),reason:'provider_policy'})]);
-export function providerExcluded(config,provider,hostname){
- const host=String(hostname).toLowerCase().replace(/\.$/,'');
- return (config.providerExclusions??DEFAULT_PROVIDER_EXCLUSIONS).some(rule=>rule.provider===provider&&rule.hostSuffixes.some(suffix=>host.endsWith(suffix.toLowerCase())||host===suffix.toLowerCase().replace(/^\./,'')));
-}
-export function validateProviderExclusions(rules){
- if(rules===undefined)return;
- if(!Array.isArray(rules)||rules.length>100||rules.some(r=>!r||typeof r!=='object'||!['oxylabs','scrapedo'].includes(r.provider)||!Array.isArray(r.hostSuffixes)||!r.hostSuffixes.length||r.hostSuffixes.some(x=>typeof x!=='string'||!/^\.?[a-z0-9-]+(\.[a-z0-9-]+)*$/i.test(x))))fail('provider_exclusions_invalid',500);
-}
+export const FALLBACK_FAILURES=new Set(['proxy_connect_failed','source_denied','source_challenge']);

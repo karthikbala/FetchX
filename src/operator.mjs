@@ -5,14 +5,6 @@ import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {Store} from './store.mjs';
 import {Sealer} from './crypto.mjs';
 import {gatewayStatus} from './status.mjs';
-import {probeHost} from './reachability.mjs';
-if(process.argv[2]==='probe-reachability'){
- // Operator onboarding check: a few KB per {provider, country}. Prints a
- // proposed rule (no credentials, no proxy addresses) for review; writes nothing.
- const config=JSON.parse(await readFile(process.env.GATEWAY_CONFIG??'/run/secrets/gateway.json','utf8'));
- console.log(JSON.stringify(await probeHost(config,process.argv[3],String(process.argv[4]??'US').split(',')),null,1));
- process.exit(0);
-}
 const store=new Store(process.env.DATABASE_URL);
 try{
  if(process.argv[2]==='status'){

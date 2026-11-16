@@ -1,6 +1,6 @@
 import http from 'node:http';
 import net from 'node:net';
-import {checkedURL,connectFailure} from './policy.mjs';
+import {checkedURL} from './policy.mjs';
 // Private per-attempt CONNECT relay: exact reviewed hosts, no direct fallback,
 // bounded wire traffic, no source/provider credentials in logs or client URLs.
 export async function connectRelay({proxy,profile,maxBytes,resolve,allowLicense=false}){
@@ -36,7 +36,7 @@ export async function connectRelay({proxy,profile,maxBytes,resolve,allowLicense=
     if(connectStatus===null){
      statusPrefix=Buffer.concat([statusPrefix,part.subarray(0,32-statusPrefix.length)]);
      const match=/^HTTP\/1\.[01] (\d{3})/.exec(statusPrefix.toString('latin1'));
-     if(match){connectStatus=Number(match[1]);if(connectStatus!==200){const failure=connectFailure(connectStatus);if(failure==='provider_account_rejected'||!error)error=failure;}}
+     if(match){connectStatus=Number(match[1]);if([401,402,407].includes(connectStatus))error='provider_account_rejected';}
     }
     if(proxyBytes+pendingBytes>maxBytes)stop('residential_byte_limit');
    });
@@ -46,7 +46,7 @@ export async function connectRelay({proxy,profile,maxBytes,resolve,allowLicense=
     const i=header.indexOf('\r\n\r\n');if(i<0)return;
     remote.removeListener('data',ready);
     const status=Number(/^HTTP\/1\.[01] (\d{3})/.exec(header.toString())?.[1]);
-    if(status!==200){error=error??connectFailure(status);remote.destroy();client.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');return;}
+    if(status!==200){error=[401,402,407].includes(status)?'provider_account_rejected':error??'proxy_connect_failed';remote.destroy();client.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');return;}
     if(bytes+512>maxBytes){stop('residential_byte_limit');return;}bytes+=512;
     client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
     pump(client,remote,true);pump(remote,client);
