@@ -25,7 +25,7 @@ export async function oxylabsRequest(input,proxy,profile){
   child.on('close',()=>{
    if(!size){finish(new GatewayError('transport_unavailable',503));return;}
    try{
-    const r=JSON.parse(Buffer.concat(output)),errors=new Set(['provider_target_refused','provider_account_rejected','proxy_connect_failed','tls_verification_failed','transport_unavailable','transport_request_invalid','transport_failed','source_body_incomplete','response_too_large','transport_outcome_unknown']);
+    const r=JSON.parse(Buffer.concat(output)),errors=new Set(['provider_target_refused','provider_account_rejected','source_unreachable','proxy_connect_failed','tls_verification_failed','transport_unavailable','transport_request_invalid','transport_failed','source_body_incomplete','response_too_large','transport_outcome_unknown']);
     if(!r||typeof r!=='object'||(r.error&&!errors.has(r.error))||(!r.error&&(!Number.isInteger(r.status)||r.status<100||r.status>599)))throw Error();
     const pairs=r.headers??[],encoded=r.body_base64??'';
     if(!Array.isArray(pairs)||pairs.some(p=>!Array.isArray(p)||p.length!==2||p.some(v=>typeof v!=='string'))||typeof encoded!=='string')throw Error();

@@ -1,6 +1,6 @@
 # Plan: routing rules admin portal
 
-Status: plan only, not built.
+Status: step 1 built (database rules, loader, refresh, operator CLI). Steps 2–5 are planned.
 
 ## Goal
 
@@ -73,7 +73,7 @@ CREATE TABLE reachability_probes(id uuid PRIMARY KEY, host text NOT NULL, countr
 
 ## Delivery steps
 
-1. Database tables plus a loader with the precedence rules; the gateway reads rules from the database (config and defaults still work). Tests.
+1. **Done:** database tables plus a loader with the precedence rules; the gateway reads rules from the database and refreshes them (config and defaults still work); audited, versioned save/enable/disable/delete; operator CLI (`node src/operator.mjs rules …`). Tests.
 2. Operator role and the admin API (rules CRUD, test endpoint, audit). Tests.
 3. Probe as an async job with stored reports, and the apply endpoint.
 4. Console UI pages (rules, editor, probe, audit), then profiles editing.

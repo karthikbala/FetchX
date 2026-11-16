@@ -46,7 +46,7 @@ export async function connectRelay({proxy,profile,maxBytes,resolve,allowLicense=
     const i=header.indexOf('\r\n\r\n');if(i<0)return;
     remote.removeListener('data',ready);
     const status=Number(/^HTTP\/1\.[01] (\d{3})/.exec(header.toString())?.[1]);
-    if(status!==200){error=[401,402,407].includes(status)?'provider_account_rejected':status>=400&&status<500?error??'provider_target_refused':error??'proxy_connect_failed';remote.destroy();client.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');return;}
+    if(status!==200){error=[401,402,407].includes(status)?'provider_account_rejected':status>=400&&status<500?error??'provider_target_refused':[502,503,504].includes(status)?error??'source_unreachable':error??'proxy_connect_failed';remote.destroy();client.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');return;}
     if(bytes+512>maxBytes){stop('residential_byte_limit');return;}bytes+=512;
     client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
     pump(client,remote,true);pump(remote,client);

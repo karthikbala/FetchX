@@ -63,6 +63,14 @@ test('CONNECT relay reports a provider 4xx refusal as provider_target_refused',a
   assert.equal(classifyOutcome({status:null,error:'provider_target_refused'}),'provider_refused');
  }finally{await relay.close();proxy.close();}
 });
+test('CONNECT relay reports a proxy 502-504 as source_unreachable',async()=>{
+ const proxy=await fakeProxy(()=>502,{port:1});
+ const relay=await connectRelay({proxy:{url:`http://u:p@127.0.0.1:${proxy.address().port}`},profile:{hosts:['geo.example.com']},maxBytes:4096,resolve:async()=>[{address:'93.184.216.34'}]});
+ try{
+  await new Promise((resolve,reject)=>{const q=http.request(relay.url,{method:'CONNECT',path:'geo.example.com:443'});q.on('connect',(r,s)=>{s.destroy();resolve(r.statusCode);});q.on('error',reject);q.end();});
+  assert.equal(relay.error,'source_unreachable');assert.equal(classifyOutcome({status:null,error:'source_unreachable'}),'source_unreachable');
+ }finally{await relay.close();proxy.close();}
+});
 test('probe plan skips rule-excluded providers and the summary infers country, provider and datacenter limits',async()=>{
  const config={proxies:[{id:'us-1',country:'US',url:'http://u:p@dc.invalid:1'},{id:'gb-1',country:'GB',url:'http://u:p@dc.invalid:2'}],residential:{providers:{evomi:{enabled:true,username:'u',password:'p'},dataimpulse:{enabled:false}}}};
  const plan=probePlan(config,'myplace.cuyahogacounty.gov',['US','GB']);
@@ -118,4 +126,41 @@ test('v2 routes refuse an excluded provider for the destination and redirect hos
  assert.doesNotThrow(()=>v.assertRouteProvider({class:'datacenter',country:'US',proxy_id:'us-1'},'example.com'));
  assert.doesNotThrow(()=>v.assertRouteProvider({class:'residential',country:'US',provider:'evomi'},'www.irs.gov'));
  assert.doesNotThrow(()=>v.assertRouteProvider({class:'direct',country:null},'www.irs.gov'));
+});
+
+test('database rules: precedence, versioned saves, default override, delete and audit',{skip:!process.env.TEST_DATABASE_URL},async()=>{
+ const {Store}=await import('../src/store.mjs'),m=await import('../src/provider-rules.mjs');
+ assert.match(new URL(process.env.TEST_DATABASE_URL).pathname,/^\/gateway_test_[A-Za-z0-9]+$/);
+ const store=new Store(process.env.TEST_DATABASE_URL);await store.init();await store.pool.query('TRUNCATE routing_rules,routing_rule_audit RESTART IDENTITY');
+ const config={providerRules:[{id:'scrapedo-shop',provider:'scrapedo',match:{host:'shop.example.com'},action:'exclude',reason:'config rule'}]};
+ const actor='ops@example.com';
+ try{
+  assert.deepEqual(await m.loadProviderRules(store.pool,config),{loaded:0,rejected:[]});
+  assert.deepEqual(m.providerRuleSources(config).map(r=>`${r.id}:${r.source}`),['oxylabs-gov:default','scrapedo-shop:config']);
+  // Create, then a stale or missing version conflicts; the right version updates.
+  const rule={id:'evomi-records',provider:'evomi',match:{hostSuffix:'.records.example'},action:'exclude',reason:'portal rule',evidence:{probe:'p1'}};
+  const created=await m.saveProviderRule(store,rule,{actor});assert.equal(created.version,1);
+  await assert.rejects(m.saveProviderRule(store,rule,{actor}),e=>e.code==='rule_version_conflict');
+  await assert.rejects(m.saveProviderRule(store,{...rule,reason:'x'},{actor,expectedVersion:5}),e=>e.code==='rule_version_conflict');
+  assert.equal((await m.saveProviderRule(store,{...rule,reason:'edited'},{actor,expectedVersion:1})).version,2);
+  for(const bad of [{...rule,provider:'nope'},{...rule,extra:1},{...rule,evidence:'text'},{...rule,evidence:{blob:'x'.repeat(5000)}}])await assert.rejects(m.saveProviderRule(store,bad,{actor,expectedVersion:2}),e=>e.code==='rule_invalid');
+  await assert.rejects(m.saveProviderRule(store,{...rule,id:'other'},{actor:'bad actor!'}),e=>e.code==='rule_actor_invalid');
+  // Not visible to routing until loaded (the gateway refreshes on an interval).
+  assert.equal(m.providerRule(config,'evomi','a.records.example'),null);
+  await m.loadProviderRules(store.pool,config);assert.equal(m.providerRule(config,'evomi','a.records.example')?.id,'evomi-records');
+  // Disabling a shipped default writes a database override; deleting it restores the default.
+  await assert.rejects(m.setProviderRuleEnabled(store,config,'oxylabs-gov',false,{actor,reason:''}),e=>e.code==='rule_reason_required');
+  await assert.rejects(m.setProviderRuleEnabled(store,config,'missing',false,{actor,reason:'x'}),e=>e.code==='rule_not_found');
+  const off=await m.setProviderRuleEnabled(store,config,'oxylabs-gov',false,{actor,reason:'Oxylabs enabled .gov for our account'});assert.equal(off.enabled,false);assert.deepEqual(off.match,{hostSuffix:'.gov'});
+  await m.loadProviderRules(store.pool,config);assert.equal(m.providerRule(config,'oxylabs','ohio.gov'),null);
+  const sources=m.providerRuleSources(config);assert.deepEqual(sources.find(r=>r.id==='oxylabs-gov')?.overrides,'default');assert.equal(sources.find(r=>r.id==='oxylabs-gov').source,'database');
+  await m.deleteProviderRule(store,'oxylabs-gov',{actor});await m.loadProviderRules(store.pool,config);assert.equal(m.providerRule(config,'oxylabs','ohio.gov')?.id,'oxylabs-gov');
+  await assert.rejects(m.deleteProviderRule(store,'oxylabs-gov',{actor}),e=>e.code==='rule_not_found');
+  // An invalid row (written outside the API) is skipped, never loaded.
+  await store.pool.query("INSERT INTO routing_rules(id,provider,match,reason,updated_by) VALUES('broken','evomi','{\"host\":\"NOT A HOST\"}','x','sql')");
+  assert.deepEqual((await m.loadProviderRules(store.pool,config)).rejected,['broken']);
+  const audit=await m.providerRuleAudit(store.pool);
+  assert.deepEqual(audit.map(a=>`${a.rule_id}:${a.action}`).reverse(),['evomi-records:create','evomi-records:update','oxylabs-gov:disable','oxylabs-gov:delete']);
+  assert.ok(audit.every(a=>a.actor===actor));assert.equal(audit.find(a=>a.action==='disable').after.note,'Oxylabs enabled .gov for our account');
+ }finally{await store.close();}
 });

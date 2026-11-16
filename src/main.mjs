@@ -19,6 +19,7 @@ import {publicConsoleRequest,registerConsole} from './console.mjs';
 import {ControlIdentity} from './control-identity.mjs';
 import {ControlCredits} from './control-credits.mjs';
 import {isControlRequest,registerControl} from './control.mjs';
+import {loadProviderRules} from './provider-rules.mjs';
 
 // New self-service credentials have an explicit endpoint allowlist. Existing
 // provisioned project tokens retain their established v1/v2 contract.
@@ -91,7 +92,14 @@ if(process.argv[1]===fileURLToPath(import.meta.url)){
  await store.acquireRunnerLock(()=>{process.stderr.write('gateway_ownership_lost\n');process.exit(1);});
  await store.init();await store.recover();
  for(const id of Object.keys(config.sourceProfiles??{}))if(Object.hasOwn(profiles,id))throw Error('profile_override_rejected');
+ // Provider rules from the database (portal/operator) override defaults and
+ // config; refresh periodically so edits apply without a restart.
+ const ruleLoad=await loadProviderRules(store.pool,config);
+ if(ruleLoad.rejected.length)process.stderr.write('provider_rules_rejected:'+ruleLoad.rejected.length+'\n');
  const gateway=new Gateway({store,config,profiles:{...profiles,...config.sourceProfiles}});
+ const refreshMs=config.providerRulesRefreshMs??30000;
+ if(!Number.isInteger(refreshMs)||refreshMs<1000||refreshMs>3600000)throw Error('provider_rules_refresh_invalid');
+ const rulesRefresh=setInterval(()=>loadProviderRules(store.pool,config).catch(()=>process.stderr.write('provider_rules_refresh_failed\n')),refreshMs);rulesRefresh.unref();
  const recovery=await gateway.recoverCaptures();
  if(recovery.invalid)process.stderr.write('capture_recovery_invalid\n');
  const app=server(gateway);
@@ -107,5 +115,5 @@ if(process.argv[1]===fileURLToPath(import.meta.url)){
  const port=process.env.GATEWAY_PORT===undefined?8788:Number(process.env.GATEWAY_PORT);
  if(!Number.isInteger(port)||port<1||port>65535)throw Error('gateway_port_invalid');
  await app.listen({host:process.env.GATEWAY_HOST??'0.0.0.0',port});
- for(const signal of ['SIGINT','SIGTERM'])process.on(signal,async()=>{clearInterval(expiry);clearInterval(retention);await app.close();await pruning;await store.close();process.exit(0);});
+ for(const signal of ['SIGINT','SIGTERM'])process.on(signal,async()=>{clearInterval(expiry);clearInterval(retention);clearInterval(rulesRefresh);await app.close();await pruning;await store.close();process.exit(0);});
 }
