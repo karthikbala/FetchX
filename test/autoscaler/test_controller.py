@@ -146,6 +146,7 @@ class ControllerTests(unittest.TestCase):
         self.pressure, self.stale = True, False
         self.global_limit = 10
         self.busy = {}
+        self.worker_ready = {}
         self.controller = self.make_controller()
         self.addCleanup(lambda: self.controller.close())
 
@@ -157,7 +158,8 @@ class ControllerTests(unittest.TestCase):
         return dict(version=1, generated_at=dt.datetime.fromtimestamp(self.now - (100 if self.stale else 0), dt.timezone.utc).isoformat(),
                     queue=dict(pending=1 if self.pressure else 0, active=len(rows) if self.pressure else 0,
                                oldest_wait_ms=100000, recent_timeouts=0), max_concurrent_requests=self.global_limit,
-                    workers=[dict(id=r["id"], state=r["state"], ready=True, busy=self.busy.get(r["id"], self.pressure)) for r in rows])
+                    workers=[dict(id=r["id"], state=r["state"], ready=self.worker_ready.get(r["id"], True),
+                                  busy=self.busy.get(r["id"], self.pressure)) for r in rows])
 
     def tick(self, seconds=1):
         self.now += seconds
@@ -582,9 +584,10 @@ class ControllerTests(unittest.TestCase):
         self.tick()
         self.tick()
         self.assertEqual(self.only_record()["state"], "booting")
+        identity = self.only_record()["id"]
         self.tick(301)
         self.assertIn("delete_server", self.cloud.calls)
-        self.assertEqual(self.only_record()["state"], "deleting")
+        self.assertEqual(next(r for r in self.controller.ledger.records() if r["id"] == identity)["state"], "deleting")
         waiting.set_result({"socket_path": "/run/fx/registry/late.sock"})
         self.tick()
         self.assertEqual(json.loads((self.path / "registry.json").read_text())[0]["id"], "base")
@@ -613,6 +616,121 @@ class ControllerTests(unittest.TestCase):
         self.assertIn((self.only_record()["id"], "renew"), self.controller.futures)
         self.tick()
         self.assertEqual(self.only_record()["lease_expires_at"], original_deadline)
+
+    def test_unhealthy_drain_threshold_is_positive_and_defaults_to_30(self):
+        self.assertEqual(self.config['unhealthy_drain_seconds'], 30)
+        for invalid in (0, -1, True, '30'):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(SafetyError, 'invalid_unhealthy_drain_seconds'):
+                validate_config(dict(self.config, unhealthy_drain_seconds=invalid))
+
+    def unhealthy_ready(self):
+        self.controller.config['max_additional_workers'] = 1
+        self.ready()
+        identity = self.only_record()['id']
+        self.worker_ready[identity] = False
+        self.tick()
+        return identity
+
+    def test_brief_unhealthy_probe_recovers_without_drain(self):
+        identity = self.unhealthy_ready()
+        self.tick(29)
+        self.assertEqual(self.only_record()['state'], 'ready')
+        self.worker_ready[identity] = True
+        self.tick()
+        self.assertEqual(self.only_record()['state'], 'ready')
+        self.assertNotIn('unhealthy_since', self.only_record())
+        self.assertNotIn('delete_server', self.cloud.calls)
+
+    def test_stale_metrics_do_not_extend_unhealthy_evidence(self):
+        self.unhealthy_ready()
+        self.stale = True
+        self.tick(100)
+        self.assertEqual(self.only_record()['state'], 'ready')
+        self.stale = False
+        self.tick()
+        self.assertEqual(self.only_record()['state'], 'ready')
+        self.tick(29)
+        self.assertEqual(self.only_record()['state'], 'ready')
+        self.tick(1)
+        self.assertEqual(self.only_record()['state'], 'draining')
+
+    def test_sustained_unhealthy_drains_before_renew_and_replaces_with_shared_liabilities(self):
+        identity = self.unhealthy_ready()
+        self.controller.config['max_additional_workers'] = 2
+        record = self.only_record()
+        record['last_renewed_at'] = self.now - 60
+        self.controller.ledger.save(record)
+        renewals = len(self.driver.renewals)
+        self.tick(30)
+        self.assertEqual(self.only_record()['state'], 'draining')
+        self.assertEqual(len(self.driver.renewals), renewals)
+        self.assertNotIn('delete_server', self.cloud.calls)
+        result = self.tick()
+        records = self.controller.ledger.records()
+        self.assertEqual(self.cloud.calls.count('create'), 2)
+        self.assertEqual(next(r for r in records if r['id'] == identity)['state'], 'draining')
+        self.assertEqual(result['committed_micro_eur'], sum(r['reservation'] for r in records))
+        self.tick()
+        self.assertEqual(self.cloud.calls.count('create'), 2)
+
+    def test_draining_liabilities_keep_resource_and_budget_caps(self):
+        self.unhealthy_ready()
+        self.tick(30)
+        result = self.tick()
+        self.assertEqual(result['last_decision']['code'], 'resource_cap')
+        self.assertEqual(self.cloud.calls.count('create'), 1)
+        self.controller.config['max_additional_workers'] = 2
+        self.controller.config['monthly_budget_micro_eur'] = self.only_record()['reservation'] * 2 - 1
+        result = self.tick()
+        self.assertEqual(result['last_decision']['code'], 'budget_cap')
+        self.assertEqual(self.cloud.calls.count('create'), 1)
+
+    def test_unhealthy_drain_cleanup_waits_for_lease_and_grace_without_metrics(self):
+        self.unhealthy_ready()
+        self.tick(30)
+        drained = self.only_record()
+        self.stale = True
+        self.now = drained['drain_at'] + self.config['worker_lease_seconds'] + self.config['hard_delete_grace_seconds'] - 1
+        self.tick(0)
+        self.assertNotIn('delete_server', self.cloud.calls)
+        self.tick(1)
+        self.assertIn('delete_server', self.cloud.calls)
+        self.assertIn('server_get', self.cloud.calls)
+        self.assertEqual(self.only_record()['state'], 'deleting')
+        self.tick()
+        self.tick()
+        self.assertEqual(self.only_record()['state'], 'deleted')
+        self.assertIn('ipv4_get', self.cloud.calls)
+        self.assertEqual(self.cloud.calls.count('create'), 1)
+
+    def test_unhealthy_drain_prefers_fresh_healthy_idle_observation(self):
+        identity = self.unhealthy_ready()
+        self.tick(30)
+        self.worker_ready[identity] = True
+        self.busy[identity] = False
+        self.tick()
+        self.assertIn('delete_server', self.cloud.calls)
+        self.assertLess(self.now, self.only_record()['drain_at'] + self.config['worker_lease_seconds'])
+
+    def test_unhealthy_idle_metrics_require_lease_before_forced_cleanup(self):
+        identity = self.unhealthy_ready()
+        self.tick(30)
+        self.busy[identity] = False
+        self.tick()
+        self.assertNotIn('delete_server', self.cloud.calls)
+        self.now = self.only_record()['drain_at'] + self.config['worker_lease_seconds'] + self.config['hard_delete_grace_seconds']
+        self.tick(0)
+        self.assertIn('delete_server', self.cloud.calls)
+        self.assertEqual(self.cloud.calls.count('create'), 1)
+
+    def test_fresh_healthy_busy_drain_keeps_inflight_work(self):
+        identity = self.unhealthy_ready()
+        self.tick(30)
+        self.worker_ready[identity] = True
+        self.now = self.only_record()['drain_at'] + self.config['worker_lease_seconds'] + self.config['hard_delete_grace_seconds']
+        self.tick(0)
+        self.assertEqual(self.only_record()['state'], 'draining')
+        self.assertNotIn('delete_server', self.cloud.calls)
 
     def test_missing_and_corrupt_state_fail_closed(self):
         self.controller.close()

@@ -27,7 +27,7 @@ def validate_config(raw):
     defaults = dict(enabled=False, server_type="cx23", location="hel1", image="ubuntu-24.04",
                     server_hourly_ceiling_micro_eur=8800, ipv4_hourly_ceiling_micro_eur=800,
                     boot_timeout_seconds=300, scale_up_delay_seconds=30, cooldown_seconds=120,
-                    idle_drain_seconds=300, max_vm_lifetime_seconds=3600,
+                    idle_drain_seconds=300, unhealthy_drain_seconds=30, max_vm_lifetime_seconds=3600,
                     cleanup_reserve_seconds=3600, metrics_max_age_seconds=15,
                     poll_seconds=5, worker_lease_seconds=180, renew_seconds=60,
                     drain_before_expiry_seconds=90, hard_delete_grace_seconds=60,

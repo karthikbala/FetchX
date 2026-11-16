@@ -317,10 +317,17 @@ class Controller:
                     entry = next((row for row in rows if row["id"] == r["id"]), None)
                     if not entry or entry["state"] != "active" or entry["socket_path"] != r.get("socket_path"):
                         self._drain(r, now, "registry_worker_changed")
+                w = worker_metrics.get(r["id"])
+                if metrics and w and not w["ready"]:
+                    r.setdefault("unhealthy_since", now)
+                    if now - r["unhealthy_since"] >= self.config["unhealthy_drain_seconds"]:
+                        self._drain(r, now, "unhealthy_drain")
+                else:
+                    # Missing/stale metrics are not evidence of sustained failure.
+                    r.pop("unhealthy_since", None)
                 key = r["id"], "renew"
                 if r["state"] == "ready" and now - r.get("last_renewed_at", 0) >= self.config["renew_seconds"] and key not in self.futures:
                     self.futures[key] = self.submit(self.driver.renew, dict(r), server)
-                w = worker_metrics.get(r["id"])
                 if metrics and w and w["ready"] and not w["busy"]:
                     r.setdefault("idle_since", now)
                     if now - r["idle_since"] >= self.config["idle_drain_seconds"]:
@@ -331,7 +338,10 @@ class Controller:
         if r["state"] == "draining":
             self.registry.edit(r["id"], drain=True)
             w = worker_metrics.get(r["id"])
-            if not r.get("registered") or (metrics and metrics["timestamp"] > r["drain_at"] and w and w["state"] == "draining" and not w["busy"]):
+            lease_elapsed = now >= r["drain_at"] + self.config["worker_lease_seconds"] + self.config["hard_delete_grace_seconds"]
+            unavailable = not metrics or not w or not w["ready"]
+            if (not r.get("registered") or (lease_elapsed and unavailable) or
+                    (metrics and metrics["timestamp"] > r["drain_at"] and w and w["state"] == "draining" and w["ready"] and not w["busy"])):
                 self._delete(r, server, now)
             else:
                 self._decision(now, "waiting_for_drain", r)
@@ -368,7 +378,9 @@ class Controller:
         if now - since < self.config["scale_up_delay_seconds"] or metrics["queue"]["oldest_wait_ms"] < self.config["scale_up_delay_seconds"] * 1000:
             self._decision(now, "scale_up_delay")
             return
-        if any(r["state"] not in ("ready", "deleted", "cancelled") for r in self.ledger.records()):
+        if any(r["state"] not in ("ready", "deleted", "cancelled", "draining", "deleting") or
+               (r["state"] in ("draining", "deleting") and (not r.get("server_id") or not r.get("ipv4_id")))
+               for r in self.ledger.records()):
             self._decision(now, "growth_in_flight")
             return
         if now - self.ledger.meta("last_create_at", 0) < self.config["cooldown_seconds"]:
