@@ -191,7 +191,7 @@ class WorkerDriverTests(unittest.TestCase):
         self.worker.config["porttrack_public_key"] = "ssh-ed25519 cHVibGlj " + "x" * (32 * 1024)
         control = controller.Controller.__new__(controller.Controller)
         control.config = {"enabled": True, "scale_up_delay_seconds": 0, "cooldown_seconds": 0,
-                          "drain_before_expiry_seconds": 60}
+                          "drain_before_expiry_seconds": 60, "metrics_max_age_seconds": 15}
         control.registry = Mock()
         control.registry.read.return_value = [{"id": "base", "state": "active"}]
         control.ledger = Mock()
@@ -205,8 +205,10 @@ class WorkerDriverTests(unittest.TestCase):
         control.cloud = Mock()
         control.clock = time.time
         control._decision = Mock()
-        metrics = {"workers": [{"id": "base", "state": "active", "ready": True, "busy": True}],
-                   "max_concurrent_requests": 2, "queue": {"pending": 1, "active": 1, "oldest_wait_ms": 1000}}
+        metrics = {"version": 1, "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                   "workers": [{"id": "base", "state": "active", "ready": True, "busy": True}],
+                   "max_concurrent_requests": 2,
+                   "queue": {"pending": 1, "active": 1, "oldest_wait_ms": 1000, "recent_timeouts": 0}}
         with patch.object(controller, "select_machine", return_value=machine), patch.object(self.worker, "_run", side_effect=self.fake_run):
             control._grow(metrics, time.time())
         self.assertEqual(control.ledger.reserve.call_args.args[2], machine)

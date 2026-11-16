@@ -234,6 +234,7 @@ class Controller:
             self.cloud.delete_ipv4(ip["id"])
             self._decision(now, "ipv4_delete_requested", r)
             return
+        now = int(self.clock())
         r.update(state="deleted", deleted_at=now)
         self.ledger.save(r)
         self._decision(now, "deletion_confirmed", r)
@@ -373,14 +374,18 @@ class Controller:
         if now - self.ledger.meta("last_create_at", 0) < self.config["cooldown_seconds"]:
             self._decision(now, "growth_cooldown")
             return
-        machine = select_machine(self.cloud.server_types(), self.cloud.pricing(), self.config,
+        server_types, pricing = self.cloud.server_types(), self.cloud.pricing()
+        now = int(self.clock())
+        metrics_snapshot(metrics, now, self.config["metrics_max_age_seconds"])
+        machine = select_machine(server_types, pricing, self.config,
                                  self.ledger.meta("machine_cooldowns", {}), now)
         record = self.ledger.reserve(now, uuid.uuid4().hex[:24], machine)
         try:
             prepared = self.driver.prepare(dict(record))
             if not isinstance(prepared["user_data"], str) or not prepared["user_data"]:
                 raise SafetyError("driver_prepare_invalid")
-            if int(self.clock()) >= record["lease_expires_at"] - self.config["drain_before_expiry_seconds"]:
+            now = int(self.clock())
+            if now >= record["lease_expires_at"] - self.config["drain_before_expiry_seconds"]:
                 raise SafetyError("driver_prepare_expired")
         except Exception:
             record["state"] = "cancelled"
@@ -432,7 +437,13 @@ class Controller:
             except SafetyError as error:
                 inventory_problem = str(error)
             try:
-                metrics = metrics_snapshot(self.metrics(), now, self.config["metrics_max_age_seconds"])
+                try:
+                    value = self.metrics()
+                finally:
+                    # Inventory and gateway health reads can take several seconds.
+                    # Compare generated_at and lifecycle deadlines at receipt time.
+                    now = int(self.clock())
+                metrics = metrics_snapshot(value, now, self.config["metrics_max_age_seconds"])
             except SafetyError as error:
                 metrics = None
                 self.ledger.set_meta("pressure_since", None)
@@ -448,6 +459,8 @@ class Controller:
                 self.ledger.set_meta("pressure_since", None)
                 self._decision(now, inventory_problem or reconcile_problem)
             elif metrics:
+                now = int(self.clock())
+                metrics_snapshot(metrics, now, self.config["metrics_max_age_seconds"])
                 self._grow(metrics, now)
         except (CloudError, SafetyError) as error:
             self.ledger.set_meta("pressure_since", None)
@@ -456,7 +469,7 @@ class Controller:
             # Never print provider/driver exception messages: they may contain secrets.
             self.ledger.set_meta("pressure_since", None)
             self._decision(now, "reconcile_error")
-        return self.status(now)
+        return self.status()
 
 
 def load_config(path):

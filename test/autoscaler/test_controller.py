@@ -392,6 +392,81 @@ class ControllerTests(unittest.TestCase):
         self.tick()
         self.assertNotIn("create", self.cloud.calls)
 
+    def test_inventory_delay_accepts_current_metrics_and_starts_current_lease(self):
+        inventory = self.cloud.inventory
+        def delayed_inventory():
+            self.now += 3
+            return inventory()
+        self.cloud.inventory = delayed_inventory
+        result = self.tick()
+        self.assertEqual(result["last_decision"]["code"], "server_created")
+        self.assertEqual(self.cloud.calls.count("create"), 1)
+        self.assertEqual(self.only_record()["created_at"], self.now)
+
+    def test_metrics_read_delay_accepts_current_metrics(self):
+        def delayed_metrics():
+            self.now += 3
+            return self.metrics()
+        self.controller.metrics = delayed_metrics
+        result = self.tick()
+        self.assertEqual(result["last_decision"]["code"], "server_created")
+
+    def test_delayed_reads_still_reject_stale_and_future_metrics(self):
+        for offset in (-100, 3):
+            with self.subTest(offset=offset):
+                def invalid_metrics():
+                    self.now += 3
+                    value = self.metrics()
+                    value["generated_at"] = dt.datetime.fromtimestamp(self.now + offset, dt.timezone.utc).isoformat()
+                    return value
+                self.controller.metrics = invalid_metrics
+                result = self.tick()
+                self.assertEqual(result["last_decision"]["code"], "metrics_stale")
+                self.assertEqual(result["last_decision"]["at"], self.now)
+                self.assertNotIn("create", self.cloud.calls)
+
+    def test_inventory_delay_reconciles_current_hard_lifetime(self):
+        self.ready()
+        record = self.only_record()
+        self.now = record["lease_expires_at"] + self.config["hard_delete_grace_seconds"] - 1
+        inventory = self.cloud.inventory
+        def delayed_inventory():
+            self.now += 3
+            return inventory()
+        self.cloud.inventory = delayed_inventory
+        self.tick(0)
+        self.assertIn("delete_server", self.cloud.calls)
+        self.assertEqual(self.only_record()["state"], "deleting")
+
+    def test_pricing_delay_starts_lease_after_read_and_accrues_through_create(self):
+        pricing, create = self.cloud.pricing, self.cloud.create
+        def delayed_pricing():
+            self.now += 3
+            return pricing()
+        def delayed_create(*args):
+            self.now += 3601
+            return create(*args)
+        self.cloud.pricing = delayed_pricing
+        self.cloud.create = delayed_create
+        started = self.now
+        result = self.tick()
+        self.assertEqual(self.only_record()["created_at"], started + 4)
+        # Full lifetime reservation plus the second billed hour has accrued.
+        charges = dict(self.controller.ledger.db.execute("SELECT month,amount FROM charges"))
+        self.assertEqual(charges["2026-11"], 19200)
+        self.assertGreaterEqual(result["committed_micro_eur"], self.only_record()["reservation"])
+
+    def test_pricing_delay_that_expires_metrics_prevents_reservation(self):
+        pricing = self.cloud.pricing
+        def delayed_pricing():
+            self.now += self.config["metrics_max_age_seconds"] + 1
+            return pricing()
+        self.cloud.pricing = delayed_pricing
+        result = self.tick()
+        self.assertEqual(result["last_decision"]["code"], "metrics_stale")
+        self.assertEqual(self.controller.ledger.records(), [])
+        self.assertNotIn("create", self.cloud.calls)
+
     def test_busy_drain_then_confirm_server_and_ipv4_deletion(self):
         self.ready()
         self.controller.config["max_additional_workers"] = 1
