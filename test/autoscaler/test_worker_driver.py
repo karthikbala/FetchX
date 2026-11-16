@@ -195,6 +195,7 @@ class WorkerDriverTests(unittest.TestCase):
         self.assertLessEqual(len(first["user_data"].encode("utf-8")), 32 * 1024)
         cloud = json.loads(first["user_data"].split("\n", 1)[1])
         self.assertEqual(cloud["users"][0], {"name": "root", "ssh_authorized_keys": [public]})
+        self.assertEqual(first["ssh_public_key"], public)
         self.assertFalse(cloud["disable_root"])
         self.assertFalse(cloud["ssh_pwauth"])
         self.assertTrue(cloud["ssh_deletekeys"])
@@ -250,6 +251,7 @@ class WorkerDriverTests(unittest.TestCase):
             control._grow(metrics, time.time())
         self.assertEqual(control.ledger.reserve.call_args.args[2], machine)
         control.cloud.create.assert_not_called()
+        control.cloud.ensure_ssh_key.assert_not_called()
         self.assertEqual(control.ledger.save.call_args.args[0]["state"], "cancelled")
         self.assertEqual(control._decision.call_args.args[1], "driver_prepare_failed")
 

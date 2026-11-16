@@ -399,6 +399,14 @@ class Controller:
             now = int(self.clock())
             if now >= record["lease_expires_at"] - self.config["drain_before_expiry_seconds"]:
                 raise SafetyError("driver_prepare_expired")
+            key_id = self.cloud.ensure_ssh_key(self.config["deployment"], prepared["ssh_public_key"])
+            if type(key_id) is not int or not 1 <= key_id <= 9007199254740991:
+                raise SafetyError("driver_ssh_key_invalid")
+            now = int(self.clock())
+            if now >= record["lease_expires_at"] - self.config["drain_before_expiry_seconds"]:
+                raise SafetyError("driver_prepare_expired")
+            record["ssh_key_id"] = key_id
+            self.ledger.save(record)
         except Exception:
             record["state"] = "cancelled"
             self.ledger.save(record)
@@ -412,7 +420,7 @@ class Controller:
             self.ledger.set_meta("last_create_at", now)
             self.ledger.set_meta("pressure_since", None)
         try:
-            server = self.cloud.create(self.name(record), self.labels(record), prepared["user_data"], dict(record["machine"]))
+            server = self.cloud.create(self.name(record), self.labels(record), prepared["user_data"], dict(record["machine"]), record["ssh_key_id"])
             if not self._owned(server, record) or server.get("name") != self.name(record) or type(server.get("id")) is not int:
                 raise UncertainCreate("create_uncertain")
             record.update(server_id=server["id"], state="booting")

@@ -5,8 +5,10 @@ response body (create responses can contain a root password).
 """
 
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
+import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import urllib.error
 import urllib.request
@@ -169,9 +171,53 @@ class Hetzner:
     def server_types(self):
         return {"server_types": self.list_all("/server_types", "server_types")}
 
-    def create(self, name, labels, user_data, machine):
+    def ensure_ssh_key(self, deployment, public_key):
+        from .worker_driver import _ed25519_public, WorkerDriverError
+        if not isinstance(deployment, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,23}", deployment):
+            raise SafetyError("cloud_ssh_key_deployment_invalid")
+        try:
+            public = _ed25519_public(public_key)
+        except (WorkerDriverError, TypeError):
+            raise SafetyError("cloud_ssh_public_key_invalid") from None
+        name = "fx-" + deployment + "-admin-" + hashlib.sha256(public.encode()).hexdigest()[:24]
+        matches = []
+        for key in self.list_all("/ssh_keys", "ssh_keys"):
+            if not isinstance(key, dict):
+                raise CloudError("cloud_ssh_key_invalid")
+            try:
+                same = _ed25519_public(key.get("public_key")) == public
+            except (WorkerDriverError, TypeError):
+                same = False
+            if key.get("name") == name and not same:
+                raise CloudError("cloud_ssh_key_name_collision")
+            if same:
+                matches.append(key)
+        if len(matches) > 1:
+            raise CloudError("cloud_ssh_key_ambiguous")
+        if matches:
+            key = matches[0]  # Reuse exact identity without changing its name/labels.
+        else:
+            # One POST only. Any uncertain outcome aborts VM preparation. A later
+            # call first reconciles paginated inventory; deterministic unique names
+            # prevent creating duplicate keys even under delayed visibility.
+            result = self.request("POST", "/ssh_keys", dict(name=name, public_key=public,
+                                  labels={"fetchx-deployment": deployment, "fetchx-role": "controller-admin"}))
+            try:
+                key = result["ssh_key"]
+                if key["name"] != name or _ed25519_public(key["public_key"]) != public:
+                    raise ValueError()
+            except (KeyError, TypeError, ValueError, WorkerDriverError):
+                raise CloudError("cloud_ssh_key_invalid") from None
+        if type(key.get("id")) is not int or not 1 <= key["id"] <= 9007199254740991:
+            raise CloudError("cloud_ssh_key_invalid")
+        return key["id"]
+
+    def create(self, name, labels, user_data, machine, ssh_key_id):
+        if type(ssh_key_id) is not int or not 1 <= ssh_key_id <= 9007199254740991:
+            raise SafetyError("cloud_ssh_key_id_invalid")
         payload = self.request("POST", "/servers", dict(name=name, labels=labels, user_data=user_data,
                                server_type=machine["server_type"], location=machine["location"], image="ubuntu-24.04",
+                               ssh_keys=[str(ssh_key_id)],
                                start_after_create=True, automount=False,
                                public_net=dict(enable_ipv4=True, enable_ipv6=False)))
         try:

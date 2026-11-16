@@ -18,7 +18,7 @@ A gateway restart cancels waiting tickets. Tickets do not contain request bodies
 
 ## Controller and spending limits
 
-The controller uses the gateway's private callback Unix socket for aggregate queue and worker metrics. Its Hetzner token, SSH keys and SQLite infrastructure ledger stay on the host; neither the gateway nor browser containers receive that token. Worker browser containers have no direct network interface. All browser source traffic continues through the gateway's existing admission and metered relay.
+The controller uses the gateway's private callback Unix socket for aggregate queue and worker metrics. Before VM creation it registers or reuses its dedicated public administration key in the same Hetzner project, and passes that key to the server API so bootstrap never requires an interactive root-password change. Its Hetzner token, private SSH keys and SQLite infrastructure ledger stay on the host; neither the gateway nor browser containers receive that token. Worker browser containers have no direct network interface. All browser source traffic continues through the gateway's existing admission and metered relay.
 
 A controller configuration can list one to four machine options. Each option has a server type, HEL1 location, server hourly price ceiling and IPv4 hourly ceiling. The example includes CX23, CX33, CPX22 and CCX13. Before each creation, the controller verifies availability, non-deprecation, x86 architecture, at least two CPUs, 4 GB RAM and 40 GB disk, and current EUR prices. It selects the cheapest eligible available option. A definitive placement rejection temporarily excludes that option. A timeout or uncertain creation retains its reservation and blocks a second creation until the original identity is reconciled.
 

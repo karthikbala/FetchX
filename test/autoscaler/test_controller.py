@@ -62,7 +62,13 @@ class FakeCloud:
         self.calls.append("pricing")
         return self.price
 
-    def create(self, name, labels, user_data, machine):
+    def ensure_ssh_key(self, deployment, public_key):
+        self.calls.append("ensure_ssh_key")
+        return 42
+
+    def create(self, name, labels, user_data, machine, ssh_key_id):
+        if ssh_key_id != 42:
+            raise AssertionError("controller must supply registered administrator key")
         self.calls.append("create")
         self.created_machines.append(copy.deepcopy(machine))
         if self.create_error and not isinstance(self.create_error, UncertainCreate):
@@ -108,7 +114,7 @@ class FakeDriver:
         self.renewals = []
 
     def prepare(self, record):
-        return {"user_data": "#cloud-config\nsynthetic: true"}
+        return {"user_data": "#cloud-config\nsynthetic: true", "ssh_public_key": "ssh-ed25519 cHVibGlj"}
 
     def bootstrap(self, record, server):
         self.bootstraps.append(record["id"])
@@ -196,11 +202,12 @@ class ControllerTests(unittest.TestCase):
     def test_selects_cheapest_available_actual_price_and_persists_before_create(self):
         self.options_fixture()
         original_create = self.cloud.create
-        def inspect_create(name, labels, user_data, selected):
+        def inspect_create(name, labels, user_data, selected, ssh_key_id):
             durable = next(r for r in self.controller.ledger.records() if r["id"] == labels["fetchx-worker"])
             self.assertEqual(durable["machine"], selected)
             self.assertEqual(durable["state"], "creating")
-            return original_create(name, labels, user_data, selected)
+            self.assertEqual(durable["ssh_key_id"], ssh_key_id)
+            return original_create(name, labels, user_data, selected, ssh_key_id)
         self.cloud.create = inspect_create
         self.tick()
         selected = self.only_record()["machine"]
@@ -294,6 +301,44 @@ class ControllerTests(unittest.TestCase):
         result = self.tick()
         self.assertNotIn("create", self.cloud.calls)
         self.assertEqual(result["last_decision"]["code"], "budget_cap")
+        self.assertNotIn("ensure_ssh_key", self.cloud.calls)
+
+    def test_ssh_key_preparation_failure_cancels_before_vm_creating_intent(self):
+        for error in (CloudError(), UncertainCreate(), SafetyError("invalid_key")):
+            def failed_key(deployment, public_key):
+                durable = next(r for r in self.controller.ledger.records() if r["state"] == "reserved")
+                self.assertEqual(durable["state"], "reserved")
+                raise error
+            self.cloud.ensure_ssh_key = failed_key
+            result = self.tick()
+            self.assertEqual(self.controller.ledger.records()[-1]["state"], "cancelled")
+            self.assertTrue(all(r["state"] == "cancelled" for r in self.controller.ledger.records()))
+            self.assertEqual(result["last_decision"]["code"], "driver_prepare_failed")
+            self.assertNotIn("create", self.cloud.calls)
+            self.assertIsNone(self.controller.ledger.meta("last_create_at"))
+
+    def test_ssh_key_delay_rechecks_hard_lifetime_before_vm_post(self):
+        def delayed_key(deployment, public_key):
+            self.now += self.config["max_vm_lifetime_seconds"]
+            return 42
+        self.cloud.ensure_ssh_key = delayed_key
+        self.tick()
+        self.assertEqual(self.only_record()["state"], "cancelled")
+        self.assertNotIn("create", self.cloud.calls)
+
+    def test_invalid_registered_key_id_cancels_before_vm_post(self):
+        self.cloud.ensure_ssh_key = lambda deployment, public_key: True
+        self.tick()
+        self.assertEqual(self.only_record()["state"], "cancelled")
+        self.assertNotIn("create", self.cloud.calls)
+
+    def test_corrupt_persisted_ssh_key_identity_fails_closed(self):
+        self.tick()
+        record = self.only_record()
+        record["ssh_key_id"] = True
+        self.controller.ledger.save(record)
+        with self.assertRaisesRegex(SafetyError, "record_ssh_key_id"):
+            self.controller.ledger.records()
 
     def test_gateway_global_concurrency_cap_prevents_unusable_paid_capacity(self):
         self.global_limit = 1

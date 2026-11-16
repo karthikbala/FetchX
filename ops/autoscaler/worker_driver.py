@@ -262,7 +262,7 @@ class WorkerDriver:
         # serialized value here, before prepare can authorize a paid create.
         if len(user_data.encode("utf-8")) > MAX_USER_DATA_BYTES:
             raise WorkerDriverError("worker user_data exceeds Hetzner 32 KiB limit")
-        return {"user_data": user_data}
+        return {"user_data": user_data, "ssh_public_key": admin}
 
     def _firewall(self):
         return ("#!/usr/sbin/nft -f\nflush ruleset\ntable inet fetchx {\n"

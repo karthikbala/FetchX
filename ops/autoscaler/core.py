@@ -190,7 +190,7 @@ class Ledger:
                 positive_int(r[k], "record_" + k)
             if r["lease_expires_at"] <= r["created_at"]:
                 raise SafetyError("ledger_record_invalid")
-            for k in ("server_id", "ipv4_id"):
+            for k in ("server_id", "ipv4_id", "ssh_key_id"):
                 if r.get(k) is not None:
                     positive_int(r[k], "record_" + k)
             if "machine" in r:
