@@ -128,6 +128,43 @@ class WorkerDriverTests(unittest.TestCase):
             self.worker.prepare(self.record)
         self.assertEqual(key.read_bytes(), before)
 
+    def test_real_openssh_keys_with_and_without_comments_are_canonical(self):
+        for index, comment in enumerate(("fetchx-autoscaler", "")):
+            with self.subTest(comment=comment):
+                path = self.home / ("real_ed25519_" + str(index))
+                subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", str(path)],
+                               check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=10)
+                raw = subprocess.run(["ssh-keygen", "-y", "-f", str(path)], check=True,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10).stdout.decode()
+                expected = " ".join(raw.split()[:2])
+                self.assertEqual(self.worker._key(path, time.monotonic() + 10), expected)
+                self.assertEqual(path.with_suffix(".pub").read_text(), expected + "\n")
+                self.assertEqual(self.worker._key(path, time.monotonic() + 10), expected)
+
+    def test_derived_ed25519_key_rejects_multiline_options_type_and_invalid_base64(self):
+        path = self.home / "invalid_key"
+        path.write_text("synthetic private key")
+        path.chmod(0o600)
+        for raw in (b"ssh-ed25519 cHVibGlj\nssh-ed25519 cHVibGlj\n", b"ssh-ed25519 cHVibGlj\n\n",
+                    b'restrict ssh-ed25519 cHVibGlj\n', b"ssh-rsa cHVibGlj\n", b" ssh-ed25519 cHVibGlj\n",
+                    b"ssh-ed25519 invalid-base64\n", b"ssh-ed25519 A\n"):
+            with self.subTest(raw=raw), patch.object(self.worker, "_run", return_value=result(stdout=raw)):
+                with self.assertRaisesRegex(driver.WorkerDriverError, "invalid Ed25519"):
+                    self.worker._key(path, time.monotonic() + 10)
+
+    def test_prepare_with_real_openssh_keys_is_restart_idempotent(self):
+        first = self.worker.prepare(self.record)
+        self.assertEqual(first, self.worker.prepare(self.record))
+        cloud = json.loads(first["user_data"].split("\n", 1)[1])
+        self.assertEqual(len(cloud["ssh_keys"]["ed25519_public"].split()), 2)
+        self.assertEqual(len(cloud["users"][0]["ssh_authorized_keys"][0].split()), 2)
+        self.assertLessEqual(len(first["user_data"].encode()), 32768)
+        folder = self.state / "workers" / self.record["id"]
+        host = folder / "host_ed25519"
+        host.with_suffix(".pub").write_text(cloud["ssh_keys"]["ed25519_public"] + "\nextra material\n")
+        with self.assertRaisesRegex(driver.WorkerDriverError, "mismatch"):
+            self.worker.prepare(self.record)
+
     def test_rejects_borrowed_admin_key_and_unsafe_identity(self):
         with self.assertRaisesRegex(driver.WorkerDriverError, "separate"):
             driver.WorkerDriver({**self.config, "ssh_admin_key": "/root/.ssh/porttrack"})

@@ -6,6 +6,7 @@ Run as root on the gateway host. Assets and state must stay outside the checkout
 from __future__ import annotations
 
 import base64
+import binascii
 import gzip
 import hashlib
 import http.client
@@ -38,6 +39,20 @@ MAX_USER_DATA_BYTES = 32 * 1024
 
 def _json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _ed25519_public(raw):
+    # OpenSSH -y may retain the private key's comment. Persist only the identity,
+    # rejecting options, extra lines and non-key material rather than stripping it.
+    match = re.fullmatch(r"(ssh-ed25519 [A-Za-z0-9+/]+={0,2})(?: [^\r\n]*)?(?:\r?\n)?", raw)
+    if match is None:
+        raise WorkerDriverError("invalid Ed25519 key")
+    public = match[1]
+    try:
+        base64.b64decode(public.split()[1], validate=True)
+    except (ValueError, binascii.Error):
+        raise WorkerDriverError("invalid Ed25519 key") from None
+    return public
 
 
 def _private(path, directory=False):
@@ -161,13 +176,14 @@ class WorkerDriver:
             self._run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "fetchx-autoscaler", "-f", str(path)], deadline=deadline)
             os.chmod(path, 0o600)
         _private(path)
-        public = self._run(["ssh-keygen", "-y", "-f", str(path)], deadline=deadline).stdout.decode().strip()
-        if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/=]+", public):
-            raise WorkerDriverError("invalid Ed25519 key")
+        public = _ed25519_public(self._run(["ssh-keygen", "-y", "-f", str(path)], deadline=deadline).stdout.decode())
         public_path = path.with_suffix(".pub")
         if public_path.exists():
-            existing = public_path.read_text().strip().split()
-            if existing[:2] != public.split():
+            try:
+                existing = _ed25519_public(public_path.read_text())
+            except WorkerDriverError:
+                raise WorkerDriverError("private/public key mismatch") from None
+            if existing != public:
                 raise WorkerDriverError("private/public key mismatch")
         _atomic(public_path, public + "\n")
         return public
