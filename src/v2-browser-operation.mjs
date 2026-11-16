@@ -63,6 +63,7 @@ export async function browserProbeOperation(v2,project,raw){
  const artifacts=[],seenKinds=new Set();let admission=Promise.resolve(),callbackFailed=false,parentBlocked=0,runnerStarted=false,outputReceived=false,relayCloseUnknown=false;
  try{
   const first=await v2.destination(raw.url,profile,deadline);v2.headers({method:'GET',headers:{}},profile,first.url);
+  v2.assertRouteProvider(route,first.url.hostname);
   const proxy=v2.resolveProxy(route),jar=CookieJar.deserializeSync(v2.sealer.open(session.cookie_jar));
   relay=await v2.browserRelay({profile,resolve:v2.resolve,proxy,limits:policy,deadline,beforeConnect:async destination=>{await v2.dispatchable(project,id,session.id,destination.url);dispatched=true;}});
   stage='browser';
