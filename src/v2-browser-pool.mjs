@@ -31,12 +31,14 @@ export class BrowserWorkerPool{
  #server;
  #start;
  #closing=false;
+ #registryValid=false;
 
- constructor(config){
+ constructor(config,{metrics,runtime,onClose}={}){
   if(!object(config)||Object.keys(config).some(k=>!['registry_path','callback_socket'].includes(k))||
    typeof config.registry_path!=='string'||!isAbsolute(config.registry_path)||!socketPathValid(config.callback_socket)||config.registry_path===config.callback_socket)fail('browser_worker_pool_configuration',503);
   this.registryPath=config.registry_path;
   this.callbackSocket=config.callback_socket;
+  this.metrics=metrics;this.runtime=runtime;this.onClose=onClose;
  }
 
  start(){
@@ -44,6 +46,7 @@ export class BrowserWorkerPool{
   return this.#start??=(async()=>{
    this.#server=privateServer((req,res)=>{
     if(req.method==='GET'&&req.url==='/healthz')jsonResponse(res,this.#closing?503:200,{ready:!this.#closing});
+    else if(req.method==='GET'&&req.url==='/v1/pool-metrics'&&this.metrics)void this.#metrics(res);
     else this.#callback(req,res);
    });
    this.#server.on('connection',socket=>trackSocket(this.#sockets,socket));
@@ -54,12 +57,15 @@ export class BrowserWorkerPool{
 
  async close(){
   this.#closing=true;
+  const closing=Promise.resolve().then(()=>this.onClose?.());
+  void closing.catch(()=>{});
   await this.#start?.catch(()=>{});
   const attempts=[...this.#attempts.values()];
   for(const attempt of attempts)attempt.controller.abort();
   for(const socket of this.#sockets)socket.destroy();
   if(this.#server?.listening)await new Promise(resolve=>this.#server.close(resolve));
   await Promise.allSettled(attempts.map(attempt=>attempt.done));
+  await closing;
  }
 
  async #refreshRegistry(){
@@ -72,8 +78,8 @@ export class BrowserWorkerPool{
       !socketPathValid(row.socket_path)||row.socket_path===this.callbackSocket||ids.has(row.id)||paths.has(row.socket_path))throw new Error('invalid registry row');
      ids.add(row.id);paths.add(row.socket_path);
     }
-    this.#entries=rows;
-   }catch{this.#entries=[];}
+    this.#entries=rows;this.#registryValid=true;
+   }catch{this.#entries=[];this.#registryValid=false;}
    return this.#entries;
   });
   this.#registryRead=read;
@@ -103,6 +109,27 @@ export class BrowserWorkerPool{
  async ready(runtime){
   await this.start();
   return (await this.#healthy(runtime,false)).some(entry=>this.#active(entry));
+ }
+
+ async #metrics(res){
+  try{
+   if(this.#closing)throw unavailable();
+   const qualified=await this.runtime();
+   if(!qualified.available)throw unavailable();
+   const entries=await this.#refreshRegistry();
+   if(!this.#registryValid)throw unavailable();
+   const snapshot=[...entries];
+   for(const {entry}of this.#held.values())if(!snapshot.some(row=>row.id===entry.id))snapshot.push({...entry,state:'draining'});
+   const workers=await Promise.all(snapshot.map(async entry=>{
+    try{
+     const {status,value}=await requestJson(entry.socket_path,'/healthz',{signal:AbortSignal.timeout(750),responseLimit:8192});
+     if(status!==200||value?.ready!==true||typeof value.busy!=='boolean'||!matchesRuntime(value.runtime,qualified.runtime))throw unavailable();
+     return {id:entry.id,state:entry.state,ready:true,busy:this.#occupied(entry)||value.busy};
+    }catch{return {id:entry.id,state:entry.state,ready:false,busy:true};}
+   }));
+   const aggregate=await this.metrics();
+   jsonResponse(res,200,{version:1,generated_at:new Date().toISOString(),queue:aggregate.queue,workers,max_concurrent_requests:aggregate.max_concurrent_requests});
+  }catch{jsonResponse(res,503,{error:'browser_pool_metrics_unavailable'});}
  }
 
  async acquire(runtime){

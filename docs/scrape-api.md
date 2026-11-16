@@ -86,3 +86,7 @@ For a project-specific route, add an entry under `v2.scrape.projects`:
 Use a browser-enabled access profile already approved for the provisioned project. For managed projects, use the browser profile reference from [render preparation](render-api.md#prepare-a-managed-render) for the reviewed origin and the same proxy class and country. The optional `max_estimated_micro_usd` tightens the existing spending controls. A project-specific entry takes precedence over managed mode; an invalid or rejected entry cannot fall back to managed mode. Provisioned legacy project tokens require an explicit project-specific entry.
 
 Only the exact `POST /v2/scrape` path is supported. Configure the public API proxy to forward it and preserve the request and response `X-Idempotency-Key` header. Managed mode accepts public HTTPS hostnames on port 443 without embedded credentials or fragments; redirects and subresources must remain within the prepared origin. It does not enable crawl, map, batch, cross-origin browser access, or application-level extraction acceptance.
+
+## Optional capacity queue
+
+An enabled [browser admission queue](hetzner-autoscaling.md) waits for a qualified worker before source dispatch or credit reservation. Queue wait is bounded separately from browser execution. On queue-full, timeout or pre-dispatch cancellation, repeat the exact request with its original idempotency key. Running or uncertain source work is never redispatched automatically.

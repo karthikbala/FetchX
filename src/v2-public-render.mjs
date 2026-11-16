@@ -15,7 +15,8 @@ const failureContexts=new WeakMap();
 const admissionCodes=new Set([
  'browser_probe_profile_unapproved','browser_probe_invalid','browser_request_ceiling_rejected','browser_session_required',
  'browser_wait_ceiling_rejected','browser_screenshot_rejected','browser_probe_disabled','browser_probe_runtime_unqualified','browser_probe_runtime_unavailable',
- 'browser_probe_build_mismatch','browser_probe_redirect_admission_unqualified','browser_capacity','capability_unsupported'
+ 'browser_probe_build_mismatch','browser_probe_redirect_admission_unqualified','browser_capacity','capability_unsupported',
+ 'browser_queue_running','browser_queue_full','browser_queue_timeout','browser_queue_cancelled'
 ]);
 const messages={
  browser_probe_invalid:'Check the render URL and options. Browser rendering accepts GET navigation, an optional wait and an optional viewport screenshot.',
@@ -24,6 +25,10 @@ const messages={
  render_profile_execution_mismatch:'The selected access profile is for HTTP execution. Choose an access profile approved for browser rendering.',
  render_profile_preparation_required:'Use the browser access profile returned by render preparation for this URL.',
  browser_probe_disabled:'Browser rendering is currently unavailable.',
+ browser_queue_running:'The original browser request is waiting or running. Replay it with the same idempotency key.',
+ browser_queue_full:'The browser waiting queue is full. Retry the same request with its original idempotency key.',
+ browser_queue_timeout:'The browser request timed out before dispatch. Retry the same request with its original idempotency key.',
+ browser_queue_cancelled:'The browser request was cancelled before dispatch. Retry it with its original idempotency key.',
  browser_request_limit:'The rendered page exceeded its browser network request limit.',
  browser_dom_byte_limit:'The rendered HTML exceeded its capture limit.',
  browser_screenshot_byte_limit:'The viewport screenshot exceeded its capture limit.'
@@ -52,6 +57,7 @@ function normalize(raw){
 function retry(key,code,state,{recoveryUrl=lookupUrl(key),replaySafe=true,retryAfter=null}={}){
  const advice={safe_to_retry:false,same_key_replay_safe:replaySafe,new_request_allowed:false,next_action:'recover_first',lookup_url:recoveryUrl};
  if(['reserved','running','unknown'].includes(state)||/unknown|incomplete|interrupted|internal_error|idempotency_conflict/.test(code??''))return advice;
+ if(['browser_queue_full','browser_queue_timeout','browser_queue_cancelled'].includes(code))return {...advice,safe_to_retry:true,next_action:'retry_same_key'};
  if(!code)return {...advice,next_action:'complete'};
  if(code==='operation_not_found')return {...advice,next_action:'check_original_request'};
  if(code==='source_rate_limited'||code==='source_cooldown')return {...advice,next_action:'wait_for_source_retry_after',retry_after:retryAfter};
@@ -224,7 +230,7 @@ export class PublicRenderGateway{
   }catch(error){
    if(error&&typeof error==='object'){
     const rejected=isPublicOperationAdmissionError(error)||error instanceof GatewayError&&admissionCodes.has(error.code);
-    failureContexts.set(error,{sessionId:session.id,routing:{class:session.proxy.class,country:session.proxy.country,provider:session.proxy.provider},state:rejected?'rejected':'unknown',stage:rejected?'operation_admission':'operation'});
+    failureContexts.set(error,{sessionId:session.id,routing:{class:session.proxy.class,country:session.proxy.country,provider:session.proxy.provider},state:error.code==='browser_queue_running'?'running':rejected?'rejected':'unknown',stage:rejected?'operation_admission':'operation'});
    }
    throw error;
   }

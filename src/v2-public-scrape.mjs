@@ -231,6 +231,9 @@ const messages={
  scrape_unavailable:'Scrape is unavailable for this project.',
  scrape_configuration_invalid:'The project’s scrape configuration is unavailable.',
  scrape_running:'The original scrape is still running. Replay its request with the same X-Idempotency-Key.',
+ browser_queue_full:'The browser waiting queue is full. Replay the request with the same X-Idempotency-Key.',
+ browser_queue_timeout:'The request timed out before dispatch. Replay it with the same X-Idempotency-Key.',
+ browser_queue_cancelled:'The request was cancelled before dispatch. Replay it with the same X-Idempotency-Key.',
  scrape_outcome_unknown:'The original scrape outcome is uncertain. Recover with the same X-Idempotency-Key.',
  scrape_capture_unavailable:'The rendered capture is unavailable.',
  scrape_content_limit:'The rendered page exceeded a scrape content limit.',
@@ -265,6 +268,7 @@ export function registerPublicScrape(app){
     ...await scrapeRoute(app.v2,req.project,input.url,identity),url:input.url,wait_ms:input.waitFor
    }),identity,{timeoutMs:input.timeout??undefined});
   }catch(error){
+   if(error instanceof GatewayError&&error.code==='browser_queue_running')fail('scrape_running',409);
    if(error instanceof GatewayError&&error.status!==502)throw error;
    fail('scrape_outcome_unknown',409);
   }

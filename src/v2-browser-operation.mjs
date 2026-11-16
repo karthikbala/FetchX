@@ -5,7 +5,7 @@ import {sha} from './crypto.mjs';
 import {browserProbePolicy,BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
 import {admitPlaygroundRoute,isPlaygroundRef,materializePlaygroundProfile,playgroundOperationProfile} from './control-playground.mjs';
 import {safeFailure} from './v2-diagnostics.mjs';
-import {WORKER_TRANSPORT_ERROR} from './v2-browser-worker-wire.mjs';
+import {matchesRuntime,WORKER_TRANSPORT_ERROR} from './v2-browser-worker-wire.mjs';
 import {residentialTrafficCharge,finishResidentialTrafficCharge} from './customer-traffic.mjs';
 
 const plain=v=>v&&typeof v==='object'&&!Array.isArray(v);
@@ -47,9 +47,13 @@ export async function browserProbeOperation(v2,project,raw,identity,{timeoutMs}=
  await admitPlaygroundRoute(v2,project,profile,{class:route.class,country:route.country,affinity:'session'},'browser',route);
  const attribution={project,keyId,userId:identity?.userId,requireSoleKey:identity?.requireSoleKey};
  const timeout=Math.min(profile.limits.timeout_ms,timeoutMs??Infinity);
- const worker=await v2.browserPool?.acquire(runtime.runtime);
- try{return await executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,managed,profile,runtime,maximum,policy,id,reservedBytes,reservedTunnel,attribution,timeout,worker});}
- finally{worker?.release();}
+ const admission=v2.browserQueue?await v2.browserQueue.acquire(project,raw.idempotency_key,hash,runtime.runtime):null;
+ if(admission?.operation)return v2.operationView(admission.operation);
+ const worker=admission?.worker??await v2.browserPool?.acquire(runtime.runtime);
+ try{
+  if(admission){const qualified=await v2.browserRuntime(v2.config);if(!qualified.available||!matchesRuntime(qualified.runtime,runtime.runtime)||qualified.runtime.expires_at!==runtime.runtime.expires_at)fail(qualified.reason??'browser_probe_runtime_unqualified',409);}
+  return await executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,managed,profile,runtime,maximum,policy,id,reservedBytes,reservedTunnel,attribution,timeout,worker});
+ }finally{worker?.release();await admission?.finish();}
 }
 
 async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,managed,profile,runtime,maximum,policy,id,reservedBytes,reservedTunnel,attribution,timeout,worker}){

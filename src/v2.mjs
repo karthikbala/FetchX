@@ -13,6 +13,7 @@ import {browserRelay} from './v2-browser-relay.mjs';
 import {runBrowserProbe} from './v2-browser-runner.mjs';
 import {browserProbeOperation} from './v2-browser-operation.mjs';
 import {BrowserWorkerPool} from './v2-browser-pool.mjs';
+import {BrowserAdmissionQueue,browserQueuePolicy,initBrowserQueue,recoverBrowserQueue} from './v2-browser-queue.mjs';
 import {estimateRoutePricing,estimatePaidPublicDatacenter} from './v2-pricing.mjs';
 import {residentialTrafficCharge,finishResidentialTrafficCharge} from './customer-traffic.mjs';
 import {distinctNativeRetryRoute,nativeRetryIdentityBinding,pristineNativeRetry,transientNativeTransport,transientNativeResponse,successfulNativeResponse} from './v2-native-retry.mjs';
@@ -51,9 +52,10 @@ export async function initV2(pool){await pool.query(`
  ALTER TABLE v2_ledger ADD COLUMN IF NOT EXISTS customer_traffic_reservation jsonb;
  CREATE TABLE IF NOT EXISTS v2_ledger_events(id bigserial PRIMARY KEY,operation uuid NOT NULL REFERENCES v2_operations(id),event text NOT NULL,detail jsonb NOT NULL DEFAULT '{}',created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(operation,event));
  CREATE INDEX IF NOT EXISTS v2_ledger_project_created ON v2_ledger(project,created_at);
- `);}
+ `);await initBrowserQueue(pool);}
 
 export async function recoverV2(pool){
+ await recoverBrowserQueue(pool);
  // Even reserved work is not replayed automatically. A dispatched request has
  // no recoverable remote job handle; its original reservation survives restart.
  await pool.query(`UPDATE v2_operations SET state='unknown',error='interrupted_unknown',finished_at=now() WHERE state='running';
@@ -109,11 +111,15 @@ const operationExecution=kind=>kind==='browser_probe'?'browser':'http';
 
 export class V2Gateway{
  constructor(gateway,{http=nativeHttp,dnsHttp=nativeHttp,browserRuntime=browserProbeRuntime,browserRunner=runBrowserProbe,relayFactory=browserRelay}={}){this.gateway=gateway;this.store=gateway.store;this.config=gateway.config;this.sealer=gateway.sealer;this.http=http;this.resolve=createSourceResolver(this.config.v2?.dns,{systemLookup:gateway.resolve,http:dnsHttp});Object.assign(this,{browserRuntime,browserRunner,browserRelay:relayFactory});
+  const queuePolicy=browserQueuePolicy(this.config.v2?.browser_queue);
+  if(queuePolicy&&this.config.v2?.browser_pool===undefined)fail('browser_queue_configuration',503);
   if(this.config.v2?.browser_pool!==undefined){
-   this.browserPool=new BrowserWorkerPool(this.config.v2.browser_pool);
+   this.browserPool=new BrowserWorkerPool(this.config.v2.browser_pool,{metrics:async()=>({queue:this.browserQueue?await this.browserQueue.metrics():{pending:0,active:0,oldest_wait_ms:0,recent_timeouts:0},max_concurrent_requests:this.config.maxConcurrentRequests??4}),runtime:()=>browserProbePoolRuntime(this.config),onClose:()=>this.browserQueue?.close()});
+   if(queuePolicy)this.browserQueue=new BrowserAdmissionQueue(this.store,this.config,this.browserPool);
    this.browserRuntime=async config=>{
     const qualified=browserProbePoolRuntime(config);
     if(!qualified.available)return qualified;
+    if(this.browserQueue)return qualified;
     return await this.browserPool.ready(qualified.runtime)?qualified:{available:false,reason:'browser_probe_runtime_unavailable'};
    };
   }

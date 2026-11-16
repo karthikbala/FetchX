@@ -86,3 +86,7 @@ scoped `datacenterPricingAttestations` entry uses `schema_version: 2` and
 Include `"http"` in that list to cover native HTTP as well. Version 1 pricing
 remains HTTP-scoped. Managed browser credits require reviewed browser mode
 weights in addition to available route pricing.
+
+## Optional capacity queue
+
+An enabled [browser admission queue](hetzner-autoscaling.md) waits for a qualified worker before source dispatch or credit reservation. Queue wait is bounded separately from browser execution. On queue-full, timeout or pre-dispatch cancellation, repeat the exact request with its original idempotency key. Running or uncertain source work is never redispatched automatically.
