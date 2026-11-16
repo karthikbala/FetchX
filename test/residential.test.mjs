@@ -8,7 +8,7 @@ import {fileURLToPath} from 'node:url';
 import {Store} from '../src/store.mjs';
 import {Gateway} from '../src/gateway.mjs';
 import {sha} from '../src/crypto.mjs';
-import {providerProxy,residentialPolicy,routePlan,residentialStatus,reconcileResidential} from '../src/residential.mjs';
+import {providerProxy,residentialPolicy,routePlan,routeConfig,residentialStatus,reconcileResidential} from '../src/residential.mjs';
 import {checkBrowserTier} from '../src/browser.mjs';
 import {connectRelay} from '../src/connect-relay.mjs';
 import http from 'node:http';
@@ -27,6 +27,12 @@ test('new profile defaults, native/browser ladder and sticky country syntax',()=
  assert.throws(()=>residentialPolicy({...base,country:'xx'},settings));
  assert.equal(p.maxSessionRenewals,0);assert.equal(residentialPolicy({...base,maxSessionRenewals:3},settings).maxSessionRenewals,3);
  for(const bad of [-1,11,1.5,'2'])assert.throws(()=>residentialPolicy({...base,maxSessionRenewals:bad},settings),/residential_profile_invalid/);
+ // CloakBrowser is an opt-in last resort behind every Camoufox route.
+ const cf=residentialPolicy({...base,execution:'browser',browserEngine:'camoufox',browserEngineFallback:'cloakbrowser'},settings);
+ assert.deepEqual(routePlan(cf).map(r=>`${r.engine??'camoufox'}:${r.provider}/${r.tier}`),['camoufox:evomi/free','camoufox:dataimpulse/free','cloakbrowser:evomi/free','cloakbrowser:dataimpulse/free','cloakbrowser:evomi/paid','cloakbrowser:dataimpulse/paid']);
+ const cloakStep=routeConfig(cf,2,'abcdefabcd');assert.equal(cloakStep.browserEngine,'cloakbrowser');assert.equal(routePlan(cloakStep).length,6);assert.equal(routeConfig(cloakStep,0,'abcdefabcd').browserEngine,'camoufox');
+ assert.deepEqual(routePlan(residentialPolicy({...base,execution:'browser',browserEngine:'camoufox'},settings)).map(r=>r.provider),['evomi','dataimpulse']);
+ for(const bad of [{browserEngineFallback:'cloakbrowser'},{execution:'browser',browserEngine:'cloakbrowser',browserEngineFallback:'cloakbrowser'},{execution:'browser',browserEngine:'camoufox',browserEngineFallback:'chrome'},{execution:'browser',maxRouteAttempts:7}])assert.throws(()=>residentialPolicy({...base,...bad},settings),/residential_profile_invalid/);
 });
 test('paid tier rejects free trial, invalid, expired and unverifiable entitlement',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'tier-test-')),path=join(dir,'binary');await writeFile(path,'not executed');
@@ -47,10 +53,10 @@ test('CONNECT relay rejects private/unknown destinations without upstream access
 test('durable residential default, bounded fallback, accounting and browser tier isolation',{skip:!process.env.TEST_DATABASE_URL},async()=>{
  assert.match(new URL(process.env.TEST_DATABASE_URL).pathname,/^\/gateway_test_[A-Za-z0-9]+$/);
  const root=await mkdtemp(join(tmpdir(),'residential-test-')),store=new Store(process.env.TEST_DATABASE_URL);await store.init();await store.pool.query('TRUNCATE ledger,attempts,operations,workflows,source_limits RESTART IDENTITY CASCADE');
- const config={...structuredClone(settings),release:'test',artifactDir:root,artifactKey:'22'.repeat(32),maxDailyFallbackCredits:0,projects:{a:{profiles:['native','browser','renew'],tokenHash:sha('a')},b:{profiles:['native'],tokenHash:sha('b')}},proxies:[]};
+ const config={...structuredClone(settings),release:'test',artifactDir:root,artifactKey:'22'.repeat(32),maxDailyFallbackCredits:0,projects:{a:{profiles:['native','browser','renew','cfb'],tokenHash:sha('a')},b:{profiles:['native'],tokenHash:sha('b')}},proxies:[]};
  let mode='fallback',queue=[];const calls=[],tiers=[];
- const g=new Gateway({store,config,profiles:{native:base,browser:{...base,execution:'browser'},renew:{...base,maxSessionRenewals:1}},resolve:async()=>[{address:'93.184.216.34'}],browserTierCheck:async(c,t)=>{tiers.push(t);},transport:{residential:async(input,w,c,storageState)=>{
-  calls.push({provider:w.route,tier:routePlan(w.config)[w.config.routeIndex].tier,session:w.config.residentialSession,state:storageState??null});
+ const g=new Gateway({store,config,profiles:{native:base,browser:{...base,execution:'browser'},renew:{...base,maxSessionRenewals:1},cfb:{...base,execution:'browser',browserEngine:'camoufox',browserEngineFallback:'cloakbrowser',maxRouteAttempts:6,maxResidentialBytes:8000,maxSessionRenewals:1}},resolve:async()=>[{address:'93.184.216.34'}],browserTierCheck:async(c,t,o)=>{tiers.push(t);if(o?.engine==='cloakbrowser'&&c.browser?.paidBroken&&t==='paid')throw Object.assign(Error(),{code:'browser_entitlement_unavailable'});},transport:{residential:async(input,w,c,storageState)=>{
+  calls.push({provider:w.route,tier:routePlan(w.config)[w.config.routeIndex].tier,engine:w.config.browserEngine??null,session:w.config.residentialSession,state:storageState??null});
   if(queue.length)return {status:queue.shift(),error:null,headers:{},body:Buffer.from('body'),wireBytes:50,proxyTraffic:{status:'measured',bytes:100},storageState:{cookies:[{name:'session',value:w.config.residentialSession}],origins:[]}};
   if(mode==='secret')return {status:200,headers:{},body:Buffer.from(provider.password),wireBytes:50,proxyTraffic:{status:'measured',bytes:42}};
   if(mode==='unknown')throw Error('unclassified');
@@ -97,6 +103,16 @@ test('durable residential default, bounded fallback, accounting and browser tier
   // A renewed session's first GET still rotates Evomi -> DataImpulse on 429.
   const renew2=await workflow('renew');queue=[200,429,429,200];await g.operation('a',renew2.id,{...input,idempotency_key:'s1'});const r2Before=calls.length;
   const s2=await g.operation('a',renew2.id,{...input,idempotency_key:'s2'});assert.deepEqual(calls.slice(r2Before).map(x=>x.provider),['evomi','evomi','dataimpulse']);assert.equal(s2.status,200);assert.equal(s2.provider,'dataimpulse');
+  queue=[];await store.pool.query('TRUNCATE source_limits');
+  // Opt-in engine fallback: both Camoufox routes walled -> CloakBrowser in a fresh session.
+  const cfb=await workflow('cfb');queue=[429,403,200];const cfbBefore=calls.length;const cfbResult=await g.operation('a',cfb.id,{...input,idempotency_key:'c1'});
+  assert.deepEqual(calls.slice(cfbBefore).map(x=>`${x.engine}:${x.provider}/${x.tier}`),['camoufox:evomi/free','camoufox:dataimpulse/free','cloakbrowser:evomi/free']);
+  assert.equal(cfbResult.status,200);assert.equal(new Set(calls.slice(cfbBefore).map(x=>x.session)).size,3);assert.equal(calls.at(-1).state,null);
+  // The session stays on CloakBrowser; a renewal restarts with Camoufox first.
+  queue=[200];await g.operation('a',cfb.id,{...input,idempotency_key:'c2'});assert.equal(calls.at(-1).engine,'cloakbrowser');
+  await store.pool.query('TRUNCATE source_limits');
+  queue=[429,200];const renewBefore2=calls.length;const c3=await g.operation('a',cfb.id,{...input,idempotency_key:'c3'});
+  assert.deepEqual(calls.slice(renewBefore2).map(x=>`${x.engine}:${x.provider}`),['cloakbrowser:evomi','camoufox:evomi']);assert.equal(c3.status,200);
   queue=[];await store.pool.query('TRUNCATE source_limits');
   mode='browser';const browser=await workflow('browser'),before=calls.length;const rendered=await g.operation('a',browser.id,input);assert.equal(rendered.provider,'dataimpulse');assert.equal(rendered.browser_tier,'paid');assert.deepEqual(calls.slice(before).map(x=>`${x.provider}/${x.tier}`),['evomi/free','dataimpulse/free','evomi/paid','dataimpulse/paid']);
   assert.equal(rendered.customer_traffic.metered_bytes,1000);assert.equal(rendered.customer_traffic.cost_usd,'0.000002000');

@@ -69,7 +69,7 @@ One worker executes jobs under the gateway's database ownership lock. Queued wor
 
 ## Routing and limits
 
-New native profiles: Evomi, then DataImpulse. Browser profiles: Evomi/free, DataImpulse/free, Evomi/paid, DataImpulse/paid. Fallback is qualified, bounded and restricted to the first eligible operation; eligible outcomes are denial (401/403), a recognized challenge, a transport failure and a source 429. Paid browser builds require a valid paid entitlement; the free trial is not perpetual. No binaries, trial keys or subscriptions are included in this repository. Scrape.do/Oxylabs adapters remain available for explicitly configured legacy routes.
+New native profiles: Evomi, then DataImpulse. Browser profiles: Evomi/free, DataImpulse/free, Evomi/paid, DataImpulse/paid (CloakBrowser). Camoufox profiles use Evomi/free and DataImpulse/free, followed by the CloakBrowser routes only when the profile sets `browserEngineFallback: "cloakbrowser"`. Fallback is qualified, bounded and restricted to the first eligible operation; eligible outcomes are denial (401/403), a recognized challenge, a transport failure and a source 429. Paid browser builds require a valid paid entitlement; the free trial is not perpetual. No binaries, trial keys or subscriptions are included in this repository. Scrape.do/Oxylabs adapters remain available for explicitly configured legacy routes.
 
 Residential usage is reserved before dispatch. Local byte counters are not provider invoices; failed or uncertain attempts retain reservations until authoritative reconciliation. FetchX does not promise success-only billing. Status and diagnostics remain at `/v1/status` and `/v1/operations/:id/diagnostics`.
 

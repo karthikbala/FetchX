@@ -4,17 +4,31 @@ import {newBrowserEngine} from './browser-engines.mjs';
 import {residentialTrafficCharge} from './customer-traffic.mjs';
 export const RESIDENTIAL_POLICY='residential-v1';
 export const isResidential=p=>p.routingPolicy===RESIDENTIAL_POLICY;
-export function routePlan(p){return p.execution==='browser'?[{provider:'evomi',tier:'free'},{provider:'dataimpulse',tier:'free'},...(p.browserEngine==='camoufox'?[]:[{provider:'evomi',tier:'paid'},{provider:'dataimpulse',tier:'paid'}])]:[{provider:'evomi',tier:null},{provider:'dataimpulse',tier:null}];}
+const CLOAKBROWSER_ROUTES=[{provider:'evomi',tier:'free'},{provider:'dataimpulse',tier:'free'},{provider:'evomi',tier:'paid'},{provider:'dataimpulse',tier:'paid'}];
+// The ladder is fixed by the workflow's primary engine. An opt-in
+// browserEngineFallback appends the CloakBrowser routes after every Camoufox
+// route, so CloakBrowser is only reached when Camoufox has failed on all of them.
+export const primaryBrowserEngine=p=>p.primaryBrowserEngine??p.browserEngine;
+export function routePlan(p){
+ if(p.execution!=='browser')return [{provider:'evomi',tier:null},{provider:'dataimpulse',tier:null}];
+ if(primaryBrowserEngine(p)!=='camoufox')return CLOAKBROWSER_ROUTES;
+ return [{provider:'evomi',tier:'free'},{provider:'dataimpulse',tier:'free'},...(p.browserEngineFallback==='cloakbrowser'?CLOAKBROWSER_ROUTES.map(r=>({...r,engine:'cloakbrowser'})):[])];
+}
 export function selectedRoute(p){return routePlan(p)[p.routeIndex??0];}
+// The profile fields for a given route index: route, session and the engine it runs.
+export function routeConfig(p,index,residentialSession){const route=routePlan(p)[index];return {...p,routeIndex:index,residentialSession,...(p.execution==='browser'?{browserEngine:route.engine??primaryBrowserEngine(p)}:{})};}
 export function residentialPolicy(p,config){
  const policy=p.routingPolicy??config.defaultRouting??'legacy';
  if(!['legacy',RESIDENTIAL_POLICY].includes(policy))fail('routing_policy_invalid',500);
  if(policy==='legacy')return {...p,routingPolicy:policy};
  if(!/^[A-Z]{2}$/.test(p.country)||p.ttlSeconds>1800)fail('residential_profile_invalid',500);
- if(p.maxRouteAttempts!==undefined&&(!Number.isInteger(p.maxRouteAttempts)||p.maxRouteAttempts<1||p.maxRouteAttempts>4))fail('residential_profile_invalid',500);
+ if(p.maxRouteAttempts!==undefined&&(!Number.isInteger(p.maxRouteAttempts)||p.maxRouteAttempts<1||p.maxRouteAttempts>6))fail('residential_profile_invalid',500);
+ if(p.browserEngineFallback!==undefined&&(p.browserEngineFallback!=='cloakbrowser'||p.execution!=='browser'))fail('residential_profile_invalid',500);
  if(p.execution&&!['http','browser'].includes(p.execution))fail('residential_profile_invalid',500);
  if(p.maxSessionRenewals!==undefined&&(!Number.isInteger(p.maxSessionRenewals)||p.maxSessionRenewals<0||p.maxSessionRenewals>10))fail('residential_profile_invalid',500);
- return {...p,...(p.execution==='browser'?{browserEngine:newBrowserEngine(p,config)}:{}),routingPolicy:policy,execution:p.execution??'http',maxConcurrent:1,maxFallbackCredits:0,
+ const engine=p.execution==='browser'?newBrowserEngine(p,config):null;
+ if(p.browserEngineFallback&&engine!=='camoufox')fail('residential_profile_invalid',500);
+ return {...p,...(engine?{browserEngine:engine,primaryBrowserEngine:engine}:{}),routingPolicy:policy,execution:p.execution??'http',maxConcurrent:1,maxFallbackCredits:0,
   routeIndex:0,residentialSession:randomBytes(5).toString('hex'),maxSessionRenewals:p.maxSessionRenewals??0,sessionRenewals:0,
   maxResidentialBytes:p.maxResidentialBytes??Math.min(p.maxBytes,16*1024*1024),
   maxAttemptBytes:p.maxAttemptBytes??Math.min(p.maxBytes,4*1024*1024)};

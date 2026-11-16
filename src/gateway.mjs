@@ -1,4 +1,4 @@
-import {isResidential,residentialPolicy,selectedRoute,routePlan,providerProxy,reserveResidential,settleResidential,operationResidentialTraffic} from './residential.mjs';
+import {isResidential,residentialPolicy,selectedRoute,routePlan,routeConfig,providerProxy,reserveResidential,settleResidential,operationResidentialTraffic} from './residential.mjs';
 import {residentialTrafficCharge} from './customer-traffic.mjs';
 import {estimateRoutePricing} from './v2-pricing.mjs';
 import {residentialRequest} from './residential-transport.mjs';
@@ -21,7 +21,7 @@ import {chooseHealthyProxy,recordRouteOutcome,validateRouteHealthConfig} from '.
 // Residential route fallback applies only to a workflow's first, cookie-free GET.
 const cookieFreeGet=input=>input.method==='GET'&&!Object.keys(input.headers??{}).some(k=>['cookie','authorization'].includes(k.toLowerCase()));
 function residentialFirstGet(w,input){return w.requests===0&&cookieFreeGet(input);}
-const routeConfigured=(config,p,index)=>{try{providerProxy(config,{...p,routeIndex:index,residentialSession:'0000000000'},selectedRoute({...p,routeIndex:index}).provider);return true;}catch{return false;}};
+const routeConfigured=(config,p,index)=>{try{const q=routeConfig(p,index,'0000000000');providerProxy(config,q,selectedRoute(q).provider);return true;}catch{return false;}};
 // A profile may allow a bounded number of session renewals: a later
 // cookie-free GET that is rate-limited, denied or challenged restarts the
 // route ladder in a fresh residential session with no saved browser state.
@@ -143,7 +143,7 @@ export class Gateway {
  }
  async residentialRenewal(w,opId,input,response){
   if(!residentialRenewable(w,input,response))return response;
-  const config={...w.config,routeIndex:0,residentialSession:randomBytes(5).toString('hex'),sessionRenewals:(w.config.sessionRenewals??0)+1},route=selectedRoute(config);
+  const config={...routeConfig(w.config,0,randomBytes(5).toString('hex')),sessionRenewals:(w.config.sessionRenewals??0)+1},route=selectedRoute(config);
   try{providerProxy(this.config,config,route.provider);if(route.tier)await this.browserTierCheck(this.config,route.tier,{engine:config.browserEngine??'cloakbrowser'});}catch(e){return {...response,fallbackBlocked:e.code??'route_unavailable'};}
   await this.store.tx(async c=>{
    const current=await this.owned(w.project,w.id,c);if(current.state!=='open')fail('workflow_closed',409);
@@ -167,7 +167,7 @@ export class Gateway {
    if(response.actionsStarted)return {...response,fallbackBlocked:'browser_actions_not_replayable'};
    const next=(w.config.routeIndex??0)+1;
    if(next>=Math.min(routePlan(w.config).length,w.config.maxRouteAttempts??4))return response;
-   const config={...w.config,routeIndex:next,residentialSession:randomBytes(5).toString('hex')},route=selectedRoute(config);
+   const config=routeConfig(w.config,next,randomBytes(5).toString('hex')),route=selectedRoute(config);
    try{providerProxy(this.config,config,route.provider);if(route.tier)await this.browserTierCheck(this.config,route.tier,{engine:config.browserEngine??'cloakbrowser'});}catch(e){return {...response,fallbackBlocked:e.code??'route_unavailable'};}
    await this.store.tx(async c=>{
     const current=await this.owned(w.project,w.id,c);if(current.state!=='open')fail('workflow_closed',409);
