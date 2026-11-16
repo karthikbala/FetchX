@@ -59,7 +59,7 @@ Example profile fragment (replace selectors and approve destination/method rules
 
 Actions: `fill`, `select`, `click`, `press` (Enter/Tab/Escape/arrows), `wait`, `scroll` into view. Selectors and static values are reviewed configuration. `fill`/`select` accept either `value` or `valueFrom`. Wait states are visible, hidden, attached or detached. No caller JavaScript or arbitrary CDP endpoint is exposed. Up to 20 steps, 20 extraction fields and 100 matches per field; text values are bounded to 4,096 characters. The entire worker has a 60-second deadline. Screenshots are PNG viewport or a reviewed element selector, and share the response-byte ceiling with HTML and extraction. `extracted`, `screenshot`, `actions_completed`, `action_step` identify outputs and progress without logging submitted values.
 
-Any action other than a wait makes the capture non-replayable across providers. A subsequent denial or timeout cannot automatically submit the form again. Initial navigation blocks can still qualify for normal bounded fallback. Source 429 cooldowns and uncertain transport outcomes never authorize rotation. A saved page or extracted selector value is not application acceptance.
+Any action other than a wait makes the capture non-replayable across providers. A subsequent denial or timeout cannot automatically submit the form again. Initial navigation blocks can still qualify for normal bounded fallback. Uncertain transport outcomes never authorize rotation. A source 429 on a residential workflow's first cookie-free GET advances to the next residential route (Evomi → DataImpulse) in a fresh session, and only the limited egress is cooled down meanwhile. A 429 on the last route, or on any later request, cools down the source and origin and does not rotate. A saved page or extracted selector value is not application acceptance.
 
 ## Durable asynchronous jobs
 
@@ -69,7 +69,7 @@ One worker executes jobs under the gateway's database ownership lock. Queued wor
 
 ## Routing and limits
 
-New native profiles: Evomi, then DataImpulse. Browser profiles: Evomi/free, DataImpulse/free, Evomi/paid, DataImpulse/paid. Fallback is qualified, bounded and restricted to the first eligible operation. Paid browser builds require a valid paid entitlement; the free trial is not perpetual. No binaries, trial keys or subscriptions are included in this repository. Scrape.do/Oxylabs adapters remain available for explicitly configured legacy routes.
+New native profiles: Evomi, then DataImpulse. Browser profiles: Evomi/free, DataImpulse/free, Evomi/paid, DataImpulse/paid. Fallback is qualified, bounded and restricted to the first eligible operation; eligible outcomes are denial (401/403), a recognized challenge, a transport failure and a source 429. Paid browser builds require a valid paid entitlement; the free trial is not perpetual. No binaries, trial keys or subscriptions are included in this repository. Scrape.do/Oxylabs adapters remain available for explicitly configured legacy routes.
 
 Residential usage is reserved before dispatch. Local byte counters are not provider invoices; failed or uncertain attempts retain reservations until authoritative reconciliation. FetchX does not promise success-only billing. Status and diagnostics remain at `/v1/status` and `/v1/operations/:id/diagnostics`.
 

@@ -52,7 +52,7 @@ test('durable residential default, bounded fallback, accounting and browser tier
   if(mode==='secret')return {status:200,headers:{},body:Buffer.from(provider.password),wireBytes:50,proxyTraffic:{status:'measured',bytes:42}};
   if(mode==='unknown')throw Error('unclassified');
   if(mode==='unsent-primary'&&w.route==='evomi')return {status:null,error:'proxy_connect_failed',headers:{},body:Buffer.alloc(0),wireBytes:0,proxyTraffic:{status:'no_traffic',bytes:0}};
-  const status=mode==='rate'?429:mode==='denied'?403:mode==='browser'?(w.config.routeIndex===3?200:403):['fallback','missing-primary'].includes(mode)&&w.route==='evomi'?403:200;
+  const status=mode==='rate'||mode==='rate-primary'&&w.route==='evomi'?429:mode==='denied'?403:mode==='browser'?(w.config.routeIndex===3?200:403):['fallback','missing-primary'].includes(mode)&&w.route==='evomi'?403:200;
   return {status,error:mode==='browser'&&status===403?'browser_capture_failed':mode==='readiness'?'browser_capture_failed':null,headers:{},body:Buffer.from('body'),wireBytes:50,...(mode==='missing'||mode==='missing-primary'&&w.route==='evomi'?{}:{proxyTraffic:{status:'measured',bytes:mode==='overrun'?1500:w.route==='evomi'?150:350}})};
  }}});
  let n=0;const workflow=(profile='native')=>g.workflow('a',{profile,idempotency_key:'w'+(++n)}),input={idempotency_key:'one',url:'https://source.example/',main_document:true};
@@ -64,7 +64,18 @@ test('durable residential default, bounded fallback, accounting and browser tier
   const usage=(await store.pool.query('SELECT * FROM residential_usage ORDER BY created_at')).rows;assert.equal(usage.length,2);assert.ok(usage.every(x=>Number(x.accounted_bytes)===1000&&Number(x.observed_bytes)===50&&x.invoice_micro_usd===null));assert.deepEqual(usage.map(x=>Number(x.observed_proxy_bytes)),[150,350]);
   mode='denied';await g.operation('a',w.id,{...input,idempotency_key:'two'});assert.equal(calls.length,3);assert.equal(calls.at(-1).provider,'dataimpulse');
   mode='readiness';const ready=await workflow('browser'),readyBefore=calls.length;await g.operation('a',ready.id,input);assert.equal(calls.length,readyBefore+1);
-  mode='rate';const rate=await workflow();await g.operation('a',rate.id,input);assert.equal(calls.at(-1).provider,'evomi');assert.equal((await g.read('a',rate.id)).route,'evomi');await store.pool.query('TRUNCATE source_limits');
+  // A first-GET 429 rotates Evomi -> DataImpulse; only the limited egress cools
+  // down until the last route is also limited, which then cools the origin.
+  await store.pool.query('TRUNCATE source_limits');
+  mode='rate-primary';const ratePrimary=await workflow(),rpBefore=calls.length;const rp=await g.operation('a',ratePrimary.id,input);
+  assert.deepEqual(calls.slice(rpBefore).map(x=>x.provider),['evomi','dataimpulse']);assert.equal(rp.provider,'dataimpulse');assert.equal(rp.status,200);assert.equal((await g.read('a',ratePrimary.id)).route,'dataimpulse');
+  const cooled=async()=>(await store.pool.query("SELECT source FROM source_limits WHERE cooldown_until>now()+interval '30 seconds' ORDER BY source")).rows.map(x=>x.source);
+  assert.deepEqual(await cooled(),[`egress:evomi:${calls[rpBefore].session}`]);
+  mode='rate';const rate=await workflow(),rateBefore=calls.length;const limitedResult=await g.operation('a',rate.id,input);
+  assert.deepEqual(calls.slice(rateBefore).map(x=>x.provider),['evomi','dataimpulse']);assert.equal(limitedResult.status,429);assert.equal((await g.read('a',rate.id)).route,'dataimpulse');
+  assert.ok((await cooled()).includes('origin:source.example'));
+  await assert.rejects(g.operation('a',(await workflow()).id,{...input,idempotency_key:'cooling'}),/source_cooldown/);
+  await store.pool.query('TRUNCATE source_limits');
   mode='browser';const browser=await workflow('browser'),before=calls.length;const rendered=await g.operation('a',browser.id,input);assert.equal(rendered.provider,'dataimpulse');assert.equal(rendered.browser_tier,'paid');assert.deepEqual(calls.slice(before).map(x=>`${x.provider}/${x.tier}`),['evomi/free','dataimpulse/free','evomi/paid','dataimpulse/paid']);
   assert.equal(rendered.customer_traffic.metered_bytes,1000);assert.equal(rendered.customer_traffic.cost_usd,'0.000002000');
   await assert.rejects(g.operation('a',browser.id,{...input,idempotency_key:'over'}),/residential_budget_exhausted/);

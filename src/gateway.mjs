@@ -18,6 +18,13 @@ import {hasHtmlChallenge} from './source-challenge.mjs';
 import {observeProtection} from './protection.mjs';
 import {chooseHealthyProxy,recordRouteOutcome,validateRouteHealthConfig} from './route-health.mjs';
 
+// Residential route fallback applies only to a workflow's first, cookie-free GET.
+function residentialFirstGet(w,input){return w.requests===0&&input.method==='GET'&&!Object.keys(input.headers??{}).some(k=>['cookie','authorization'].includes(k.toLowerCase()));}
+function residentialRotatable429(config,w,input,r){
+ const p=w.config;if(!isResidential(p)||!residentialFirstGet(w,input)||r.error||r.actionsStarted)return false;
+ const next=(p.routeIndex??0)+1;if(next>=Math.min(routePlan(p).length,p.maxRouteAttempts??4))return false;
+ try{providerProxy(config,{...p,routeIndex:next,residentialSession:'0000000000'},selectedRoute({...p,routeIndex:next}).provider);return true;}catch{return false;}
+}
 export class Gateway {
  constructor({store,config,profiles,resolve,browserTierCheck=checkBrowserTier,transport={oxylabs:oxylabsRequest,scrapedo:scrapeDoRequest}}){
   Object.assign(this,{store,config,profiles,resolve,transport,browserTierCheck});this.sealer=new Sealer(config.artifactKey);
@@ -122,11 +129,13 @@ export class Gateway {
  }
  async residentialFallback(w,opId,input,response){
   // Browser captures are isolated from caller state. Native first GET only.
-  if(w.requests!==0||input.method!=='GET'||Object.keys(input.headers).some(k=>['cookie','authorization'].includes(k.toLowerCase())))return response;
+  if(!residentialFirstGet(w,input))return response;
   for(;;){
    const category=classifyOutcome(response,{...input,main_document:true});
    const eligibleError=!response.error||['proxy_connect_failed','source_challenge','source_denied'].includes(response.error)||response.error==='browser_capture_failed'&&['source_denied','source_challenge'].includes(category);
-   if(!eligibleError||response.headers?.['retry-after']||!['source_denied','source_challenge','transport_failure'].includes(category))return response;
+   // A 429 on the first GET limits that provider's egress, not the source:
+   // move to the next provider (Evomi -> DataImpulse) in a fresh session.
+   if(!eligibleError||category!=='rate_limited'&&response.headers?.['retry-after']||!['source_denied','source_challenge','transport_failure','rate_limited'].includes(category))return response;
    if(response.actionsStarted)return {...response,fallbackBlocked:'browser_actions_not_replayable'};
    const next=(w.config.routeIndex??0)+1;
    if(next>=Math.min(routePlan(w.config).length,w.config.maxRouteAttempts??4))return response;
@@ -223,7 +232,10 @@ export class Gateway {
    if(r.status===429||r.headers?.['retry-after']){
     const text=r.headers?.['retry-after'],seconds=/^\d+$/.test(text??'')?Number(text):Math.ceil((Date.parse(text)-Date.now())/1000);
     const until=new Date(Date.now()+Math.min(3600,Math.max(60,Number.isFinite(seconds)?seconds:60))*1000);
-    const keys=['source:'+w.profile.split('.').slice(0,2).join('.'),'origin:'+new URL(input.url).hostname,'egress:'+w.proxy_id];
+    // While residentialFallback can still rotate this first GET to another
+    // provider, cool down only the limited egress so the next route is admitted.
+    // The last route's 429 cools the source and origin as before.
+    const keys=r.status===429&&residentialRotatable429(this.config,w,input,r)?['egress:'+w.proxy_id]:['source:'+w.profile.split('.').slice(0,2).join('.'),'origin:'+new URL(input.url).hostname,'egress:'+w.proxy_id];
     for(const key of keys)await c.query('INSERT INTO source_limits(source,next_at,cooldown_until) VALUES($1,$2,$2) ON CONFLICT(source) DO UPDATE SET next_at=GREATEST(source_limits.next_at,EXCLUDED.next_at),cooldown_until=GREATEST(source_limits.cooldown_until,EXCLUDED.cooldown_until)',[key,until]);
    }
   });
