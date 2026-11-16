@@ -44,8 +44,8 @@ export function classifyOutcome(response={},input={}){
  if(response.error==='source_challenge')return 'source_challenge';
  // The proxy provider refused the destination (CONNECT 4xx): the source was never contacted.
  if(response.error==='provider_target_refused')return 'provider_refused';
- // The proxy could not reach the target (CONNECT 502-504): a country or IP-type firewall, not the proxy's health.
- if(response.error==='source_unreachable')return 'source_unreachable';
+ // The proxy could not reach the destination (CONNECT 502-504): not an unhealthy proxy IP.
+ if(response.error==='source_unreachable'&&!response.status)return 'source_unreachable';
  const status=response.status;
  if(status===429||response.error==='rate_limited')return 'rate_limited';
  if(status===401||status===403||response.error==='source_denied')return 'source_denied';
