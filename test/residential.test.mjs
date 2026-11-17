@@ -84,6 +84,7 @@ test('durable residential default, bounded fallback, accounting and browser tier
   if(mode==='secret')return {status:200,headers:{},body:Buffer.from(provider.password),wireBytes:50,proxyTraffic:{status:'measured',bytes:42}};
   if(mode==='unknown')throw Error('unclassified');
   if(mode==='unsent-primary'&&w.route==='evomi')return {status:null,error:'proxy_connect_failed',headers:{},body:Buffer.alloc(0),wireBytes:0,proxyTraffic:{status:'no_traffic',bytes:0}};
+  if(mode==='rate-capture')return w.route==='evomi'?{status:429,error:'browser_capture_failed',headers:{},body:Buffer.from('wall'),wireBytes:50,proxyTraffic:{status:'measured',bytes:100}}:{status:200,error:null,headers:{},body:Buffer.from('ok'),wireBytes:50,proxyTraffic:{status:'measured',bytes:100}};
   const status=mode==='rate'||mode==='rate-primary'&&w.route==='evomi'?429:mode==='denied'?403:mode==='browser'?(w.config.routeIndex===3?200:403):['fallback','missing-primary'].includes(mode)&&w.route==='evomi'?403:200;
   return {status,error:mode==='browser'&&status===403?'browser_capture_failed':mode==='readiness'?'browser_capture_failed':null,headers:{},body:Buffer.from('body'),wireBytes:50,...(mode==='missing'||mode==='missing-primary'&&w.route==='evomi'?{}:{proxyTraffic:{status:'measured',bytes:mode==='overrun'?1500:w.route==='evomi'?150:350}})};
  }}});
@@ -122,6 +123,10 @@ test('durable residential default, bounded fallback, accounting and browser tier
   assert.equal((await store.pool.query("SELECT count(*)::int n FROM attempts WHERE workflow=$1 AND routing_reason='session_renewal'",[renew.id])).rows[0].n,1);
   // The renewal budget is spent: the next 429 is returned and cools the origin.
   queue=[429];const r3=await g.operation('a',renew.id,{...input,idempotency_key:'r3'});assert.equal(r3.status,429);assert.ok((await cooled()).includes('origin:source.example'));
+  await store.pool.query('TRUNCATE source_limits');
+  // A browser 429 whose ready check then failed (browser_capture_failed) rotates too.
+  mode='rate-capture';const rc=await workflow('browser'),rcBefore=calls.length;const rcr=await g.operation('a',rc.id,input);
+  assert.deepEqual(calls.slice(rcBefore).map(x=>x.provider),['evomi','dataimpulse']);assert.equal(rcr.status,200);mode='fallback';
   await store.pool.query('TRUNCATE source_limits');
   // A renewed session's first GET still rotates Evomi -> DataImpulse on 429.
   const renew2=await workflow('renew');queue=[200,429,429,200];await g.operation('a',renew2.id,{...input,idempotency_key:'s1'});const r2Before=calls.length;
