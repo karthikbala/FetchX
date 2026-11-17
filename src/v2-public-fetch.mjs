@@ -86,6 +86,7 @@ function message(code){
   source_dns_unavailable:'Source DNS resolution is unavailable.',
   source_dns_invalid_response:'The DNS resolver response did not match the required validated DNS format.',
   source_dns_meter_unknown:'The session-proxy DNS charge is uncertain. Its reservation remains held; recover before any new work.',
+  provider_host_excluded:'A provider rule excludes the selected proxy provider for this destination host (for example, Oxylabs refuses .gov). No request was sent; choose another proxy class or country.',
   proxy_connect_failed:'The selected proxy could not establish the source tunnel.',
   proxy_connect_refused:'The selected proxy refused the TCP connection before any proxy request or target traffic on this dial. An operator must review the selected proxy configuration; recover the saved operation before considering new work.',
   proxy_connect_rejected:'The selected proxy rejected the requested tunnel. Inspect safe diagnostics for its status and destination stage; no source HTTP denial is implied.',

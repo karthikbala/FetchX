@@ -92,6 +92,7 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
  const artifacts=[],seenKinds=new Set(),mainArtifacts=new Map();let admission=Promise.resolve(),callbackFailed=false,parentBlocked=0,runnerStarted=false,outputReceived=false,relayCloseUnknown=false,workerUnknown=false;
  try{
   const first=await v2.destination(raw.url,profile,deadline);v2.headers({method:'GET',headers:{}},profile,first.url);
+  v2.assertRouteProvider(route,first.url.hostname);
   const proxy=v2.resolveProxy(route),jar=CookieJar.deserializeSync(v2.sealer.open(session.cookie_jar));
   relay=await v2.browserRelay({profile,pinnedDestinations,proxy,limits:policy,deadline,beforeConnect:async destination=>{await v2.dispatchable(project,id,session.id,destination.url,pricingContext);dispatched=true;}});
   stage='browser';

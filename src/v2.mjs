@@ -17,6 +17,7 @@ import {BrowserAdmissionQueue,browserQueuePolicy,initBrowserQueue,recoverBrowser
 import {estimateRoutePricing,estimatePaidPublicDatacenter} from './v2-pricing.mjs';
 import {residentialTrafficCharge,finishResidentialTrafficCharge} from './customer-traffic.mjs';
 import {distinctNativeRetryRoute,nativeRetryIdentityBinding,pristineNativeRetry,transientNativeTransport,transientNativeResponse,successfulNativeResponse} from './v2-native-retry.mjs';
+import {assertProviderAllowed} from './provider-rules.mjs';
 import {ControlCredits,creditSnapshot,creditWeight,recoverControlCredits,reviewedCreditPolicy} from './control-credits.mjs';
 import {PLAYGROUND_PREFIX,RENDER_PREPARATION_PATH,REVIEWED_BROWSER_RESIDENTIAL_PROVIDER_POLICY,admitPlaygroundRoute,isPlaygroundRef,materializePlaygroundProfile,playgroundCapabilities,playgroundOperationProfile,readPlaygroundProfile} from './control-playground.mjs';
 import {lockStripeSales} from './control-stripe-provider.mjs';
@@ -392,6 +393,8 @@ export class V2Gateway{
   providerProxy(this.config,{country:proxy.country,residentialSession},provider);
   return {...proxy,provider,proxy_id:null,residential_session:residentialSession};
  }
+ // Provider rules apply to every destination host, including redirects.
+ assertRouteProvider(route,host){if(route.class==='direct')return;assertProviderAllowed(this.config,route.class==='residential'?route.provider:(this.config.proxies?.find(p=>p.id===route.proxy_id)?.provider??'oxylabs'),host);}
  checkProxy(proxy){let u;try{u=new URL(proxy.url);}catch{fail('proxy_configuration_invalid',503);}if(!proxy.id||u.protocol!=='http:'||u.pathname!=='/'||u.search||u.hash)fail('proxy_configuration_invalid',503);}
  resolveProxy(route){
   if(route.class==='direct')return null;
@@ -553,6 +556,8 @@ export class V2Gateway{
    await admitPlaygroundRoute(this,project,p,{class:route.class,country:route.country,affinity:route.affinity},'http',route);
   }
   await this.rejectControlCredentials(input.headers);
+  // Before any reservation: an excluded provider is never reserved, dispatched or charged.
+  this.assertRouteProvider(route,new URL(input.url).hostname);
   const id=randomUUID(),hops=p.limits.max_redirects+1,publicUrl=isPublicUrlProfile(p);
   if(paid&&raw.retry===true)fail('paid_credit_retry_unsupported',409);
   if(paid){
@@ -841,7 +846,7 @@ export class V2Gateway{
       if(hop>=p.limits.max_redirects)fail('redirect_limit',502);
       if(retryEnabled&&requests>=retryPlan.request_limit)fail('retry_request_limit',429);
       const target=(publicUrl?checkedPublicRedirect(response.headers.location,destination.url,reviewedPublicUrlPolicy(this.config)):new URL(response.headers.location,destination.url)).href;
-      stage='dns';const checked=await this.destination(target,p,deadline,dnsContext);stage='redirect_policy';
+      stage='dns';const checked=await this.destination(target,p,deadline,dnsContext);stage='redirect_policy';this.assertRouteProvider(route,checked.url.hostname);
       if(checked.url.origin!==destination.url.origin&&!(p.id.startsWith(DISCOVERY_PREFIX)&&p.kind==='discovery'))fail('redirect_origin_rejected');
       const toGet=response.status===303&&current.method!=='HEAD'||[301,302].includes(response.status)&&current.method==='POST';
       checkedDestination=checked;

@@ -4,17 +4,32 @@ import {newBrowserEngine} from './browser-engines.mjs';
 import {residentialTrafficCharge} from './customer-traffic.mjs';
 export const RESIDENTIAL_POLICY='residential-v1';
 export const isResidential=p=>p.routingPolicy===RESIDENTIAL_POLICY;
-export function routePlan(p){return p.execution==='browser'?[{provider:'evomi',tier:'free'},{provider:'dataimpulse',tier:'free'},...(p.browserEngine==='camoufox'?[]:[{provider:'evomi',tier:'paid'},{provider:'dataimpulse',tier:'paid'}])]:[{provider:'evomi',tier:null},{provider:'dataimpulse',tier:null}];}
+const CLOAKBROWSER_ROUTES=[{provider:'evomi',tier:'free'},{provider:'dataimpulse',tier:'free'},{provider:'evomi',tier:'paid'},{provider:'dataimpulse',tier:'paid'}];
+// The ladder is fixed by the workflow's primary engine. An opt-in
+// browserEngineFallback appends the CloakBrowser routes after every Camoufox
+// route, so CloakBrowser is only reached when Camoufox has failed on all of them.
+export const primaryBrowserEngine=p=>p.primaryBrowserEngine??p.browserEngine;
+export function routePlan(p){
+ if(p.execution!=='browser')return [{provider:'evomi',tier:null},{provider:'dataimpulse',tier:null}];
+ if(primaryBrowserEngine(p)!=='camoufox')return CLOAKBROWSER_ROUTES;
+ return [{provider:'evomi',tier:'free'},{provider:'dataimpulse',tier:'free'},...(p.browserEngineFallback==='cloakbrowser'?CLOAKBROWSER_ROUTES.map(r=>({...r,engine:'cloakbrowser'})):[])];
+}
 export function selectedRoute(p){return routePlan(p)[p.routeIndex??0];}
+// The profile fields for a given route index: route, session and the engine it runs.
+export function routeConfig(p,index,residentialSession){const route=routePlan(p)[index];return {...p,routeIndex:index,residentialSession,...(p.execution==='browser'?{browserEngine:route.engine??primaryBrowserEngine(p)}:{})};}
 export function residentialPolicy(p,config){
  const policy=p.routingPolicy??config.defaultRouting??'legacy';
  if(!['legacy',RESIDENTIAL_POLICY].includes(policy))fail('routing_policy_invalid',500);
  if(policy==='legacy')return {...p,routingPolicy:policy};
  if(!/^[A-Z]{2}$/.test(p.country)||p.ttlSeconds>1800)fail('residential_profile_invalid',500);
- if(p.maxRouteAttempts!==undefined&&(!Number.isInteger(p.maxRouteAttempts)||p.maxRouteAttempts<1||p.maxRouteAttempts>4))fail('residential_profile_invalid',500);
+ if(p.maxRouteAttempts!==undefined&&(!Number.isInteger(p.maxRouteAttempts)||p.maxRouteAttempts<1||p.maxRouteAttempts>6))fail('residential_profile_invalid',500);
+ if(p.browserEngineFallback!==undefined&&(p.browserEngineFallback!=='cloakbrowser'||p.execution!=='browser'))fail('residential_profile_invalid',500);
  if(p.execution&&!['http','browser'].includes(p.execution))fail('residential_profile_invalid',500);
- return {...p,...(p.execution==='browser'?{browserEngine:newBrowserEngine(p,config)}:{}),routingPolicy:policy,execution:p.execution??'http',maxConcurrent:1,maxFallbackCredits:0,
-  routeIndex:0,residentialSession:randomBytes(5).toString('hex'),
+ if(p.maxSessionRenewals!==undefined&&(!Number.isInteger(p.maxSessionRenewals)||p.maxSessionRenewals<0||p.maxSessionRenewals>10))fail('residential_profile_invalid',500);
+ const engine=p.execution==='browser'?newBrowserEngine(p,config):null;
+ if(p.browserEngineFallback&&engine!=='camoufox')fail('residential_profile_invalid',500);
+ return {...p,...(engine?{browserEngine:engine,primaryBrowserEngine:engine}:{}),routingPolicy:policy,execution:p.execution??'http',maxConcurrent:1,maxFallbackCredits:0,
+  routeIndex:0,residentialSession:randomBytes(5).toString('hex'),maxSessionRenewals:p.maxSessionRenewals??0,sessionRenewals:0,
   maxResidentialBytes:p.maxResidentialBytes??Math.min(p.maxBytes,16*1024*1024),
   maxAttemptBytes:p.maxAttemptBytes??Math.min(p.maxBytes,4*1024*1024)};
 }
@@ -115,7 +130,7 @@ export async function settleResidential(c,config,aid,provider,r){
 export async function residentialStatus(pool,config,project){
  const rows=(await pool.query(`SELECT provider,browser_tier,state,count(*)::int AS attempts,sum(accounted_bytes)::text AS reserved_or_accounted_bytes,sum(observed_bytes)::text AS observed_wire_bytes,sum(estimated_micro_usd)::text AS estimated_micro_usd,sum(invoice_micro_usd)::text AS invoice_micro_usd FROM residential_usage WHERE ($1::text IS NULL OR project=$1) GROUP BY provider,browser_tier,state`,[project])).rows;
  const engine=newBrowserEngine({},config),tiers=engine==='camoufox'?config.browser?.camoufox:config.browser;
- return {default_policy:config.defaultRouting??'legacy',native_order:['evomi','dataimpulse'],browser_engine:engine,browser_order:routePlan({execution:'browser',browserEngine:engine}),usage:rows,billing_basis:'conservative_bandwidth_reservations_not_invoices',limits:{max_daily_bytes:config.residential?.maxDailyBytes??null,max_total_bytes:config.residential?.maxTotalBytes??null},browser_tiers:Object.fromEntries(['free','paid'].map(t=>[t,{supported:engine!=='camoufox'||t==='free',configured:(engine!=='camoufox'||t==='free')&&!!tiers?.[t]?.executablePath,qualified:engine==='camoufox'?false:null,qualification_error:engine==='camoufox'?'browser_runtime_unqualified':null,entitlement:tiers?.[t]?.entitlement??null,version:tiers?.[t]?.version??null}]))};
+ return {default_policy:config.defaultRouting??'legacy',native_order:['evomi','dataimpulse'],browser_engine:engine,browser_order:routePlan({execution:'browser',browserEngine:engine}),usage:rows,billing_basis:'conservative_bandwidth_reservations_not_invoices',limits:{max_daily_bytes:config.residential?.maxDailyBytes??null,max_total_bytes:config.residential?.maxTotalBytes??null},browser_tiers:Object.fromEntries(['free','paid'].map(t=>[t,{supported:engine!=='camoufox'||t==='free',configured:(engine!=='camoufox'||t==='free')&&!!tiers?.[t]?.executablePath,qualified:engine==='camoufox'?t==='free'&&tiers?.free?.qualified===true:null,qualification_error:engine==='camoufox'&&!(t==='free'&&tiers?.free?.qualified===true)?(t==='free'?'browser_not_qualified':'browser_tier_unsupported'):null,entitlement:tiers?.[t]?.entitlement??null,version:tiers?.[t]?.version??null}]))};
 }
 export async function reconcileResidential(store,input){
  if(!input||!/^[a-f0-9-]{36}$/.test(input.attempt)||!Number.isSafeInteger(input.bytes)||input.bytes<0||!Number.isSafeInteger(input.invoice_micro_usd)||input.invoice_micro_usd<0||!/^sha256:[a-f0-9]{64}$/.test(input.evidence))fail('residential_reconciliation_invalid');

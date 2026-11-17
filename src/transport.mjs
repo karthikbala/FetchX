@@ -25,13 +25,13 @@ export async function oxylabsRequest(input,proxy,profile){
   child.on('close',()=>{
    if(!size){finish(new GatewayError('transport_unavailable',503));return;}
    try{
-    const r=JSON.parse(Buffer.concat(output)),errors=new Set(['proxy_connect_failed','tls_verification_failed','transport_unavailable','transport_request_invalid','transport_failed','source_body_incomplete','response_too_large','transport_outcome_unknown']);
+    const r=JSON.parse(Buffer.concat(output)),errors=new Set(['provider_target_refused','provider_account_rejected','source_unreachable','proxy_connect_failed','tls_verification_failed','transport_unavailable','transport_request_invalid','transport_failed','source_body_incomplete','response_too_large','transport_outcome_unknown']);
     if(!r||typeof r!=='object'||(r.error&&!errors.has(r.error))||(!r.error&&(!Number.isInteger(r.status)||r.status<100||r.status>599)))throw Error();
     const pairs=r.headers??[],encoded=r.body_base64??'';
     if(!Array.isArray(pairs)||pairs.some(p=>!Array.isArray(p)||p.length!==2||p.some(v=>typeof v!=='string'))||typeof encoded!=='string')throw Error();
     const body=Buffer.from(encoded,'base64'),receivedBytes=r.received_bytes??body.length;
     if(body.toString('base64')!==encoded||!Number.isSafeInteger(receivedBytes)||receivedBytes<body.length)throw Error();
-    finish(null,{status:r.status??null,providerStatus:null,...sourceHeaders(pairs),body,receivedBytes,error:r.error??null});
+    finish(null,{status:r.status??null,providerStatus:Number.isInteger(r.provider_status)&&r.provider_status>=100&&r.provider_status<600?r.provider_status:null,...sourceHeaders(pairs),body,receivedBytes,error:r.error??null});
    }catch{finish(new GatewayError('transport_protocol_error',502));}
   });
   child.stdin.on('error',()=>{});
