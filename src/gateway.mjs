@@ -36,11 +36,13 @@ const routeConfigured=(config,p,index)=>{try{const q=routeConfig(p,index,'000000
 function residentialRenewable(w,input,r){
  const p=w.config;if(!isResidential(p)||w.requests===0||!cookieFreeGet(input)||r.actionsStarted)return false;
  const category=classifyOutcome(r,{...input,main_document:true});
- const eligibleError=!r.error||['source_challenge','source_denied'].includes(r.error)||r.error==='browser_capture_failed'&&['source_denied','source_challenge'].includes(category);
+ const eligibleError=!r.error||['source_challenge','source_denied'].includes(r.error)||r.error==='browser_capture_failed'&&['source_denied','source_challenge','rate_limited'].includes(category);
  return eligibleError&&['rate_limited','source_denied','source_challenge'].includes(category)&&(p.sessionRenewals??0)<(p.maxSessionRenewals??0);
 }
 function residentialRotatable429(config,w,input,r){
- const p=w.config;if(!isResidential(p)||r.error||r.actionsStarted)return false;
+ // A walled browser page whose ready check or capture then failed still reports
+ // the source 429; it is the same egress limit as a clean 429.
+ const p=w.config;if(!isResidential(p)||r.error&&r.error!=='browser_capture_failed'||r.actionsStarted)return false;
  const host=new URL(input.url).hostname;
  if(w.requests!==0){const first=nextRoute(config,p,0,host);return residentialRenewable(w,input,r)&&first>=0&&routeConfigured(config,p,first);}
  if(!residentialFirstGet(w,input))return false;
@@ -180,7 +182,7 @@ export class Gateway {
   if(!residentialFirstGet(w,input))return response;
   for(;;){
    const category=classifyOutcome(response,{...input,main_document:true});
-   const eligibleError=!response.error||['proxy_connect_failed','provider_target_refused','source_unreachable','source_challenge','source_denied'].includes(response.error)||response.error==='browser_capture_failed'&&['source_denied','source_challenge'].includes(category);
+   const eligibleError=!response.error||['proxy_connect_failed','provider_target_refused','source_unreachable','source_challenge','source_denied'].includes(response.error)||response.error==='browser_capture_failed'&&['source_denied','source_challenge','rate_limited'].includes(category);
    // A 429 on the first GET limits that provider's egress, not the source:
    // move to the next provider (Evomi -> DataImpulse) in a fresh session.
    if(!eligibleError||category!=='rate_limited'&&response.headers?.['retry-after']||!['source_denied','source_challenge','transport_failure','rate_limited','provider_refused','source_unreachable'].includes(category))return response;
