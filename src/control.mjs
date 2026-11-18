@@ -7,6 +7,7 @@ import {googleConfiguration} from './control-google.mjs';
 import {githubConfiguration} from './control-github.mjs';
 import {CONNECT_INTERVAL,ControlConnect,connectApiBase} from './control-connect.mjs';
 import {isPlaygroundRef,playgroundCapabilities,playgroundMessage,preparePlayground,selectPlaygroundKey} from './control-playground.mjs';
+import {registerAdminRoutes} from './control-admin.mjs';
 
 export const CONTROL_COOKIE='fetchx_session';
 export const CONTROL_GOOGLE_COOKIE='fetchx_google';
@@ -327,6 +328,8 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,cr
    query(req);const auth=await member(req);if(!stripe)fail('stripe_checkout_disabled',404);
    return stripe.status(auth.id,req.params.key);
   });
+  // Admin portal API (operator role only; disabled unless controlPlane.admin.enabled).
+  registerAdminRoutes(route,{gateway,config,authenticated,body:input,noQuery:query});
   control.all('/*',async()=>fail('not_found',404));
  },{prefix:'/control'});
  return app;
