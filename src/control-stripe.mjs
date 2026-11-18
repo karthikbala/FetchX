@@ -7,6 +7,9 @@ import {
 } from './control-stripe-provider.mjs';
 import {StripeEvents,checkoutMatches,stripeEventSubject} from './control-stripe-events.mjs';
 import {BROKER_MAX_BODY,RELAY_PATH,STRIPE_WEBHOOK_PATH,checkoutForm,customerForm,billingCurrency,currencyPaymentMethod} from './control-stripe-broker-protocol.mjs';
+// Stripe-hosted Checkout page paths. Stripe moved new sessions from /c/pay/ to
+// /g/pay/ (Nov 2026); both stay on checkout.stripe.com with the exact session id.
+const STRIPE_HOSTED_PATHS=Object.freeze(['/c/pay/','/g/pay/']);
 
 export async function initControlStripe(pool){
  await pool.query(`
@@ -278,7 +281,7 @@ export class ControlStripe {
    return checkoutView(row,'expired');
   }
   if(session.status==='complete')return checkoutView(row,'awaiting_webhook');
-  const url=stripeHostedUrl(session.url,'https://checkout.stripe.com','/c/pay/'+session.id);
+  const url=stripeHostedUrl(session.url,'https://checkout.stripe.com',STRIPE_HOSTED_PATHS.map(prefix=>prefix+session.id));
   if(session.status!=='open'||session.payment_status!=='unpaid'||!url)fail('stripe_checkout_unconfirmed',502);
   return {...checkoutView(row),checkout_url:url};
  }

@@ -73,7 +73,7 @@ function hostedCheckoutUrl(value: unknown, mode: Mode) {
   try {
     const url = new URL(value);
     if (url.origin === 'https://checkout.stripe.com' && !url.username && !url.password && !url.search &&
-        new RegExp(`^/c/pay/cs_${mode}_[A-Za-z0-9]{1,200}$`).test(url.pathname)) return url.href;
+        new RegExp(`^/[cg]/pay/cs_${mode}_[A-Za-z0-9]{1,200}$`).test(url.pathname)) return url.href;
   } catch { /* Ignore invalid hosted URLs. */ }
   return null;
 }

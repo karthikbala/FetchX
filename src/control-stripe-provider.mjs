@@ -194,7 +194,7 @@ export function stripeHostedUrl(value,origin,path){
  if(typeof value!=='string'||value.length>4096)return null;
  try{
   const url=new URL(value);
-  if(url.origin===origin&&!url.username&&!url.password&&url.pathname===path)return url.href;
+  if(url.origin===origin&&!url.username&&!url.password&&[].concat(path).includes(url.pathname))return url.href;
  }catch{}
  return null;
 }

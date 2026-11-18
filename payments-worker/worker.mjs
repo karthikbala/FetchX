@@ -180,7 +180,7 @@ class StripeOperations {
   const result=selected(value,['id','object','livemode','mode','client_reference_id','customer','amount_subtotal','amount_total','currency','status','payment_status','payment_intent','payment_method_types']);
   if(value.status==='open'&&value.payment_status==='unpaid'&&typeof value.url==='string'&&value.url.length<=4096){
    const url=new URL(value.url);
-   if(url.origin==='https://checkout.stripe.com'&&!url.username&&!url.password&&url.pathname==='/c/pay/'+id)result.url=url.href;
+   if(url.origin==='https://checkout.stripe.com'&&!url.username&&!url.password&&['/c/pay/'+id,'/g/pay/'+id].includes(url.pathname))result.url=url.href;
   }
   return result;
  }

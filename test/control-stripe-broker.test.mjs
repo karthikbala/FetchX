@@ -56,7 +56,7 @@ function fixture({offer=plan,sessionMethods=[offer.currency==='inr'?'upi':'card'
    const session={id,object:'checkout.session',livemode:false,mode:'payment',client_reference_id:params.get('client_reference_id'),
     customer:params.get('customer'),amount_subtotal:plan.amountMinor,amount_total:plan.amountMinor,currency:plan.currency,status:'open',payment_status:'unpaid',
     payment_intent:null,...checkoutSafety(),payment_method_types:sessionMethods,
-    url:'https://checkout.stripe.com/c/pay/'+id+'#private-hosted-token',customer_details:{email:'private-customer@example.com'}};
+    url:'https://checkout.stripe.com/g/pay/'+id+'#private-hosted-token',customer_details:{email:'private-customer@example.com'}};
    stripeObjects.set('/checkout/sessions/'+id,session);
    return Response.json(session);
   }

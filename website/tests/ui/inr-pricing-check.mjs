@@ -58,7 +58,7 @@ await page.route('**/api/control/**', async route => {
     posts.push({ ...body, currency: plan.currency });
     if (abortFirst) { abortFirst = false; return route.abort('failed'); }
     return send({ mode: 'live', state: pending.state, plan_id: plan.id, currency: plan.currency, amount_minor: plan.amount_minor, credits: plan.credits,
-      checkout_url: 'https://checkout.stripe.com/c/pay/cs_live_InrSynthetic#fixture' });
+      checkout_url: 'https://checkout.stripe.com/g/pay/cs_live_InrSynthetic#fixture' });
   }
   if (path.includes('/billing/stripe/checkout/')) {
     assert.equal(path.split('/').at(-1), pending.key);

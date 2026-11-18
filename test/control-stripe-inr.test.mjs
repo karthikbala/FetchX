@@ -60,7 +60,7 @@ test('INR UPI and legacy USD reconcile through the actual Worker into an isolate
     currency:offer.currency,amount_subtotal:offer.amountMinor,amount_total:offer.amountMinor,status:'open',payment_status:'unpaid',payment_intent:null,
     payment_method_types:[offer.paymentMethod],success_url:origin+'/app/billing?checkout=success',cancel_url:origin+'/app/billing?checkout=cancelled',
     automatic_tax:{enabled:false},allow_promotion_codes:false,total_details:{amount_tax:0,amount_discount:0,amount_shipping:0}};
-   value.url='https://checkout.stripe.com/c/pay/'+value.id+'#synthetic-only';sessions.push(value);
+   value.url='https://checkout.stripe.com/g/pay/'+value.id+'#synthetic-only';sessions.push(value);
   }
   objects.set(path+'/'+value.id,value);byKey.set(key,{body:options.body,value});return Response.json(value);
  });
