@@ -311,7 +311,7 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,cr
   route('GET','/projects/:id/billing',async req=>{
    query(req);const auth=await member(req);
    const [{trial:account,paid,unified},payment]=await Promise.all([
-    paidCredits?creditSnapshot(credits,paidCredits,auth.id):credits.usage(auth.id).then(trial=>({trial})),stripe?.billing(auth.id)]);
+    paidCredits?creditSnapshot(credits,paidCredits,auth.id):credits.usage(auth.id).then(trial=>({trial})),stripe?.billing(auth.id,{country:req.headers['x-fetchx-client-country']})]);
    const trial=unified?null:trialTerms(v2,auth.id,config);
    return {status:unified?'active':Number(account.available??account.available_credits??0)>0?'trial':'approval_required',credits:account,
     commercial_enabled:payment?.mode==='live'&&(payment.can_checkout||payment.can_resume_checkout===true||payment.purchases.length>0),...(payment?{stripe:payment}:{}),
@@ -321,7 +321,7 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,cr
   route('POST','/projects/:id/billing/stripe/checkout',async req=>{
    query(req);const auth=await member(req),body=input(req,['plan_id','idempotency_key']);
    if(!stripe)fail('stripe_checkout_disabled',404);
-   return stripe.checkout({project:auth.id,planId:body.plan_id,key:body.idempotency_key,origin:req.headers.origin});
+   return stripe.checkout({project:auth.id,planId:body.plan_id,key:body.idempotency_key,origin:req.headers.origin,country:req.headers['x-fetchx-client-country']});
   });
   route('GET','/projects/:id/billing/stripe/checkout/:key',async req=>{
    query(req);const auth=await member(req);if(!stripe)fail('stripe_checkout_disabled',404);

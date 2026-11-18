@@ -1,8 +1,8 @@
 import {
- BROKER_MAX_BODY,BROKER_PATH,BROKER_SECRET,BROKER_TIME_WINDOW,EVENT_SUBJECTS,KEY_ID,PACK_AMOUNTS,
+ BROKER_MAX_BODY,BROKER_PATH,BROKER_SECRET,BROKER_TIME_WINDOW,EVENT_SUBJECTS,KEY_ID,PACK_AMOUNTS,PACK_OFFERS,
  RELAY_PATH,RELAY_TIME_WINDOW,SHA256,STRIPE_MAX_BODY,STRIPE_VERSION,STRIPE_WEBHOOK_PATH,
  audience,brokerMessage,checkoutForm,customerForm,epoch,exact,fresh,hex,relayMessage,sessionPrefix,sha256,
- stripeId,subjectPrefix,utf8,uuid,
+ stripeId,stripeChargeId,stripeRefundId,stripeSubjectId,utf8,uuid,currencyPaymentMethod,
 } from '../src/control-stripe-broker-protocol.mjs';
 
 const STRIPE_API='https://api.stripe.com/v1';
@@ -18,6 +18,7 @@ const COMMANDS=Object.freeze({
  'payment_intent.get':['intent_id'],
  'charge.get':['charge_id'],
  'dispute.get':['dispute_id'],
+ 'refund.get':['refund_id'],
 });
 const WRITES=new Set(['customer.create','checkout.create']);
 
@@ -48,11 +49,12 @@ function settings(env){
  let prices;
  try{prices=JSON.parse(env.STRIPE_PRICE_IDS);}catch{fail('worker_configuration_invalid',503);}
  const ids=prices&&typeof prices==='object'&&!Array.isArray(prices)?Object.keys(prices):[];
- if(!ids.length||mode==='live'&&ids.length!==Object.keys(PACK_AMOUNTS).length||
-  ids.some(id=>!Object.hasOwn(PACK_AMOUNTS,id)||!stripeId(prices[id],'price'))||new Set(Object.values(prices)).size!==ids.length)
+ if(!ids.length||mode==='live'&&(!Object.keys(PACK_AMOUNTS).every(id=>ids.includes(id))||
+  ids.length!==4&&ids.length!==8)||
+  ids.some(id=>!Object.hasOwn(PACK_OFFERS,id)||!stripeId(prices[id],'price'))||new Set(Object.values(prices)).size!==ids.length)
   fail('worker_configuration_invalid',503);
- const amountsByPrice=new Map(ids.map(id=>[prices[id],PACK_AMOUNTS[id]]));
- return {mode,accountId,apiKey,webhookSecret,brokerSecret,relayKeyId,relayPrivateKey,amountsByPrice,
+ const offersByPrice=new Map(ids.map(id=>[prices[id],PACK_OFFERS[id]]));
+ return {mode,accountId,apiKey,webhookSecret,brokerSecret,relayKeyId,relayPrivateKey,offersByPrice,
   returnOrigin:returnUrl.origin,relayUrl:relayUrl.href,audience:audience(mode,accountId)};
 }
 
@@ -105,7 +107,7 @@ async function verifiedStripeEvent(config,raw,header){
   typeof event.type!=='string'||event.account!=null||event.context!=null)fail('stripe_event_invalid',400);
  if(!Object.hasOwn(EVENT_SUBJECTS,event.type))return null;
  const expected=EVENT_SUBJECTS[event.type],subject=event.data?.object;
- if(subject?.object!==expected||!stripeId(subject.id,subjectPrefix(expected,config.mode)))fail('stripe_event_invalid',400);
+ if(subject?.object!==expected||!stripeSubjectId(subject.id,expected,config.mode))fail('stripe_event_invalid',400);
  return {v:1,mode:config.mode,account_id:config.accountId,event_id:event.id,event_type:event.type,subject_id:subject.id,
   provider_payload_sha256:await sha256(raw)};
 }
@@ -140,16 +142,16 @@ class StripeOperations {
   if(value?.object!=='account'||value.id!==this.config.accountId)fail('stripe_account_mismatch',502);
   return {object:value.object,id:value.id};
  }
- priceView(value,expectedId,amount){
-  if(!validObject(value,'price',expectedId,this.config)||value.currency!=='usd'||value.type!=='one_time'||
-   value.unit_amount!==amount||value.billing_scheme!=='per_unit'||value.recurring!=null||value.transform_quantity!=null||
+ priceView(value,expectedId,offer){
+  if(!validObject(value,'price',expectedId,this.config)||value.currency!==offer?.currency||value.type!=='one_time'||
+   value.unit_amount!==offer.amountMinor||value.billing_scheme!=='per_unit'||value.recurring!=null||value.transform_quantity!=null||
    value.custom_unit_amount!=null)fail('stripe_price_mismatch',502);
   return selected(value,['id','object','livemode','active','currency','type','unit_amount','billing_scheme','recurring','transform_quantity','custom_unit_amount']);
  }
  async price(id){
-  const amount=this.config.amountsByPrice.get(id);
-  if(!amount)fail('stripe_price_rejected');
-  const result=this.priceView(await this.stripe('/prices/'+id),id,amount);
+  const offer=this.config.offersByPrice.get(id);
+  if(!offer)fail('stripe_price_rejected');
+  const result=this.priceView(await this.stripe('/prices/'+id),id,offer);
   if(result.active!==true)fail('stripe_price_mismatch',502);
   return result;
  }
@@ -166,16 +168,16 @@ class StripeOperations {
  }
  sessionView(value,id){
   if(!validObject(value,'checkout.session',id,this.config)||!stripeId(id,sessionPrefix(this.config.mode))||
-   value.mode!=='payment'||!uuid(value.client_reference_id)||!stripeId(value.customer,'cus')||value.currency!=='usd'||
-   !Array.isArray(value.payment_method_types)||value.payment_method_types.length!==1||value.payment_method_types[0]!=='card'||
-   value.amount_subtotal!==value.amount_total||![...this.config.amountsByPrice.values()].includes(value.amount_total)||
+   value.mode!=='payment'||!uuid(value.client_reference_id)||!stripeId(value.customer,'cus')||!currencyPaymentMethod(value.currency)||
+   !Array.isArray(value.payment_method_types)||value.payment_method_types.length!==1||value.payment_method_types[0]!==currencyPaymentMethod(value.currency)||
+   value.amount_subtotal!==value.amount_total||![...this.config.offersByPrice.values()].some(offer=>offer.currency===value.currency&&offer.amountMinor===value.amount_total)||
    !['open','complete','expired'].includes(value.status)||!['unpaid','paid'].includes(value.payment_status)||
    value.success_url!==this.config.returnOrigin+'/app/billing?checkout=success'||
    value.cancel_url!==this.config.returnOrigin+'/app/billing?checkout=cancelled'||
    value.automatic_tax?.enabled!==false||value.allow_promotion_codes===true||
    value.total_details?.amount_discount!==0||value.total_details?.amount_tax!==0||value.total_details?.amount_shipping!==0||
    value.payment_intent!=null&&!stripeId(value.payment_intent,'pi'))fail('stripe_checkout_mismatch',502);
-  const result=selected(value,['id','object','livemode','mode','client_reference_id','customer','amount_subtotal','amount_total','currency','status','payment_status','payment_intent']);
+  const result=selected(value,['id','object','livemode','mode','client_reference_id','customer','amount_subtotal','amount_total','currency','status','payment_status','payment_intent','payment_method_types']);
   if(value.status==='open'&&value.payment_status==='unpaid'&&typeof value.url==='string'&&value.url.length<=4096){
    const url=new URL(value.url);
    if(url.origin==='https://checkout.stripe.com'&&!url.username&&!url.password&&url.pathname==='/c/pay/'+id)result.url=url.href;
@@ -192,29 +194,30 @@ class StripeOperations {
    input.expires_at<=epoch()||input.expires_at>epoch()+3660)fail('stripe_checkout_rejected');
   const [price]=await Promise.all([this.price(input.price_id),this.customer(input.customer_id)]);
   const form=new URLSearchParams(checkoutForm({orderId:input.order_id,customerId:input.customer_id,priceId:input.price_id,
-   expiresAt:input.expires_at,returnOrigin:this.config.returnOrigin}));
+   expiresAt:input.expires_at,returnOrigin:this.config.returnOrigin,paymentMethod:currencyPaymentMethod(price.currency)}));
   // Endive removed the old create parameter. Translate only the Stripe wire
   // form; the gateway's durable canonical form and idempotency stay unchanged.
   form.delete('payment_method_types[0]');
-  form.set('allowed_payment_method_types[0]','card');
+  form.set('allowed_payment_method_types[0]',currencyPaymentMethod(price.currency));
   const value=await this.stripe('/checkout/sessions',form.toString(),'fetchx-checkout-'+input.order_id),result=this.sessionView(value,value?.id);
-  if(result.client_reference_id!==input.order_id||result.customer!==input.customer_id||result.amount_total!==price.unit_amount)fail('stripe_checkout_mismatch',502);
+  if(result.client_reference_id!==input.order_id||result.customer!==input.customer_id||result.amount_total!==price.unit_amount||result.currency!==price.currency)fail('stripe_checkout_mismatch',502);
   return result;
  }
  async lineItems(id){
   const session=await this.session(id),list=await this.stripe('/checkout/sessions/'+id+'/line_items?limit=2');
   const line=list?.data?.[0];
   if(list?.object!=='list'||list.has_more!==false||list.data?.length!==1||line?.object!=='item'||!stripeId(line.price?.id,'price')||
-   line.quantity!==1||line.currency!=='usd'||line.amount_subtotal!==session.amount_total||line.amount_total!==session.amount_total||
-   line.amount_tax!==0||line.amount_discount!==0||this.config.amountsByPrice.get(line.price.id)!==session.amount_total)fail('stripe_price_mismatch',502);
+   line.quantity!==1||line.currency!==session.currency||line.amount_subtotal!==session.amount_total||line.amount_total!==session.amount_total||
+   line.amount_tax!==0||line.amount_discount!==0||this.config.offersByPrice.get(line.price.id)?.currency!==session.currency||
+   this.config.offersByPrice.get(line.price.id)?.amountMinor!==session.amount_total)fail('stripe_price_mismatch',502);
   return {object:'list',has_more:false,data:[{...selected(line,['object','quantity','currency','amount_subtotal','amount_total','amount_tax','amount_discount']),
-   price:this.priceView(line.price,line.price.id,session.amount_total)}]};
+   price:this.priceView(line.price,line.price.id,this.config.offersByPrice.get(line.price.id))}]};
  }
  async intent(id){
   const value=await this.stripe('/payment_intents/'+id);
   if(!validObject(value,'payment_intent',id,this.config)||!uuid(value.metadata?.fetchx_checkout)||
-   !stripeId(value.customer,'cus')||value.currency!=='usd'||![...this.config.amountsByPrice.values()].includes(value.amount)||
-   value.latest_charge!=null&&!stripeId(value.latest_charge,'ch'))fail('stripe_payment_mismatch',502);
+   !stripeId(value.customer,'cus')||![...this.config.offersByPrice.values()].some(offer=>offer.currency===value.currency&&offer.amountMinor===value.amount)||
+   value.latest_charge!=null&&!stripeChargeId(value.latest_charge))fail('stripe_payment_mismatch',502);
   await this.customer(value.customer);
   return {...selected(value,['id','object','livemode','customer','status','amount','amount_received','currency','latest_charge']),
    metadata:{fetchx_checkout:value.metadata.fetchx_checkout}};
@@ -223,13 +226,26 @@ class StripeOperations {
   const value=await this.stripe('/charges/'+id);
   if(!validObject(value,'charge',id,this.config)||!stripeId(value.payment_intent,'pi'))fail('stripe_charge_mismatch',502);
   const intent=await this.intent(value.payment_intent);
-  if(intent.customer!==value.customer||intent.amount!==value.amount||value.currency!=='usd')fail('stripe_charge_mismatch',502);
+  if(intent.customer!==value.customer||intent.amount!==value.amount||value.currency!==intent.currency||
+   value.payment_method_details?.type!==currencyPaymentMethod(value.currency))fail('stripe_charge_mismatch',502);
   return {...selected(value,['id','object','livemode','payment_intent','customer','paid','captured','amount','amount_captured',
    'currency','amount_refunded','disputed','created','refunded']),payment_method_details:{type:value.payment_method_details?.type}};
  }
+ async refund(id){
+  const value=await this.stripe('/refunds/'+id);
+  // Refund objects do not expose livemode. The tagged Charge -> PaymentIntent
+  // -> Customer chain proves the account and mode before any data is relayed.
+  if(value?.object!=='refund'||value.id!==id||!stripeChargeId(value.charge)||!stripeId(value.payment_intent,'pi')||
+   !Number.isSafeInteger(value.amount)||value.amount<=0||!['pending','requires_action','succeeded','failed','canceled'].includes(value.status))
+   fail('stripe_refund_mismatch',502);
+  const charge=await this.charge(value.charge);
+  if(charge.payment_intent!==value.payment_intent||charge.currency!==value.currency||value.amount>charge.amount)
+   fail('stripe_refund_mismatch',502);
+  return selected(value,['id','object','amount','currency','charge','payment_intent','status']);
+ }
  async dispute(id){
   const value=await this.stripe('/disputes/'+id);
-  if(!validObject(value,'dispute',id,this.config)||!stripeId(value.charge,'ch'))fail('stripe_dispute_mismatch',502);
+  if(!validObject(value,'dispute',id,this.config)||!stripeChargeId(value.charge))fail('stripe_dispute_mismatch',502);
   await this.charge(value.charge);
   return selected(value,['id','object','livemode','charge','status']);
  }
@@ -255,8 +271,8 @@ async function broker(request,env,config,outbound,raw){
  if(typeof command?.op!=='string'||!Object.hasOwn(COMMANDS,command.op)||!exact(command,['op',...COMMANDS[command.op]]))fail('broker_operation_rejected');
  if('price_id'in command&&!stripeId(command.price_id,'price')||'customer_id'in command&&!stripeId(command.customer_id,'cus')||
   'session_id'in command&&!stripeId(command.session_id,sessionPrefix(config.mode))||
-  'intent_id'in command&&!stripeId(command.intent_id,'pi')||'charge_id'in command&&!stripeId(command.charge_id,'ch')||
-  'dispute_id'in command&&!stripeId(command.dispute_id,'dp')||'creation_key'in command&&!uuid(command.creation_key)||
+  'intent_id'in command&&!stripeId(command.intent_id,'pi')||'charge_id'in command&&!stripeChargeId(command.charge_id)||
+  'dispute_id'in command&&!stripeId(command.dispute_id,'dp')||'refund_id'in command&&!stripeRefundId(command.refund_id)||'creation_key'in command&&!uuid(command.creation_key)||
   'order_id'in command&&!uuid(command.order_id))fail('broker_operation_rejected');
  if(typeof env.BROKER_RATE_LIMIT?.limit!=='function'||typeof env.BROKER_WRITE_RATE_LIMIT?.limit!=='function')fail('broker_rate_limit_unavailable',503);
  if(!(await env.BROKER_RATE_LIMIT.limit({key:config.audience})).success||
@@ -273,6 +289,7 @@ async function broker(request,env,config,outbound,raw){
  case 'payment_intent.get':return stripe.intent(command.intent_id);
  case 'charge.get':return stripe.charge(command.charge_id);
  case 'dispute.get':return stripe.dispute(command.dispute_id);
+ case 'refund.get':return stripe.refund(command.refund_id);
  default:fail('broker_operation_rejected');
  }
 }

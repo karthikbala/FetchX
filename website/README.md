@@ -2,7 +2,17 @@
 
 An Astro website for the FetchX web scraping and unblocking API. The graphite, lime and cyan design uses self-hosted fonts and original execution diagrams. The account workspace connects to the FetchX gateway through a same-origin Pages Function; technical enquiries retain their separate intake handler.
 
-This remains a **non-indexed review build**. Signup, projects, scoped API keys, native HTTP requests and usage use the configured backend. An unavailable backend produces an explicit unavailable state, never simulated account activity. Paid pricing and the intelligence layer remain proposals. See [self-service setup](../docs/self-service-backend.md) and [the launch backlog](../docs/website-redesign.md).
+This remains a **non-indexed review build**. Signup, projects, scoped API keys, native HTTP requests and usage use the configured backend. An unavailable backend produces an explicit unavailable state, never simulated account activity. Credit pricing and checkout follow the configured payment catalog; the intelligence layer remains a proposal. See [self-service setup](../docs/self-service-backend.md) and [the launch backlog](../docs/website-redesign.md).
+
+## Country-selected credit pricing
+
+`GET /api/pricing` returns INR/UPI offers when Cloudflare's trusted `request.cf.country` is `IN`, and USD/card offers for other or unknown countries. Browser country headers, language, timezone and query parameters do not select a market. The public response is private/no-store at the browser and CDN. Static pricing markup contains currency-neutral placeholders until this response is verified; a failed request leaves pricing unavailable rather than displaying a guessed currency. JavaScript is required for local prices and checkout.
+
+INR packs are ₹175 / 10,000 credits, ₹750 / 50,000, ₹1,800 / 150,000 and ₹9,000 / 1,000,000. Their unit discounts are 14.3%, 31.4% and 48.6% relative to the entry pack. Existing USD packs retain their prices. Free trial eligibility and the shared credit balance do not change with currency.
+
+The private control bridge derives `X-FetchX-Client-Country` from the same Cloudflare metadata. Billing requires a single `stripe.currency` catalog, formats prices in actual minor units, and offers an explicit unavailable state if INR sales are paused or not configured. A reviewed INR catalog can remain visible with purchase actions disabled while a saved checkout is recovered. A saved checkout retains its original currency and operation key across country changes. Historical purchases show their original billed currency. Backend price, market and payment validation remains authoritative.
+
+`tests/pricing.test.ts`, the country-spoof cases in `tests/control-proxy.test.ts`, and `tests/ui/inr-pricing-check.mjs` cover country selection, exact prices/discounts, cache isolation, no currency flash, UPI pending/failure/success, unavailable markets and saved checkout recovery. These checks use synthetic fixtures and do not create real payments.
 
 ## Local development and verification
 
@@ -22,6 +32,8 @@ The development site is at `http://127.0.0.1:4327`. Astro 7 runs it in the backg
 node tests/ui/site-check.mjs
 node tests/ui/docs-check.mjs
 node tests/ui/product-check.mjs
+node tests/ui/stripe-check.mjs
+node tests/ui/inr-pricing-check.mjs
 node tests/ui/google-check.mjs
 node tests/ui/github-check.mjs
 node tests/ui/form-check.mjs
@@ -35,7 +47,7 @@ The marketing site includes the homepage, four `/products/*` pages, three `/use-
 
 The eight API quickstart/reference pages retain their `/docs` URLs and share `src/data/api-docs.ts`. Markdown exports at `/docs/quickstart.md` and `/docs/<slug>.md` are generated from the same content. Examples require a configured gateway and approved profile. `/404.html` handles missing pages.
 
-The product journey starts at `/signup` or `/login` and continues to `/app`, `/app/onboarding`, `/app/playground`, `/app/requests`, `/app/keys` and `/app/billing`. Configured GitHub, Google and email sign-in create an HttpOnly session. Only the selected project ID and pending operation keys enter session storage; credentials and source inputs do not. Recovery reads retained gateway state with GET and never dispatches source work. Billing shows authoritative allocations and holds; no checkout, automatic upgrade or refill is implemented.
+The product journey starts at `/signup` or `/login` and continues to `/app`, `/app/onboarding`, `/app/playground`, `/app/requests`, `/app/keys` and `/app/billing`. Configured GitHub, Google and email sign-in create an HttpOnly session. Only the selected project ID and pending operation keys enter session storage; credentials and source inputs do not. Recovery reads retained gateway state with GET and never dispatches source work. Billing shows authoritative allocations, holds, purchase history and one-time hosted Stripe Checkout when enabled. Automatic upgrades and refills are not offered.
 
 GitHub sign-in appears only when `/api/control/status` advertises `github.enabled`. It uses a dedicated gateway OAuth application with only `user:email`, PKCE and the exact callback `https://fetchx.ai/api/control/auth/github/callback`. Its client secret and provider tokens stay in the gateway. The Pages callback is the sole cross-site GET exception: it validates bounded query parameters, forwards private JSON through the existing bridge, obtains the current session CSRF for explicit linking, clears the short-lived HttpOnly binding, and returns a fixed no-store, no-referrer redirect. It never renders provider descriptions or identity tokens. An existing FetchX email requires signing in through the existing method and choosing **Connect GitHub** in the signed-in account panel. Linking preserves the account's projects and credentials. Disabled GitHub leaves Google and email available. `tests/github-proxy.test.ts` and `tests/ui/github-check.mjs` use synthetic fixtures only; browser fixtures do not establish a live GitHub authorization or production configuration.
 

@@ -2,6 +2,7 @@ import {ID,fail} from './policy.mjs';
 import {lockActiveCreditProject} from './control-credits.mjs';
 import {PAID_WIRE_READ_BYTES} from './paid-wire-limits.mjs';
 import {PUBLIC_URL_V2_REF,publicUrlRouteAllowed} from './v2-public-url.mjs';
+import {PACK_OFFERS} from './control-stripe-broker-protocol.mjs';
 
 const BYTES_PER_MB=1_000_000;
 const TRANSFER_STEP_BYTES=250_000;
@@ -11,7 +12,7 @@ const MAX_REGIONAL_PAID_ROUTES=3*249;
 const TARIFF_VERSION='paid-http-v1';
 const FIXED_TARIFF_VERSION='playground-fixed-v1';
 const MAX_FIXED_CREDITS=1_000_000;
-const PACKAGES=new Map([[200,10_000],[800,50_000],[2000,150_000],[10000,1_000_000]]);
+const PACKAGES=new Map(Object.values(PACK_OFFERS).map(offer=>[offer.currency+':'+offer.amountMinor,offer.credits]));
 const TARIFFS=new Map([
  ['direct',{block_bytes:BYTES_PER_MB,credits_per_block:1}],
  ['datacenter',{block_bytes:BYTES_PER_MB,credits_per_block:1}],
@@ -34,8 +35,8 @@ const managed=project=>typeof project==='string'&&project.startsWith('cp_');
 const matches=(value,pattern)=>typeof value==='string'&&pattern.test(value);
 const validAmount=value=>Number.isSafeInteger(value)&&value>=0;
 
-export function paidCreditPack(amountMinor){
- return PACKAGES.get(amountMinor)??null;
+export function paidCreditPack(amountMinor,currency='usd'){
+ return Number.isSafeInteger(amountMinor)&&typeof currency==='string'?(PACKAGES.get(currency+':'+amountMinor)??null):null;
 }
 
 export function unifiedCreditsEnabled(config){
@@ -102,11 +103,24 @@ export async function initControlPaidCredits(pool){
    id bigserial PRIMARY KEY,project text NOT NULL REFERENCES control_credit_accounts(project),
    account_id text NOT NULL,mode text NOT NULL CHECK(mode='live'),checkout_session_id text NOT NULL,payment_intent_id text NOT NULL,
    credits bigint CHECK(credits>0 AND credits<=1000000),amount_minor integer CHECK(amount_minor>0),
-   currency text CHECK(currency='usd'),created_at timestamptz NOT NULL DEFAULT now(),revoked_at timestamptz,
+   currency text CHECK(currency IN ('usd','inr')),created_at timestamptz NOT NULL DEFAULT now(),revoked_at timestamptz,
    UNIQUE(account_id,mode,checkout_session_id),UNIQUE(account_id,mode,payment_intent_id),UNIQUE(id,project),
    CHECK((credits IS NOT NULL AND amount_minor IS NOT NULL AND currency IS NOT NULL)
     OR (credits IS NULL AND amount_minor IS NULL AND currency IS NULL AND revoked_at IS NOT NULL))
   );
+  DO $currency_migration$
+  DECLARE definition text;
+  BEGIN
+   SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+    WHERE conrelid='paid_credit_grants'::regclass AND conname='paid_credit_grants_currency_check';
+   IF definition IN ('CHECK ((currency = ''usd''::text))',
+     'CHECK ((currency = ANY (ARRAY[''usd''::text, ''inr''::text])))') THEN
+    IF definition='CHECK ((currency = ''usd''::text))' THEN
+     ALTER TABLE paid_credit_grants DROP CONSTRAINT paid_credit_grants_currency_check;
+     ALTER TABLE paid_credit_grants ADD CONSTRAINT paid_credit_grants_currency_check CHECK(currency IN ('usd','inr'));
+    END IF;
+   ELSE RAISE EXCEPTION 'paid_credit_currency_constraint_unrecognized'; END IF;
+  END $currency_migration$;
   CREATE INDEX IF NOT EXISTS paid_credit_grants_project ON paid_credit_grants(project,id);
   CREATE TABLE IF NOT EXISTS paid_credit_reservations(
    operation uuid PRIMARY KEY REFERENCES v2_operations(id),project text NOT NULL REFERENCES control_credit_accounts(project),
@@ -356,7 +370,7 @@ export class ControlPaidCredits{
  // Stripe supplies verified payment evidence and owns the enclosing transaction.
  async grantPaidCredits(c,input){
   const {project,mode,accountId,checkoutSessionId,paymentIntentId,credits,amountMinor,currency}=input;
-  if(!checkoutIdentity(input)||currency!=='usd'||paidCreditPack(amountMinor)!==credits||!validAmount(credits)||!credits)
+  if(!checkoutIdentity(input)||!['usd','inr'].includes(currency)||paidCreditPack(amountMinor,currency)!==credits||!validAmount(credits)||!credits)
    fail('paid_credit_grant_invalid',503);
   await lockAccount(c,project);
   const key=[accountId,mode,checkoutSessionId,paymentIntentId];

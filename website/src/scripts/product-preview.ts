@@ -6,7 +6,7 @@ import { clearConnectReturn, readConnectReturn } from './connect-return';
 import { countryName } from '../data/countries';
 import { operationExecution, operationResource, requestCode, routeClasses, routeLabels, type Execution, type PlaygroundCapabilities, type Preparation, type RouteClass, type SafeKey } from '../data/playground';
 import { mountStripeBilling } from './stripe-billing';
-import { creditPackages, formatCredits } from '../data/credit-packages';
+import { isCreditPlanId, formatCredits } from '../data/credit-packages';
 type Json = Record<string, any>;
 type Project = { id: string; name: string; status: string; created_at?: string };
 type ProfileRef = { id: string; version: number };
@@ -51,7 +51,7 @@ async function initWorkspace(root: HTMLElement) {
   const authPage = ['signup', 'login'].includes(root.dataset.view || '');
   const query = new URLSearchParams(window.location.search);
   const plan = query.get('plan');
-  const preferredPlan = creditPackages.some(pack => pack.id === plan) ? plan : null;
+  const preferredPlan = isCreditPlanId(plan) ? plan : null;
   const billingPath = '/app/billing' + (preferredPlan ? '?plan=' + preferredPlan : '');
   const authDestination = preferredPlan || query.get('view') === 'billing' ? billingPath : '/app';
   const selectedStorage = 'fetchx-selected-project';
