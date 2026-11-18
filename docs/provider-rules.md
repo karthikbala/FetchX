@@ -83,3 +83,26 @@ FETCHX_OPERATOR=you@example.com node src/operator.mjs rules audit [rule-id]
 - **Deleting:** default and config rules cannot be deleted; disable them instead.
 
 The admin portal (see `docs/plans/admin-portal.md`) builds on these same functions.
+
+## Admin API (admin portal step 2)
+
+Operators manage rules over the control plane. It is disabled unless `controlPlane.admin.enabled` is `true`. Operators are granted out of band:
+
+```bash
+FETCHX_OPERATOR=you@example.com node src/operator.mjs operators grant ops@example.com   # a verified control-plane user
+FETCHX_OPERATOR=you@example.com node src/operator.mjs operators revoke ops@example.com
+node src/operator.mjs operators list
+```
+
+Grants and revocations are recorded in `control_operator_audit`. Revocation takes effect on the next request. All routes use the normal control-plane session, exact origin and session-bound CSRF. They are reached through the website bridge at `/api/control/admin/...`, accept no query strings, and return `operator_required` (403) to non-operators. Writes apply to the running gateway immediately; other gateways pick them up within `providerRulesRefreshMs`.
+
+| Method | Path | Body | Result |
+| --- | --- | --- | --- |
+| GET | `/admin/session` | — | `{operator, email}` |
+| GET | `/admin/rules` | — | Effective rules with `source` (default / config / database), `overrides`, `version`, plus the allowed `providers` |
+| POST | `/admin/rules` | `{rule}` | Creates a database rule (`rule_version_conflict` if the id exists) |
+| PUT | `/admin/rules/:id` | `{rule, version}` | Replaces it; `version` must match (optimistic concurrency) |
+| POST | `/admin/rules/:id/enable`, `/disable` | `{reason}` | Toggles any rule; for a default/config rule, writes a database override |
+| DELETE | `/admin/rules/:id` | — | Removes a database rule (restores the default/config rule it overrode) |
+| POST | `/admin/rules/test` | `{provider, host}` | `{excluded, rule, reason}`: would this provider be used for this host? (read-only) |
+| GET | `/admin/rules/:id/audit`, `/admin/audit` | — | Audit entries (actor = operator email, before, after, time) |

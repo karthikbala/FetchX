@@ -130,6 +130,23 @@ describe('same-origin control bridge',()=>{
   expect((await send(`${base}/render`,{method:'POST',body})).status).toBe(502);
   expect(calls).toHaveLength(4);
  });
+ it('forwards only the admin portal routes and methods, without query strings',async()=>{
+  const rule=JSON.stringify({rule:{id:'evomi-x',provider:'evomi',match:{host:'a.example.com'},action:'exclude',reason:'r'}});
+  for(const path of ['/admin','/admin/rules/Bad_ID','/admin/rules/a/b','/admin/operators','/admin/rules/x/audit/extra','/admin/rules/x%2Fy'])expect((await send(path)).status).toBe(404);
+  expect((await send('/admin/rules',{method:'DELETE'})).status).toBe(405);
+  expect((await send('/admin/rules/test')).status).toBe(405);
+  expect((await send('/admin/rules/evomi-x')).status).toBe(405);
+  expect((await send('/admin/rules/evomi-x/enable')).status).toBe(405);
+  expect((await send('/admin/session',{method:'POST',body:'{}'})).status).toBe(405);
+  expect((await send('/admin/rules?x=1')).status).toBe(400);
+  expect((await send('/admin/rules',{method:'POST',body:rule,headers:{'X-CSRF-Token':'invalid'}})).status).toBe(403);
+  expect(calls).toHaveLength(0);
+  const ok:[string,string,string?][]=[['/admin/session','GET'],['/admin/rules','GET'],['/admin/rules','POST',rule],['/admin/rules/test','POST','{"provider":"oxylabs","host":"ohio.gov"}'],
+   ['/admin/rules/evomi-x','PUT',rule],['/admin/rules/evomi-x','DELETE'],['/admin/rules/oxylabs-gov/disable','POST','{"reason":"r"}'],['/admin/rules/oxylabs-gov/enable','POST','{"reason":"r"}'],
+   ['/admin/rules/oxylabs-gov/audit','GET'],['/admin/audit','GET']];
+  for(const [path,method,body] of ok)expect((await send(path,{method,body})).status).toBe(200);
+  expect(calls.map(({url,init})=>[url.replace('https://gateway.example/control',''),init.method])).toEqual(ok.map(([path,method])=>[path,method]));
+ });
  it('allows only the project-scoped Stripe checkout methods',async()=>{
   const stripe=`/projects/${project}/billing/stripe`,key='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const checkout=JSON.stringify({plan_id:'developer',idempotency_key:key});

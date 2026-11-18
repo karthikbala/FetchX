@@ -1,6 +1,6 @@
 # Plan: routing rules admin portal
 
-Status: step 1 built (database rules, loader, refresh, operator CLI). Steps 2–5 are planned.
+Status: steps 1–2 built (database rules, loader, refresh, operator CLI; operator role and admin API). Steps 3–5 are planned.
 
 ## Goal
 
@@ -74,7 +74,7 @@ CREATE TABLE reachability_probes(id uuid PRIMARY KEY, host text NOT NULL, countr
 ## Delivery steps
 
 1. **Done:** database tables plus a loader with the precedence rules; the gateway reads rules from the database and refreshes them (config and defaults still work); audited, versioned save/enable/disable/delete; operator CLI (`node src/operator.mjs rules …`). Tests.
-2. Operator role and the admin API (rules CRUD, test endpoint, audit). Tests.
+2. **Done:** operator role (`control_operators` + `control_operator_audit`, granted with `node src/operator.mjs operators grant <email>`) and the admin API (rules list/create/edit/enable/disable/delete, host test, audit), gated by `controlPlane.admin.enabled`, plus the website bridge allowlist. No query strings: the host test is `POST /admin/rules/test`, and per-rule audit is `GET /admin/rules/:id/audit`. Profile routing-field edits move to step 3 with the probe. Tests.
 3. Probe as an async job with stored reports, and the apply endpoint.
 4. Console UI pages (rules, editor, probe, audit), then profiles editing.
 5. Docs and a migration note: existing `config.providerRules` keep working and show up as source "config".

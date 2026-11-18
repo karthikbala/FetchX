@@ -5,6 +5,7 @@ import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {Store} from './store.mjs';
 import {Sealer} from './crypto.mjs';
 import {gatewayStatus} from './status.mjs';
+import {grantOperator,revokeOperator,listOperators} from './control-admin.mjs';
 import {loadProviderRules,providerRuleSources,saveProviderRule,setProviderRuleEnabled,deleteProviderRule,providerRuleAudit} from './provider-rules.mjs';
 const store=new Store(process.env.DATABASE_URL);
 try{
@@ -45,5 +46,12 @@ try{
   else if(action==='delete')console.log(JSON.stringify(await deleteProviderRule(store,arg,{actor})));
   else if(action==='audit')console.log(JSON.stringify(await providerRuleAudit(store.pool,{ruleId:arg??null}),null,1));
   else throw Error('usage_rules_list_save_enable_disable_delete_audit');
- }else throw Error('usage_status_reconcile_snapshot_or_rules');
+ }else if(process.argv[2]==='operators'){
+  // Grant or revoke the admin-portal operator role on a verified control-plane user.
+  const actor=process.env.FETCHX_OPERATOR??'operator-cli',[,,,action,email]=process.argv;
+  if(action==='list')console.log(JSON.stringify(await listOperators(store.pool),null,1));
+  else if(action==='grant')console.log(JSON.stringify(await grantOperator(store,email,actor)));
+  else if(action==='revoke')console.log(JSON.stringify(await revokeOperator(store,email,actor)));
+  else throw Error('usage_operators_list_grant_revoke');
+ }else throw Error('usage_status_reconcile_snapshot_rules_or_operators');
 }finally{await store.close();}

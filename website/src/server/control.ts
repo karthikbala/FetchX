@@ -33,6 +33,7 @@ export const CONTROL_REQUEST_LIMIT=96*1024;
 export const CONTROL_RESPONSE_LIMIT=24*1024*1024;
 // A 20 MB fetch can carry 26.7 MB of base64 plus a text preview and metadata.
 const CONTROL_FETCH_RESPONSE_LIMIT=28*1024*1024;
+const ADMIN_RULE='[a-z0-9][a-z0-9._-]{0,63}';
 const fetchResultPath=new RegExp(`^/projects/${PROJECT}/(?:fetch(?:/|$)|requests/${UUID}$)`);
 export const CONTROL_TIMEOUT_MS=85_000;
 const headers={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Pragma':'no-cache','X-Content-Type-Options':'nosniff','X-Robots-Tag':'noindex, nofollow'};
@@ -66,6 +67,13 @@ function allowedMethods(path:string):string[]|null {
  if(new RegExp(`^/projects/${PROJECT}/billing/stripe/checkout$`).test(path))return ['POST'];
  if(new RegExp(`^/projects/${PROJECT}/billing/stripe/checkout/${STRIPE_KEY}$`).test(path))return ['GET'];
  if(new RegExp(`^/projects/${PROJECT}/requests/${UUID}$`).test(path))return ['GET'];
+ // Admin portal API (operator role enforced by the gateway; no query strings).
+ if(path==='/admin/session'||path==='/admin/audit')return ['GET'];
+ if(path==='/admin/rules')return ['GET','POST'];
+ if(path==='/admin/rules/test')return ['POST'];
+ if(new RegExp(`^/admin/rules/${ADMIN_RULE}$`).test(path))return ['PUT','DELETE'];
+ if(new RegExp(`^/admin/rules/${ADMIN_RULE}/(?:enable|disable)$`).test(path))return ['POST'];
+ if(new RegExp(`^/admin/rules/${ADMIN_RULE}/audit$`).test(path))return ['GET'];
  return null;
 }
 class ProxyFailure extends Error {constructor(readonly code:string){super(code);}}
