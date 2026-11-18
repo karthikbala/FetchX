@@ -2,7 +2,7 @@
 
 ## Outcome and boundaries
 
-Connect the existing website to verified users, project membership, server-issued keys, native HTTP fetch, retained request history and authoritative usage. The gateway remains the source of truth. Existing configured projects and v1/v2 contracts retain their behavior. New self-service credentials initially support the native HTTP API; browser execution remains independently qualified.
+Connect the existing website to verified users, project membership, server-issued keys, native HTTP fetch, retained request history and authoritative usage. The gateway remains the source of truth. Existing configured projects and v1/v2 contracts retain their behavior. The initial self-service configuration uses native HTTP. Managed keys can also use the [Render API](render-api.md) on a project with an approved browser policy and qualified runtime.
 
 Implementation is local until release authorization. No paid source calls, production migration, email sends or commercial activation are part of verification. Proposed prices are not activated by a user clicking a plan.
 
@@ -12,7 +12,7 @@ Operator configuration lives in `config.controlPlane`. `enabled` defaults false.
 
 `projectTemplate` has `id`, `v2_access_profiles`, `v2_entitlement` and optional `v2_discovery_policy`; it grants no v1 profiles. All grants come from operator configuration, never request fields. Persist a canonical template hash and fail closed if the template changes until an operator migration explicitly approves the change. New project identifiers use `cp_` plus a UUID. Configuration projections contain no plaintext credentials and no legacy `tokenHash`.
 
-`creditPolicy` has `reviewed: true`, `version`, `trialCredits`, `weights` (`direct`, optionally `datacenter`) and `maxEstimatedMicroUsdPerOperation`. Credits are a separate customer usage ledger, not provider invoices. Only the first project per verified user receives the configured trial allocation; subsequent projects receive zero until an explicit operator grant. No automatic monthly refill, upgrade or overage. Paid route cost estimates must be known and within the configured ceiling. The review configuration uses direct-only HTTP and no paid allowance.
+`creditPolicy` has `reviewed: true`, `version`, `trialCredits`, `weights` (`direct`, optionally `datacenter`) and `maxEstimatedMicroUsdPerOperation`. The free plan grants 1,000 trial credits once per verified account. The allocation belongs to the account's first project. Each request must meet the configured route, source, cost and daily-operation limits. Reviewed Playground HTTP and Browser routes can use separate `creditPolicy.modeWeights`, including residential where configured. After a qualifying purchase, unused trial and purchased credits share the project balance. The Playground uses the selected HTTP route and country to check eligibility before dispatch. It uses the reviewed route when it qualifies and can use an advertised public URL profile when the requested route is unavailable under the reviewed policy. Public URL HTTP API callers can optionally supply `max_transfer_mb` and `max_credits`.
 
 ### Identity service
 
@@ -32,20 +32,23 @@ Managed v2 operations receive explicit identity `{keyId}` from trusted route cod
 
 Same-origin website calls `/api/control/*`. A Pages Function proxies only known paths/methods to gateway `/control/*` with an operator-configured bridge secret; it forwards the website origin, session cookie and CSRF header but never a customer API key. The gateway verifies the bridge and exact origin. Session cookie is HttpOnly, SameSite=Lax, path `/api/control`; Secure in production. State-changing authenticated routes also require `X-CSRF-Token`; derive it with HMAC from the session token and private bridge secret and return it from session/verification responses.
 
-- `GET /status`: `{enabled,mail_configured,api_base_url,capabilities}`; no secrets.
+- `GET /status`: `{enabled,mail_configured,api_base_url,capability_scope,capabilities}`.
+  The public service status has `capability_scope: "service"`. Use the authenticated
+  project details for project-specific render and route readiness.
 - `POST /auth/code`: `{email}` → `{challenge_id,expires_in,accepted:true}`.
 - `POST /auth/verify`: `{email,challenge_id,code}` → `{user,csrf_token,projects}` plus cookie.
 - `GET /session`: `{user,csrf_token,projects}`; unauthenticated 401.
 - `POST /auth/logout`: revoke session, clear cookie.
 - `GET, POST /projects`: `{projects}` / `{project}`.
-- `GET /projects/:id`: `{project,capabilities,access_profiles}`.
+- `GET /projects/:id`: `{project,capabilities,access_profiles}` with
+  `capabilities.capability_scope: "project"`.
 - `GET, POST /projects/:id/keys`; `POST /projects/:id/keys/:key/rotate`; `DELETE /projects/:id/keys/:key`.
-- `POST /projects/:id/fetch`: exact current `/v2/fetch` body. Persist operation key before sending, return the real public fetch envelope.
+- `POST /projects/:id/fetch`: exact current `/v2/fetch` body, including `max_transfer_mb` and `max_credits` for eligible paid HTTP requests. Persist operation key before sending, return the real public fetch envelope.
 - `GET /projects/:id/fetch/:key`: original-key recovery; no redispatch.
 - `GET /projects/:id/requests`: bounded `{operations}` list with real IDs, state, timestamps, route/profile context and latency. No raw source captures in list.
 - `GET /projects/:id/requests/:operationId`: retained public fetch projection by operation ID.
-- `GET /projects/:id/usage`: `{gateway,credits}` with outcome/latency/request counts and conservative balances.
-- `GET /projects/:id/billing`: `{status:'trial'|'approval_required',credits,commercial_enabled:false}`. No checkout or subscription mutation.
+- `GET /projects/:id/usage`: `{gateway,credits}` with outcome and latency counts and authoritative balances. Active or held paid allocations also expose `paid_credits`. Upgraded projects additionally expose `credit_balance` with `mode:'unified'` on both control usage and `/v2/usage`.
+- `GET /projects/:id/billing`: `{status:'trial'|'approval_required'|'active',credits,commercial_enabled}`. Configured projects can buy [prepaid credit packs](stripe-payments.md) through separate Stripe checkout routes. Before upgrade, the reviewed free-plan policy adds `trial:{trial_target:1000,grant_scope:'account',grant_frequency:'once',eligible_routes,max_daily_operations}` to billing and usage. After upgrade, billing returns `status:'active'` and `credit_balance` instead of trial terms.
 
 Errors use `{error:{code,message}}` for control paths; public fetch envelopes remain unchanged. All authenticated responses are no-store. Source content is rendered as text, never inserted as HTML. The browser stores only selected project and pending operation keys; never session tokens, API keys, source URLs/bodies or private account data in web storage.
 
@@ -69,7 +72,7 @@ Add this section to an existing private gateway configuration, replacing placeho
     "creditPolicy": {
       "reviewed": false,
       "version": "direct-http-v1",
-      "trialCredits": 25,
+      "trialCredits": 1000,
       "weights": {"direct": 1},
       "maxEstimatedMicroUsdPerOperation": 0
     },
@@ -82,7 +85,17 @@ Add this section to an existing private gateway configuration, replacing placeho
 }
 ```
 
-The trial count above is an operator example, not the proposed public allowance. Remote source access still needs TLS and reviewed access profiles. No browser, residential, CAPTCHA, unqualified route, checkout or automatic credit refill is granted to these account keys. Datacenter can be added only with a reviewed integer weight and known bounded route cost. Account-key endpoint scopes are enforced independently from profiles and credits. Existing provisioned project tokens retain their v1/v2 access.
+The trial count above is an operator example. This policy enables only direct
+HTTP after operator review. Remote source access still needs TLS and reviewed
+access profiles. Datacenter needs a reviewed integer weight and known bounded
+route cost. The managed-key `fetch:write` scope covers both Fetch and Render.
+Render requires a separate approved browser playground route, a reviewed browser
+credit weight, and a qualified runtime. See the [Render API](render-api.md) for
+admission requirements. Account-key scopes, approved profiles and credit limits
+apply independently. Existing provisioned tokens retain their approved v1 and
+v2 access.
+
+The example config grants free credits for reviewed direct HTTP access once enabled. Datacenter trial access needs a reviewed integer weight and known bounded route cost. Paid public HTTP routes require their own policy and funding. Account-key endpoint scopes are enforced independently from profiles and credits.
 
 Configure the Pages environment separately:
 
@@ -96,6 +109,8 @@ Configure the Pages environment separately:
 | `FETCHX_CONTROL_ALLOW_LOOPBACK` | Omit remotely; `true` only for explicit local development |
 
 Do not put gateway/mail/bridge secrets in client code, build-time `PUBLIC_*` variables, command arguments or logs. The bridge sends no customer Bearer key upstream. It forwards the authenticated session and trusted client IP, bounds requests/responses, and does not retry POSTs or follow redirects. Production cookie security cannot be disabled using a browser field.
+
+Connect FetchX is opt-in. Roll out the gateway and Pages bridge together, then set `controlPlane.agentConnectEnabled` to `true` with the existing `controlPlane.apiBaseUrl` configured. Keep the account service and exact website origins configured as above. The control status advertises `connect_enabled` when the flow is ready. The browser shows the requested permissions and asks the signed-in user to select a project and match the short code. The client holds the private verifier and activates the key after approval. Existing API key management can revoke the connected key.
 
 The `pages` mail transport reuses the website's approved Gmail authorization without copying Gmail credentials to the gateway. Pages requires its existing private `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN` secrets and validated `MAIL_FROM` (`FetchX <hello@fetchx.ai>`). The Google authorization must belong to that mailbox or have verified send-as permission for it; changing the sender alone does not repair an invalid OAuth grant. The configured mail URL must be an HTTPS DNS host on the default port with exactly `/api/control-mail`, without credentials, query or fragment. The dedicated mail secret must differ from the account bridge secret. A missing or invalid URL/secret leaves gateway mail unconfigured.
 
@@ -118,6 +133,8 @@ node scripts/control-preview.mjs \
 
 The website origin defaults to `http://127.0.0.1:4331`. The runner grants 25 local review credits to the first project and approves only GET/HEAD of `https://example.com/` over direct native HTTPS, with no paid-provider allowance. It does not fetch on startup. Real email is replaced with a private local mailbox at `.local/selfservice-preview/mailbox.jsonl`; the UI explicitly identifies this delivery mode, and codes never appear in an HTTP response. This adapter exists only in the local runner, not a production configuration flag.
 
+Pass `--agent-connect --fixture` to review Connect FetchX with the offline source fixture. Run the client against the loopback website and pass the separate loopback API origin shown by the runner. Approve the request in the website’s browser session and verify the key by listing access profiles. This read does not dispatch a source request.
+
 Private configuration, encryption key, bridge settings and mailbox are mode 0600 under the ignored `.local/selfservice-preview/` directory. The runner binds its persisted secrets to the database and source mode; do not overwrite that state to switch databases or abandon pending work. Database state is retained at shutdown. The optional `--fixture` mode uses an offline source adapter for `/success`, `/forbidden`, `/not-found`, `/unknown` and `/slow`, without source network calls.
 
 For a fresh local website setup, copy the generated `bridge.env` to `website/.dev.vars` only if no existing local secret file would be overwritten; preserve existing intake configuration otherwise. Then build and run the installed Wrangler:
@@ -136,7 +153,7 @@ Back up the target PostgreSQL database and private configuration before an autho
 
 Validate a restricted staging account through real mail delivery, TLS, signup, project creation, key lifecycle, an approved source and retained usage. Verify the gateway and Pages origin/secret pair, cookie security, project isolation, encrypted capture retention, cost ceilings and unknown recovery on the intended host. Source content acceptance and provider invoice reconciliation remain separate from a source HTTP status.
 
-Before enabling paid routes or publishing allowances, measure the configured routes' costs, approve logical-operation weights and failure treatment, and approve commercial terms. A dispatched source failure consumes its configured request credits; a proven predispatch cancellation releases them; an uncertain dispatch retains a hold. Request credits are not provider invoice amounts. Monthly subscriptions, renewals, payment webhooks and automatic refills remain P1 work.
+Before enabling paid routes or publishing allowances, measure the configured routes' costs, approve logical-operation weights and failure treatment, and approve commercial terms. Trial source failures after dispatch consume the configured request credits. Proven predispatch cancellations release credits, and uncertain dispatches retain a hold. Paid HTTP settles against measured wire traffic. Request credits are not provider invoice amounts. Stripe sells one-time paid credit packs for eligible public HTTP routes. The billing and usage APIs project paid and trial credits separately.
 
 Rollback by disabling `controlPlane.enabled` and removing the website bridge configuration from the affected environment. Retain identity tables, key hashes, operations, captures and credit holds for recovery; do not truncate them or reset allowances. Do not widen a changed project template automatically: existing projects fail closed on a template hash change until a reviewed migration approves it. Public indexing and advertised browser/AI capabilities retain the separate launch gates in the website backlog.
 

@@ -44,3 +44,31 @@ for (const group of document.querySelectorAll<HTMLElement>('[data-mkt-tabs]')) {
     }, 2500);
   });
 }
+
+const agentPrompt = document.querySelector<HTMLElement>('[data-agent-prompt]');
+const agentCopy = document.querySelector<HTMLButtonElement>('[data-agent-copy]');
+const agentCopyStatus = document.querySelector<HTMLElement>('[data-agent-copy-status]');
+
+if (agentPrompt && agentCopy && agentCopyStatus) {
+  agentCopy.hidden = false;
+  let reset: ReturnType<typeof setTimeout> | undefined;
+  agentCopy.addEventListener('click', async () => {
+    clearTimeout(reset);
+    try {
+      await navigator.clipboard.writeText(agentPrompt.textContent ?? '');
+      agentCopyStatus.textContent = 'Copied to clipboard.';
+      reset = setTimeout(() => { agentCopyStatus.textContent = ''; }, 3000);
+    } catch {
+      const selection = window.getSelection();
+      if (selection) {
+        const range = document.createRange();
+        range.selectNodeContents(agentPrompt);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        agentCopyStatus.textContent = 'Prompt selected. Use your device’s copy command.';
+      } else {
+        agentCopyStatus.textContent = 'Select and copy the prompt manually.';
+      }
+    }
+  });
+}

@@ -59,4 +59,4 @@ export function requestInput(input,profile){
   const browser=recipeInput(input.browser,profile);
   return {...input,...(browser?{browser}:{}),method,headers:input.headers??{},body};
 }
-export const FALLBACK_FAILURES=new Set(['proxy_connect_failed','source_denied','source_challenge']);
+export const FALLBACK_FAILURES=new Set(['proxy_connect_failed','provider_target_refused','source_unreachable','source_denied','source_challenge']);

@@ -1,0 +1,88 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Brand from '../components/Brand.astro';
+import '../styles/product-preview.css';
+---
+<Layout title="Connect a coding agent — FetchX" description="Review a request to connect a coding agent to a FetchX project." appMode={true} noindex={true}>
+  <div class="product-preview pp-auth connect-page" data-connect>
+    <header class="pp-auth-header">
+      <a href="/" class="pp-brand" aria-label="FetchX home"><Brand/></a>
+      <span class="pp-eyebrow">FETCHX CONNECT</span>
+    </header>
+    <div class="connect-layout">
+      <section class="pp-auth-form-card connect-card" aria-labelledby="connect-title">
+        <h1 id="connect-title">Connect a coding agent</h1>
+        <p class="connect-intro">Review the request and choose what your agent can access.</p>
+        <div class="connect-account" data-connect-account hidden>
+          <p>Signed in as <strong data-connect-email></strong></p>
+          <button class="pp-text-link" type="button" data-connect-logout>Sign out</button>
+        </div>
+        <p class="connect-status" role="status" tabindex="-1" data-connect-status>Checking your connection request…</p>
+        <p class="pp-inline-error" role="alert" data-connect-error hidden></p>
+        <div class="connect-actions" data-connect-signin hidden>
+          <a class="pp-button pp-button-primary" href="/login" rel="noopener noreferrer" data-connect-return="review">Sign in to review</a>
+        </div>
+        <div class="connect-details" data-connect-details hidden>
+          <dl>
+            <div><dt>Requested by</dt><dd data-connect-client></dd></div>
+            <div><dt>Expires</dt><dd><time data-connect-expires></time></dd></div>
+          </dl>
+          <h2>Requested permissions</h2>
+          <ul class="connect-scopes" data-connect-scopes></ul>
+        </div>
+        <div class="connect-review" data-connect-review hidden>
+          <div class="connect-no-project" data-connect-no-project hidden>
+            <p>Create an active project to approve this request, or deny it below.</p>
+            <a class="pp-text-link" href="/signup" rel="noopener noreferrer" data-connect-return="create">Create a project</a>
+          </div>
+          <div class="pp-field" data-connect-project-field>
+            <label for="connect-project">Project</label>
+            <select id="connect-project" aria-describedby="connect-project-help" data-connect-project disabled></select>
+            <small id="connect-project-help">Access is limited to this project. Its usage counts toward your project limits.</small>
+          </div>
+          <div class="pp-field">
+            <label for="connect-code">Code shown by your agent</label>
+            <input type="text" id="connect-code" placeholder="XXXX-XXXX" maxlength="9" spellcheck="false" autocapitalize="characters" autocomplete="off" aria-describedby="connect-code-help" data-connect-code disabled/>
+            <small id="connect-code-help">Only approve a request you started in your agent. Enter the matching code shown there.</small>
+          </div>
+          <div class="connect-actions">
+            <button class="pp-button pp-button-primary" type="button" data-connect-approve disabled>Approve connection</button>
+            <button class="pp-button pp-button-secondary" type="button" data-connect-deny disabled>Deny request</button>
+          </div>
+        </div>
+        <button class="pp-text-link connect-refresh" type="button" data-connect-refresh hidden>Check again</button>
+        <noscript><p>Enable JavaScript to review your request securely.</p></noscript>
+      </section>
+    </div>
+    <footer class="pp-auth-footer"><span>FetchX</span><a href="/app">Workspace</a><a href="/privacy">Privacy</a></footer>
+  </div>
+  <script>import '../scripts/connect';</script>
+</Layout>
+
+<style>
+  .connect-page { min-height: 100dvh; }
+  .connect-layout { display: grid; place-items: start center; padding: clamp(28px, 6vw, 78px) 18px; }
+  .connect-card { width: min(100%, 610px); padding: clamp(20px, 5vw, 38px); }
+  .connect-card h1 { font-size: clamp(26px, 5vw, 36px); line-height: 1.16; letter-spacing: -.03em; }
+  .connect-card .connect-intro { margin: 12px 0 24px; font-size: 14px; }
+  .connect-account { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 5px; }
+  .connect-card .connect-account p { margin: 0; overflow-wrap: anywhere; }
+  .connect-card .connect-status { margin: 20px 0 12px; }
+  .connect-card .connect-status:empty { margin: 0; }
+  .connect-details { margin: 18px 0; }
+  .connect-details dl { display: flex; flex-wrap: wrap; gap: 12px 28px; margin: 0 0 18px; }
+  .connect-details dt { font-size: 12px; color: var(--muted); }
+  .connect-details dd { margin: 3px 0 0; font-weight: 650; overflow-wrap: anywhere; }
+  .connect-details h2 { font-size: 15px; letter-spacing: normal; }
+  .connect-scopes { list-style: none; display: grid; gap: 6px; padding: 0; margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+  .connect-scopes code { color: var(--ink); overflow-wrap: anywhere; }
+  .connect-review { border-top: 1px solid var(--line); padding-top: 18px; }
+  .connect-review .pp-field { margin-bottom: 15px; }
+  .connect-review .pp-field small { font-size: 12px; }
+  .connect-card .connect-no-project p { margin: 0 0 6px; }
+  .connect-no-project { margin-bottom: 16px; }
+  .connect-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+  .connect-refresh { margin-top: 18px; }
+  .connect-card [hidden] { display: none !important; }
+  @media (max-width: 420px) { .connect-actions > * { width: 100%; } }
+</style>

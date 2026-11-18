@@ -15,7 +15,7 @@ import {server} from '../src/main.mjs';
 
 const ROOT=resolve(fileURLToPath(new URL('..',import.meta.url)),'.local/selfservice-preview');
 const BASE='http://127.0.0.1:8789';
-const HELP=`Usage: node scripts/control-preview.mjs --database-url <local gateway_test_* PostgreSQL URL> [--fixture] [--origin <loopback website origin>]
+const HELP=`Usage: node scripts/control-preview.mjs --database-url <local gateway_test_* PostgreSQL URL> [--fixture] [--agent-connect] [--origin <loopback website origin>]
 
 CONTROL_PREVIEW_DATABASE_URL may supply the explicitly disposable database URL.
 The database is created if absent and reused without truncation. Bind: ${BASE}.
@@ -23,17 +23,19 @@ Default origin: http://127.0.0.1:4331.
 Default source: real native HTTPS to example.com, GET/HEAD, direct route only.
 --fixture: offline source.example transport with /success, /forbidden, /not-found,
            /unknown and /slow scenarios; no source/provider network requests.
+--agent-connect: enable FetchX Connect for this loopback preview.
 Verification codes go only to a private local mailbox file; no email is sent.
 Generated secrets and encrypted captures stay in ignored .local/selfservice-preview.
 No provider credentials, paid routes, jobs, checkout, or production configuration.
 `;
 
 function argumentsFor(argv){
- const options={database:process.env.CONTROL_PREVIEW_DATABASE_URL,fixture:false,origin:'http://127.0.0.1:4331'};
+ const options={database:process.env.CONTROL_PREVIEW_DATABASE_URL,fixture:false,agentConnect:false,origin:'http://127.0.0.1:4331'};
  for(let i=0;i<argv.length;i++){
   const arg=argv[i];
   if(arg==='--help'||arg==='-h')return {help:true};
   if(arg==='--fixture'){options.fixture=true;continue;}
+  if(arg==='--agent-connect'){options.agentConnect=true;continue;}
   if(arg==='--database-url'||arg==='--origin'){
    const value=argv[++i];if(!value||value.startsWith('--'))throw Error('preview_argument_missing');
    options[arg==='--database-url'?'database':'origin']=value;continue;
@@ -80,7 +82,7 @@ function configuration(options,state){
  const profile={id:options.fixture?'preview-fixture':'preview-example',version:1,origins:[source],paths:options.fixture?['^/(?:success|forbidden|not-found|unknown|slow)?$']:['^/$'],methods:['GET','HEAD'],headers:['accept'],proxy_classes:['direct'],countries:[],
   limits:{max_requests:100,max_encoded_bytes:262144,max_decoded_bytes:1048576,max_session_encoded_bytes:4194304,max_input_bytes:1024,max_tunnel_bytes:262144,max_redirects:0,max_expansion_ratio:100,timeout_ms:15000,min_interval_ms:options.fixture?0:1000,ttl_seconds:900}};
  return {release:'selfservice-local-'+state.mode,artifactDir:join(ROOT,'captures'),artifactKey:state.artifactKey,maxDailyFallbackCredits:0,maxConcurrentRequests:4,projects:{},proxies:[],jobs:{enabled:false},
-  v2:{maxArtifactBytes:64*1024*1024,accessProfiles:{[profile.id+'@1']:profile}},controlPlane:{enabled:true,origins:[options.origin],bridgeSecret:state.bridgeSecret,sessionSecure:false,allowLoopbackDevelopment:true,apiBaseUrl:BASE,
+  v2:{maxArtifactBytes:64*1024*1024,accessProfiles:{[profile.id+'@1']:profile}},controlPlane:{enabled:true,origins:[options.origin],bridgeSecret:state.bridgeSecret,sessionSecure:false,allowLoopbackDevelopment:true,apiBaseUrl:BASE,agentConnectEnabled:options.agentConnect,
    projectTemplate:{id:'local-preview-'+state.mode+'-v1',v2_access_profiles:[profile.id+'@1'],v2_entitlement:{mode:'metered',max_daily_operations:100}},
    creditPolicy:{reviewed:true,version:'local-preview-direct-v1',trialCredits:25,weights:{direct:1},maxEstimatedMicroUsdPerOperation:0}}};
 }

@@ -166,7 +166,7 @@ test('actual local DNS CONNECT 503 supplies definitive no-target evidence and re
  },{dns:true,maxRequests:1});}finally{for(const socket of sockets)socket.destroy();await new Promise(resolve=>proxy.close(resolve));}
 });
 
-test('source retries share the first deadline and cumulative encoded/tunnel caps and preserve both source statuses',{skip:!enabled},async()=>{
+test('source retries share the first deadline and cumulative encoded/tunnel caps and preserve both source statuses',{skip:!enabled},async t=>{
  await fixture(async({v2,calls,input,setSource})=>{
   setSource(async()=>{if(calls.length===1){await new Promise(resolve=>setTimeout(resolve,20));return response(503,{},'x'.repeat(3000));}return response(200,{},'y'.repeat(1000));});
   const result=await v2.operation('a',input);
@@ -176,8 +176,15 @@ test('source retries share the first deadline and cumulative encoded/tunnel caps
  await fixture(async({v2,calls,input,setSource})=>{
   setSource(async()=>response(503,{},'x'.repeat(4096)));const result=await v2.operation('a',input);assert.equal(calls.length,1);assert.equal(result.result.retry.stop_reason,'retry_byte_limit');
  });
- await fixture(async({v2,calls,input,setSource})=>{
-  setSource(async()=>{await new Promise(resolve=>setTimeout(resolve,40));return response(503);});const result=await v2.operation('a',input);assert.equal(calls.length,1);assert.equal(result.result.retry.stop_reason,'retry_deadline');
+ await fixture(async({store,v2,calls,input,setSource})=>{
+  // Admission includes database work. Advance only the synthetic response clock
+  // so a busy database cannot exhaust this deadline before the first dispatch.
+  await store.pool.query("INSERT INTO source_limits(source,next_at) VALUES('origin:source.example','1970-01-01T00:00:00Z')");
+  let now=Date.now();const clock=t.mock.method(Date,'now',()=>now);
+  try{
+   setSource(async()=>{now+=40;return response(503);});
+   const result=await v2.operation('a',input);assert.equal(calls.length,1);assert.equal(result.result.retry.stop_reason,'retry_deadline');
+  }finally{clock.mock.restore();}
  },{limits:{timeout_ms:30}});
 });
 

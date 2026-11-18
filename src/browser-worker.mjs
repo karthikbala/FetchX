@@ -2,7 +2,8 @@
 import {browserEngine,launchPinnedBrowser,installBrowserRestrictions,browserRedirectBlocked} from './browser-engines.mjs';
 import {recipeInput,runRecipe,extractRecipe} from './browser-recipes.mjs';
 import {captchaHandler,captchaObservation} from './captcha-browser.mjs';
-let x,browser,context,page,response,captcha,phase='startup';
+import {prepareCamoufoxContext} from './camoufox-cookies.mjs';
+let x,browser,context,page,response,captcha,cookies,phase='startup';
 let sequence=0;const pending=new Map();
 process.on('message',message=>{const task=pending.get(message?.id);if(!task)return;pending.delete(message.id);clearTimeout(task.timer);message.error?task.reject(Object.assign(Error(),{code:message.error})):task.resolve(message.result);});
 function parentRequest(kind,data){return new Promise((resolve,reject)=>{if(!process.send)return reject(Object.assign(Error(),{code:'captcha_solver_unavailable'}));const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(Object.assign(Error(),{code:'captcha_ipc_timeout'}));},150000);pending.set(id,{resolve,reject,timer});process.send({id,kind,data},error=>{if(error){clearTimeout(timer);pending.delete(id);reject(Object.assign(Error(),{code:'captcha_ipc_unavailable'}));}});});}
@@ -14,8 +15,12 @@ try{
  const recipeRequest=recipeInput(x.recipeInput,x.profile),recipe=recipeRequest?x.profile.browserRecipes[recipeRequest.recipe]:null;
  const tier=x.browser;
  browser=await launchPinnedBrowser(tier,x.profile,x.relay,x.cacheDir);
- context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,locale:x.profile.locale??'en-US',timezoneId:x.profile.timezone??'UTC',storageState:x.storageState??undefined});
+ const camoufox=browserEngine(x.profile)==='camoufox';
+ // Camoufox: Juggler only restores localStorage here; cookies are replayed below.
+ const storageState=camoufox?(x.storageState?{cookies:[],origins:x.storageState.origins??[]}:undefined):x.storageState??undefined;
+ context=await browser.newContext({serviceWorkers:'block',acceptDownloads:false,locale:x.profile.locale??'en-US',timezoneId:x.profile.timezone??'UTC',storageState});
  const counts=await installBrowserRestrictions(context,x);
+ if(camoufox){phase='state';cookies=await prepareCamoufoxContext(context,{url:x.url,cookies:x.storageState?.cookies??[],profile:x.profile});}
  page=await context.newPage();phase='navigation';page.setDefaultTimeout(x.profile.browserWaitMs??15000);
  page.on('response',r=>{if(r.request().isNavigationRequest()&&r.frame()===page.mainFrame())response=r;});
  response=await page.goto(x.url,{waitUntil:'domcontentloaded',timeout:30000});
@@ -30,12 +35,12 @@ try{
  const screenshot=recipe?.screenshot?await (recipe.screenshot==='viewport'?page:page.locator(recipe.screenshot)).screenshot({type:'png',timeout:10000}):null;
  if(body.length+(screenshot?.length??0)+Buffer.byteLength(JSON.stringify(extracted??{}))>x.profile.maxResponseBytes)throw Object.assign(Error(),{code:'response_too_large'});
  const observation=await captchaObservation(page,captcha,x.profile,response?.status());
- result={captcha:observation,receivedBytes:body.length+(screenshot?.length??0)+Buffer.byteLength(JSON.stringify(extracted??{})),actionsStarted:progress.actionsStarted,actionsCompleted:progress.completed,extracted,screenshot_base64:screenshot?.toString('base64'),status:response?.status()??null,headers:{'content-type':'text/html; charset=utf-8'},cookies:[],body_base64:body.toString('base64'),storageState:await context.storageState(),browserEngine:browserEngine(x.profile),browserVersion:tier.version,browserRequests:counts.requests,blockedRequests:counts.blocked};
+ result={captcha:observation,receivedBytes:body.length+(screenshot?.length??0)+Buffer.byteLength(JSON.stringify(extracted??{})),actionsStarted:progress.actionsStarted,actionsCompleted:progress.completed,extracted,screenshot_base64:screenshot?.toString('base64'),status:response?.status()??null,headers:{'content-type':'text/html; charset=utf-8'},cookies:[],body_base64:body.toString('base64'),storageState:cookies?(await cookies.capture(page),{...await context.storageState(),cookies:cookies.cookies()}):await context.storageState(),browserEngine:browserEngine(x.profile),browserVersion:tier.version,browserRequests:counts.requests,blockedRequests:counts.blocked};
 }catch(e){
  await captcha?.clear();
  let partial='';try{partial=await page?.content()??'';}catch{}
  if(Buffer.byteLength(partial)>x.profile?.maxResponseBytes)partial='';
- result={captcha:await captchaObservation(page,captcha,x.profile,response?.status()),actionsStarted:progress.actionsStarted,actionsCompleted:progress.completed,actionStep:progress.step,status:response?.status()??null,browserEngine:x.profile?.browserEngine??'cloakbrowser',browserVersion:x.browser?.version,browserPhase:phase,browserFailureCode:/net::(ERR_[A-Z_]+)/.exec(e.message??'')?.[1]??/\b(NS_ERROR_[A-Z_]+)\b/.exec(e.message??'')?.[1]??(e.name==='TimeoutError'?'TIMEOUT':'CAPTURE_ERROR'),error:e.code?.startsWith('captcha_')?e.code:browserRedirectBlocked(e,x.profile)?'browser_redirect_blocked':['browser_runtime_unqualified','browser_build_mismatch','browser_version_mismatch','browser_not_qualified','browser_model_unavailable','browser_protocol_mismatch','browser_proxy_required','browser_identity_unconfigured','browser_identity_invalid','browser_pacing_invalid','browser_runtime_download_disabled','response_too_large','browser_extraction_limit','source_denied','source_challenge'].includes(e.code)?e.code:!browser?'browser_launch_failed':'browser_capture_failed',body_base64:Buffer.from(captcha?captcha.redact(partial):partial).toString('base64'),headers:partial?{'content-type':'text/html'}:{},cookies:[]};}
+ result={captcha:await captchaObservation(page,captcha,x.profile,response?.status()),actionsStarted:progress.actionsStarted,actionsCompleted:progress.completed,actionStep:progress.step,status:response?.status()??null,browserEngine:x.profile?.browserEngine??'cloakbrowser',browserVersion:x.browser?.version,browserPhase:phase,browserFailureCode:/net::(ERR_[A-Z_]+)/.exec(e.message??'')?.[1]??/\b(NS_ERROR_[A-Z_]+)\b/.exec(e.message??'')?.[1]??(e.name==='TimeoutError'?'TIMEOUT':'CAPTURE_ERROR'),error:e.code?.startsWith('captcha_')?e.code:browserRedirectBlocked(e,x.profile)?'browser_redirect_blocked':['browser_runtime_unqualified','browser_build_mismatch','browser_version_mismatch','browser_not_qualified','browser_model_unavailable','browser_protocol_mismatch','browser_proxy_required','browser_identity_unconfigured','browser_identity_invalid','browser_pacing_invalid','browser_runtime_download_disabled','browser_cookie_state_invalid','browser_tier_unavailable','response_too_large','browser_extraction_limit','source_denied','source_challenge'].includes(e.code)?e.code:!browser?'browser_launch_failed':'browser_capture_failed',body_base64:Buffer.from(captcha?captcha.redact(partial):partial).toString('base64'),headers:partial?{'content-type':'text/html'}:{},cookies:[]};}
 finally{await context?.close().catch(()=>{});await browser?.close().catch(()=>{});}
 const output=JSON.stringify(result);process.stdout.write(captcha?captcha.redact(output):output);
 for(const task of pending.values())clearTimeout(task.timer);if(process.connected)process.disconnect();

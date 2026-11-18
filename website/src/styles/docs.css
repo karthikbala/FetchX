@@ -73,6 +73,7 @@
 .docs-code-language { display: block; padding: 11px 17px 0; font: 12px/1.5 var(--mono); color: #a3b1a4; }
 .docs-code.docs-enhanced .docs-code-tabs ~ .docs-code-panel > .docs-code-language { display: none; }
 .docs-code pre.astro-code { margin: 0; padding: 19px 18px 22px; overflow-x: auto; font: 13px/1.85 var(--mono); background: #101914 !important; tab-size: 2; scrollbar-width: thin; }
+#copy-prompt .docs-code pre.astro-code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .docs-code code { font: inherit; }
 .docs-code :focus-visible { outline-offset: -3px; }
 .docs-table-wrap { margin-top: 20px; overflow-x: auto; border: 1px solid var(--line); border-radius: 7px; scrollbar-width: thin; }

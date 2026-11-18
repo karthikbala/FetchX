@@ -5,6 +5,7 @@ import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {Store} from './store.mjs';
 import {Sealer} from './crypto.mjs';
 import {gatewayStatus} from './status.mjs';
+import {loadProviderRules,providerRuleSources,saveProviderRule,setProviderRuleEnabled,deleteProviderRule,providerRuleAudit} from './provider-rules.mjs';
 const store=new Store(process.env.DATABASE_URL);
 try{
  if(process.argv[2]==='status'){
@@ -32,5 +33,17 @@ try{
   for(const name of ['captcha_tasks','fetch_jobs','residential_reconciliations','residential_usage','browser_state','workflows','operations','attempts','ledger','source_limits','pool_cursor','project_admission','admission_queue','operation_outcomes','route_health','route_health_workflows','route_health_pools'])data[name]=(await store.pool.query('SELECT * FROM '+name)).rows;
   await writeFile(process.argv[3],new Sealer(config.artifactKey).seal({created_at:new Date().toISOString(),tables:data}),{mode:0o600});
   console.log('encrypted_operator_snapshot_written');
- }else throw Error('usage_status_reconcile_or_snapshot');
+ }else if(process.argv[2]==='rules'){
+  // Routing rules (admin portal step 1). Actor comes from FETCHX_OPERATOR; rule
+  // bodies come from a file, never command-line JSON.
+  const config=JSON.parse(await readFile(process.env.GATEWAY_CONFIG??'/run/secrets/gateway.json','utf8'));
+  const actor=process.env.FETCHX_OPERATOR??'operator-cli',[,,,action,arg,...rest]=process.argv;
+  await loadProviderRules(store.pool,config);
+  if(action==='list')console.log(JSON.stringify(providerRuleSources(config),null,1));
+  else if(action==='save'){const rule=JSON.parse(await readFile(arg,'utf8'));const current=providerRuleSources(config).find(r=>r.id===rule.id&&r.source==='database');console.log(JSON.stringify(await saveProviderRule(store,rule,{actor,expectedVersion:current?.version??null})));}
+  else if(action==='enable'||action==='disable')console.log(JSON.stringify(await setProviderRuleEnabled(store,config,arg,action==='enable',{actor,reason:rest.join(' ')})));
+  else if(action==='delete')console.log(JSON.stringify(await deleteProviderRule(store,arg,{actor})));
+  else if(action==='audit')console.log(JSON.stringify(await providerRuleAudit(store.pool,{ruleId:arg??null}),null,1));
+  else throw Error('usage_rules_list_save_enable_disable_delete_audit');
+ }else throw Error('usage_status_reconcile_snapshot_or_rules');
 }finally{await store.close();}

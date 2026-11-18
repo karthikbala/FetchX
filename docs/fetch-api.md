@@ -2,11 +2,11 @@
 
 `POST /v2/fetch` fetches one URL through an explicitly selected proxy class and
 country using an approved access profile. It is a native HTTP facade over the
-existing v2 session/operation APIs. It follows a one-call request/response model;
-it is not a drop-in Firecrawl or Scrape.do protocol implementation.
+existing v2 session and operation APIs.
 
-Every endpoint requires `Authorization: Bearer <project-token>`. Project tokens,
-profiles, sessions, idempotency keys and artifacts remain isolated by project.
+Every endpoint requires a project credential in `Authorization: Bearer <token>`.
+Managed `fxk_` keys need `fetch:write` for submission and `fetch:read` for recovery.
+Profiles, sessions, idempotency keys and artifacts remain isolated by project.
 Use authenticated TLS or a private listener.
 
 ## Request
@@ -31,7 +31,7 @@ the project's approved profiles, route reservations and limits.
 | Field | Contract |
 | --- | --- |
 | `idempotency_key` | Required, 1–160 letters, digits, `_`, `.`, `:` or `-`. |
-| `access_profile` | Required exact `{id, version}` reference to an approved profile. |
+| `access_profile` | Exact `{id, version}` reference to an approved profile. An eligible self-service project can omit it to select paid `public-url-http@1`. |
 | `url` | Required HTTPS URL within that profile's origins and paths. |
 | `proxy` | Required exact `{class, country}` object. No class or country default. |
 | `proxy.class` | `direct`, `datacenter` or `residential`, explicitly approved by the profile. |
@@ -41,6 +41,8 @@ the project's approved profiles, route reservations and limits.
 | `headers` | Optional object, defaults to `{}`. Existing header/credential restrictions apply. |
 | `body_base64` | Optional canonical base64 body. Body size and method restrictions apply; GET/HEAD cannot carry a body. |
 | `max_estimated_micro_usd` | Optional nonnegative integer ceiling on the conservative reservation estimate. An unavailable estimate fails closed. |
+| `max_transfer_mb` | Optional paid HTTP transfer ceiling in decimal MB, from 0.25 through 20 in increments of 0.25. For Public URL HTTP, omit it to let FetchX size the reservation automatically. |
+| `max_credits` | Optional positive integer paid HTTP credit ceiling. |
 | `retry` | Optional boolean, defaults to `false`. `true` permits at most one extra known-safe attempt for an eligible fresh HTTP read; see [bounded retries](#bounded-retries). Other types are rejected. |
 
 Affinity is always `session`. Without `session_id`, a deterministic internal
@@ -58,9 +60,104 @@ same fixed-fee datacenter pool before session state is established.
 This endpoint supports HTTP only. `render`, `browser`, `formats`, browser actions,
 scripts, extraction options and other unsupported browser/render parameters return
 `capability_unsupported` before dispatch. Unknown parameters are rejected.
-Reviewed v1 rendered recipes remain separate. V2 browser probes remain disabled;
-this endpoint does not enable them. The intended new Camoufox engine is currently
-blocked from service execution by a [runtime qualification gate](browser-engines.md).
+Use the [v2 Render API](render-api.md) for a one-shot browser navigation when
+your gateway, project and access profile permit it. Reviewed v1 browser recipes
+use the [v1 workflow API](api.md).
+
+## Paid public URLs and transfer ceilings
+
+Public URL HTTP charges for measured transfer. Reviewed Playground routes use
+fixed credits per operation, including qualified Browser requests through the
+[Render API](render-api.md). Upgraded projects spend from one shared balance.
+
+An eligible self-service project can use `public-url-http@1` for a public HTTPS
+URL on port 443. The operator reviews the route before it appears in
+`GET /v2/access-profiles`. Version 1 supports US datacenter and residential
+routes. Version 2 is an explicit profile for additional reviewed routes. Use
+the exact profile version and class/country pair advertised in its
+`route_reservations`. The `paid_http.public_url_access_profiles` capability
+lists available profile references when extended coverage is ready. Omitting
+`access_profile` continues to select version 1. Paid public requests accept
+`GET` and `HEAD` with optional `accept`, `accept-language` and `user-agent`
+headers. URL user information, authentication and cookie headers, bodies and
+IP literals are rejected. Each hop rejects private, special or mixed DNS
+answers and connects to a checked IP while keeping the source hostname for TLS.
+The gateway follows up to two same-origin redirects. The session keeps no cookie
+state and uses one pinned route throughout.
+
+The US paid datacenter route uses the operator's
+`controlPlane.paidCreditPolicy.datacenterPool` binding. Its `proxyIds` must match
+the full set of configured US datacenter proxies. Its `pricing` uses the
+reviewed fixed-fee Oxylabs schema with `countries: ["US"]`. The fingerprint
+covers the exact legacy URLs and IDs with the reviewed provider and pool
+metadata. A changed or unreviewed US member disables the paid datacenter
+route. The binding applies only to paid public HTTP and leaves existing
+private and trial pricing policies in place. Version 2 uses the same binding
+schema per country in `controlPlane.paidCreditPolicy.datacenterPoolsByCountry`.
+Residential locations also require an explicit provider rule and a reviewed
+spending budget for the selected provider.
+
+```json
+{
+  "idempotency_key": "paid-url-001",
+  "url": "https://www.example.com/data",
+  "proxy": {"class": "datacenter", "country": "US"}
+}
+```
+
+| Route | Billing block | Debit per started block |
+| --- | ---: | ---: |
+| Direct or datacenter | 1,000,000 bytes | 1 credit |
+| Residential | 250,000 bytes | 5 credits |
+
+Direct paid HTTP is available only through an eligible operator-registered
+profile. On a reviewed self-service direct or datacenter profile, supplying
+either paid ceiling selects paid billing. Existing direct and datacenter trial
+requests continue to use trial credits with their approved profiles. The public
+URL profile uses a separate paid daily operation quota and requires a prepaid
+balance. Paid routes reject `retry: true`.
+
+For Public URL HTTP, omitting `max_transfer_mb` sizes the reservation from the
+available credit balance, any supplied `max_credits`, and the service and
+provider transfer limits. The maximum service ceiling is 20 MB. Supplying
+`max_transfer_mb` sets an explicit ceiling. The gateway reserves credits
+before DNS or source dispatch and rejects an explicit ceiling that needs more
+than `max_credits`. The `paid_credit_reservation` in access-profile discovery
+describes a single billing block. The operation response reports the actual
+reservation and debit. The cumulative wire meter covers encrypted bytes in both
+directions, CONNECT, DNS over HTTPS and redirects. It measures the gateway's
+socket payload and excludes TCP/IP framing.
+
+On Public URL HTTP, the authorized transfer ceiling also sets two separate
+aggregate body limits, one for encoded bytes and one for decoded bytes. Each
+tops out at 20,000,000 bytes across the operation, including redirect bodies.
+A response must also pass the profile's 100× expansion check. Allow room for
+DNS, TLS and headers when setting a ceiling for a download. For example, a 2 MB
+file can fit under a 2.25 MB wire ceiling when the overhead fits. Existing
+registered profiles keep their own body limits. The public profile's
+`transfer_limits` and the capability field `paid_http.public_url_transfer_limits`
+report the supported ceilings and increments.
+
+A wire cutoff returns `max_transfer_bytes_exceeded`. Encoded and decoded
+cutoffs return `encoded_body_limit` or `decoded_body_limit`. On a measured
+terminal cutoff below 20 MB, `error.details.next` gives the next allowed
+`max_transfer_mb` and its required `max_credits`. A new operation needs a new
+idempotency key and a fresh reservation. The suggested increment can still be
+too small for the response. Unknown outcomes return recovery guidance without
+a suggested increase. The provider reservation allows one final bounded socket
+read while the credit debit remains capped at the authorized transfer ceiling.
+
+`usage.wire_bytes` reports a complete local observation when available, and
+`usage.wire_bytes_lower_bound` reports confirmed bytes. Read
+`usage.accounting.paid_credits` for `reserved_credits`, `used_credits`,
+`billable_bytes`, `billable_blocks`, `block_bytes`, `credits_per_block`, `state`, and
+`settlement_basis`. For a settled transfer, the debit is the number of started
+billable blocks multiplied by `credits_per_block`. Measured source failures
+and size cutoffs can consume credits. Invalid destinations and requests with
+verified zero dispatch use zero credits. A FetchX internal failure releases the
+customer reservation while provider accounting remains separate. An uncertain
+observation holds the reservation unless confirmed bytes establish the full
+authorized debit. Use the existing recovery endpoint with the same key.
 
 ## Response and status
 
@@ -145,6 +242,11 @@ reviewed messages and a stage, not raw exception strings. `diagnostics` preserve
 the native safe diagnostics, including failure stage, reviewed cause code,
 `request_dispatched` and DNS resolver provenance when retained.
 
+`data.headers` contains allowlisted response metadata from the final retained
+source response, such as content type, cache directives, and `Retry-After`.
+Cookies, authorization, proxy and private headers are excluded from this
+projection. Use [the render endpoint](render-api.md) for generated browser HTML.
+
 For newly retained non-200 proxy CONNECT failures, safe diagnostics also preserve
 the remote `provider_status`, CONNECT `failure_code` and explicit proxy dispatch
 phase. During supporting DNS, `error.stage` remains `dns` and
@@ -166,9 +268,9 @@ being converted to zero. Reservation estimates and observed bytes are not provid
 invoices; missing invoice values stay `null`, and uncertain-charge holds survive
 replay and recovery.
 
-### Residential traffic charges
+### Residential traffic accounting for private projects
 
-For new Evomi and DataImpulse requests, read
+For Evomi and DataImpulse requests under the existing private-project API, read
 `usage.accounting.customer_traffic.cost_usd` for the customer charge. FetchX
 charges **$2 per 1,000,000,000 proxy bytes**. For example, a request that
 transfers 2,000,000 bytes returns this value in `usage.accounting.customer_traffic`:
@@ -205,7 +307,8 @@ return `accounting.estimated_micro_usd:0` with
 `accounting.pricing.basis:"operator_attested_prepaid_included_traffic"`,
 `cost_scope:"incremental_traffic_only"` and
 `customer_traffic_charge_micro_usd:0`. This is the customer's traffic charge for
-the approved operation. Fixed subscription allocation and provider invoice
+the approved private-project operation. Paid-credit debits are independent of
+this incremental provider estimate. Fixed subscription allocation and provider invoice
 remain `null`; platform/model costs are outside this traffic policy.
 The safe pricing metadata includes the attestation ID, validity times and status.
 Read authenticated profile `route_reservations` for the current quote.
@@ -231,7 +334,7 @@ session and artifacts. It performs no DNS lookup, route selection or source
 request. An exact repeat of `POST /v2/fetch` returns the existing operation (which
 may still be running). Concurrent exact POSTs cannot duplicate source work. A
 changed URL, body, headers, method, profile, route, country, supplied session,
-cost ceiling or enabled retry policy under a bound key returns HTTP 409
+cost ceiling, paid ceiling or enabled retry policy under a bound key returns HTTP 409
 `idempotency_conflict`. `retry: false` and omission are equivalent, including for
 keys bound before the flag existed. Changing either to `true` requires a new key.
 
@@ -248,9 +351,9 @@ all existing approvals and budgets. They never authorize automatic fallback.
 
 | Outcome | Guidance |
 | --- | --- |
-| Datacenter GET returns 403 or a recognized challenge | If the saved profile also approves residential in the same country, suggest that route with a **new key and fresh session**. No suggested request is dispatched. |
+| Datacenter GET on a registered profile returns 403 or a recognized challenge | If the saved profile also approves residential in the same country, suggest that route with a **new key and fresh session**. No suggested request is dispatched. |
 | Other 403/challenge | Review source access; no implicit escalation. |
-| 429 or source cooldown | Wait for source `Retry-After`; do not rotate providers or countries. |
+| 429 or source cooldown | Wait for source `Retry-After`; do not rotate countries. Residential sessions already moved a first-GET 429 from Evomi to DataImpulse inside the same operation; a 429 returned after that means every residential route was limited. Profiles with `maxSessionRenewals` also renew a walled later session automatically, up to that bound. |
 | 404 | Check the URL before considering another request. |
 | Permission, profile or route configuration failure | Fix the approved request/configuration. |
 | Quota or budget exhausted | Review the quota/budget; creating sessions does not bypass it. |

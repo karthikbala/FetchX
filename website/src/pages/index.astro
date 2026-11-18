@@ -2,6 +2,7 @@
 import Layout from '../layouts/Layout.astro';
 import Icon from '../components/Icon.astro';
 import HeroPipeline from '../components/marketing/HeroPipeline.astro';
+import AgentQuickstart from '../components/marketing/AgentQuickstart.astro';
 import ApiDemo from '../components/marketing/ApiDemo.astro';
 import Architecture from '../components/marketing/Architecture.astro';
 import Dashboard from '../components/marketing/Dashboard.astro';
@@ -22,16 +23,18 @@ const faqs = [
  ['How do HTTP fetching and browser rendering work?', 'The documented /v2/fetch endpoint handles HTTP fetching. Reviewed browser recipes use /v1/fetch on an appropriately configured gateway. Browser availability and challenge handling depend on your project configuration and the source.'],
  ['What happens if a connection drops?', 'Persist your request and idempotency key before dispatch. Use the original key to look up the saved operation and inspect its state and retry guidance. A lookup reads retained evidence without fetching the source again.'],
  ['Does a successful request mean I have the right data?', 'Check the API outcome, source status, final URL and returned content. FetchX reports application_acceptance as not_evaluated for HTTP fetching; your application decides whether the content satisfies its requirements.'],
- ['Can I start using the plans shown here?', 'Prices and advertised credit allowances are commercial proposals. When account access is configured, Start building opens signup with email verification. Your workspace shows the actual allocation set by the operator. Signing up or selecting a plan does not purchase a plan or start an automatic subscription; paid access requires approval.'],
+ ['How do I buy credits?', 'Sign in and open Billing to check availability for your project. If a paid route is ready, choose a credit pack and confirm a one-time payment in Stripe.'],
 ];
 ---
 <Layout title="FetchX — Unlock the web. With one API." description="FetchX brings proxy routing, browser rendering and challenge handling into one API for developers, data teams and AI agents.">
  <div class="mkt">
   <section class="mkt-hero mkt-container">
-   <div class="mkt-hero-copy"><p class="mkt-eyebrow"><span class="mkt-dot"></span> WEB SCRAPING API & WEB UNBLOCKER</p><h1>Unlock the web.<br/><span>With one API.</span></h1><p class="mkt-hero-description">FetchX brings proxy routing, browser rendering and challenge handling into one API for developers, data teams and AI agents.</p><div class="mkt-actions"><a class="mkt-button mkt-button-primary" href="/signup">Start building <Icon name="arrow" size={18}/></a><a class="mkt-button mkt-button-secondary" href="/docs">Explore the API <Icon name="code" size={18}/></a></div><div class="mkt-hero-note"><span class="mkt-micro">LESS INFRASTRUCTURE.</span><span>More room to build.</span></div></div>
+   <div class="mkt-hero-copy"><p class="mkt-eyebrow"><span class="mkt-dot"></span> WEB SCRAPING API & WEB UNBLOCKER</p><h1>Unlock the web.<br/><span>With one API.</span></h1><p class="mkt-hero-description">FetchX brings proxy routing, browser rendering and challenge handling into one API for developers, data teams and AI agents.</p><div class="mkt-actions"><a class="mkt-button mkt-button-primary" href="/signup">Start building <Icon name="arrow" size={18}/></a><a class="mkt-button mkt-button-secondary" href="/docs">Explore the API <Icon name="code" size={18}/></a></div><a class="mkt-text-link mkt-hero-agent-link" href="#agent-quickstart"><Icon name="code" size={15}/> Quickstart for coding agents <Icon name="down" size={14}/></a></div>
    <div class="mkt-hero-visual"><HeroPipeline/></div>
   </section>
   <div class="mkt-capabilities mkt-container"><span class="mkt-micro">ONE ACCESS LAYER</span><span><Icon name="route" size={16}/> Proxy routing</span><span><Icon name="code" size={16}/> Browser workflows</span><span><Icon name="lock" size={16}/> Project controls</span><span><Icon name="file" size={16}/> Response evidence</span></div>
+
+  <AgentQuickstart/>
 
   <section class="mkt-section mkt-container" id="api"><div class="mkt-section-heading"><div><span class="mkt-eyebrow">01 / THE DEVELOPER EXPERIENCE</span><h2>A familiar request.<br/><span class="mkt-muted">A clearer result.</span></h2></div><p>Choose an approved source profile. Send a request. Get the response and the context to decide what happens next.</p></div><ApiDemo/></section>
 
@@ -47,10 +50,15 @@ const faqs = [
    <a class="mkt-use-case" href="/use-cases/real-estate"><div class="mkt-use-case-art mkt-property-art" aria-hidden="true"><span class="mkt-art-label">PROPERTY DATA / 03</span><div class="mkt-map-grid"></div><span class="mkt-map-pin mkt-map-pin-one"><Icon name="house" size={17}/></span><span class="mkt-map-pin mkt-map-pin-two"><Icon name="house" size={14}/></span><span class="mkt-map-pin mkt-map-pin-three"><Icon name="house" size={14}/></span><div class="mkt-property-label"><span>listing.reference</span><b>Source connected <Icon name="arrow" size={12}/></b></div></div><div class="mkt-use-case-content"><span class="mkt-micro">PROPERTY & RESEARCH</span><h3>Build a clearer view<br/>of the property market.</h3><p>Connect listing and public property sources to your own matching, validation and analysis.</p><span class="mkt-use-case-link">Explore real estate <Icon name="diagonal" size={18}/></span></div></a>
   </div><p class="mkt-small-note">Illustrative workflows. Source access and data validation are defined for your project.</p></section>
 
-  <section class="mkt-pricing-section mkt-container" id="pricing"><div class="mkt-section-heading"><div><span class="mkt-eyebrow">06 / A PLAN FOR YOUR NEXT BUILD</span><h2>Start exploring.<br/><span class="mkt-muted">Scale with a plan.</span></h2></div><a class="mkt-text-link" href="/pricing">Compare the plans <Icon name="arrow" size={17}/></a></div><Pricing compact/></section>
+  <section class="mkt-pricing-section mkt-container" id="pricing"><div class="mkt-section-heading"><div><span class="mkt-eyebrow">06 / PREPAID FETCHX CREDITS</span><h2>Start with trial credits.<br/><span class="mkt-muted">Top up from $2.</span></h2></div><a class="mkt-text-link" href="/pricing">View pricing <Icon name="arrow" size={17}/></a></div><Pricing compact/></section>
 
   <section class="mkt-section mkt-container mkt-faq-section"><div><span class="mkt-eyebrow">07 / A FEW MORE DETAILS</span><h2>Good questions.<br/><span class="mkt-muted">Clear answers.</span></h2><p class="mkt-faq-intro">Get to know the API, the access model and where the product is headed.</p><a class="mkt-text-link" href="/docs">Go deeper in the docs <Icon name="arrow" size={16}/></a></div><Faq items={faqs}/></section>
   <Closing/>
  </div>
  <script>import '../scripts/marketing.ts';</script>
 </Layout>
+
+<style>
+ .mkt-hero-agent-link{gap:8px;margin-top:14px;min-height:36px}
+ .mkt-hero-agent-link:hover svg:last-child{transform:translateY(3px)}
+</style>

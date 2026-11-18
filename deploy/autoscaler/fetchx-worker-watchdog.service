@@ -1,0 +1,19 @@
+[Unit]
+Description=FetchX worker hard lifetime and renewable workload lease
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/local/lib/fetchx-autoscaler/worker_agent.py watchdog
+Restart=always
+RestartSec=1
+UMask=0077
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

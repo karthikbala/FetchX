@@ -53,9 +53,9 @@ export function camoufoxLaunchOptions(tier,profile,relay,cacheDir){
    'network.proxy.failover_direct':false,'network.proxy.no_proxies_on':'','network.proxy.allow_hijacking_localhost':true,
    'network.dns.disablePrefetch':true,'network.prefetch-next':false,'network.predictor.enabled':false,
    'network.http.speculative-parallel-limit':0,'network.trr.mode':5,'network.http.http3.enable':false,'network.http.redirection-limit':0,
-   // Provisional diagnostic settings only: Juggler needs this engine enabled.
-   // Private browsing blocks native workers but FAILS cookie continuity;
-   // the production launcher is hard gated until a compatible policy exists.
+   // Juggler request interception needs the service-worker engine enabled.
+   // Native private browsing then removes the service-worker API entirely;
+   // workflow cookies are kept by camoufox-cookies.mjs, not Juggler storage.
    'dom.serviceWorkers.enabled':true,'browser.privatebrowsing.autostart':true,'dom.serviceWorkers.privateBrowsing.enabled':false,'media.peerconnection.enabled':false,
    'app.update.auto':false,'app.update.enabled':false,'extensions.update.enabled':false,'extensions.systemAddon.update.enabled':false,
    'toolkit.telemetry.enabled':false,'toolkit.telemetry.unified':false,'toolkit.telemetry.server':'',
@@ -66,9 +66,15 @@ export function camoufoxLaunchOptions(tier,profile,relay,cacheDir){
 }
 export async function launchPinnedBrowser(tier,profile,relay,cacheDir){
  const engine=browserEngine(profile);
- // This paired build cannot simultaneously preserve routing, native service-worker
- // exclusion and cookie continuity. Configuration cannot override this service gate.
- if(engine==='camoufox')fail('browser_runtime_unqualified',503);
+ if(engine==='camoufox'){
+  await verifyCamoufoxBuild(tier);
+  // Offline only: the pinned model must already be installed and verified.
+  process.env.CAMOUFOX_FPGEN_DATA=tier.modelDir;
+  const {setModelDir,ensureModel}=await import('fpgen-js');setModelDir(tier.modelDir);
+  await ensureModel({dir:tier.modelDir,fetchImpl:()=>{throw Object.assign(Error(),{code:'browser_runtime_download_disabled'});}}).catch(()=>fail('browser_model_unavailable',503));
+  const {Camoufox}=await import('camoufox');
+  return Camoufox(camoufoxLaunchOptions(tier,profile,relay,cacheDir));
+ }
  if(await fileSha256(tier.executablePath)!==tier.sha256)fail('browser_build_mismatch',503);
  process.env.CLOAKBROWSER_BINARY_PATH=tier.executablePath;process.env.CLOAKBROWSER_AUTO_UPDATE='false';
  process.env.CLOAKBROWSER_LICENSE_KEY='';process.env.CLOAKBROWSER_CACHE_DIR=cacheDir;

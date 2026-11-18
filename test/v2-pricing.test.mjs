@@ -8,7 +8,7 @@ import {Gateway} from '../src/gateway.mjs';
 import {V2Gateway} from '../src/v2.mjs';
 import {GatewayError} from '../src/policy.mjs';
 import {sha} from '../src/crypto.mjs';
-import {datacenterPoolFingerprint,estimateRoutePricing} from '../src/v2-pricing.mjs';
+import {datacenterPoolFingerprint,estimateRoutePricing,fixedFeePoolFingerprint} from '../src/v2-pricing.mjs';
 
 const epoch=Date.parse('2026-11-01T10:00:00.000Z');
 function fixture(root,now=epoch){
@@ -51,6 +51,38 @@ const invalidCases=[
  ['invoice scope',f=>f.grant.cost_scope='total_invoice'],
  ['fixed allocation inferred',f=>f.grant.fixed_subscription_allocation_micro_usd=0]
 ];
+
+test('browser datacenter pricing requires an explicitly reviewed transport scope',t=>{
+ const f=fixture();
+ assert.equal(estimate(f,{transport:'browser'}).pricing.reason,'attestation_scope_mismatch');
+ const browser={...f.grant,schema_version:2,id:'browser-grant',transport:'browser'};
+ f.config.v2.datacenterPricingAttestations.push(browser);
+ assert.equal(estimate(f).pricing.attestation_id,f.grant.id);
+ const decision=estimate(f,{transport:'browser'});
+ assert.equal(decision.pricing.attestation_id,browser.id);
+ assert.equal(decision.estimated_micro_usd,0);
+ t.mock.method(Date,'now',()=>epoch);
+ const gateway={pricing:(project,profile,selected,bytes,transport,duration)=>estimate(f,{project,profile,route:selected,reserved_tunnel_bytes:bytes,transport,duration_ms:duration})};
+ const context={profile:f.profile,route,decision,transport:'browser'};
+ V2Gateway.prototype.assertPricingDispatch.call(gateway,'a',context);
+ assert.throws(()=>V2Gateway.prototype.assertPricingDispatch.call(gateway,'a',{...context,transport:'http'}),{code:'pricing_attestation_unavailable'});
+ browser.reviewed=false;
+ assert.throws(()=>V2Gateway.prototype.assertPricingDispatch.call(gateway,'a',context),{code:'pricing_attestation_unavailable'});
+
+ const pool={schema_version:1,id:'fixed-v1',reviewed:true,provider:'oxylabs',pool_id:'synthetic-prepaid',countries:['US'],cost_scope:'incremental_traffic_only',
+  fixed_subscription_allocation_micro_usd:null,provenance:{...f.grant.provenance},pool_fingerprint_sha256:fixedFeePoolFingerprint(f.config.proxies,['US'])};
+ f.config.datacenterFixedFeePool=pool;
+ assert.equal(estimate(f).estimated_micro_usd,0);
+ assert.equal(estimate(f,{transport:'browser'}).pricing.reason,'fixed_fee_pool_scope_mismatch');
+ f.config.datacenterFixedFeePool={...pool,schema_version:2,transports:['browser']};
+ assert.equal(estimate(f).pricing.reason,'fixed_fee_pool_scope_mismatch');
+ assert.equal(estimate(f,{transport:'browser'}).estimated_micro_usd,0);
+ f.config.datacenterFixedFeePool.transports=['http','browser'];
+ assert.equal(estimate(f).estimated_micro_usd,0);
+ assert.equal(estimate(f,{transport:'browser'}).estimated_micro_usd,0);
+ f.config.datacenterFixedFeePool.transports=['browser','browser'];
+ assert.equal(estimate(f,{transport:'browser'}).pricing.reason,'fixed_fee_pool_policy_invalid');
+});
 
 test('prepaid estimator binds the full sorted country pool and reports only included incremental traffic',()=>{
  const f=fixture(),decision=estimate(f);

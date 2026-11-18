@@ -40,7 +40,7 @@ test('public HTTP fetch: explicit routes, durable isolation/idempotency, retaine
   if(mode==='unknown')throw Object.assign(new GatewayError('source_timeout_unknown',504),{observed_encoded_bytes:0,observed_tunnel_bytes:400});
   if(mode==='proxy-unknown')throw Object.assign(new GatewayError('proxy_connect_unknown',502),{cause_code:'ECONNRESET',observed_encoded_bytes:0,observed_tunnel_bytes:400});
   if(mode==='tls-unknown')throw Object.assign(new GatewayError('source_transport_unknown',502),{cause_code:'CERT_HAS_EXPIRED',observed_encoded_bytes:0,observed_tunnel_bytes:400});
-  const headers={'content-type':'application/json; charset=utf-8','content-encoding':'gzip','set-cookie':['sid=one; Path=/; Secure; HttpOnly']};
+  const headers={'content-type':'application/json; charset=utf-8','content-encoding':'gzip','set-cookie':['sid=one; Path=/; Secure; HttpOnly'],'x-fixture-private':'fixture-private'};
   let value=encoded,status=200;
   if(mode==='403')status=403;
   if(mode==='404')status=404;
@@ -84,6 +84,7 @@ test('public HTTP fetch: explicit routes, durable isolation/idempotency, retaine
    first=await post(payload('dc-success'));assert.equal(first.status,200);assert.equal(first.body.success,true);assert.equal(first.body.state,'completed');
    assert.deepEqual(first.body.routing,{class:'datacenter',country:'US',provider:'configured_datacenter'});assert.equal(first.body.data.status,200);assert.equal(first.body.gateway_http_status,200);
    assert.equal(first.body.data.body_base64,body.toString('base64'));assert.equal(first.body.data.text,body.toString());
+   assert.deepEqual(first.body.data.headers,{'content-type':'application/json; charset=utf-8','content-encoding':'gzip'});
    assert.equal(first.body.artifacts[0].encoded_sha256,sha(encoded));assert.equal(first.body.artifacts[0].decoded_sha256,sha(body));
    assert.equal(first.body.usage.accounting.invoice_micro_usd,null);assert.equal(first.body.usage.accounting.estimated_micro_usd,null);
    assert.equal(first.body.usage.native_requests,1);assert.equal(first.body.usage.dns_requests,0);assert.equal(first.body.application_acceptance,'not_evaluated');

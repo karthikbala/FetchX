@@ -1,0 +1,47 @@
+# Staging overlay for compose.yaml. Use project fetchx-staging.
+services:
+  db:
+    environment:
+      POSTGRES_DB: gateway_test_browserpool
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U fetchx -d gateway_test_browserpool]
+  init-storage:
+    image: ${FETCHX_POOL_IMAGE:?required}
+    platform: linux/amd64
+    build: !reset null
+    pull_policy: never
+  gateway:
+    image: ${FETCHX_POOL_IMAGE:?required}
+    platform: linux/amd64
+    build: !reset null
+    pull_policy: never
+    ports: !override
+      - 127.0.0.1:19788:8788
+    environment:
+      DATABASE_URL: postgresql://fetchx:${FETCHX_DB_PASSWORD:?required}@db/gateway_test_browserpool
+    volumes: !override
+      - type: bind
+        source: ${FETCHX_HOME:?required}/secrets/gateway.json
+        target: /run/secrets/gateway.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FETCHX_HOME:?required}/registry
+        target: /run/fx/registry
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FETCHX_HOME:?required}/run/worker
+        target: /run/fx/local
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FETCHX_HOME:?required}/run/remote
+        target: /run/fx/remote
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FETCHX_HOME:?required}/run/cb
+        target: /run/fx/cb
+        bind: {create_host_path: false}
+      - fetchx-artifacts:/data/artifacts

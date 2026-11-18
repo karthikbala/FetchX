@@ -153,7 +153,7 @@ async function run(){
  stage='single_native_fetch';
  await navigate('/app/playground');await enabled('[data-run-request]');
  checked(await page.locator('input[value="browser"]').isDisabled(),'browser_execution_not_blocked');
- checked(await page.locator('[data-request-country]').isDisabled(),'direct_country_not_disabled');
+ checked(await page.locator('[data-country-picker]').isHidden(),'direct_country_not_hidden');
  checked(await page.locator('[data-request-route] option').count()===1&&(await page.locator('[data-request-route]').inputValue())==='direct','paid_route_available');
  checked((await page.locator('[data-request-profile]').inputValue())==='preview-example@1','native_example_profile_missing');
  await page.locator('[data-request-url]').fill('https://example.com/');await auditBoth();

@@ -17,29 +17,58 @@ const GITHUB_ISSUER='https://github.com/login/oauth';
 const GITHUB_ERRORS=new Set(['github_disabled','github_unavailable','github_verification_invalid','github_cancelled','github_account_link_required','github_identity_conflict','github_session_conflict','github_email_verification_required']);
 const PROJECT='cp_[a-fA-F0-9-]{36}';
 const UUID='[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}';
+const CONNECT_CLI=new Set(['/connect/start','/connect/claim']);
+const CONNECT_BROWSER=new Set(['/connect/review','/connect/decision']);
+const CONNECT_STATES=new Set(['pending','approved','denied','connected','expired']);
+const CONNECT_ERRORS:Record<string,string>={
+ unauthorized:'Sign in to continue.',csrf_rejected:'This request could not be authorized.',request_invalid:'Check the submitted connection request.',
+ connect_disabled:'FetchX Connect is currently unavailable.',connect_not_found:'This connection request was not found.',
+ connect_code_invalid:'The code could not be verified.',connect_request_closed:'This connection request is closed.',
+ project_not_found:'The selected project was not found.',project_disabled:'The selected project is disabled.',
+ project_template_changed:'The selected project cannot currently accept new keys.',key_limit:'The selected project has reached its key limit.',
+};
+const STRIPE_KEY='[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
 export const CONTROL_REQUEST_LIMIT=96*1024;
 export const CONTROL_RESPONSE_LIMIT=24*1024*1024;
+// A 20 MB fetch can carry 26.7 MB of base64 plus a text preview and metadata.
+const CONTROL_FETCH_RESPONSE_LIMIT=28*1024*1024;
+const fetchResultPath=new RegExp(`^/projects/${PROJECT}/(?:fetch(?:/|$)|requests/${UUID}$)`);
 export const CONTROL_TIMEOUT_MS=85_000;
 const headers={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Pragma':'no-cache','X-Content-Type-Options':'nosniff','X-Robots-Tag':'noindex, nofollow'};
 const response=(status:number,body:unknown,extra:Record<string,string>={})=>new Response(JSON.stringify(body),{status,headers:{...headers,...extra}});
 const error=(status:number,code:string,message:string)=>response(status,{error:{code,message}});
 const loopback=(url:URL)=>/^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i.test(url.hostname)||url.hostname.endsWith('.localhost');
+function browserConnectPayload(path:string,status:number,payload:Record<string,unknown>):object|null {
+ if(status>=400){
+  const code=(payload.error as Record<string,unknown>|undefined)?.code;
+  return typeof code==='string'&&Object.hasOwn(CONNECT_ERRORS,code)
+   ?{error:{code,message:CONNECT_ERRORS[code]}}
+   :{error:{code:'connect_unavailable',message:'The account service could not complete this connection request.'}};
+ }
+ const {state,client_name,scopes,expires_at}=payload;
+ if(path==='/connect/decision')return state==='approved'||state==='denied'?{state}:null;
+ return typeof state==='string'&&CONNECT_STATES.has(state)&&typeof client_name==='string'&&Array.isArray(scopes)&&scopes.every(scope=>typeof scope==='string')&&typeof expires_at==='string'
+  ?{state,client_name,scopes,expires_at}:null;
+}
 function allowedMethods(path:string):string[]|null {
  if(['/status','/session'].includes(path))return ['GET'];
+ if(CONNECT_CLI.has(path)||CONNECT_BROWSER.has(path))return ['POST'];
  if(['/auth/code','/auth/verify','/auth/logout','/auth/google/challenge','/auth/google/verify','/auth/github/start','/auth/github/complete'].includes(path))return ['POST'];
  if(path==='/projects')return ['GET','POST'];
  if(new RegExp(`^/projects/${PROJECT}$`).test(path))return ['GET'];
  if(new RegExp(`^/projects/${PROJECT}/keys$`).test(path))return ['GET','POST'];
  if(new RegExp(`^/projects/${PROJECT}/keys/${UUID}/rotate$`).test(path))return ['POST'];
  if(new RegExp(`^/projects/${PROJECT}/keys/${UUID}$`).test(path))return ['DELETE'];
- if(new RegExp(`^/projects/${PROJECT}/fetch$`).test(path))return ['POST'];
- if(new RegExp(`^/projects/${PROJECT}/fetch/[A-Za-z0-9_.:-]{1,160}$`).test(path))return ['GET'];
+ if(new RegExp(`^/projects/${PROJECT}/(?:fetch|render|playground/prepare)$`).test(path))return ['POST'];
+ if(new RegExp(`^/projects/${PROJECT}/(?:fetch|render)/(?:[A-Za-z0-9_.:-]|%3[Aa]){1,160}$`).test(path))return ['GET'];
  if(new RegExp(`^/projects/${PROJECT}/(?:requests|usage|billing)$`).test(path))return ['GET'];
+ if(new RegExp(`^/projects/${PROJECT}/billing/stripe/checkout$`).test(path))return ['POST'];
+ if(new RegExp(`^/projects/${PROJECT}/billing/stripe/checkout/${STRIPE_KEY}$`).test(path))return ['GET'];
  if(new RegExp(`^/projects/${PROJECT}/requests/${UUID}$`).test(path))return ['GET'];
  return null;
 }
 class ProxyFailure extends Error {constructor(readonly code:string){super(code);}}
-async function boundedBody(body:ReadableStream<Uint8Array>|null,limit:number,signal:AbortSignal):Promise<Uint8Array> {
+async function boundedBody(body:ReadableStream<Uint8Array>|null,limit:number,signal:AbortSignal):Promise<Uint8Array<ArrayBuffer>> {
  if(!body)return new Uint8Array();
  const reader=body.getReader(),chunks:Uint8Array[]=[];let length=0;
  let abort:()=>void=()=>{};
@@ -118,11 +147,21 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
  const parameters=[...incoming.searchParams];
  if(parameters.length&&!(new RegExp(`^/projects/${PROJECT}/requests$`).test(path)&&parameters.length===1&&parameters[0][0]==='limit'&&/^(?:[1-9]|[1-4][0-9]|50)$/.test(parameters[0][1])))return error(400,'request_invalid','Check the submitted request.');
  const origin=request.headers.get('Origin'),site=request.headers.get('Sec-Fetch-Site');
- if(origin&&origin!==incoming.origin||!['GET','HEAD'].includes(request.method)&&!origin||site&& !['same-origin','none'].includes(site))return error(403,'origin_rejected','Submit this request from the FetchX website.');
+ const cliConnect=CONNECT_CLI.has(path),browserConnect=CONNECT_BROWSER.has(path);
+ const rawCookie=request.headers.get('Cookie'),csrf=request.headers.get('X-CSRF-Token');
+ // Only the device client may omit the POST origin. Browser requests never
+ // start or claim a device grant, even from this origin or with blank headers.
+ if(cliConnect?origin!==null||site!==null||rawCookie!==null||csrf!==null:
+    origin&&origin!==incoming.origin||!['GET','HEAD'].includes(request.method)&&!origin||site&&!['same-origin','none'].includes(site))return error(403,'origin_rejected','Submit this request from the FetchX website.');
  if(!(env.ALLOWED_ORIGINS??'').split(',').map(v=>v.trim()).includes(incoming.origin))return error(403,'origin_rejected','Submit this request from the FetchX website.');
+ const sessionCookie=cliConnect?null:requestCookie(rawCookie,COOKIE,SESSION);
+ if(browserConnect){
+  if(!sessionCookie)return error(401,'unauthorized','Sign in to continue.');
+  if(!csrf||!/^[A-Za-z0-9_-]{43}$/.test(csrf))return error(403,'csrf_rejected','This request could not be authorized.');
+ }
  const development=env.SITE_ENV==='development'&&env.FETCHX_CONTROL_ALLOW_LOOPBACK==='true'&&loopback(incoming);
  if(!env.FETCHX_CONTROL_URL||!env.FETCHX_CONTROL_SECRET){
-  if(path==='/status')return response(503,{enabled:false,mail_configured:false,github:{enabled:false},api_base_url:null,capabilities:{native_http:false,render:false,routes:[]}});
+  if(path==='/status')return response(503,{enabled:false,mail_configured:false,github:{enabled:false},api_base_url:null,capability_scope:'service',capabilities:{native_http:false,render:false,routes:[]}});
   return error(503,'control_disabled','Account access is currently unavailable.');
  }
  let upstream:URL;
@@ -137,11 +176,11 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
  let submitted=false;
  try {
   const forwarded=new Headers({'Accept':'application/json','Origin':incoming.origin,'X-FetchX-Control-Secret':env.FETCHX_CONTROL_SECRET});
-  const cookies=[requestCookie(request.headers.get('Cookie'),COOKIE,SESSION)];
-  if(path==='/auth/google/challenge'||path==='/auth/google/verify')cookies.push(requestCookie(request.headers.get('Cookie'),GOOGLE_COOKIE,GOOGLE_BINDING));
-  if(path==='/auth/github/start'||path==='/auth/github/complete')cookies.push(requestCookie(request.headers.get('Cookie'),GITHUB_COOKIE,GITHUB_BINDING));
+  const cookies=[sessionCookie];
+  if(path==='/auth/google/challenge'||path==='/auth/google/verify')cookies.push(requestCookie(rawCookie,GOOGLE_COOKIE,GOOGLE_BINDING));
+  if(path==='/auth/github/start'||path==='/auth/github/complete')cookies.push(requestCookie(rawCookie,GITHUB_COOKIE,GITHUB_BINDING));
   const cookie=cookies.filter(Boolean).join('; ');if(cookie)forwarded.set('Cookie',cookie);
-  const csrf=request.headers.get('X-CSRF-Token');if(csrf){if(!/^[A-Za-z0-9_-]{43}$/.test(csrf))return error(403,'csrf_rejected','This request could not be authorized.');forwarded.set('X-CSRF-Token',csrf);}
+  if(csrf){if(!/^[A-Za-z0-9_-]{43}$/.test(csrf))return error(403,'csrf_rejected','This request could not be authorized.');forwarded.set('X-CSRF-Token',csrf);}
   const ip=request.headers.get('CF-Connecting-IP');if(ip&&/^[a-fA-F0-9:.]{3,64}$/.test(ip))forwarded.set('X-FetchX-Client-IP',ip);
   let body:string|undefined;
   if(!['GET','HEAD'].includes(request.method)){
@@ -155,11 +194,15 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
   submitted=true;
   const result=await fetch(upstream.href,{method:request.method,headers:forwarded,body,redirect:'manual',signal:controller.signal});
   if(result.status>=300&&result.status<400){void result.body?.cancel().catch(()=>{});return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
-  if(!/^application\/json(?:\s*;|$)/i.test(result.headers.get('Content-Type')??'')||Number(result.headers.get('Content-Length')??0)>CONTROL_RESPONSE_LIMIT){void result.body?.cancel().catch(()=>{});return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
-  const bytes=await boundedBody(result.body,CONTROL_RESPONSE_LIMIT,controller.signal);
-  let payload:unknown;try{payload=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:false}).decode(bytes));if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error();}catch{return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
-  const output=response(result.status,payload);
-  const returnedCookies=result.headers.getSetCookie();
+  const fetchResult=fetchResultPath.test(path),limit=fetchResult?CONTROL_FETCH_RESPONSE_LIMIT:CONTROL_RESPONSE_LIMIT;
+  if(!/^application\/json(?:\s*;|$)/i.test(result.headers.get('Content-Type')??'')||Number(result.headers.get('Content-Length')??0)>limit){void result.body?.cancel().catch(()=>{});return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
+  const bytes=await boundedBody(result.body,limit,controller.signal);
+  let payload:unknown;try{
+   payload=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:fetchResult}).decode(bytes));if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error();
+   if(browserConnect){payload=browserConnectPayload(path,result.status,payload as Record<string,unknown>);if(!payload)throw new Error();}
+  }catch{return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
+  const output=fetchResult?new Response(bytes,{status:result.status,headers}):response(result.status,payload);
+  const returnedCookies=cliConnect||browserConnect?[]:result.headers.getSetCookie();
   for(const name of [COOKIE,...(path.startsWith('/auth/google/')?[GOOGLE_COOKIE]:[]),...(path.startsWith('/auth/github/')?[GITHUB_COOKIE]:[])]){
    const values=returnedCookies.filter(value=>value.startsWith(name+'='));
    if(values.length!==1)continue;
