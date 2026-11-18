@@ -85,6 +85,10 @@ await page.route('**/*', async route => {
   unexpected.push(url.origin + url.pathname);
   return route.abort();
 });
+// Pin the public market to USD/card. /api/pricing follows Cloudflare's visitor
+// country, so an unmocked run on a machine in India would render INR prices.
+const usdPacks = [200, 800, 2000, 10000].map((amount_minor, index) => ({ id: ['credits-10000', 'credits-50000', 'credits-150000', 'credits-1000000'][index], name: ['10,000 credits', '50,000 credits', '150,000 credits', '1,000,000 credits'][index], amount_minor, currency: 'usd', credits: [10000, 50000, 150000, 1000000][index], saving: [null, '20%', '33.3%', '50%'][index] }));
+await page.route('**/api/pricing', route => route.fulfill({ json: { currency: 'usd', payment_method: 'card', trial_credits: 1000, plans: usdPacks } }));
 await page.route('**/api/control/**', async route => {
   const request = route.request(), url = new URL(request.url());
   const path = url.pathname.slice('/api/control'.length), method = request.method();
