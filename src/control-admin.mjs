@@ -8,7 +8,11 @@ import {fail} from './policy.mjs';
 import {startProbe,listProbes,readProbe,applyProbe} from './admin-ops.mjs';
 import {siteKnowledgeOverview,siteRoutes,forgetSite,siteHost} from './site-knowledge.mjs';
 import {RULE_PROVIDERS,loadProviderRules,providerRule,providerRuleSources,saveProviderRule,setProviderRuleEnabled,deleteProviderRule,providerRuleAudit} from './provider-rules.mjs';
+import {budgetAudit,budgetDefinition,budgetUsage,listBudgets,loadBudgets,resetBudget,setBudget} from './budgets.mjs';
 
+const BUDGET_KEY=/^[a-z][A-Za-z0-9.]{1,80}$/;
+// A budget change as an audit-log row, in the shape of rule rows.
+const budgetEntry=e=>({id:'budget-'+e.id,rule_id:'budget:'+e.key,action:e.action,before:e.before,after:e.after,note:e.reason,actor:e.actor,at:e.at});
 const RULE_ID=/^[a-z0-9][a-z0-9._-]{0,63}$/,HOST=/^(?=.{1,253}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 const plain=v=>!!v&&typeof v==='object'&&!Array.isArray(v);
 
@@ -94,7 +98,13 @@ export function registerAdminRoutes(route,{gateway,config,authenticated,body,noQ
   await refresh();return result;
  });
  route('GET','/admin/rules/:id/audit',async req=>{noQuery(req);await operator(req);return {entries:await providerRuleAudit(store.pool,{ruleId:ruleId(req.params.id),limit:200})};});
- route('GET','/admin/audit',async req=>{noQuery(req);await operator(req);return {entries:await providerRuleAudit(store.pool,{limit:200})};});
+ // One audit log: rule changes, forgotten sites and budget changes, newest first.
+ route('GET','/admin/audit',async req=>{
+  noQuery(req);await operator(req);
+  const [rules,budgets]=await Promise.all([providerRuleAudit(store.pool,{limit:200}),budgetAudit(store.pool,{limit:200})]);
+  const entries=[...rules,...budgets.map(budgetEntry)].sort((a,b)=>new Date(b.at)-new Date(a.at)).slice(0,200);
+  return {entries};
+ });
 
  // ---- Step 3: reachability probes (background jobs) ----
  route('GET','/admin/probes',async req=>{noQuery(req);await operator(req);return {probes:await listProbes(store.pool)};});
@@ -113,6 +123,37 @@ export function registerAdminRoutes(route,{gateway,config,authenticated,body,noQ
  const siteParam=value=>{const host=siteHost('https://'+String(value??'')+'/');if(!host||host!==String(value).toLowerCase())fail('host_invalid',400);return host;};
  route('GET','/admin/sites',async req=>{noQuery(req);await operator(req);return {sites:await siteKnowledgeOverview(store.pool,{config:gateway.config})};});
  route('GET','/admin/sites/:host',async req=>{noQuery(req);await operator(req);const host=siteParam(req.params.host);return {host,routes:await siteRoutes(store.pool,host,{config:gateway.config})};});
+ // ---- Budgets: spend caps and limits, adjustable without a redeploy ----
+ const budgetKey=value=>{if(typeof value!=='string'||!BUDGET_KEY.test(value))fail('budget_unknown',404);budgetDefinition(value);return value;};
+ const budgetView=async key=>{
+  const [entry]=listBudgets(gateway.config).filter(b=>b.key===key);
+  const used=await budgetUsage(store.pool).catch(()=>({}));
+  return {...entry,used:used[key]??null};
+ };
+ route('GET','/admin/budgets',async req=>{
+  noQuery(req);await operator(req);
+  await loadBudgets(store.pool,gateway.config);
+  // Usage is shown when it can be read; the budgets are listed either way.
+  const used=await budgetUsage(store.pool).catch(()=>null);
+  return {budgets:listBudgets(gateway.config).map(b=>({...b,used:used?.[b.key]??null})),
+   autoscaler:gateway.browserPool?.autoscalerStatus?.()??null};
+ });
+ route('PUT','/admin/budgets/:key',async req=>{
+  noQuery(req);const auth=await operator(req),key=budgetKey(req.params.key),input=body(req,['value','version','reason']);
+  if(!Object.hasOwn(input,'value'))fail('budget_value_invalid',400);
+  await setBudget(store,gateway.config,key,{value:input.value,expectedVersion:input.version,actor:actorOf(auth),reason:input.reason});
+  return {budget:await budgetView(key)};
+ });
+ route('POST','/admin/budgets/:key/reset',async req=>{
+  noQuery(req);const auth=await operator(req),key=budgetKey(req.params.key),input=body(req,['version','reason']);
+  await resetBudget(store,gateway.config,key,{expectedVersion:input.version,actor:actorOf(auth),reason:input.reason});
+  return {budget:await budgetView(key)};
+ });
+ route('GET','/admin/budgets/:key/audit',async req=>{
+  noQuery(req);await operator(req);const key=budgetKey(req.params.key);
+  return {entries:(await budgetAudit(store.pool,{key,limit:200})).map(budgetEntry)};
+ });
+
  route('DELETE','/admin/sites/:host',async req=>{
   noQuery(req);const auth=await operator(req),host=siteParam(req.params.host);
   const removed=await forgetSite(store.pool,host);

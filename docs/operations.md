@@ -26,5 +26,5 @@ A release that changed no tables rolls back to the previous image. One that chan
 
 - **A site that suddenly fails:** check the admin portal's Site knowledge tab. Forget the host to let auto mode relearn it, or add a provider rule if a provider refuses it.
 - **Browser steps failing everywhere:** check the runtime pin (`browser_build_mismatch`), worker health in `/v1/pool-metrics` on the callback socket, and the autoscaler's status.
-- **Captcha spend:** `operator.mjs status`; lower `captcha.maxDailyMicroUsd` to stop solving without a restart of anything else.
+- **Captcha, proxy or VM spend:** the admin portal's Budgets tab shows each budget and how much of it is used; set the 24-hour captcha budget to 0 to stop solving, or cap a residential provider, at once and without a restart. See [budgets](budgets.md).
 - **A customer disputes a charge:** the request's `attempts` and `credits.charged` are in `GET /v1/fetch/{id}` for 90 days; correct the balance with `operator.mjs credits`.

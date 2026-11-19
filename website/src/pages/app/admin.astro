@@ -3,7 +3,7 @@ import Layout from '../../layouts/Layout.astro';
 import Brand from '../../components/Brand.astro';
 import '../../styles/product-preview.css';
 ---
-<Layout title="Admin — FetchX" description="Operator tools for FetchX provider rules, reachability probes and site knowledge." appMode={true} noindex={true}>
+<Layout title="Admin — FetchX" description="Operator tools for FetchX provider rules, spend budgets, reachability probes and site knowledge." appMode={true} noindex={true}>
   <div class="product-preview fx-admin" data-admin>
     <header class="fx-admin-top">
       <a href="/app" class="pp-brand" aria-label="FetchX workspace"><Brand/></a>
@@ -12,14 +12,15 @@ import '../../styles/product-preview.css';
     </header>
     <main class="fx-admin-main">
       <p class="pp-eyebrow">OPERATOR</p>
-      <h1>Routing administration</h1>
-      <p class="fx-admin-lede">Provider rules, reachability probes and what FetchX has learned per site. Every change is validated, versioned and recorded with your email.</p>
+      <h1>Administration</h1>
+      <p class="fx-admin-lede">Provider rules, spend budgets, reachability probes and what FetchX has learned per site. Every change is validated, versioned and recorded with your email.</p>
       <p class="fx-admin-error" data-admin-error role="alert" hidden></p>
       <section class="fx-admin-gate" data-admin-gate><p data-admin-gate-text>Checking your session…</p><a href="/login" class="pp-button pp-button-primary" data-admin-login hidden>Sign in</a></section>
 
       <div data-admin-content hidden>
         <nav class="fx-admin-tabs" role="tablist" aria-label="Admin sections">
           <button type="button" role="tab" data-tab="rules" aria-selected="true">Provider rules</button>
+          <button type="button" role="tab" data-tab="budgets" aria-selected="false">Budgets</button>
           <button type="button" role="tab" data-tab="probes" aria-selected="false">Reachability probes</button>
           <button type="button" role="tab" data-tab="sites" aria-selected="false">Site knowledge</button>
           <button type="button" role="tab" data-tab="audit" aria-selected="false">Audit log</button>
@@ -51,6 +52,24 @@ import '../../styles/product-preview.css';
               <p class="fx-admin-result" data-test-result aria-live="polite"></p>
             </form>
           </div>
+        </section>
+
+        <section data-panel="budgets" class="fx-admin-panel" hidden>
+          <div class="fx-admin-card">
+            <h2>Spend budgets</h2>
+            <p class="fx-admin-hint">Caps on what FetchX spends with providers and gives away. A change applies at once, with no redeploy, within the hard limits shown, and is recorded in the audit log. Reset returns a budget to its configured value.</p>
+            <p class="fx-admin-result" data-autoscaler-status></p>
+          </div>
+          <form class="fx-admin-card" data-budget-form hidden>
+            <h2 data-budget-form-title>Change budget</h2>
+            <p class="fx-admin-hint" data-budget-form-hint></p>
+            <input type="hidden" name="key"><input type="hidden" name="version">
+            <label><span data-budget-value-label>New value</span> <input name="value" inputmode="decimal" autocomplete="off"></label>
+            <label class="fx-admin-inline" data-budget-null hidden><input type="checkbox" name="none"> <span data-budget-null-label>No cap</span></label>
+            <label>Reason <input name="reason" required maxlength="300" placeholder="Recorded in the audit log"></label>
+            <div class="fx-admin-actions"><button class="pp-button pp-button-primary" type="submit">Save</button><button class="pp-button pp-button-secondary" type="button" data-budget-cancel>Cancel</button></div>
+          </form>
+          <div data-budget-groups></div>
         </section>
 
         <section data-panel="probes" class="fx-admin-panel" hidden>
@@ -96,7 +115,8 @@ import '../../styles/product-preview.css';
 
         <section data-panel="audit" class="fx-admin-panel" hidden>
           <div class="fx-admin-card">
-            <h2>Rule changes</h2>
+            <h2>Changes</h2>
+            <p class="fx-admin-hint">Provider rules, budgets and forgotten sites, newest first.</p>
             <div class="fx-admin-table-wrap"><table class="fx-admin-table"><thead><tr><th>When</th><th>Rule</th><th>Action</th><th>By</th><th>Details</th></tr></thead><tbody data-audit-body></tbody></table></div>
           </div>
         </section>
@@ -128,9 +148,12 @@ import '../../styles/product-preview.css';
     .fx-admin-table th{text-align:left;color:#9fac9a;font-weight:500;padding:8px;border-bottom:1px solid #2a3527;white-space:nowrap}
     .fx-admin-table td{padding:8px;border-bottom:1px solid #222d22;vertical-align:top;word-break:break-word}
     .fx-admin-table button{background:none;border:1px solid #3a4a36;color:#cfdac9;border-radius:6px;padding:3px 8px;margin:0 4px 4px 0;cursor:pointer;font-size:12px}
-    .fx-admin-tag{display:inline-block;border:1px solid #3a4a36;border-radius:999px;padding:1px 8px;font-size:11px;color:#cfdac9}
+    .fx-admin-tag{display:inline-block;white-space:nowrap;border:1px solid #3a4a36;border-radius:999px;padding:1px 8px;font-size:11px;color:#cfdac9}
     .fx-admin-tag.is-off{color:#e8b39f;border-color:#6a4334}.fx-admin-tag.is-ok{color:#c9f27a;border-color:#4f6a2c}
     .fx-admin-result{font-size:13px;margin-top:10px}
+    .fx-admin-table small{display:block;color:#9fac9a;font-size:12px;margin-top:2px}
+    .fx-admin-table .fx-admin-num{white-space:nowrap}
+    .fx-admin-tag.is-warn{color:#f2d27a;border-color:#6a5a2c}
     .fx-admin-summary{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;font-size:13px;margin:14px 0}
     .fx-admin-summary dt{color:#9fac9a}.fx-admin-summary dd{margin:0}
     @media(max-width:640px){.fx-admin-main{padding:20px 16px}.fx-admin-top{padding:14px 16px;flex-wrap:wrap}.fx-admin-main h1{font-size:26px}}

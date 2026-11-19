@@ -15,6 +15,7 @@ curl https://app.fetchx.ai/v1/fetch \
 - **Auto mode.** Requests climb a ladder until the site answers: HTTP direct, a datacenter proxy, residential IPs (a fresh IP after each 429, alternating between Evomi and DataImpulse), then a Camoufox browser over residential and datacenter routes. Empty JavaScript shells go straight to a browser. Methods other than GET and HEAD get exactly one attempt.
 - **Site knowledge.** Every attempt is recorded per host; the next request starts at the step that worked, and failing routes rest instead of being retried. See [site knowledge](docs/site-knowledge.md).
 - **Captchas.** In the browser, Turnstile, reCAPTCHA v2 and hCaptcha are solved through 2Captcha, and DataDome when enabled. See [captcha solving](docs/captcha.md).
+- **Budgets.** Every spend limit (2Captcha, residential traffic, worker VMs, attempts, credits per request, trial credits) has hard bounds in code and can be changed in the admin portal without a redeploy, with each change audited. See [budgets](docs/budgets.md).
 - **Success-only billing.** A request reserves credits up front and is charged only if it succeeds, at the price of the step that worked. See [billing](docs/billing.md).
 - **Safe by default.** Only public addresses are fetched, checked after DNS and on every redirect, in HTTP and in the browser. Provider rules keep some providers off some hosts (Oxylabs never carries `.gov`). See [provider rules](docs/provider-rules.md).
 
@@ -26,7 +27,8 @@ curl https://app.fetchx.ai/v1/fetch \
 | `src/fetch/` | Request parsing, address checks, HTTP transport, the auto-mode ladder, browser attempts, outputs |
 | `src/browser/` | Camoufox launch, page capture, captcha handling, the egress relay and the worker pool |
 | `src/billing/` | The credit ledger, purchases and trial grants |
-| `src/captcha/` | The 2Captcha client and its budget |
+| `src/captcha/` | The 2Captcha client |
+| `src/budgets.mjs` | Spend budgets and limits, adjustable in the admin portal ([budgets](docs/budgets.md)) |
 | `src/api/v1.mjs` | The public API routes and error format |
 | `src/control*.mjs` | Console accounts, projects, keys, Connect, Stripe and the admin API |
 | `clients/` | JavaScript and Python clients, and the Connect helper for agents |

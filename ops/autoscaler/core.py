@@ -46,6 +46,14 @@ def validate_config(raw):
             raise SafetyError("invalid_" + key)
     for key in ("max_additional_workers", "monthly_budget_micro_eur"):
         positive_int(c.get(key), key, 0)
+    # The admin portal may change both limits through the gateway, but never
+    # above these ceilings. Without them, it can only lower the limits.
+    for key, base in (("monthly_budget_ceiling_micro_eur", "monthly_budget_micro_eur"),
+                      ("max_additional_workers_ceiling", "max_additional_workers")):
+        c.setdefault(key, c[base])
+        positive_int(c[key], key, 0)
+        if c[key] < c[base]:
+            raise SafetyError("invalid_" + key)
     for key in defaults:
         if type(defaults[key]) is int:
             positive_int(c[key], key, 0 if key in ("scale_up_delay_seconds", "cooldown_seconds", "idle_drain_seconds") else 1)
@@ -74,7 +82,7 @@ def validate_config(raw):
     c["machine_options"] = [dict(option) for option in choices]
     if c["enabled"] and (not c["max_additional_workers"] or not c["monthly_budget_micro_eur"]):
         raise SafetyError("authorization_limits_required")
-    if c["max_additional_workers"] > 64:
+    if c["max_additional_workers"] > 64 or c["max_additional_workers_ceiling"] > 64:
         raise SafetyError("invalid_max_additional_workers")
     if c["renew_seconds"] * 2 >= c["worker_lease_seconds"] or c["drain_before_expiry_seconds"] < 60 or c["hard_delete_grace_seconds"] < 60:
         raise SafetyError("unsafe_lease_timing")
@@ -258,12 +266,15 @@ class Ledger:
             amount += charge if r["state"] == "deleted" else max(charge, r["reservation"])
         return amount
 
-    def reserve(self, now, worker_id, machine, **extra):
+    def reserve(self, now, worker_id, machine, limits=None, **extra):
+        # limits: the effective budget and worker cap (gateway limits within the
+        # host ceilings); the host config values when absent.
+        limits = limits or {k: self.config[k] for k in ("monthly_budget_micro_eur", "max_additional_workers")}
         with self.transaction():
             records = self.records()
             if any(r["id"] == worker_id for r in records):
                 raise SafetyError("duplicate_reservation")
-            if sum(r["state"] not in ("deleted", "cancelled") for r in records) >= self.config["max_additional_workers"]:
+            if sum(r["state"] not in ("deleted", "cancelled") for r in records) >= limits["max_additional_workers"]:
                 raise SafetyError("resource_cap")
             option = next((o for o in self.config["machine_options"] if all(o[k] == machine.get(k) for k in o)), None)
             if option is None or type(machine.get("type_id")) is not int or machine["type_id"] < 1:
@@ -278,7 +289,7 @@ class Ledger:
                      (self.config["cleanup_reserve_seconds"] + 3599) // 3600 + 1)
             # Extra hour covers rounding across a UTC month boundary.
             reservation = hours * rate
-            if self.committed(now) + reservation > self.config["monthly_budget_micro_eur"]:
+            if self.committed(now) + reservation > limits["monthly_budget_micro_eur"]:
                 raise SafetyError("budget_cap")
             r = dict(id=worker_id, created_at=now, lease_expires_at=now + self.config["max_vm_lifetime_seconds"],
                      state="reserved", rate=rate, reservation=reservation, server_id=None, ipv4_id=None, machine=dict(machine),

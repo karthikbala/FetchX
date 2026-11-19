@@ -23,17 +23,39 @@ from .core import (InstanceLock, Ledger, Registry, SafetyError, month_key,
 from .hetzner import CloudError, Hetzner, UncertainCreate, select_machine
 
 
+LIMIT_KEYS = ("monthly_budget_micro_eur", "max_additional_workers")
+
+
+def effective_limits(config, requested):
+    """The gateway's limits (set in the admin portal), else the host config
+    values, never above the host ceilings."""
+    requested = requested or {}
+    return {key: min(requested.get(key, config[key]), config[ceiling]) for key, ceiling in
+            (("monthly_budget_micro_eur", "monthly_budget_ceiling_micro_eur"),
+             ("max_additional_workers", "max_additional_workers_ceiling"))}
+
+
 class UnixMetrics:
-    def __init__(self, path):
+    """Reads the gateway's pool metrics. `report` returns this controller's
+    status, sent along so the admin portal can show limits and spend."""
+
+    def __init__(self, path, report=None):
         self.path = path
+        self.report = report
 
     def __call__(self):
         connection = http.client.HTTPConnection("localhost", timeout=3)
         connection.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         connection.sock.settimeout(3)
+        headers = {}
+        if self.report:
+            try:
+                headers["X-FetchX-Autoscaler"] = json.dumps(self.report(), separators=(",", ":"), sort_keys=True)
+            except Exception:
+                headers = {}
         try:
             connection.sock.connect(self.path)
-            connection.request("GET", "/v1/pool-metrics")
+            connection.request("GET", "/v1/pool-metrics", headers=headers)
             response = connection.getresponse()
             body = response.read(65537)
             if response.status != 200 or len(body) > 65536:
@@ -66,7 +88,14 @@ def metrics_snapshot(value, now, max_age):
                     type(w["ready"]) is not bool or type(w["busy"]) is not bool):
                 raise ValueError()
             ids.add(w["id"])
-        return dict(value, timestamp=timestamp)
+        # Optional limits set in the admin portal; applied within host ceilings.
+        limits = value.get("limits", {})
+        if not isinstance(limits, dict) or set(limits) - set(LIMIT_KEYS):
+            raise ValueError()
+        for key in limits:
+            if type(limits[key]) is not int or limits[key] < 0:
+                raise ValueError()
+        return dict(value, timestamp=timestamp, limits=dict(limits))
     except (ValueError, KeyError, TypeError, AttributeError):
         raise SafetyError("metrics_invalid") from None
 
@@ -95,7 +124,7 @@ class Controller:
             self.lock.close()
             raise
         self.cloud, self.driver = cloud, driver
-        self.metrics = metrics or UnixMetrics(config["callback_socket"])
+        self.metrics = metrics or UnixMetrics(config["callback_socket"], report=self.report)
         self.clock, self.submit = clock, submit
         self.registry = Registry(config["registry_path"])
         self.futures = {}
@@ -110,15 +139,38 @@ class Controller:
     def name(self, record):
         return "fx-" + self.config["deployment"] + "-" + record["id"]
 
+    def limits(self):
+        """The effective limits. The last limits the gateway sent are kept in
+        the ledger, so a restart or a missed metrics read never loosens them."""
+        return effective_limits(self.config, self.ledger.meta("gateway_limits", {}))
+
+    def _accept_limits(self, metrics):
+        if self.ledger.meta("gateway_limits", {}) != metrics["limits"]:
+            self.ledger.set_meta("gateway_limits", metrics["limits"])
+
+    def report(self):
+        now = int(self.clock())
+        limits = self.limits()
+        return {"v": 1, "enabled": self.config["enabled"], "month_utc": month_key(now),
+                "committed_micro_eur": self.ledger.committed(now),
+                "monthly_budget_micro_eur": limits["monthly_budget_micro_eur"],
+                "monthly_budget_ceiling_micro_eur": self.config["monthly_budget_ceiling_micro_eur"],
+                "max_additional_workers": limits["max_additional_workers"],
+                "max_additional_workers_ceiling": self.config["max_additional_workers_ceiling"],
+                "workers": sum(r["state"] not in ("deleted", "cancelled") for r in self.ledger.records())}
+
     def status(self, now=None):
         now = int(self.clock()) if now is None else now
         self.ledger.accrue(now)
         rows = self.ledger.records()
         decision = self.ledger.db.execute("SELECT at,code,worker FROM decisions ORDER BY seq DESC LIMIT 1").fetchone()
+        limits = self.limits()
         return dict(enabled=self.config["enabled"], deployment=self.config["deployment"], month_utc=month_key(now),
-                    monthly_budget_micro_eur=self.config["monthly_budget_micro_eur"],
+                    monthly_budget_micro_eur=limits["monthly_budget_micro_eur"],
+                    monthly_budget_ceiling_micro_eur=self.config["monthly_budget_ceiling_micro_eur"],
                     committed_micro_eur=self.ledger.committed(now),
-                    max_additional_workers=self.config["max_additional_workers"],
+                    max_additional_workers=limits["max_additional_workers"],
+                    max_additional_workers_ceiling=self.config["max_additional_workers_ceiling"],
                     workers=[{k: r.get(k) for k in ("id", "state", "purpose", "image", "server_id", "ipv4_id", "lease_expires_at", "reservation", "machine")} for r in rows],
                     snapshot=self.ledger.meta("snapshot"),
                     last_decision=dict(decision) if decision else None)
@@ -461,7 +513,8 @@ class Controller:
         self.ledger.set_meta("bake_started_at", now)
         machine = select_machine(self.cloud.server_types(), self.cloud.pricing(), self.config,
                                  self.ledger.meta("machine_cooldowns", {}), now)
-        record = self.ledger.reserve(now, uuid.uuid4().hex[:24], machine, purpose="bake", manifest_sha256=fingerprint)
+        record = self.ledger.reserve(now, uuid.uuid4().hex[:24], machine, limits=self.limits(), purpose="bake",
+                                     manifest_sha256=fingerprint)
         self._create(record, now, preinstalled=False, image="ubuntu-24.04", growth=False)
 
     def _create(self, record, now, preinstalled, image, growth, since=None):
@@ -575,7 +628,7 @@ class Controller:
                                  self.ledger.meta("machine_cooldowns", {}), now)
         disk = next((t.get("disk") for t in server_types.get("server_types", []) if t.get("id") == machine["type_id"]), None)
         image = self._snapshot_for_boot(disk)
-        record = self.ledger.reserve(now, uuid.uuid4().hex[:24], machine, image=image or "ubuntu-24.04")
+        record = self.ledger.reserve(now, uuid.uuid4().hex[:24], machine, limits=self.limits(), image=image or "ubuntu-24.04")
         self._create(record, now, preinstalled=image is not None, image=image or "ubuntu-24.04", growth=True, since=since)
 
     def once(self):
@@ -597,6 +650,7 @@ class Controller:
                     # Compare generated_at and lifecycle deadlines at receipt time.
                     now = int(self.clock())
                 metrics = metrics_snapshot(value, now, self.config["metrics_max_age_seconds"])
+                self._accept_limits(metrics)
             except SafetyError as error:
                 metrics = None
                 self.ledger.set_meta("pressure_since", None)
@@ -653,8 +707,14 @@ def main(argv=None):
             try:
                 now = int(time.time())
                 decision = ledger.db.execute("SELECT at,code,worker FROM decisions ORDER BY seq DESC LIMIT 1").fetchone()
+                requested = ledger.meta("gateway_limits", {}) or {}
+                limits = effective_limits(config, requested)
                 print(json.dumps(dict(initialized=True, enabled=config["enabled"], month_utc=month_key(now),
-                                      monthly_budget_micro_eur=config["monthly_budget_micro_eur"],
+                                      monthly_budget_micro_eur=limits["monthly_budget_micro_eur"],
+                                      monthly_budget_ceiling_micro_eur=config["monthly_budget_ceiling_micro_eur"],
+                                      max_additional_workers=limits["max_additional_workers"],
+                                      max_additional_workers_ceiling=config["max_additional_workers_ceiling"],
+                                      gateway_limits=requested,
                                       committed_micro_eur=ledger.committed(now), workers=ledger.records(),
                                       last_decision=dict(decision) if decision else None), sort_keys=True))
             finally:

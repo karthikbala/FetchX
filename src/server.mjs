@@ -20,6 +20,7 @@ import {isControlRequest, registerControl} from './control.mjs';
 import {ControlStripe, isStripeWebhookRequest, registerStripeWebhook} from './control-stripe.mjs';
 import {loadProviderRules} from './provider-rules.mjs';
 import {interruptProbes} from './admin-ops.mjs';
+import {autoscalerLimits, loadBudgets} from './budgets.mjs';
 
 // Wires the services for one gateway. Tests pass their own fakes in `deps`.
 export function createGateway({store, config, deps = {}}) {
@@ -29,10 +30,12 @@ export function createGateway({store, config, deps = {}}) {
   gateway.purchases = deps.purchases ?? new Purchases({store});
   gateway.captchaSolver = deps.solver ?? new CaptchaSolver(store, config, deps.solverOptions);
   const runtime = deps.runtime !== undefined ? deps.runtime : (browserRuntime(config).runtime ?? null);
-  // The pool serves the autoscaler its queue metrics from the slots below.
+  // The pool serves the autoscaler its queue metrics from the slots below,
+  // and the worker budget set in the admin portal.
   const pool = deps.browserPool !== undefined ? deps.browserPool
     : config.browser?.pool ? new BrowserWorkerPool(config.browser.pool, {runtime: async () => browserRuntime(config),
-      metrics: async () => ({queue: gateway.slots.metrics(), max_concurrent_requests: config.browser.maxConcurrentRequests ?? 64})}) : null;
+      metrics: async () => ({queue: gateway.slots.metrics(), max_concurrent_requests: config.browser.maxConcurrentRequests ?? 64,
+        limits: autoscalerLimits(config)})}) : null;
   gateway.browserPool = pool;
   gateway.slots = deps.slots ?? new BrowserSlots({pool, localConcurrency: config.browser?.maxConcurrent ?? 1, runner: deps.browserRunner});
   gateway.service = deps.service ?? new FetchService({store, config, ledger: gateway.ledger, solver: gateway.captchaSolver,
@@ -106,6 +109,8 @@ async function main() {
   await store.init();
   const rules = await loadProviderRules(store.pool, config);
   if (rules.rejected.length) process.stderr.write(`provider_rules_rejected:${rules.rejected.length}\n`);
+  const budgets = await loadBudgets(store.pool, config);
+  if (budgets.rejected.length) process.stderr.write(`budgets_rejected:${budgets.rejected.join(',')}\n`);
   await interruptProbes(store.pool);
   const gateway = createGateway({store, config});
   await gateway.captchaSolver.recover();
@@ -114,8 +119,10 @@ async function main() {
   await gateway.browserPool?.start();
   const app = server(gateway);
   const refreshMs = config.providerRulesRefreshMs ?? 30_000;
-  const refresh = setInterval(() => loadProviderRules(store.pool, config)
-    .catch(() => process.stderr.write('provider_rules_refresh_failed\n')), refreshMs);
+  const refresh = setInterval(() => {
+    loadProviderRules(store.pool, config).catch(() => process.stderr.write('provider_rules_refresh_failed\n'));
+    loadBudgets(store.pool, config).catch(() => process.stderr.write('budgets_refresh_failed\n'));
+  }, refreshMs);
   refresh.unref();
   let pruning = null;
   const retention = setInterval(async () => {

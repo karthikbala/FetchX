@@ -9,6 +9,7 @@ import {randomBytes} from 'node:crypto';
 import {lookup} from 'node:dns/promises';
 import {GatewayError, fail} from '../policy.mjs';
 import {providerRule} from '../provider-rules.mjs';
+import {residentialOverBudget} from '../budgets.mjs';
 import {checkAddresses, literalAddress} from './destination.mjs';
 
 export const RESIDENTIAL_PROVIDERS = Object.freeze(['evomi', 'dataimpulse']);
@@ -57,10 +58,12 @@ export function residentialProxy(config, provider, country, session = randomByte
 }
 
 // Picks the residential provider for an attempt: `prefer` first (auto mode
-// alternates after a failure), skipping providers excluded for this host.
+// alternates after a failure), skipping providers excluded for this host and
+// providers whose traffic budget is used up.
 export function pickResidentialProvider(config, country, host, {prefer = null} = {}) {
   const order = [...RESIDENTIAL_PROVIDERS].sort((a, b) => (a === prefer ? 0 : 1) - (b === prefer ? 0 : 1));
-  return order.find(provider => residentialAvailable(config, provider, country) && !providerRule(config, provider, host)) ?? null;
+  return order.find(provider => residentialAvailable(config, provider, country) && !providerRule(config, provider, host)
+    && !residentialOverBudget(config, provider)) ?? null;
 }
 
 // Resolves the concrete proxy for one attempt on a route. Throws a refusal
@@ -77,7 +80,11 @@ export function proxyFor(config, route, host, {preferProvider = null, pickDatace
   }
   if (route.class === 'residential') {
     const provider = pickResidentialProvider(config, route.country, host, {prefer: preferProvider});
-    if (!provider) fail('route_unavailable', 503);
+    if (!provider) {
+      const capped = RESIDENTIAL_PROVIDERS.some(name => residentialAvailable(config, name, route.country)
+        && !providerRule(config, name, host) && residentialOverBudget(config, name));
+      fail(capped ? 'residential_budget_exhausted' : 'route_unavailable', capped ? 429 : 503);
+    }
     const proxy = residentialProxy(config, provider, route.country);
     return {route: {...route, provider}, proxy};
   }

@@ -70,7 +70,7 @@ def approved_prices(payload, config, machine_id, option=None):
             raise SafetyError("cloud_currency_not_eur")
         server_type = next(s for s in p["server_types"] if s["id"] == machine_id)
         server = next(x for x in server_type["prices"] if x["location"] == option["location"])
-        if type(server["included_traffic"]) is not int or server["included_traffic"] < config["max_vm_egress_bytes"] * config["max_additional_workers"]:
+        if type(server["included_traffic"]) is not int or server["included_traffic"] < config["max_vm_egress_bytes"] * config.get("max_additional_workers_ceiling", config["max_additional_workers"]):
             raise SafetyError("included_traffic_insufficient")
         ipv4 = next(s for s in p["primary_ips"] if s["type"] == "ipv4")
         ip = next(x for x in ipv4["prices"] if x["location"] == option["location"])
