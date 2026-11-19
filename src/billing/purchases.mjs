@@ -53,30 +53,6 @@ export async function initPurchases(pool) {
   `);
 }
 
-// Brings a grants table from the old releases to the shape above: USD-only
-// currency becomes USD or INR, and the trial grants the old unified-credit
-// upgrade copied in (source = 'signup_trial') go, because the trial is counted
-// from control_credit_accounts. Runs inside Store.migrateLegacy's transaction.
-export async function migrateLegacyGrants(client) {
-  const currency = (await client.query(`SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
-    WHERE conrelid = 'paid_credit_grants'::regclass AND conname = 'paid_credit_grants_currency_check'`)).rows[0]?.definition;
-  if (currency === "CHECK ((currency = 'usd'::text))") {
-    await client.query(`ALTER TABLE paid_credit_grants DROP CONSTRAINT paid_credit_grants_currency_check,
-      ADD CONSTRAINT paid_credit_grants_currency_check CHECK (currency IN ('usd', 'inr'))`);
-  }
-  const hasSource = (await client.query(`SELECT 1 FROM information_schema.columns
-    WHERE table_schema = current_schema() AND table_name = 'paid_credit_grants' AND column_name = 'source'`)).rowCount > 0;
-  if (!hasSource) return;
-  await client.query("DELETE FROM paid_credit_grants WHERE source = 'signup_trial'");
-  // Dropping the column also drops its check constraint and partial index.
-  await client.query(`ALTER TABLE paid_credit_grants DROP COLUMN source,
-    ALTER COLUMN account_id SET NOT NULL, ALTER COLUMN mode SET NOT NULL,
-    ALTER COLUMN checkout_session_id SET NOT NULL, ALTER COLUMN payment_intent_id SET NOT NULL,
-    ADD CONSTRAINT paid_credit_grants_shape_check CHECK (
-      (credits BETWEEN 1 AND 1000000 AND amount_minor IS NOT NULL AND currency IS NOT NULL)
-      OR (credits IS NULL AND amount_minor IS NULL AND currency IS NULL AND revoked_at IS NOT NULL))`);
-}
-
 async function lockAccount(client, project) {
   const account = (await client.query('SELECT project FROM control_credit_accounts WHERE project = $1 FOR UPDATE', [project])).rows[0];
   if (!account) fail('credit_account_unavailable', 503);

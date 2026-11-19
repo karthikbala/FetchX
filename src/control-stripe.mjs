@@ -24,18 +24,6 @@ export async function initControlStripe(pool){
    session_id text, FOREIGN KEY(mode,project) REFERENCES control_stripe_customers(mode,project),
    UNIQUE(mode,project,operation_key), UNIQUE(mode,account_id,session_id)
   );
-  DO $order_state_migration$
-  DECLARE definition text;
-  BEGIN
-   SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
-    WHERE conrelid='control_stripe_orders'::regclass AND conname='control_stripe_orders_state_check';
-   IF definition='CHECK ((state = ANY (ARRAY[''creating''::text, ''awaiting_payment''::text, ''complete''::text, ''expired''::text])))' THEN
-    ALTER TABLE control_stripe_orders DROP CONSTRAINT control_stripe_orders_state_check;
-    ALTER TABLE control_stripe_orders ADD CONSTRAINT control_stripe_orders_state_check
-     CHECK(state IN ('creating','awaiting_payment','complete','expired','failed'));
-   ELSIF definition IS DISTINCT FROM 'CHECK ((state = ANY (ARRAY[''creating''::text, ''awaiting_payment''::text, ''complete''::text, ''expired''::text, ''failed''::text])))'
-    THEN RAISE EXCEPTION 'stripe_order_state_constraint_unrecognized'; END IF;
-  END $order_state_migration$;
   CREATE UNIQUE INDEX IF NOT EXISTS control_stripe_one_open_checkout ON control_stripe_orders(mode,project)
    WHERE state IN ('creating','awaiting_payment');
   CREATE TABLE IF NOT EXISTS control_stripe_events (

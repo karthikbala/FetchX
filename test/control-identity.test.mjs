@@ -7,7 +7,7 @@ import {Store} from '../src/store.mjs';
 import {Ledger} from '../src/billing/ledger.mjs';
 
 const scopes=['fetch:read','fetch:write','usage:read'];
-function config(){return {projects:{},v2:{accessProfiles:{'synthetic@1':{id:'synthetic',version:1}}},controlPlane:{enabled:true,bridgeSecret:'test-only-bridge-secret-32-bytes-long',projectTemplate:{id:'synthetic',v2_access_profiles:['synthetic@1'],v2_entitlement:{mode:'metered',max_daily_operations:10}},creditPolicy:{reviewed:true,version:'test-v1',trialCredits:12,weights:{direct:1},maxEstimatedMicroUsdPerOperation:0}}};}
+function config(){return {projects:{},controlPlane:{enabled:true,bridgeSecret:'test-only-bridge-secret-32-bytes-long',projectTemplate:{id:'synthetic',v2_access_profiles:['synthetic@1'],v2_entitlement:{mode:'metered',max_daily_operations:10}},creditPolicy:{reviewed:true,version:'test-v1',trialCredits:12,weights:{direct:1},maxEstimatedMicroUsdPerOperation:0}}};}
 const expectCode=(error,code)=>error?.code===code;
 
 test('identity configuration and input validation reject unapproved grants before database use',async()=>{
@@ -15,7 +15,7 @@ test('identity configuration and input validation reject unapproved grants befor
  assert.equal(identity.mailConfigured,false);
  await assert.rejects(identity.requestCode({email:'test@example.com',ip:'127.0.0.1'}),e=>expectCode(e,'mail_unavailable'));
  await assert.rejects(identity.requestCode({email:'test@example.com\r\nBcc: victim@example.com',ip:'127.0.0.1'}),e=>expectCode(e,'email_invalid'));
- await assert.rejects(identity.createProject(randomUUID(),{name:'Test',v2_access_profiles:['private@1']}),e=>expectCode(e,'project_invalid'));
+ await assert.rejects(identity.createProject(randomUUID(),{name:'Test',template:'private'}),e=>expectCode(e,'project_invalid'));
  await assert.rejects(identity.createKey(randomUUID(),`cp_${randomUUID()}`,{name:'Test',scopes:['admin']}),e=>expectCode(e,'key_scopes_invalid'));
  await assert.rejects(identity.createKey(randomUUID(),`cp_${randomUUID()}`,{name:'Test',scopes:['fetch:read','fetch:read']}),e=>expectCode(e,'key_scopes_invalid'));
 });

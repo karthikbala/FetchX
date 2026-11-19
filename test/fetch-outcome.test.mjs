@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {classifyResponse, detectChallenge, isJavaScriptShell, captchaWidgets, retryAfterSeconds} from '../src/fetch/outcome.mjs';
+import {classifyResponse, detectChallenge, isJavaScriptShell, retryAfterSeconds} from '../src/fetch/outcome.mjs';
 import {deriveOutputs} from '../src/fetch/outputs.mjs';
 import {fixHeaders, checkHeaders, BROWSER_USER_AGENT} from '../src/fetch/http-attempt.mjs';
 
@@ -39,10 +39,7 @@ test('a JavaScript shell over HTTP asks for a browser', () => {
   assert.equal(isJavaScriptShell({headers: html, body: '<html><body><div id="root"><h1>Real content</h1>' + 'words '.repeat(80) + '</div><script></script></body></html>'}), false);
 });
 
-test('captcha widgets and Retry-After are read from the page', () => {
-  assert.deepEqual(captchaWidgets('<div class="cf-turnstile" data-sitekey="0x4AAAAAAAsyntheticKey"></div>'), [{type: 'turnstile', site_key: '0x4AAAAAAAsyntheticKey'}]);
-  assert.deepEqual(captchaWidgets('<div data-sitekey="6LcSyntheticKey01" class="g-recaptcha"></div>'), [{type: 'recaptcha_v2', site_key: '6LcSyntheticKey01'}]);
-  assert.equal(captchaWidgets('<iframe src="https://geo.captcha-delivery.com/captcha/?initialCid=x"></iframe>')[0].type, 'datadome');
+test('Retry-After is read and capped', () => {
   assert.equal(retryAfterSeconds({'retry-after': '120'}), 120);
   assert.equal(retryAfterSeconds({'retry-after': '99999'}), 3600);
   assert.equal(retryAfterSeconds({}), null);

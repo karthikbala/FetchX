@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {databaseUrl, openStore, PROJECT} from './helpers.mjs';
-import {Ledger, prices, priceOf, stepFor, worstCaseOf, migrateLegacyBalances} from '../src/billing/ledger.mjs';
+import {Ledger, prices, priceOf, stepFor, worstCaseOf} from '../src/billing/ledger.mjs';
 import {Purchases, packCredits} from '../src/billing/purchases.mjs';
 import {CaptchaSolver, captchaSettings} from '../src/captcha/solver.mjs';
 
@@ -60,34 +60,6 @@ test('the balance is trial + purchases + adjustments - charges - reservations, a
   await store.tx(c => purchases.setPaymentHold(c, {project: PROJECT, mode: 'live', accountId: 'acct_test', holdId: 'dispute:dp_1', active: false}));
   await assert.rejects(store.tx(c => ledger.reserve(c, {project: PROJECT, request: randomUUID(), minimum: 1, ceiling: 1})),
     error => error.code === 'insufficient_credits' && error.details.needed === 1);
-});
-
-test('old per-route ledgers become one opening adjustment; held old charges are released', {skip}, async t => {
-  const store = await openStore();
-  t.after(() => store.close());
-  await store.pool.query(`CREATE TABLE control_credit_reservations (operation uuid, project text, credits bigint, state text);
-    CREATE TABLE paid_credit_reservations (operation uuid, project text, used_credits bigint, state text)`);
-  await store.pool.query(`INSERT INTO control_credit_reservations VALUES (gen_random_uuid(), $1, 30, 'settled'), (gen_random_uuid(), $1, 7, 'held'),
-    (gen_random_uuid(), $1, 9, 'released')`, [PROJECT]);
-  await store.pool.query(`INSERT INTO paid_credit_reservations VALUES (gen_random_uuid(), $1, 12, 'settled'), (gen_random_uuid(), $1, 5, 'held')`, [PROJECT]);
-  // The old grants table: USD only, plus the trial copy the unified-credit upgrade made.
-  await store.pool.query(`ALTER TABLE paid_credit_grants DROP CONSTRAINT paid_credit_grants_shape_check, DROP CONSTRAINT paid_credit_grants_currency_check,
-      ADD CONSTRAINT paid_credit_grants_currency_check CHECK (currency = 'usd'),
-      ADD COLUMN source text NOT NULL DEFAULT 'stripe', ALTER COLUMN account_id DROP NOT NULL, ALTER COLUMN mode DROP NOT NULL,
-      ALTER COLUMN checkout_session_id DROP NOT NULL, ALTER COLUMN payment_intent_id DROP NOT NULL`);
-  await store.pool.query("INSERT INTO paid_credit_grants (project, source, credits) VALUES ($1, 'signup_trial', 58)", [PROJECT]);
-  const result = await store.migrateLegacy();
-  assert.ok(result.migrated >= 1 && result.dropped === 2);
-  assert.equal((await new Ledger({store, config: {}}).balance(PROJECT)).credits, 100 - 42, 'the trial copy is not counted twice');
-  const purchases = new Purchases({store});
-  await store.tx(c => purchases.grantPaidCredits(c, {project: PROJECT, mode: 'live', accountId: 'acct_test', checkoutSessionId: 'cs_live_inr',
-    paymentIntentId: 'pi_inr', credits: 10_000, amountMinor: 17_500, currency: 'inr'}));
-  assert.equal((await new Ledger({store, config: {}}).balance(PROJECT)).purchased, 10_000, 'INR grants work after the migration');
-  const columns = (await store.pool.query(`SELECT column_name FROM information_schema.columns
-    WHERE table_schema = current_schema() AND table_name = 'paid_credit_grants'`)).rows.map(row => row.column_name);
-  assert.ok(!columns.includes('source'));
-  assert.equal(await migrateLegacyBalances(store.pool), 0, 'nothing left to migrate');
-  assert.equal((await store.pool.query("SELECT to_regclass('control_credit_reservations') IS NULL AS gone")).rows[0].gone, true);
 });
 
 test('the captcha solver reserves within budget, passes DataDome the attempt proxy, and stores no token', {skip}, async t => {

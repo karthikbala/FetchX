@@ -82,7 +82,7 @@ node tests/ui/control-live-check.mjs                      # a real browser throu
 
 ## Release and rollback
 
-Back up the database before a release. `Store.init()` creates or migrates every table; see [operations](operations.md) for the upgrade from the earlier releases. To turn the console off, set `controlPlane.enabled` to `false` and remove the bridge settings from Pages; keep the identity, key and billing tables.
+Back up the database before a release; see [operations](operations.md). To turn the console off, set `controlPlane.enabled` to `false` and remove the bridge settings from Pages; keep the identity, key and billing tables.
 
 ## Tests
 

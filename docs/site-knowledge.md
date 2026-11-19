@@ -1,7 +1,7 @@
 # Site knowledge
 
 FetchX learns, for each destination host, which route has reached it: execution
-(`http` or `browser`), proxy class, provider, country and browser engine. Auto
+(`http` or `browser`), proxy class, provider and country. Auto
 mode reads this to start its ladder at the route known to work, skip routes that
 are resting, and pick the exit country, instead of rediscovering them.
 

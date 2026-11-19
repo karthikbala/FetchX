@@ -18,10 +18,10 @@ test('admin rules API: operator-only, CSRF-bound, validated, versioned, audited 
  const op={id:randomUUID(),email:'ops@example.com'},member={id:randomUUID(),email:'member@example.com'};
  for(const u of [op,member])await store.pool.query('INSERT INTO control_users(id,email) VALUES($1,$2) ON CONFLICT(email) DO UPDATE SET id=control_users.id',[u.id,u.email]);
  for(const u of [op,member])u.id=(await store.pool.query('SELECT id FROM control_users WHERE email=$1',[u.email])).rows[0].id;
- const controlPlane={enabled:true,origins:[origin],bridgeSecret:secret,creditPolicy:{weights:{direct:1}},admin:{enabled:true}};
+ const controlPlane={enabled:true,origins:[origin],bridgeSecret:secret,admin:{enabled:true}};
  const gateway={config:{controlPlane,providerRules:[]},store};
  const identity={session:async value=>{if(value===opToken)return {user:op};if(value===userToken)return {user:member};throw new GatewayError('unauthorized',401);}};
- const app=Fastify();app.decorate('v2',{store});app.decorate('publicFetch',{});
+ const app=Fastify();
  registerControl(app,gateway,{identity,ledger:{prices:{},metered:()=>true,balance:async()=>null,usage:async()=>({credits:0,by_step:[],daily:[]})},service:{}});await app.ready();
  t.after(async()=>{await app.close();await store.close();});
  const send=(method,path,payload,{token=opToken,csrf}={})=>app.inject({method,url:'/control'+path,
@@ -94,16 +94,14 @@ test('admin: probe jobs and applying proposed provider rules',{skip:!process.env
  await store.pool.query('INSERT INTO control_users(id,email) VALUES($1,$2) ON CONFLICT(email) DO NOTHING',[op.id,op.email]);
  op.id=(await store.pool.query('SELECT id FROM control_users WHERE email=$1',[op.email])).rows[0].id;await grantOperator(store,op.email,'cli-test');
  const provider={enabled:true,username:'u',password:'p',maxTotalBytes:1e6,microUsdPerGB:1};
- const controlPlane={enabled:true,origins:[origin],bridgeSecret:secret,creditPolicy:{weights:{direct:1}},admin:{enabled:true,maxProbesPerDay:2}};
- const config={controlPlane,providerRules:[],defaultRouting:'residential-v1',residential:{providers:{evomi:provider,dataimpulse:provider}},browser:{defaultEngine:'camoufox'},projects:{p:{profiles:['src.city']}}};
- const base={hosts:['records.city.example'],methods:['GET'],headers:[],country:'GB',maxConcurrent:1,maxRequests:4,maxInputBytes:1024,maxResponseBytes:1024,maxBytes:20000,ttlSeconds:120,minIntervalMs:0,maxFallbackCredits:0,maxAttemptBytes:1000,maxResidentialBytes:4000};
+ const controlPlane={enabled:true,origins:[origin],bridgeSecret:secret,admin:{enabled:true,maxProbesPerDay:2}};
+ const config={controlPlane,providerRules:[],residential:{providers:{evomi:provider,dataimpulse:provider}}};
  let release;const gate=new Promise(r=>{release=r;});let r;
  const report={host:'records.city.example',summary:{reachable_countries:['US'],recommended_route:{country:'US',class:'residential',provider:'evomi',execution:'http'},
-  proposed_profile:{v1:{country:'US',routingPolicy:'residential-v1',execution:'http'},v2:{countries:['US'],proxy_classes:['residential']}},
   proposed_provider_rules:[{id:'oxylabs-records-city-example',provider:'oxylabs',match:{host:'records.city.example'},action:'exclude',reason:'oxylabs refused CONNECT to records.city.example in every probed country'}]},cells:[]};
- const gateway={config,store,profiles:{'src.city':base},profileOverrides:new Map(),adminProbeRunner:async()=>{await gate;return report;}};
+ const gateway={config,store,adminProbeRunner:async()=>{await gate;return report;}};
  const identity={session:async value=>{if(value===opToken)return {user:op};throw new GatewayError('unauthorized',401);}};
- const app=Fastify();app.decorate('v2',{store});app.decorate('publicFetch',{});
+ const app=Fastify();
  registerControl(app,gateway,{identity,ledger:{prices:{},metered:()=>true,balance:async()=>null,usage:async()=>({credits:0,by_step:[],daily:[]})},service:{}});await app.ready();
  t.after(async()=>{await app.close();await store.close();});
  const send=(method,path,payload)=>app.inject({method,url:'/control'+path,headers:{origin,'x-fetchx-control-secret':secret,cookie:`${CONTROL_COOKIE}=${opToken}`,'x-csrf-token':controlCsrf(opToken,secret),...(payload===undefined?{}:{'content-type':'application/json'})},...(payload===undefined?{}:{payload})});
