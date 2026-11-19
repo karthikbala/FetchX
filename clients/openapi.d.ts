@@ -343,8 +343,8 @@ export interface components {
              * @description Approved absolute HTTPS destination. Profile rules restrict origin, path and method.
              */
             url: string;
-            /** @description Explicit proxy class and country. Use null for direct or an approved uppercase country for a proxied route. */
-            proxy: components["schemas"]["ProxySelection"];
+            /** @description Explicit proxy class and country. Use null for direct or an approved uppercase country for a proxied route. Use {"class": "auto"} to let FetchX choose and escalate. */
+            proxy: components["schemas"]["ProxySelection"] | components["schemas"]["AutoProxySelection"];
             /** @description Optional conservative spending ceiling in micro-USD. Admission fails when the estimate exceeds it or cannot be guaranteed. */
             max_estimated_micro_usd?: number;
             /** @description Optional existing HTTP session with the same profile version, proxy class and country. */
@@ -370,6 +370,11 @@ export interface components {
             max_transfer_mb?: number;
             /** @description Paid HTTP only. Positive cap on the prepaid credits the gateway may reserve for this request. Admission fails with max_credits_exceeded when the reservation needs more. */
             max_credits?: number;
+            /**
+             * @description Auto mode only: the most attempts that reach the site. Steps refused at admission cost nothing and do not count.
+             * @default 5
+             */
+            max_attempts?: number;
         };
         RenderRequest: {
             /** @description Caller-generated durable key. Save it before submitting. A changed request under a bound key returns 409. */
@@ -590,6 +595,8 @@ export interface components {
                 /** @constant */
                 render: false;
             };
+            /** @description Auto mode summary. When the final attempt was a rendered browser, data and usage follow the render response shape. */
+            auto?: components["schemas"]["AutoSummary"];
         };
         RenderResponse: components["schemas"]["FacadeResponse"] & {
             usage: components["schemas"]["RenderUsage"] | null;
@@ -1137,6 +1144,51 @@ export interface components {
             /** Format: date-time */
             cooldown_until: string;
             retry_after_seconds: number;
+        };
+        /** @description Auto mode: FetchX picks the route. It starts from what worked for the host, then climbs cheapest first through HTTP direct, datacenter and residential, a rendered browser on residential, a fresh residential session (new IP), and a browser on datacenter, within the access profile and provider rules. Only GET and HEAD escalate (browser steps are GET only). Only the attempt that succeeds is billed. */
+        AutoProxySelection: {
+            /** @constant */
+            class: "auto";
+            /** @description Optional preferred country. Defaults to the country that worked for the host, else US. */
+            country?: components["schemas"]["CountryCode"] | null;
+        };
+        AutoAttempt: {
+            /** @enum {string} */
+            transport: "http" | "browser";
+            class: components["schemas"]["ProxyClass"];
+            country: components["schemas"]["CountryCode"] | null;
+            /** @description Present on a repeat of the same route on a fresh session (new IP). */
+            rotation?: number;
+            /** @enum {string} */
+            result: "success" | "answered" | "blocked" | "rate_limited" | "failed" | "uncertain" | "not_admitted" | "waited";
+            /** @description Admission code when the step was not admitted or was waited out. */
+            code?: string;
+        };
+        AutoNextStep: {
+            /** @enum {string} */
+            action: "retry_after" | "retry_later" | "recover" | "review_access";
+            retry_after_seconds?: number;
+            detail: string;
+        };
+        /** @description Present when proxy.class was auto. Never names providers or protection vendors. */
+        AutoSummary: {
+            /** @constant */
+            mode: "auto";
+            attempts: number;
+            max_attempts: number;
+            routes_tried: components["schemas"]["AutoAttempt"][];
+            routes_skipped?: {
+                transport?: string;
+                class?: string;
+                country?: string | null;
+                /** @enum {string} */
+                reason?: "cooling" | "excluded_by_provider_rule";
+            }[];
+            /** @description Which dispatched attempt was billed; null when nothing was billed. */
+            billed_attempt: number | null;
+            /** @description Headers FetchX fixed, such as an automation User-Agent replaced with a browser one. */
+            headers_adjusted?: string[];
+            next: components["schemas"]["AutoNextStep"] | null;
         };
     };
     responses: never;

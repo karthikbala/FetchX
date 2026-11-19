@@ -66,29 +66,37 @@ Tunable with `siteKnowledge` in config: `freshMs`, `demoteAfter`,
 
 `proxy.country` is optional. `max_attempts` runs from 1 to 5 and defaults to 5.
 
-- **Ladder:** direct, then datacenter, then residential, limited to what the
-  access profile allows. Routes proven for the host come first. Routes that are
-  cooling, or excluded by a provider rule (such as Oxylabs for `.gov`), are skipped.
-- **Each attempt** is an ordinary fetch under a derived key, so admission, cost
+- **Ladder, cheapest first:** HTTP direct, HTTP datacenter, HTTP residential,
+  a rendered browser on residential, the same on a fresh residential session
+  (a new IP), then a browser on datacenter. It is limited to what the access
+  profile allows. Routes proven for the host (either transport) come first.
+  Routes that are cooling, or excluded by a provider rule (such as Oxylabs for
+  `.gov`), are skipped. A step the profile cannot use (for example, no browser)
+  is refused at admission. It costs nothing and does not count as an attempt.
+- **Each attempt** is an ordinary fetch or render under a derived key, so admission, cost
   ceilings, budgets and provider rules all apply. The route for each attempt is
   recorded before dispatch. A same-key replay or `GET /v2/fetch/:key` returns
   the same final attempt without new source work.
 - **Stops** on success, a real 404, an uncertain result (never retried), a
-  rate limit (429 or cooldown), or a caller limit (credits, quota, cost ceiling).
-- **Only GET and HEAD escalate.** Other methods make one attempt.
+  genuine rate limit (429 with Retry-After), or a caller limit (credits, quota,
+  cost ceiling). A challenge page served with a 429 counts as a block and
+  escalates. A short site cooldown (20 seconds or less) is waited out once
+  inside the request.
+- **Only GET and HEAD escalate.** Browser steps are GET only. Other methods
+  make one attempt.
 - **Fixing client mistakes:** an automation or missing User-Agent is replaced
   with a browser one (or removed if the profile does not allow the header), and
   missing `accept` and `accept-language` headers are added when allowed. All
   other headers are sent as given.
 - **Billing:** only the successful attempt is billed. Failed attempts are released.
 
-The response is the final attempt's normal fetch response plus an `auto`
-object. It holds `attempts`, `max_attempts`, `routes_tried` (class, country and
+The response is the final attempt's normal response (render-shaped when the
+final attempt was a browser) plus an `auto` object. It holds `attempts`, `max_attempts`, `routes_tried` (class, country and
 result; never providers), `routes_skipped`, `billed_attempt`,
 `headers_adjusted` and `next`. `next` is null on success, and otherwise one of:
 
 - `{"action": "retry_after", "retry_after_seconds": N}` when the site is rate limiting.
-- `{"action": "use_render", "endpoint": "/v2/render"}` when every HTTP route was blocked.
+- `{"action": "retry_later", "retry_after_seconds": N}` when every allowed route was blocked.
 - `{"action": "recover"}` when the outcome is uncertain: look up the same key first.
 - `{"action": "retry_later", "retry_after_seconds": N}` when the site was unreachable.
 
@@ -98,3 +106,8 @@ the wait.
 
 Explicit routes (`direct`, `datacenter`, `residential`) never escalate. Their
 error codes report exactly what happened, as before.
+
+Not in auto mode yet: CloakBrowser as a last-resort engine and captcha solving.
+Both exist only in v1 residential workflows today. The v2 browser pool runs one
+qualified engine (Camoufox), so adding them to auto mode needs per-request
+engine selection in the pool. That is a follow-up.

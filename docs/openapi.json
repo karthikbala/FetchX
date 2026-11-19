@@ -77,6 +77,16 @@
                       "country": null
                     }
                   }
+                },
+                "auto": {
+                  "summary": "Let FetchX choose the route",
+                  "value": {
+                    "idempotency_key": "auto-001",
+                    "url": "https://source.example/data",
+                    "proxy": {
+                      "class": "auto"
+                    }
+                  }
                 }
               }
             }
@@ -1339,7 +1349,7 @@
           "Discovery"
         ],
         "summary": "List approved access profiles",
-        "description": "Read the project’s configured access profiles, route reservations and limits. Managed Render uses the browser profile issued through the playground.",
+        "description": "Read the project\u2019s configured access profiles, route reservations and limits. Managed Render uses the browser profile issued through the playground.",
         "x-managed-key-scope": "profiles:read",
         "responses": {
           "200": {
@@ -1996,7 +2006,7 @@
       "ProjectBearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Project Bearer credential. Managed fxk_ keys need the operation’s x-managed-key-scope. Scopes limit API actions. Approved destinations, profiles, routes and spending still apply."
+        "description": "Project Bearer credential. Managed fxk_ keys need the operation\u2019s x-managed-key-scope. Scopes limit API actions. Approved destinations, profiles, routes and spending still apply."
       }
     },
     "schemas": {
@@ -2128,8 +2138,16 @@
             "description": "Approved absolute HTTPS destination. Profile rules restrict origin, path and method."
           },
           "proxy": {
-            "$ref": "#/components/schemas/ProxySelection",
-            "description": "Explicit proxy class and country. Use null for direct or an approved uppercase country for a proxied route."
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProxySelection",
+                "description": "Explicit proxy class and country. Use null for direct or an approved uppercase country for a proxied route."
+              },
+              {
+                "$ref": "#/components/schemas/AutoProxySelection"
+              }
+            ],
+            "description": "Explicit proxy class and country. Use null for direct or an approved uppercase country for a proxied route. Use {\"class\": \"auto\"} to let FetchX choose and escalate."
           },
           "max_estimated_micro_usd": {
             "type": "integer",
@@ -2174,7 +2192,7 @@
           "retry": {
             "type": "boolean",
             "default": false,
-            "description": "Opt in to the gateway’s bounded retry for eligible pristine HTTP reads on a dedicated datacenter route. It never authorizes retry of uncertain or stateful work. Paid routes reject retry: true."
+            "description": "Opt in to the gateway\u2019s bounded retry for eligible pristine HTTP reads on a dedicated datacenter route. It never authorizes retry of uncertain or stateful work. Paid routes reject retry: true."
           },
           "max_transfer_mb": {
             "type": "number",
@@ -2188,6 +2206,13 @@
             "minimum": 1,
             "maximum": 9007199254740991,
             "description": "Paid HTTP only. Positive cap on the prepaid credits the gateway may reserve for this request. Admission fails with max_credits_exceeded when the reservation needs more."
+          },
+          "max_attempts": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "default": 5,
+            "description": "Auto mode only: the most attempts that reach the site. Steps refused at admission cost nothing and do not count."
           }
         },
         "required": [
@@ -2990,6 +3015,10 @@
                   "render"
                 ],
                 "description": "Fetch capabilities reported in a structured failure."
+              },
+              "auto": {
+                "$ref": "#/components/schemas/AutoSummary",
+                "description": "Auto mode summary. When the final attempt was a rendered browser, data and usage follow the render response shape."
               }
             },
             "required": [
@@ -5125,6 +5154,189 @@
           "origin",
           "cooldown_until",
           "retry_after_seconds"
+        ]
+      },
+      "AutoProxySelection": {
+        "type": "object",
+        "description": "Auto mode: FetchX picks the route. It starts from what worked for the host, then climbs cheapest first through HTTP direct, datacenter and residential, a rendered browser on residential, a fresh residential session (new IP), and a browser on datacenter, within the access profile and provider rules. Only GET and HEAD escalate (browser steps are GET only). Only the attempt that succeeds is billed.",
+        "properties": {
+          "class": {
+            "type": "string",
+            "const": "auto"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CountryCode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional preferred country. Defaults to the country that worked for the host, else US."
+          }
+        },
+        "required": [
+          "class"
+        ],
+        "additionalProperties": false
+      },
+      "AutoAttempt": {
+        "type": "object",
+        "properties": {
+          "transport": {
+            "type": "string",
+            "enum": [
+              "http",
+              "browser"
+            ]
+          },
+          "class": {
+            "$ref": "#/components/schemas/ProxyClass"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CountryCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rotation": {
+            "type": "integer",
+            "description": "Present on a repeat of the same route on a fresh session (new IP)."
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "success",
+              "answered",
+              "blocked",
+              "rate_limited",
+              "failed",
+              "uncertain",
+              "not_admitted",
+              "waited"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "description": "Admission code when the step was not admitted or was waited out."
+          }
+        },
+        "required": [
+          "transport",
+          "class",
+          "country",
+          "result"
+        ]
+      },
+      "AutoNextStep": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "retry_after",
+              "retry_later",
+              "recover",
+              "review_access"
+            ]
+          },
+          "retry_after_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "detail"
+        ]
+      },
+      "AutoSummary": {
+        "type": "object",
+        "description": "Present when proxy.class was auto. Never names providers or protection vendors.",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "const": "auto"
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "max_attempts": {
+            "type": "integer"
+          },
+          "routes_tried": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutoAttempt"
+            }
+          },
+          "routes_skipped": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "transport": {
+                  "type": "string"
+                },
+                "class": {
+                  "type": "string"
+                },
+                "country": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "cooling",
+                    "excluded_by_provider_rule"
+                  ]
+                }
+              }
+            }
+          },
+          "billed_attempt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Which dispatched attempt was billed; null when nothing was billed."
+          },
+          "headers_adjusted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Headers FetchX fixed, such as an automation User-Agent replaced with a browser one."
+          },
+          "next": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoNextStep"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "attempts",
+          "max_attempts",
+          "routes_tried",
+          "billed_attempt",
+          "next"
         ]
       }
     }

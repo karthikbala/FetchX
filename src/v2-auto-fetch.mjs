@@ -1,18 +1,21 @@
 // Auto mode for POST /v2/fetch: `proxy: {"class": "auto"}` lets FetchX choose
-// the route. It starts from what site knowledge says works for the host and
-// otherwise climbs the cheapest-first ladder direct -> datacenter -> residential,
-// within the routes the access profile allows, provider rules, and the
-// caller's attempt cap (default and maximum 5).
+// how to get the page. It starts from what site knowledge says works for the
+// host and otherwise climbs a cheapest-first ladder through every transport
+// the access profile allows: plain HTTP (direct, datacenter, residential),
+// then a rendered browser on residential, a fresh residential session (new
+// IP), and a browser on datacenter. It stops at the caller's attempt cap
+// (default and maximum 5) and respects provider rules.
 //
-// Every attempt is an ordinary public fetch under a derived idempotency key, so
-// admission, cost ceilings, budgets, provider rules and billing apply unchanged.
-// Failed attempts are never billed (see unbilledAttempt). The chosen route for
-// each attempt is recorded before dispatch, so a same-key replay re-reads the
-// same attempts and never dispatches new source work for finished ones.
+// Every attempt is an ordinary public fetch or render under a derived
+// idempotency key, so admission, cost ceilings, budgets, provider rules and
+// billing apply unchanged. Failed attempts are never billed (unbilledAttempt).
+// The route of each attempt is recorded before dispatch, so a same-key replay
+// re-reads the same attempts and never dispatches new source work for them.
 //
-// A 429 or cooldown stops the ladder: the site is pacing us, not blocking a route.
-// Safety: only GET and HEAD escalate. An uncertain attempt (state unknown) stops
-// the ladder, because uncertain source work is never retried.
+// Safety: only GET and HEAD escalate (browser rungs are GET only). An uncertain
+// attempt stops the ladder, because uncertain source work is never retried. A
+// genuine rate limit (429 with Retry-After) is honoured, not routed around; a
+// challenge page served with 429 counts as a block and escalates.
 import {sha} from './crypto.mjs';
 import {GatewayError,ID,fail} from './policy.mjs';
 import {isPlaygroundRef,playgroundPolicy} from './control-playground.mjs';
@@ -21,6 +24,14 @@ import {providerRule} from './provider-rules.mjs';
 import {siteHost,siteRoutes} from './site-knowledge.mjs';
 
 export const AUTO_MAX_ATTEMPTS=5;
+const AUTO_MAX_SLOTS=10,AUTO_MAX_INLINE_WAIT_S=20;
+function cooldownSeconds(error){
+ if(error?.code!=='source_cooldown')return null;
+ const until=Date.parse(error.details?.cooldown_until??'');
+ if(Number.isFinite(until))return Math.max(1,Math.ceil((until-Date.now())/1000));
+ const seconds=Number(error.details?.retry_after_seconds);
+ return Number.isFinite(seconds)&&seconds>0?seconds:null;
+}
 const STATE_KIND='public_fetch_auto_v1',ROUTE_KIND='public_fetch_auto_route_v1';
 const CLASS_ORDER=['direct','datacenter','residential'];
 const plain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
@@ -80,35 +91,50 @@ async function allowedRoutes(v2,project,ref){
 }
 const datacenterProvider=(config,country)=>(config.proxies??[]).find(p=>p.country===country)?.provider??'oxylabs';
 
-// The ladder for a host: cheapest first, routes proven by site knowledge
-// first, cooling routes and provider-rule exclusions skipped.
+// The ladder for a host, cheapest first:
+//   HTTP direct -> HTTP datacenter -> HTTP residential ->
+//   browser residential -> browser residential on a fresh session (new IP) ->
+//   browser datacenter.
+// Routes proven by site knowledge (either transport) move to the front;
+// cooling routes and provider-rule exclusions are skipped. Browser rungs are
+// offered only to GET requests and only if the access profile can render;
+// a rung the profile cannot use is refused at admission with no dispatch.
 export async function autoLadder(v2,project,input,host,{now=Date.now()}={}){
  const allowed=await allowedRoutes(v2,project,input.access_profile);
- const knowledge=await siteRoutes(v2.store.pool,host,{execution:'http',config:v2.config,now});
+ const knowledge=await siteRoutes(v2.store.pool,host,{config:v2.config,now});
  const countries=[...new Set([...allowed.datacenter,...allowed.residential])];
  const proven=knowledge.filter(r=>r.state==='proven'&&r.country&&countries.includes(r.country));
- const country=input.proxy.country??proven[0]?.country??(countries.includes('US')?'US':countries.sort()[0]??null);
+ const country=input.proxy.country??proven[0]?.country??(countries.includes('US')?'US':[...countries].sort()[0]??null);
  const candidates=[];
- if(allowed.direct)candidates.push({class:'direct',country:null});
- if(country&&allowed.datacenter.includes(country))candidates.push({class:'datacenter',country});
- if(country&&allowed.residential.includes(country))candidates.push({class:'residential',country});
+ if(allowed.direct)candidates.push({transport:'http',class:'direct',country:null});
+ if(country&&allowed.datacenter.includes(country))candidates.push({transport:'http',class:'datacenter',country});
+ if(country&&allowed.residential.includes(country))candidates.push({transport:'http',class:'residential',country});
+ if(input.method==='GET'){
+  if(country&&allowed.residential.includes(country))candidates.push({transport:'browser',class:'residential',country},{transport:'browser',class:'residential',country,rotation:1});
+  if(country&&allowed.datacenter.includes(country))candidates.push({transport:'browser',class:'datacenter',country});
+ }
  const stateOf=route=>{
-  const rows=knowledge.filter(r=>r.proxy_class===route.class&&(route.class==='direct'||r.country===route.country));
+  const rows=knowledge.filter(r=>r.execution===route.transport&&r.proxy_class===route.class&&(route.class==='direct'||r.country===route.country));
   if(rows.some(r=>r.state==='proven'))return 'proven';
   if(rows.length&&rows.every(r=>r.state==='cooling'))return 'cooling';
   return 'unknown';
  };
  const routes=[],skipped=[];
- for(const route of candidates){
+ for(const [order,route] of candidates.entries()){
   if(route.class==='datacenter'&&providerRule(v2.config,datacenterProvider(v2.config,route.country),host)){skipped.push({...route,reason:'excluded_by_provider_rule'});continue;}
   const state=stateOf(route);
-  if(state==='cooling'){skipped.push({...route,reason:'cooling'});continue;}
-  routes.push({...route,known:state});
+  // A cooling route is skipped, but a rotation rung exists to get a new IP, so it stays.
+  if(state==='cooling'&&!route.rotation){skipped.push({...route,reason:'cooling'});continue;}
+  routes.push({...route,known:state,order});
  }
- routes.sort((a,b)=>(a.known==='proven'?0:1)-(b.known==='proven'?0:1)||CLASS_ORDER.indexOf(a.class)-CLASS_ORDER.indexOf(b.class));
+ routes.sort((a,b)=>(a.known==='proven'?0:1)-(b.known==='proven'?0:1)||a.order-b.order);
  const coolingUntil=knowledge.filter(r=>r.state==='cooling').map(r=>+new Date(r.retry_not_before));
- return {routes:routes.map(({known,...route})=>route),skipped,headers:allowed.headers,retry_after_seconds:coolingUntil.length?Math.max(1,Math.ceil((Math.min(...coolingUntil)-now)/1000)):null};
+ // Only rotation rungs left means every real route is cooling.
+ const usable=routes.filter(r=>!r.rotation||routes.some(x=>!x.rotation&&x.transport===r.transport&&x.class===r.class));
+ return {routes:usable.map(({known,order,...route})=>route),skipped,headers:allowed.headers,retry_after_seconds:coolingUntil.length?Math.max(1,Math.ceil((Math.min(...coolingUntil)-now)/1000)):null};
 }
+const sameRoute=(a,b)=>a.transport===b.transport&&a.class===b.class&&a.country===b.country&&(a.rotation??0)===(b.rotation??0);
+const publicRoute=t=>({transport:t.transport??'http',class:t.class,country:t.country,...(t.rotation?{rotation:t.rotation}:{}),result:t.result,...(t.code?{code:t.code}:{})});
 
 async function recordedRoute(pool,project,key,index,choose){
  const k=regKey(project,key)+':'+index;
@@ -134,17 +160,17 @@ function nextStep(result,response,{retryAfter=null}={}){
  if(result==='uncertain')return {action:'recover',detail:'Look up this request with the same idempotency key before sending new work.'};
  const seconds=Number(response?.data?.retry_after)||retryAfter;
  if(result==='rate_limited')return {action:'retry_after',retry_after_seconds:Number.isFinite(seconds)&&seconds>0?Math.min(3600,seconds):60,detail:'The site is limiting request rate. Retry the same URL with a new idempotency key after the wait.'};
- if(result==='blocked')return {action:'use_render',endpoint:'/v2/render',detail:'Every allowed HTTP route was blocked. A rendered browser request is the next step for this site.'};
+ if(result==='blocked')return {action:'retry_later',retry_after_seconds:retryAfter??900,detail:'The site refused every route FetchX was allowed to try within max_attempts, including a rendered browser where the access profile allows one. Retry later with a new idempotency key; a higher max_attempts or a profile that allows more routes gives auto mode more options.'};
  return {action:'retry_later',retry_after_seconds:retryAfter??300,detail:'The site could not be reached on any allowed route. Retry later with a new idempotency key.'};
 }
 
 function decorate(response,{key,tried,skipped,maxAttempts,result,retryAfter}){
  const out={...response,idempotency_key:key,idempotency_key_scope:'caller'};
- out.auto={mode:'auto',attempts:tried.length,max_attempts:maxAttempts,
+ out.auto={mode:'auto',attempts:tried.filter(t=>t.result!=='not_admitted').length,max_attempts:maxAttempts,
   // Routes only: class and country, never providers or protection details.
-  routes_tried:tried.map(t=>({class:t.class,country:t.country,result:t.result,...(t.code?{code:t.code}:{})})),
-  routes_skipped:skipped.map(s=>({class:s.class,country:s.country,reason:s.reason})),
-  billed_attempt:result==='success'||result==='answered'?tried.length:null,
+  routes_tried:tried.map(publicRoute),
+  routes_skipped:skipped.map(s=>({transport:s.transport??'http',class:s.class,country:s.country,reason:s.reason})),
+  billed_attempt:result==='success'||result==='answered'?tried.filter(t=>t.result!=='not_admitted').length:null,
   next:nextStep(result,response,{retryAfter})};
  return out;
 }
@@ -161,39 +187,56 @@ export async function autoFetch(gw,project,raw,identity,options={}){
  const escalates=['GET','HEAD'].includes(input.method);
  const maxAttempts=escalates?input.max_attempts:1;
  const {max_attempts:_,proxy:__,...base}=input;
- const tried=[];let ladder=null,last=null,result=null;
+ const tried=[];let ladder=null,last=null,result=null,finalSlot=null,finalTransport='http';
  const ensureLadder=async()=>ladder??=await autoLadder(v2,project,input,host);
  const fixed=browserHeaders(input.headers,(await ensureLadder()).headers);base.headers=fixed.headers;
- for(let i=0;i<maxAttempts;i++){
-  const route=await recordedRoute(v2.store.pool,project,key,i,async()=>{
+ const {PublicRenderGateway}=await import('./v2-public-render.mjs');
+ const render=new PublicRenderGateway(v2);
+ let dispatched=0;const waited=new Set();
+ // Slots are recorded routes; a slot refused at admission costs nothing and
+ // does not count toward max_attempts.
+ for(let slot=0;slot<AUTO_MAX_SLOTS&&dispatched<maxAttempts;slot++){
+  const route=await recordedRoute(v2.store.pool,project,key,slot,async()=>{
    const l=await ensureLadder();
-   return l.routes.find(r=>!tried.some(t=>t.class===r.class&&t.country===r.country))??null;
+   return l.routes.find(r=>!tried.some(t=>sameRoute(t,r)))??null;
   });
   if(!route)break;
+  const attemptKey=autoAttemptKey(key,slot),proxy={class:route.class,country:route.country};
+  const run=()=>route.transport==='browser'
+   ?render.render(project,{idempotency_key:attemptKey,access_profile:base.access_profile,url:base.url,proxy,...(base.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:base.max_estimated_micro_usd})},identity)
+   :gw.fetch(project,{...base,idempotency_key:attemptKey,proxy},identity,options);
   let response;
-  try{response=await gw.fetch(project,{...base,idempotency_key:autoAttemptKey(key,i),proxy:route},identity,options);}
+  try{response=await run();}
   catch(error){
    if(!(error instanceof GatewayError))throw error;
    if(CALLER_LIMIT_CODES.has(error.code))throw error;
-   // Not admitted on this route (provider unavailable, route unreviewed, ...):
-   // nothing was dispatched or billed, so the next route may be tried.
+   // A short site cooldown (such as after a challenge page) is waited out once
+   // inside the request instead of giving up on the remaining routes.
+   const wait=cooldownSeconds(error);
+   if(wait!==null&&wait<=AUTO_MAX_INLINE_WAIT_S&&!waited.has(slot)){
+    await new Promise(r=>setTimeout(r,wait*1000));waited.add(slot);slot--;
+    tried.push({...route,result:'waited',code:error.code});continue;
+   }
+   // Not admitted on this route (provider unavailable, route unreviewed, no
+   // browser for this profile, ...): nothing was dispatched or billed.
    tried.push({...route,result:'not_admitted',code:error.code});continue;
   }
-  last=response;result=attemptResult(response);tried.push({...route,result});
-  // A rate limit paces the whole site, so climbing to another route would only
-  // hit the same limit (and FetchX cools the origin down). Stop and say when.
+  dispatched++;last=response;result=attemptResult(response);finalSlot=slot;finalTransport=route.transport;tried.push({...route,result});
+  // Data, a real 404, or an uncertain outcome ends the ladder. Uncertain source
+  // work is never retried. A genuine rate limit (429 with Retry-After, not a
+  // challenge page) is honoured: every route reaches the same site limit.
   if(['success','answered','uncertain','rate_limited'].includes(result))break;
  }
  const skipped=ladder?.skipped??[];
  if(last){
-  const state={final:tried.length-1,tried,skipped,max_attempts:maxAttempts,result,retry_after_seconds:ladder?.retry_after_seconds??null,headers_adjusted:fixed.adjusted};
+  const state={final:finalSlot,final_transport:finalTransport,tried,skipped,max_attempts:maxAttempts,result,retry_after_seconds:ladder?.retry_after_seconds??null,headers_adjusted:fixed.adjusted};
   await v2.store.pool.query('INSERT INTO v2_registry(kind,key,hash) VALUES($1,$2,$3) ON CONFLICT(kind,key) DO UPDATE SET hash=EXCLUDED.hash',[STATE_KIND,regKey(project,key),JSON.stringify(state)]);
  }
  if(!last){
   // Nothing reached the site: every route is cooling, excluded or unavailable.
   const retryAfter=ladder?.retry_after_seconds??null;
   const error=new GatewayError(retryAfter?'source_cooldown':'auto_routes_unavailable',retryAfter?429:409);
-  error.details={auto:{mode:'auto',attempts:tried.length,max_attempts:maxAttempts,routes_tried:tried.map(t=>({class:t.class,country:t.country,result:t.result,code:t.code})),routes_skipped:skipped.map(s=>({class:s.class,country:s.country,reason:s.reason})),
+  error.details={auto:{mode:'auto',attempts:0,max_attempts:maxAttempts,routes_tried:tried.map(publicRoute),routes_skipped:skipped.map(s=>({transport:s.transport??'http',class:s.class,country:s.country,reason:s.reason})),
    next:retryAfter?{action:'retry_after',retry_after_seconds:retryAfter,detail:'Every allowed route for this site is cooling down after recent failures. Retry after the wait with a new idempotency key.'}
     :{action:'review_access',detail:'No route allowed by this access profile can be used for this site.'}}};
   throw error;
@@ -208,7 +251,9 @@ export async function autoLookup(gw,project,key){
  const row=(await gw.v2.store.pool.query('SELECT hash FROM v2_registry WHERE kind=$1 AND key=$2',[STATE_KIND,regKey(project,key)])).rows[0];
  if(!row)return null;
  const state=JSON.parse(row.hash);
- const response=await gw.lookup(project,autoAttemptKey(key,state.final));
+ const response=state.final_transport==='browser'
+  ?await new (await import('./v2-public-render.mjs')).PublicRenderGateway(gw.v2).lookup(project,autoAttemptKey(key,state.final))
+  :await gw.lookup(project,autoAttemptKey(key,state.final));
  const out=decorate(response,{key,tried:state.tried,skipped:state.skipped,maxAttempts:state.max_attempts,result:state.result,retryAfter:state.retry_after_seconds});
  out.auto.headers_adjusted=state.headers_adjusted??[];
  return out;

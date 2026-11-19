@@ -20,6 +20,10 @@ function configFor(root){
   proxies:[{id:'dc-us',country:'US',url:'http://dc-proxy.example:8080'},{id:'dc-gb',country:'GB',url:'http://dc-gb-proxy.example:8080'}],
   v2:{accessProfiles:{'source@1':profile}},residential:{maxTotalBytes:1e7,maxDailyBytes:1e7,providers:{evomi:{...provider},dataimpulse:{...provider}}}};
 }
+const fixtureArtifact=(kind,url,bytes,extra={})=>({kind,url,status:200,method:'GET',raw_headers:null,
+ headers:{'content-type':'text/html; charset=utf-8'},captured_at:new Date().toISOString(),
+ content_encoding:null,encoded_body_base64:null,encoded_sha256:null,encoded_bytes:null,encoded_size_basis:null,original_encoded_available:false,
+ decoded_body_base64:bytes.toString('base64'),decoded_sha256:sha(bytes),decoded_bytes:bytes.length,tunnel_bytes:null,provider_status:null,decoding_error:null,...extra});
 const routeClass=proxy=>!proxy?'direct':JSON.stringify(proxy).includes('dc-')?'datacenter':'residential';
 
 test('auto mode climbs cheapest first, learns, reuses knowledge, bills only the success and replays without dispatch',{skip:!process.env.TEST_DATABASE_URL},async()=>{
@@ -72,8 +76,11 @@ test('auto mode climbs cheapest first, learns, reuses knowledge, bills only the 
   // All routes blocked: clear final reason and the next step is rendering.
   calls.length=0;
   const blocked=await post(payload('blocked',{url:'https://source.example/blocked',proxy:{class:'auto',country:'GB'}}));
-  assert.equal(blocked.body.success,false);assert.equal(blocked.body.error.code,'source_forbidden');assert.equal(blocked.body.auto.next.action,'use_render');
-  assert.deepEqual(blocked.body.auto.routes_tried.map(r=>r.country),[null,'GB','GB']);
+  assert.equal(blocked.body.success,false);assert.equal(blocked.body.error.code,'source_forbidden');assert.equal(blocked.body.auto.next.action,'retry_later');
+  // This profile cannot render, so the browser rungs are refused at admission: no dispatch, no cost, no attempt used.
+  assert.deepEqual(blocked.body.auto.routes_tried.map(r=>[r.transport,r.class,r.country,r.result]),[['http','direct',null,'blocked'],['http','datacenter','GB','blocked'],['http','residential','GB','blocked'],
+   ['browser','residential','GB','not_admitted'],['browser','residential','GB','not_admitted'],['browser','datacenter','GB','not_admitted']]);
+  assert.equal(blocked.body.auto.attempts,3);assert.deepEqual(calls,['direct','datacenter','residential']);
   // An uncertain attempt stops the ladder: uncertain source work is never retried.
   calls.length=0;uncertain=true;
   const unsure=await post(payload('unsure',{url:'https://source.example/unsure'}));
@@ -111,5 +118,44 @@ test('auto mode request validation',{skip:!process.env.TEST_DATABASE_URL},async(
    const r=await app.inject({method:'POST',url:'/v2/fetch',headers:{authorization:'Bearer token-a'},payload:{idempotency_key:'v-'+code+JSON.stringify(extra).length,access_profile:{id:'source',version:1},url:'https://source.example/',proxy:{class:'auto'},...extra}});
    assert.equal(r.json().error.code,code,JSON.stringify(extra));
   }
+ }finally{await app.close();await store.close();await rm(root,{recursive:true,force:true});}
+});
+
+test('auto mode escalates from blocked HTTP to a rendered residential browser and learns it',{skip:!process.env.TEST_DATABASE_URL,timeout:30_000},async()=>{
+ const root=await mkdtemp(join(tmpdir(),'fetchx-auto-b-')),store=new Store(process.env.TEST_DATABASE_URL);await store.init();
+ await store.pool.query('TRUNCATE v2_registry,v2_ledger_events,v2_artifacts,v2_ledger,v2_operations,v2_sessions,workflows,source_limits,site_routes RESTART IDENTITY CASCADE');
+ const config=configFor(root);config.v2.accessProfiles['source@1'].browser_probe={enabled:true,max_requests:8,max_network_bytes:65536,max_decoded_bytes:16384,max_dom_bytes:16384,settle_ms:0,max_wait_ms:0,subresources:'same_origin',frames:false,page_post:false};
+ const calls=[];let relay,browserRuns=0;
+ const gateway=new Gateway({store,config,profiles:{},resolve:async()=>[{address:'93.184.216.34',family:4}]});
+ gateway.v2=new V2Gateway(gateway,{browserRuntime:async()=>({available:true,runtime:{synthetic:true,engine:'camoufox'}}),
+  http:async(input,destination,limits,{proxy})=>{calls.push('http:'+routeClass(proxy));const headers={'content-type':'text/html'};
+   return {status:403,headers,raw_headers:Object.entries(headers).flat(),encoded:Buffer.from('<title>denied</title>'),tunnel_bytes:proxy?300:null,provider_status:proxy?200:null};},
+  relayFactory:async options=>{relay=options;return {url:'http://127.0.0.1:1',bytes:512,meter_complete:true,connections:1,provider_status:200,close:async()=>{}};},
+  browserRunner:async(input,hooks)=>{
+   browserRuns++;calls.push('browser:'+routeClass(relay.proxy));
+   const request={url:input.url,method:'GET',headers:{accept:'text/html'},body_base64:null,resource_type:'document',redirect_depth:0,redirected_from:null};
+   await hooks.admit(request);
+   await relay.beforeConnect(relay.pinnedDestinations.get(new URL(input.url).hostname).destination);
+   await hooks.artifact(fixtureArtifact('browser_response',input.url,Buffer.from('<main>rendered data</main>'),{request,main_document:true}));
+   await hooks.artifact(fixtureArtifact('rendered_dom',input.url,Buffer.from('<html><main>rendered data</main></html>'),{generated:true}));
+   return {status:200,final_url:input.url,capture_complete:true,counts_complete:true};
+  }});
+ const app=server(gateway),auth={authorization:'Bearer token-a'};
+ const post=async input=>{const r=await app.inject({method:'POST',url:'/v2/fetch',headers:auth,payload:input});return {status:r.statusCode,body:r.json()};};
+ const payload=key=>({idempotency_key:key,access_profile:{id:'source',version:1},url:'https://source.example/page',proxy:{class:'auto'}});
+ try{
+  const first=await post(payload('render-1'));
+  assert.equal(first.status,200,JSON.stringify(first.body.error));assert.equal(first.body.success,true,JSON.stringify(first.body.auto));
+  assert.deepEqual(calls,['http:direct','http:datacenter','http:residential','browser:residential']);
+  assert.deepEqual(first.body.auto.routes_tried.at(-1),{transport:'browser',class:'residential',country:'US',result:'success'});
+  assert.equal(first.body.auto.billed_attempt,4);
+  // Lookup returns the rendered final attempt without dispatching.
+  const before=calls.length;
+  const looked=await app.inject({url:'/v2/fetch/render-1',headers:auth});
+  assert.equal(looked.json().operation_id,first.body.operation_id);assert.equal(calls.length,before);
+  // Next request for the host goes straight to the proven browser route.
+  calls.length=0;
+  const second=await post(payload('render-2'));
+  assert.equal(second.body.success,true);assert.deepEqual(calls,['browser:residential']);
  }finally{await app.close();await store.close();await rm(root,{recursive:true,force:true});}
 });
