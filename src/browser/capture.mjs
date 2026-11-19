@@ -4,7 +4,7 @@
 // gateway (hooks.admit: URL policy, DNS pinning, provider rules, request cap);
 // a refused request is aborted before it leaves the browser. Large outputs go
 // to the gateway through hooks.artifact; the returned summary stays small.
-import {solvePageCaptchas} from './page-captcha.mjs';
+import {looksChallenged, solvePageCaptchas} from './page-captcha.mjs';
 
 export const SCREENSHOT_MAX_BYTES = 2_000_000;
 const NAVIGATION_TIMEOUT_MS = 30_000;
@@ -116,7 +116,8 @@ export async function capturePage(browser, input, hooks) {
     }
     if (!page.isClosed() && input.settle_ms) await page.waitForTimeout(Math.min(input.settle_ms, remainingMs(input)));
     if (input.captcha && hooks.captcha && !page.isClosed()) {
-      result.captcha = await solvePageCaptchas(page, context, hooks, {deadline: input.deadline, settleMs: input.settle_ms ?? 0});
+      const challenged = await looksChallenged(page, mainDocument?.status);
+      result.captcha = await solvePageCaptchas(page, context, hooks, {deadline: input.deadline, settleMs: input.settle_ms ?? 0, challenged});
       if (result.captcha.some(solve => solve.outcome === 'passed')) result.error = null;
     }
     if (input.wait_for && !page.isClosed()) {

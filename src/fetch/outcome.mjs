@@ -37,9 +37,22 @@ function scriptSources(html) {
 
 const hostIs = (host, domain) => host === domain || host.endsWith('.' + domain);
 
-// Identifies a challenge or block page and its vendor. Returns null when the
-// response is not one.
-export function detectChallenge({status = null, headers = {}, body = null} = {}) {
+// Titles of interactive challenges (a script or captcha decides), as opposed to a
+// plain "Access denied", which is often an IP block another route can pass.
+const INTERACTIVE_TITLE = /^(?:just a moment\.{0,3}|security check|robot check|verify (?:that )?you are (?:a )?human|bot or not\??|are you a (?:human|robot)\??|pardon our interruption|one more step)/i;
+const BROWSER_VENDORS = new Set(['datadome', 'cloudflare', 'human', 'aws_waf', 'imperva']);
+
+// Identifies a challenge or block page and its vendor, and whether only a browser
+// can pass it (browser: true). Returns null when the response is not one.
+export function detectChallenge(response = {}) {
+  const found = identifyChallenge(response);
+  if (!found) return null;
+  const body = bodyText(response.body ?? null).replace(COMMENTS, '').replace(QUOTED_TEXT, '');
+  const title = /<title\b[^>]*>([^<]{0,300})<\/title\s*>/i.exec(body)?.[1]?.trim() ?? '';
+  return {...found, browser: BROWSER_VENDORS.has(found.vendor) || INTERACTIVE_TITLE.test(title) || CHALLENGE_TEXT.test(body)};
+}
+
+function identifyChallenge({status = null, headers = {}, body = null} = {}) {
   if (header(headers, 'cf-mitigated').trim().toLowerCase() === 'challenge') return {vendor: 'cloudflare'};
   const aws = header(headers, 'x-amzn-waf-action').trim().toLowerCase();
   if (aws === 'challenge' || aws === 'captcha') return {vendor: 'aws_waf'};

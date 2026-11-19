@@ -2,9 +2,11 @@
 //   1 HTTP direct   2 HTTP datacenter   3 HTTP residential
 //   4 browser residential   5 browser residential, fresh IP   6 browser datacenter
 // plus two HTTP residential rotations used only right after a rate limit.
-// Steps proven for the host by site knowledge move to the front; cooling steps
-// and steps a provider rule excludes are skipped; steps that cost more than the
-// request's reservation are skipped.
+// Steps proven for the host by site knowledge move to the front. Cooling steps
+// are skipped, except steps that have worked for this host before: those go to
+// the back, so failures on one page never lock a host's working route out for
+// its other pages. Steps a provider rule excludes, and steps that cost more than
+// the request's reservation, are skipped.
 import {providerRule} from '../provider-rules.mjs';
 import {siteRoutes} from '../site-knowledge.mjs';
 import {datacenterPool, datacenterProvider, residentialAvailable, RESIDENTIAL_PROVIDERS} from './routes.mjs';
@@ -76,9 +78,12 @@ export async function planLadder({config, pool, request, host, prices, reservati
     if (rows.some(row => row.state === 'proven')) return 'proven';
     // A residential rate limit is per IP; a fresh session gets another one.
     if (rows.length && rows.every(row => row.state === 'cooling'
-      && !(row.proxy_class === 'residential' && row.last_outcome === 'rate_limited'))) return 'cooling';
+      && !(row.proxy_class === 'residential' && row.last_outcome === 'rate_limited'))) {
+      return rows.some(row => row.successes > 0) ? 'cooling_known' : 'cooling';
+    }
     return 'unknown';
   };
+  const rank = {proven: 0, unknown: 1, cooling_known: 2};
   const steps = [];
   for (const [order, candidate] of candidates.entries()) {
     if (candidate.class === 'datacenter' && providerRule(config, datacenterProvider(config, candidate.country), host)) {
@@ -102,7 +107,7 @@ export async function planLadder({config, pool, request, host, prices, reservati
   }
   // Rotations need their base step.
   const usable = steps.filter(s => !s.rotation || steps.some(b => !b.rotation && b.transport === s.transport && b.class === s.class));
-  usable.sort((a, b) => (a.known === 'proven' ? 0 : 1) - (b.known === 'proven' ? 0 : 1) || a.order - b.order);
+  usable.sort((a, b) => rank[a.known] - rank[b.known] || a.order - b.order);
   const cooling = knowledge.filter(row => row.state === 'cooling').map(row => Date.parse(row.retry_not_before));
   return {
     steps: usable.map(({known, order, ...rest}) => rest),
@@ -114,9 +119,16 @@ export async function planLadder({config, pool, request, host, prices, reservati
 }
 
 // The next step to try. After a rate limit, a fresh residential IP comes
-// first (HTTP before browser); rotation steps are used only then.
-export function nextStep(plan, tried, lastResult) {
+// first (HTTP before browser); rotation steps are used only then. A JavaScript
+// shell, or a bot challenge page (which no HTTP client can pass), goes straight
+// to a browser, where challenges are solved.
+export function nextStep(plan, tried, lastResult, {challenge = null} = {}) {
   const open = plan.steps.filter(candidate => !tried.some(attempt => sameStep(attempt, candidate)));
+  const last = tried.at(-1);
+  if (lastResult === 'blocked' && challenge && last?.transport === 'http') {
+    const browser = open.find(candidate => candidate.transport === 'browser');
+    if (browser) return browser;
+  }
   if (lastResult === 'rate_limited') {
     const fresh = open.find(candidate => candidate.class === 'residential');
     if (fresh) return fresh;

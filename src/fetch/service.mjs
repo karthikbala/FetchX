@@ -42,6 +42,27 @@ const NOT_ADMITTED = new Set(['browser_capacity', 'browser_unavailable', 'provid
 // uncertain, and FetchX never sends uncertain work again.
 const TRANSPORT_FAILURES = new Set(['source_timeout', 'source_transport_unknown', 'source_body_incomplete', 'source_tls_failed',
   'source_unreachable', 'too_many_redirects', 'content_decoding_failed', 'content_encoding_unsupported', 'decompression_ratio_limit']);
+// FetchX's own browser machinery failed (worker, IPC, launch, pin): the step
+// failed, but it says nothing about the site or the route, so it is not learned.
+const INTERNAL_BROWSER_FAILURES = new Set(['browser_worker_transport_failed', 'browser_callback_failed', 'browser_protocol_failed',
+  'browser_launch_failed', 'browser_cleanup_failed', 'browser_ipc_failed', 'browser_ipc_timeout', 'browser_interrupted',
+  'browser_output_limit', 'browser_transport_failed', 'browser_runtime_unavailable', 'browser_build_mismatch', 'browser_model_unavailable']);
+// The result of an attempt that ended in an error, before any response.
+export function attemptFailure({code, dispatched}, readOnly) {
+  const unsent = dispatched === false;
+  // A private address (from DNS or a redirect) ends the request on every route.
+  if (code === 'url_not_allowed') return 'url_not_allowed';
+  if (code?.startsWith('source_dns') || (code === 'source_unreachable' && unsent)) return 'unreachable';
+  if (unsent || NOT_ADMITTED.has(code) || code?.startsWith('proxy_connect')) return 'not_admitted';
+  if (code === 'too_large') return 'too_large';
+  if (INTERNAL_BROWSER_FAILURES.has(code)) return readOnly ? 'failed' : 'uncertain';
+  if (TRANSPORT_FAILURES.has(code) || code?.startsWith('browser_')) return readOnly ? 'unreachable' : 'uncertain';
+  return readOnly ? 'failed' : 'uncertain';
+}
+
+// When a request fails, what the site said outranks how a later step failed:
+// a block seen on one route is the answer, even if the last route was unreachable.
+const FAILURE_RANK = ['blocked', 'rate_limited', 'site_error', 'unreachable', 'failed'];
 
 export async function initFetchStore(pool) {
   await pool.query(`
@@ -242,6 +263,7 @@ export class FetchService {
     const tried = [];
     let dispatchedAttempts = 0;
     let lastResult = null;
+    let lastChallenge = null;
     let lastResidential = null;
     let success = null;
     let seen = null;
@@ -260,7 +282,7 @@ export class FetchService {
         failure = 'timeout';
         break;
       }
-      const step = plan.explicit ? (tried.length ? null : plan.steps[0]) : nextStep(plan, tried, lastResult);
+      const step = plan.explicit ? (tried.length ? null : plan.steps[0]) : nextStep(plan, tried, lastResult, {challenge: lastChallenge});
       if (!step) break;
       const stepName = stepFor(step);
       if (reservation !== null && table[stepName] > reservation) {
@@ -282,6 +304,7 @@ export class FetchService {
       let response = null;
       let result;
       let code = null;
+      let classifiedChallenge = null;
       try {
         if (step.transport === 'http') {
           response = await httpAttempt({url, method: request.method, headers: fixed.headers,
@@ -298,6 +321,7 @@ export class FetchService {
         const classified = classifyResponse({status: response.status, headers: response.headers, body: response.body},
           {transport: step.transport});
         result = classified.outcome;
+        classifiedChallenge = classified.challenge?.browser ? classified.challenge.vendor : null;
         if (result === 'rate_limited') retryAfter = retryAfterSeconds(response.headers);
         // A JavaScript shell with no browser step left is still the site's answer.
         if (result === 'needs_browser' && !plan.steps.some(s => s.transport === 'browser' && !tried.some(t => sameStep(t, s)) && !sameStep(s, step))) {
@@ -306,14 +330,7 @@ export class FetchService {
       } catch (error) {
         if (!(error instanceof GatewayError)) throw error;
         code = error.code;
-        const unsent = error.dispatched === false;
-        // A private address (from DNS or a redirect) ends the request on every route.
-        if (code === 'url_not_allowed') result = 'url_not_allowed';
-        else if (code?.startsWith('source_dns') || (code === 'source_unreachable' && unsent)) result = 'unreachable';
-        else if (unsent || NOT_ADMITTED.has(code) || code?.startsWith('proxy_connect')) result = 'not_admitted';
-        else if (code === 'too_large') result = 'too_large';
-        else if (TRANSPORT_FAILURES.has(code) || code?.startsWith('browser_')) result = readOnly ? 'unreachable' : 'uncertain';
-        else result = readOnly ? 'failed' : 'uncertain';
+        result = attemptFailure(error, readOnly);
         response = {wire_bytes: error.wire_bytes ?? null, captcha: error.captcha ?? [], dispatched: error.dispatched};
       }
       const counted = !['not_admitted', 'skipped', 'url_not_allowed'].includes(result);
@@ -328,17 +345,18 @@ export class FetchService {
       const cutShort = !Number.isInteger(response?.status) && Date.now() >= deadline;
       if (!cutShort) this.#learn(url.hostname, step, route, result, response, retryAfter);
       lastResult = result;
+      lastChallenge = classifiedChallenge;
       if (Number.isInteger(response?.status) && response.body) seen = {step, response};
       if (result === 'success' || result === 'answered') success = {step, route, response, captchaSolved};
       else if (['login_required', 'uncertain', 'too_large', 'url_not_allowed'].includes(result)) failure = result;
     }
     if (!success && !failure) {
       const counted = tried.filter(t => !['not_admitted', 'skipped'].includes(t.result));
-      const last = counted.at(-1)?.result;
+      const strongest = FAILURE_RANK.find(result => counted.some(t => t.result === result));
       failure = !counted.length ? (plan.retryAfterSeconds ? 'cooling_down' : 'route_unavailable')
-        : Date.now() >= deadline ? 'timeout'
-          : last === 'rate_limited' ? 'rate_limited' : last === 'site_error' ? 'site_error'
-            : last === 'unreachable' ? 'unreachable' : last === 'failed' ? 'unreachable' : 'blocked';
+        : strongest === 'blocked' ? 'blocked'
+          : Date.now() >= deadline ? 'timeout'
+            : strongest === 'failed' ? 'unreachable' : strongest ?? 'blocked';
     }
     await this.#finish(row, request, {plan, tried, success, seen, failure, retryAfter: retryAfter ?? plan.retryAfterSeconds,
       fixes: request.fix_headers ? fixed.fixed : [], table, reservation});

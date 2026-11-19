@@ -37,7 +37,7 @@ The gateway reads one JSON file, `GATEWAY_CONFIG` (default `/run/secrets/gateway
 | `residential.providers.evomi`, `.dataimpulse` | `{enabled, username, password, countries?}`. The exit countries offered are `countries`, else `residential.countries`, else US. Requests alternate between the two after a rate limit. |
 | `dns` | `{endpoint, address, timeoutMs?}`: resolve names for proxied requests over DNS-over-HTTPS (`/resolve` or `/dns-query`) through the same proxy, so the exit country's answer is used. Without it, the gateway's resolver is used. |
 | `providerRules` | Extra provider rules; see [provider rules](provider-rules.md). Rules saved in the admin portal are loaded from the database every `providerRulesRefreshMs` (30 s). |
-| `siteKnowledge` | Overrides for `SITE_KNOWLEDGE_DEFAULTS`: `freshMs` (7 days), `demoteAfter` (2), `blockedRetryMs` (1 day), `unreachableRetryMs` (1 hour). |
+| `siteKnowledge` | Overrides for `SITE_KNOWLEDGE_DEFAULTS`: `freshMs` (7 days), `demoteAfter` (2), `blockedRetryMs` (15 min), `unreachableRetryMs` (10 min), `maxRetryMs` (6 h); cooldowns double with each further failure up to the maximum. |
 
 ## Browser
 

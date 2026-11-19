@@ -16,8 +16,12 @@ test('status codes map to outcomes; a challenge page is a block whatever its sta
   assert.equal(classifyResponse({status: 429, headers: {}, body: Buffer.alloc(0)}).outcome, 'rate_limited');
   assert.equal(classifyResponse({status: 503, headers: {}, body: Buffer.alloc(0)}).outcome, 'site_error');
   const challenge = classifyResponse({status: 429, headers: html, body: Buffer.from("<title>Just a moment...</title><script>window._cf_chl_opt={}</script>")});
-  assert.deepEqual(challenge, {outcome: 'blocked', challenge: {vendor: 'cloudflare'}});
+  assert.deepEqual(challenge, {outcome: 'blocked', challenge: {vendor: 'cloudflare', browser: true}});
   assert.equal(classifyResponse(page('<title>Robot check</title>')).outcome, 'blocked');
+  // Interactive challenges need a browser; a plain "Access denied" may pass on another route.
+  assert.equal(detectChallenge({status: 429, headers: html, body: '<title>Bot or Not?</title><script src="/app.js"></script>'}).browser, true);
+  assert.equal(detectChallenge({status: 403, headers: html, body: '<title>Access Denied</title>'}).browser, false);
+  assert.equal(detectChallenge({status: 403, headers: html, body: "<title>x</title><script>var dd={'cid':'abc','hsh':'x'}</script>"}).browser, true);
 });
 
 test('vendors are named from generic fingerprints, and comments are not challenges', () => {

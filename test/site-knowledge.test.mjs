@@ -57,6 +57,19 @@ test('two consecutive failures cool a route; success recovers; rate limits never
  const wait=+new Date(row.retry_not_before)-Date.now();assert.ok(wait>20000&&wait<=31000,String(wait));
 }));
 
+test('cooldowns start short and double with each further failure, up to a cap',{skip:!enabled},()=>fixture(async store=>{
+ const db=store.pool,host='https://flaky.example.net/';
+ const wait=async()=>{const [row]=await siteRoutes(db,host);return (Date.parse(row.retry_not_before)-Date.now())/60000;};
+ await recordSiteOutcome(db,{host,execution:'http',route:dc,outcome:'blocked'});
+ assert.equal((await siteRoutes(db,host))[0].retry_not_before,null,'one block is not a pattern');
+ await recordSiteOutcome(db,{host,execution:'http',route:dc,outcome:'blocked'});
+ assert.ok(Math.abs(await wait()-15)<1,'15 minutes after two blocks');
+ await recordSiteOutcome(db,{host,execution:'http',route:dc,outcome:'blocked'});
+ assert.ok(Math.abs(await wait()-30)<1,'then 30');
+ for(let i=0;i<10;i++)await recordSiteOutcome(db,{host,execution:'http',route:dc,outcome:'blocked'});
+ assert.ok(Math.abs(await wait()-360)<1,'capped at 6 hours');
+}));
+
 test('each transport is its own route; invalid input is ignored',{skip:!enabled},()=>fixture(async store=>{
  const db=store.pool,host='https://app.example.net/';
  await recordSiteOutcome(db,{host,execution:'browser',route:res,outcome:'blocked'});

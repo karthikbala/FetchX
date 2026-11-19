@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {databaseUrl, openStore, gatewayFor, testConfig, fakeBrowser, html, PROJECT, UNMETERED_TOKEN} from './helpers.mjs';
+import {attemptFailure} from '../src/fetch/service.mjs';
 import {recordSiteOutcome, siteRoutes} from '../src/site-knowledge.mjs';
 import {GatewayError} from '../src/policy.mjs';
 
@@ -142,7 +143,7 @@ test('cooling sites are refused without sending anything; admission checks credi
   const cold = await call('POST', '/v1/fetch', {body: {url: 'https://cold.example.com/'}});
   assert.equal(cold.body.status, 'failed');
   assert.equal(cold.body.error.code, 'cooling_down');
-  assert.ok(cold.body.error.retry_after_seconds > 3600);
+  assert.ok(cold.body.error.retry_after_seconds > 600 && cold.body.error.retry_after_seconds <= 900, 'two blocks cool a route for 15 minutes');
   assert.equal(calls.length, 0);
   const low = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/', render: 'always', max_credits: 5}});
   assert.equal(low.status, 402);
@@ -174,6 +175,60 @@ test('an attempt cut off by the request deadline is not held against the route',
   assert.deepEqual(result.body.attempts.map(a => [a.transport, a.result]), [['http', 'unreachable']]);
   await new Promise(resolve => setTimeout(resolve, 200)); // learning runs after the response
   assert.deepEqual(await siteRoutes(store.pool, 'slow.example.com'), [], 'the route is not marked failing');
+});
+
+test('a bot challenge on the first HTTP answer goes straight to a browser', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const challenge = '<html><head><title>Bot or Not?</title><script src="/app.js"></script></head><body></body></html>';
+  const browser = fakeBrowser(async (input, hooks) => {
+    await hooks.artifact({kind: 'dom', content_type: 'text/html', body_base64: Buffer.from(html('search results')).toString('base64')});
+    return {status: 200, final_url: input.url, headers: {'content-type': 'text/html'}, cookies: [], captcha: [{type: 'datadome', outcome: 'passed'}]};
+  });
+  const {call} = await gatewayFor(store, {site: () => ({status: 429, body: challenge}), browser});
+  const result = await call('POST', '/v1/fetch', {body: {url: 'https://challenge.example.com/search'}});
+  assert.equal(result.body.status, 'succeeded', JSON.stringify(result.body));
+  assert.deepEqual(result.body.attempts.map(a => [a.transport, a.class, a.result]),
+    [['http', 'direct', 'blocked'], ['browser', 'residential', 'success']]);
+});
+
+test('a failed request reports the block it met, not how a later step failed', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const site = ({provider}) => (provider === 'direct' ? {status: 403, body: '<title>Access Denied</title>'}
+    : Object.assign(new GatewayError('source_timeout', 504), {dispatched: true}));
+  const {call} = await gatewayFor(store, {site});
+  const result = await call('POST', '/v1/fetch', {body: {url: 'https://wall.example.com/search', render: 'never', max_attempts: 2}});
+  assert.equal(result.body.status, 'failed');
+  assert.deepEqual(result.body.attempts.map(a => [a.class, a.result]), [['direct', 'blocked'], ['datacenter', 'unreachable']]);
+  assert.equal(result.body.error.code, 'blocked');
+});
+
+test('failures of FetchX\'s own browser machinery are failed attempts, not an unreachable site', () => {
+  for (const code of ['browser_worker_transport_failed', 'browser_callback_failed', 'browser_launch_failed', 'browser_build_mismatch']) {
+    assert.equal(attemptFailure({code, dispatched: true}, true), 'failed', code);
+    assert.equal(attemptFailure({code, dispatched: true}, false), 'uncertain', code);
+  }
+  assert.equal(attemptFailure({code: 'browser_failed', dispatched: true}, true), 'unreachable', 'a page that would not load');
+  assert.equal(attemptFailure({code: 'source_timeout', dispatched: true}, true), 'unreachable');
+  assert.equal(attemptFailure({code: 'browser_worker_transport_failed', dispatched: false}, true), 'not_admitted', 'nothing was sent');
+});
+
+test('blocks on some pages never lock out a route that works for the host', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const host = 'https://mixed.example.com/';
+  const residential = {class: 'residential', provider: 'evomi', country: 'US'};
+  await recordSiteOutcome(store.pool, {host, execution: 'http', route: residential, outcome: 'success'});
+  for (const route of [{class: 'direct', provider: '', country: ''}, {class: 'datacenter', provider: 'oxylabs', country: 'US'}, residential]) {
+    for (let i = 0; i < 2; i++) await recordSiteOutcome(store.pool, {host, execution: 'http', route, outcome: 'blocked'});
+  }
+  const site = ({provider}) => (provider === 'evomi' || provider === 'dataimpulse' ? {body: html('product page')} : {status: 403, body: 'denied'});
+  const {call} = await gatewayFor(store, {site});
+  const result = await call('POST', '/v1/fetch', {body: {url: 'https://mixed.example.com/product', render: 'never'}});
+  assert.equal(result.body.status, 'succeeded', JSON.stringify(result.body));
+  assert.deepEqual(result.body.attempts.map(a => [a.class, a.result]), [['residential', 'success']]);
+  assert.deepEqual(result.body.skipped.filter(s => s.reason === 'cooling').map(s => s.class).sort(), ['datacenter', 'direct']);
 });
 
 test('a JavaScript shell moves to the browser; the rendered page is returned and charged as a browser step', {skip}, async t => {
