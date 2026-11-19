@@ -82,28 +82,6 @@ export async function initLedger(pool) {
   `);
 }
 
-// One-time move from the old per-transport ledgers: the credits already spent
-// there become a negative opening adjustment. Held (uncertain) old charges are
-// released, because a customer is never billed for a failed attempt.
-export async function migrateLegacyBalances(pool) {
-  const legacy = (await pool.query(`SELECT
-      to_regclass('control_credit_reservations') IS NOT NULL AS trial_ledger,
-      to_regclass('paid_credit_reservations') IS NOT NULL AS paid_ledger`)).rows[0];
-  if (!legacy.trial_ledger && !legacy.paid_ledger) return 0;
-  const trialSpent = legacy.trial_ledger
-    ? `COALESCE((SELECT sum(credits) FROM control_credit_reservations r WHERE r.project = a.project AND r.state = 'settled'), 0)`
-    : '0';
-  const paidSpent = legacy.paid_ledger
-    ? `COALESCE((SELECT sum(used_credits) FROM paid_credit_reservations r WHERE r.project = a.project AND r.state = 'settled'), 0)`
-    : '0';
-  const result = await pool.query(`
-    INSERT INTO credit_adjustments (project, kind, credits, note, actor)
-    SELECT a.project, 'opening', -(${trialSpent} + ${paidSpent}), 'credits spent before the one-version ledger', 'migration'
-    FROM control_credit_accounts a
-    ON CONFLICT DO NOTHING`);
-  return result.rowCount;
-}
-
 const balanceSql = `
   SELECT a.granted_credits::bigint AS trial,
     COALESCE((SELECT sum(credits) FROM paid_credit_grants g

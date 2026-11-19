@@ -1,5 +1,5 @@
 // Site knowledge: per destination host, which route (execution, proxy class,
-// provider, country, browser engine) has worked, what it cost and which routes
+// provider, country) has worked, what it cost and which routes
 // are currently failing. Learned automatically from settled outcomes and
 // reachability probes, and shared across projects because it is routing
 // metadata only: the host name, never URLs, paths, queries, cookies, headers,
@@ -24,45 +24,45 @@ export function siteHost(value){
 export async function initSiteKnowledge(pool){
  await pool.query(`
  CREATE TABLE IF NOT EXISTS site_routes(
-  host text NOT NULL,execution text NOT NULL,proxy_class text NOT NULL,provider text NOT NULL DEFAULT '',country text NOT NULL DEFAULT '',engine text NOT NULL DEFAULT '',
+  host text NOT NULL,execution text NOT NULL,proxy_class text NOT NULL,provider text NOT NULL DEFAULT '',country text NOT NULL DEFAULT '',
   successes bigint NOT NULL DEFAULT 0,failures bigint NOT NULL DEFAULT 0,consecutive_failures int NOT NULL DEFAULT 0,
   last_outcome text,last_evidence text,last_success_at timestamptz,last_failure_at timestamptz,retry_not_before timestamptz,
   success_credits_total double precision NOT NULL DEFAULT 0,success_credit_samples bigint NOT NULL DEFAULT 0,
   updated_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY(host,execution,proxy_class,provider,country,engine)
+  PRIMARY KEY(host,execution,proxy_class,provider,country)
  );
  CREATE INDEX IF NOT EXISTS site_routes_updated ON site_routes(updated_at);
  `);
 }
 
-function routeKey({host,execution,route={},engine}){
- const key={host:siteHost(host),execution,proxy_class:route.class,provider:route.provider??'',country:route.country??'',engine:execution==='browser'?engine??'':''};
+function routeKey({host,execution,route={}}){
+ const key={host:siteHost(host),execution,proxy_class:route.class,provider:route.provider??'',country:route.country??''};
  if(!key.host||!EXECUTIONS.includes(key.execution)||!CLASSES.includes(key.proxy_class))return null;
- if(key.provider&&!TOKEN.test(key.provider)||key.country&&!COUNTRY.test(key.country)||key.engine&&!TOKEN.test(key.engine))return null;
+ if(key.provider&&!TOKEN.test(key.provider)||key.country&&!COUNTRY.test(key.country))return null;
  return key;
 }
 
 // Records one outcome. A rate limit is the site pacing us, not evidence that the
 // route is bad, so it only sets retry_not_before (from Retry-After when given).
 // Callers run this outside settlement transactions; it must never affect billing.
-export async function recordSiteOutcome(db,{host,execution,route,engine,outcome,credits=null,evidence='outcome',retryAfterSeconds=null,config}){
+export async function recordSiteOutcome(db,{host,execution,route,outcome,credits=null,evidence='outcome',retryAfterSeconds=null,config}){
  if(!SITE_OUTCOMES.includes(outcome)||!['outcome','probe'].includes(evidence))return false;
- const key=routeKey({host,execution,route,engine});if(!key)return false;
+ const key=routeKey({host,execution,route});if(!key)return false;
  const policy={...SITE_KNOWLEDGE_DEFAULTS,...config?.siteKnowledge};
- const values=[key.host,key.execution,key.proxy_class,key.provider,key.country,key.engine];
- await db.query(`INSERT INTO site_routes(host,execution,proxy_class,provider,country,engine) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,values);
- const where='host=$1 AND execution=$2 AND proxy_class=$3 AND provider=$4 AND country=$5 AND engine=$6';
+ const values=[key.host,key.execution,key.proxy_class,key.provider,key.country];
+ await db.query(`INSERT INTO site_routes(host,execution,proxy_class,provider,country) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,values);
+ const where='host=$1 AND execution=$2 AND proxy_class=$3 AND provider=$4 AND country=$5';
  if(outcome==='success'){
   const cost=Number.isFinite(credits)&&credits>=0?credits:null;
-  await db.query(`UPDATE site_routes SET successes=successes+1,consecutive_failures=0,last_outcome='success',last_evidence=$7,last_success_at=now(),retry_not_before=NULL,
-   success_credits_total=success_credits_total+coalesce($8,0),success_credit_samples=success_credit_samples+CASE WHEN $8::float8 IS NULL THEN 0 ELSE 1 END,updated_at=now() WHERE ${where}`,[...values,evidence,cost]);
+  await db.query(`UPDATE site_routes SET successes=successes+1,consecutive_failures=0,last_outcome='success',last_evidence=$6,last_success_at=now(),retry_not_before=NULL,
+   success_credits_total=success_credits_total+coalesce($7,0),success_credit_samples=success_credit_samples+CASE WHEN $7::float8 IS NULL THEN 0 ELSE 1 END,updated_at=now() WHERE ${where}`,[...values,evidence,cost]);
  }else if(outcome==='rate_limited'){
   const seconds=Math.min(3600,Math.max(15,Number.isFinite(retryAfterSeconds)?retryAfterSeconds:60));
-  await db.query(`UPDATE site_routes SET last_outcome='rate_limited',last_evidence=$7,retry_not_before=greatest(coalesce(retry_not_before,now()),now()+$8*interval '1 second'),updated_at=now() WHERE ${where}`,[...values,evidence,seconds]);
+  await db.query(`UPDATE site_routes SET last_outcome='rate_limited',last_evidence=$6,retry_not_before=greatest(coalesce(retry_not_before,now()),now()+$7*interval '1 second'),updated_at=now() WHERE ${where}`,[...values,evidence,seconds]);
  }else{
   const retryMs=outcome==='blocked'?policy.blockedRetryMs:policy.unreachableRetryMs;
-  await db.query(`UPDATE site_routes SET failures=failures+1,consecutive_failures=consecutive_failures+1,last_outcome=$7,last_evidence=$8,last_failure_at=now(),
-   retry_not_before=CASE WHEN consecutive_failures+1>=$9 THEN greatest(coalesce(retry_not_before,now()),now()+$10*interval '1 millisecond') ELSE retry_not_before END,updated_at=now() WHERE ${where}`,
+  await db.query(`UPDATE site_routes SET failures=failures+1,consecutive_failures=consecutive_failures+1,last_outcome=$6,last_evidence=$7,last_failure_at=now(),
+   retry_not_before=CASE WHEN consecutive_failures+1>=$8 THEN greatest(coalesce(retry_not_before,now()),now()+$9*interval '1 millisecond') ELSE retry_not_before END,updated_at=now() WHERE ${where}`,
    [...values,outcome,evidence,policy.demoteAfter,retryMs]);
  }
  return true;
@@ -88,11 +88,11 @@ export function routeState(row,now=Date.now(),config){
 }
 export async function siteRoutes(db,host,{execution=null,config,now=Date.now()}={}){
  const h=siteHost(host);if(!h)return [];
- const rows=(await db.query(`SELECT * FROM site_routes WHERE host=$1 AND ($2::text IS NULL OR execution=$2) ORDER BY execution,proxy_class,provider,country,engine`,[h,execution])).rows;
+ const rows=(await db.query(`SELECT * FROM site_routes WHERE host=$1 AND ($2::text IS NULL OR execution=$2) ORDER BY execution,proxy_class,provider,country`,[h,execution])).rows;
  return rows.map(row=>publicRow(row,now,config));
 }
 function publicRow(row,now,config){
- return {host:row.host,execution:row.execution,proxy_class:row.proxy_class,provider:row.provider||null,country:row.country||null,engine:row.engine||null,
+ return {host:row.host,execution:row.execution,proxy_class:row.proxy_class,provider:row.provider||null,country:row.country||null,
   state:routeState(row,now,config),successes:Number(row.successes),failures:Number(row.failures),consecutive_failures:row.consecutive_failures,
   last_outcome:row.last_outcome,last_evidence:row.last_evidence,last_success_at:row.last_success_at,last_failure_at:row.last_failure_at,retry_not_before:row.retry_not_before,
   average_success_credits:Number(row.success_credit_samples)?Number(row.success_credits_total)/Number(row.success_credit_samples):null,updated_at:row.updated_at};

@@ -28,5 +28,5 @@ const guide = guides.find((entry) => entry.slug === page.relatedGuide)!;
   </section>
   <section class="content-section content-integration"><div><span class="content-kicker">CONNECT THE SOURCE</span><h2>Start with one<br/>approved request.</h2><p>Your application owns discovery, parsing, scheduling and delivery. FetchX provides the source response and its transport evidence.</p><ul class="content-doc-links">{page.docs.map((link) => <li><a href={link.href}>{link.label}<span aria-hidden="true">↗</span></a></li>)}</ul></div><ContentCode {...page.code}/></section>
   <a class="content-related-guide" href={'/guides/' + guide.slug}><div><span class="content-kicker">ENGINEERING GUIDE</span><h2>{guide.name}</h2><p>{guide.description}</p></div><span class="content-guide-arrow" aria-hidden="true">↗</span></a>
-  <ContentCTA title="Bring your sources. Build your workflow." text="Choose a qualified source, connect the API and define the acceptance rules your application needs."/>
+  <ContentCTA title="Bring your sources. Build your workflow." text="Send a URL to one endpoint and keep parsing and acceptance rules in your application."/>
 </div>

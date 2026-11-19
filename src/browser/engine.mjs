@@ -39,8 +39,6 @@ export function browserRuntime(config) {
     ...(settings.executablePath ? {executablePath: settings.executablePath, modelDir: settings.modelDir} : {})}};
 }
 
-export const sameRuntime = (a, b) => !!a && !!b && a.engine === b.engine && a.version === b.version && a.sha256 === b.sha256;
-
 // Checks a local install: pinned binary, version metadata and fingerprint model.
 export async function verifyCamoufox(runtime) {
   if (!isAbsolute(runtime.executablePath ?? '') || !isAbsolute(runtime.modelDir ?? '')) fail('browser_runtime_unavailable', 503);

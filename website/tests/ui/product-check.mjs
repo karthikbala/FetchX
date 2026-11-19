@@ -18,6 +18,7 @@ page.on('request', request => { if (!request.url().startsWith(base) && !request.
 
 const user = { id: '11111111-1111-4111-8111-111111111111', email: 'private-fixture@example.test' };
 const projects = [], keys = [], requests = new Map();
+let webhookSecret = 'whsec_SYNTHETIC_UI_FIXTURE_0';
 let signedIn = false, enabled = true, logoutFailure = false, charged = 0, nextOutcome = 'succeeded';
 const TRIAL = 1000;
 const token = () => 'fxk_SYNTHETIC_UI_FIXTURE_' + keys.length;
@@ -86,6 +87,8 @@ await context.route('**/api/control/**', async route => {
   const resource = match[2];
   if (!resource) return send({ project });
   if (resource === '/keys' && method === 'GET') return send({ keys });
+  if (resource === '/webhook-secret' && method === 'GET') return send({ secret: webhookSecret });
+  if (resource === '/webhook-secret/rotate' && method === 'POST') { webhookSecret = 'whsec_SYNTHETIC_UI_FIXTURE_1'; return send({ secret: webhookSecret }); }
   if (resource === '/keys' && method === 'POST') {
     keys.push({ id: `${keys.length + 1}`.repeat(8) + '-7777-4777-8777-' + `${keys.length + 1}`.repeat(12), name: body.name, scopes: body.scopes, created_at: '2026-11-19T10:00:00Z', revoked_at: null });
     return send({ key: keys.at(-1), token: token() });
@@ -193,8 +196,13 @@ try {
   await expect(page.locator('[data-key-dialog]')).toBeVisible(); await expect(page.locator('[data-key-secret]')).toHaveText(token());
   await page.locator('[data-close-key]').click(); await expect(page.locator('[data-key-secret]')).toHaveText('Concealed');
   assert.deepEqual(keys[1].scopes, ['fetch:write', 'fetch:read', 'usage:read']);
+  const hook = page.locator('[data-webhook-secret-value]');
+  await expect(hook).toHaveText('Concealed');
+  await page.locator('[data-webhook-secret-show]').click(); await expect(hook).toHaveText('whsec_SYNTHETIC_UI_FIXTURE_0');
+  await page.locator('[data-webhook-secret-rotate]').click(); await page.locator('[data-confirm-action]').click();
+  await expect(hook).toHaveText('whsec_SYNTHETIC_UI_FIXTURE_1');
   await audit('keys');
-  checks.push('Keys: three scopes, secret shown once and concealed on close');
+  checks.push('Keys: three scopes, secret shown once and concealed on close; webhook secret shown and rotated after confirming');
 
   await page.setViewportSize({ width: 360, height: 800 });
   const signout = page.getByRole('button', { name: 'Sign out', exact: true });

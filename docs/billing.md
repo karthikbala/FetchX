@@ -22,7 +22,7 @@ One balance per project, computed by `Ledger.balance`:
 ```
 trial (control_credit_accounts.granted_credits)
 + purchased (live Stripe grants not revoked, paid_credit_grants)
-+ adjustments (credit_adjustments: the opening balance from the old ledgers, operator corrections)
++ adjustments (credit_adjustments: opening balances carried over at launch, operator corrections)
 - charges (credit_charges)
 - open reservations (credit_reservations)
 ```

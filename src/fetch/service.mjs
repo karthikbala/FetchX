@@ -347,7 +347,7 @@ export class FetchService {
       unreachable: 'unreachable'}[result];
     if (!outcome) return;
     void observeSiteOutcome(this.store, {host, execution: step.transport, route: {class: route.class, provider: route.provider === 'direct' ? '' : route.provider, country: route.country ?? ''},
-      engine: step.transport === 'browser' ? 'camoufox' : undefined, outcome, config: this.config, retryAfterSeconds: retryAfter,
+      outcome, config: this.config, retryAfterSeconds: retryAfter,
       credits: null});
   }
 

@@ -41,9 +41,8 @@ test('Connect requires account approval, issues once under concurrency, and hono
  assert.equal((await store.pool.query('SELECT current_schema() AS name')).rows[0].name,schema);
  const otherOrigin='http://127.0.0.1:4435';
  const controlPlane={enabled:true,origins:[ORIGIN,otherOrigin],bridgeSecret:randomBytes(32).toString('hex'),sessionSecure:false,allowLoopbackDevelopment:true,apiBaseUrl:API,
-  projectTemplate:{id:'connect-test',v2_access_profiles:[],v2_entitlement:{mode:'metered',max_daily_operations:50}},
-  creditPolicy:{reviewed:true,version:'connect-test',trialCredits:10,weights:{direct:1},maxEstimatedMicroUsdPerOperation:0}};
- const config={artifactKey:randomBytes(32).toString('hex'),projects:{},proxies:[],v2:{accessProfiles:{}},controlPlane};
+  creditPolicy:{trialCredits:10}};
+ const config={artifactKey:randomBytes(32).toString('hex'),projects:{},proxies:[],controlPlane};
  const gateway=createGateway({store,config,deps:{runtime:null,browserPool:null}});
  app=server(gateway);
  const identity=gateway.controlIdentity;

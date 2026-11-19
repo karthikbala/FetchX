@@ -25,7 +25,7 @@ function verifier(options={}){
  const google=createControlGoogle({fetchImpl:async(url,input)=>{calls.push({url,input});return keyResponse();},...options});
  return {google,calls};
 }
-function config(){return {projects:{},v2:{accessProfiles:{'synthetic@1':{id:'synthetic',version:1}}},controlPlane:{enabled:true,origins:[origin],bridgeSecret:secret,google:{enabled:true,clientId},projectTemplate:{id:'synthetic',v2_access_profiles:['synthetic@1'],v2_entitlement:{mode:'metered',max_daily_operations:10}},creditPolicy:{reviewed:true,version:'test-v1',trialCredits:12,weights:{direct:1},maxEstimatedMicroUsdPerOperation:0}}};}
+function config(){return {projects:{},controlPlane:{enabled:true,origins:[origin],bridgeSecret:secret,google:{enabled:true,clientId},projectTemplate:{id:'synthetic',v2_access_profiles:['synthetic@1'],v2_entitlement:{mode:'metered',max_daily_operations:10}},creditPolicy:{reviewed:true,version:'test-v1',trialCredits:12,weights:{direct:1},maxEstimatedMicroUsdPerOperation:0}}};}
 
 test('Google sign-in is disabled unless a Google web client is explicitly configured',async()=>{
  assert.deepEqual(googleConfiguration({}),{enabled:false,client_id:null});

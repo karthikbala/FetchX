@@ -57,12 +57,12 @@ test('two consecutive failures cool a route; success recovers; rate limits never
  const wait=+new Date(row.retry_not_before)-Date.now();assert.ok(wait>20000&&wait<=31000,String(wait));
 }));
 
-test('browser engines are separate routes; invalid input is ignored',{skip:!enabled},()=>fixture(async store=>{
+test('each transport is its own route; invalid input is ignored',{skip:!enabled},()=>fixture(async store=>{
  const db=store.pool,host='https://app.example.net/';
- await recordSiteOutcome(db,{host,execution:'browser',route:res,engine:'camoufox',outcome:'blocked'});
- await recordSiteOutcome(db,{host,execution:'browser',route:res,engine:'cloakbrowser',outcome:'success'});
- const routes=await siteRoutes(db,host,{execution:'browser'});
- assert.deepEqual(routes.map(r=>[r.engine,r.state]).sort(),[['camoufox','failing'],['cloakbrowser','proven']]);
+ await recordSiteOutcome(db,{host,execution:'browser',route:res,outcome:'blocked'});
+ await recordSiteOutcome(db,{host,execution:'http',route:res,outcome:'success'});
+ const routes=await siteRoutes(db,host);
+ assert.deepEqual(routes.map(r=>[r.execution,r.state]).sort(),[['browser','failing'],['http','proven']]);
  for(const bad of [{host:'https://localhost/',execution:'http',route:dc,outcome:'success'},{host,execution:'ftp',route:dc,outcome:'success'},
   {host,execution:'http',route:{class:'mobile'},outcome:'success'},{host,execution:'http',route:{...dc,country:'usa'},outcome:'success'},{host,execution:'http',route:dc,outcome:'maybe'}])
   assert.equal(await recordSiteOutcome(db,bad),false,JSON.stringify(bad));

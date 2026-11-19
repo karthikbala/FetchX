@@ -34,10 +34,7 @@ client ID from the control status endpoint; do not replace the Pages mail sender
 `GOOGLE_CLIENT_ID`, secret or refresh token. Local tests use a synthetic client.
 
 Disable `controlPlane.google.enabled` to remove Google sign-in while retaining
-email login and existing FetchX sessions. Keep the additive identity tables and
-latest database on rollback; reverting an image must not restore an older ledger
-or erase newly linked identities. Back up and validate the migration before
-enabling the feature on a deployed service.
+email login and existing FetchX sessions.
 
 ## Shared contract
 

@@ -14,7 +14,7 @@ const random=()=>randomBytes(32).toString('base64url');
 const hasCode=code=>error=>error?.code===code;
 const tokenResponse=extra=>({access_token:'gho_synthetic_provider_token',token_type:'bearer',scope:'user:email',...extra});
 const emails=(email='builder@example.com',extra={})=>[{email,primary:true,verified:true,...extra}];
-function config(){return {projects:{},v2:{accessProfiles:{'synthetic@1':{id:'synthetic',version:1}}},controlPlane:{enabled:true,origins:[origin],bridgeSecret:secret,github:{enabled:true,clientId,clientSecretEnv:'FETCHX_GITHUB_CLIENT_SECRET',redirectUri:callback},projectTemplate:{id:'synthetic',v2_access_profiles:['synthetic@1'],v2_entitlement:{mode:'metered',max_daily_operations:10}},creditPolicy:{reviewed:true,version:'test-v1',trialCredits:12,weights:{direct:1},maxEstimatedMicroUsdPerOperation:0}}};}
+function config(){return {projects:{},controlPlane:{enabled:true,origins:[origin],bridgeSecret:secret,github:{enabled:true,clientId,clientSecretEnv:'FETCHX_GITHUB_CLIENT_SECRET',redirectUri:callback},projectTemplate:{id:'synthetic',v2_access_profiles:['synthetic@1'],v2_entitlement:{mode:'metered',max_daily_operations:10}},creditPolicy:{reviewed:true,version:'test-v1',trialCredits:12,weights:{direct:1},maxEstimatedMicroUsdPerOperation:0}}};}
 function env(t){const before=process.env.FETCHX_GITHUB_CLIENT_SECRET;process.env.FETCHX_GITHUB_CLIENT_SECRET=clientSecret;t.after(()=>{if(before===undefined)delete process.env.FETCHX_GITHUB_CLIENT_SECRET;else process.env.FETCHX_GITHUB_CLIENT_SECRET=before;});}
 function provider({subject=101,email='builder@example.com',responses,timeoutMs}={}){
  const calls=[];const github=createControlGithub({timeoutMs,fetchImpl:async(url,input)=>{

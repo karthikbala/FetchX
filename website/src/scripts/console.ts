@@ -165,7 +165,7 @@ async function initConsole(root: HTMLElement) {
   });
 
   // ---------- sign-in ----------
-  function concealSecret() { revealedSecret = ''; textAll('[data-key-secret],[data-signup-secret]', 'Concealed'); }
+  function concealSecret() { revealedSecret = ''; textAll('[data-key-secret],[data-signup-secret],[data-webhook-secret-value]', 'Concealed'); }
   function showSecret(token: unknown) {
     concealSecret();
     if (typeof token !== 'string' || !/^fxk_[A-Za-z0-9_-]+$/.test(token)) throw new ControlError('The key was created, but its secret was not returned. Rotate it to get a new secret.', 'key_secret_unavailable');
@@ -438,6 +438,18 @@ async function initConsole(root: HTMLElement) {
     if (id !== project?.id) return;
     keys = data.keys || []; renderKeys(); renderChecklist();
   }
+  // The webhook signing secret can be shown again; rotating replaces it at once.
+  async function webhookSecret(rotate: boolean) {
+    mutating++; clearError();
+    try {
+      const data = await api(projectPath('/webhook-secret' + (rotate ? '/rotate' : '')), rotate ? { method: 'POST', body: {} } : {});
+      if (typeof data.secret !== 'string' || !/^whsec_[A-Za-z0-9_-]+$/.test(data.secret)) throw new ControlError('The webhook secret was not returned. Try again.', 'webhook_secret_unavailable');
+      textAll('[data-webhook-secret-value]', data.secret);
+    } catch (error) { setError(error); } finally { mutating--; updateRunButton(); }
+  }
+  q('[data-webhook-secret-show]')?.addEventListener('click', () => void webhookSecret(false));
+  q('[data-webhook-secret-rotate]')?.addEventListener('click', () => confirmAction('Rotate the webhook secret?',
+    'Deliveries are signed with the new secret from now on. Update your webhook receiver first.', 'Rotate secret', () => void webhookSecret(true)));
   function renderKeys() {
     const parent = q('[data-key-list]'); if (!parent) return;
     parent.replaceChildren();

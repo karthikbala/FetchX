@@ -37,22 +37,6 @@ function scriptSources(html) {
 
 const hostIs = (host, domain) => host === domain || host.endsWith('.' + domain);
 
-// Captcha widgets present on a page, with what a solver needs.
-export function captchaWidgets(html) {
-  const widgets = [];
-  const sitekey = selector => new RegExp(`class=["'][^"']*${selector}[^"']*["'][^>]*data-sitekey=["']([A-Za-z0-9_-]{10,200})["']|data-sitekey=["']([A-Za-z0-9_-]{10,200})["'][^>]*class=["'][^"']*${selector}`, 'i');
-  const turnstile = sitekey('cf-turnstile').exec(html);
-  if (turnstile) widgets.push({type: 'turnstile', site_key: turnstile[1] ?? turnstile[2]});
-  const recaptcha = sitekey('g-recaptcha').exec(html);
-  if (recaptcha) widgets.push({type: 'recaptcha_v2', site_key: recaptcha[1] ?? recaptcha[2]});
-  const hcaptcha = sitekey('h-captcha').exec(html);
-  if (hcaptcha) widgets.push({type: 'hcaptcha', site_key: hcaptcha[1] ?? hcaptcha[2]});
-  for (const source of scriptSources(html)) {
-    if (source.tag === 'iframe' && hostIs(source.host, 'captcha-delivery.com')) widgets.push({type: 'datadome', captcha_url: source.href});
-  }
-  return widgets;
-}
-
 // Identifies a challenge or block page and its vendor. Returns null when the
 // response is not one.
 export function detectChallenge({status = null, headers = {}, body = null} = {}) {
@@ -122,4 +106,3 @@ export function retryAfterSeconds(headers) {
   return Number.isFinite(seconds) && seconds > 0 ? Math.min(3600, seconds) : null;
 }
 
-export {header as responseHeader};

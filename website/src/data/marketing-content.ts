@@ -440,7 +440,7 @@ export const guides: GuidePage[] = [
           rows: [
             ['Source request', 'Your HTTP client or browser constructs it.', 'You send a URL; FetchX fixes automation headers.'],
             ['Route selection', 'Configured in your client or proxy account.', 'Auto mode per site, or one route you set.'],
-            ['Session state', 'Managed by your client.', 'V2 session pins route and encrypted cookies.'],
+            ['Cookies', 'Managed by your client.', 'Sent with the request; cookies the site sets come back with the result.'],
             ['Lost result', 'Your code decides how to reconcile it.', 'Retained same-key lookup and replay.'],
             ['Rendered page', 'You run and manage a browser.', 'render: always, or automatic when needed.'],
             ['Record validation', 'Your application.', 'Your application.'],

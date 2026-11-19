@@ -164,7 +164,6 @@ test('self-service: identity, isolation, keys, idempotency and success-only cred
       const forbidden = await api('POST', '/v1/fetch', {url: 'https://shop.example.com/'}, readOnly.token);
       assert.equal(forbidden.status, 403);
       assert.equal(forbidden.body.error.code, 'api_key_scope_forbidden');
-      for (const path of ['/v2/fetch', '/v1/workflows', '/v1/profiles']) assert.equal((await api('POST', path, {}, keyA.token)).status, 404);
     });
     const viaKey = await api('POST', '/v1/fetch', {url: 'https://shop.example.com/k'}, keyA.token);
     assert.equal(viaKey.body.status, 'succeeded');

@@ -121,16 +121,10 @@ Before deployment:
 1. Review the exact source revision and the website callback/bridge diff. Prepare
    the dedicated OAuth app, exact callback, process secret and private config;
    registration or credentials alone do not establish a working sign-in.
-2. Back up the exact deployed database, configuration and encrypted capture state.
-   Rehearse on a clone of that backup. Preserve all 35 pre-existing tables and
-   their rows, accounting balances/holds, profiles and recovery state; verify the
-   two added tables and a second idempotent initialization. Confirm the actual
-   deployed table inventory rather than assuming it matches the expected count.
+2. Back up the deployed database and configuration.
 3. Run the serial backend suite and website type/build/bridge/callback tests.
    Confirm that browser responses, cookies and logs contain no GitHub tokens,
-   secret, verifier or private identity details. Retain rollback evidence and
-   the migrated database; rollback must not restore an older ledger or discard
-   newly connected identities.
+   secret, verifier or private identity details.
 4. After an authorized release, verify live status, email and Google login, a
    real GitHub login, and explicit connection to an existing account. Confirm
    stable account/project/key ownership and unchanged credits before and after
