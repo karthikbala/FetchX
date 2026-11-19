@@ -44,12 +44,13 @@ async function workerRelay(callbackSocket,token,controller,maxRequests){
     if(remote.status!==200)denyConnect(req,client);
     return;
    }
-   remote.socket.on('error',()=>{if(!closing)controller.abort(WORKER_TRANSPORT_ERROR);});
+   // One reset or refused connection is one failed request in the page, as in any
+   // browser; it must not end the capture. A lost gateway fails the navigation itself.
+   remote.socket.on('error',()=>client.destroy());
    bridgeTunnels(client,remote.socket,remote.head);
    client.resume();
   }catch{
    client.destroy();
-   if(!closing&&!signal.aborted)controller.abort(WORKER_TRANSPORT_ERROR);
   }
  });
  const close=()=>closing??=(async()=>{

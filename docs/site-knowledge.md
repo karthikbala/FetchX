@@ -34,18 +34,20 @@ is logged and ignored; it never delays or fails a request.
 | rate_limited | 429 or a rate-limit error | sets a cooldown from Retry-After (15 s to 1 h), never counts as a failure |
 
 Uncertain results, customer input errors, quota refusals, provider and proxy
-faults, FetchX internal errors, and 404/5xx responses teach nothing.
+faults, FetchX internal errors (a browser worker failing, for example), attempts
+cut off by the request's own deadline, and 404/5xx responses teach nothing.
 
 ## Route states
 
 - **proven**: succeeded within the last 7 days and has fewer than 2 consecutive failures.
 - **cooling**: `retry_not_before` is in the future. Two consecutive blocks cool a
-  route for 24 hours, and two consecutive unreachable results cool it for 1 hour.
+  route for 15 minutes, and two consecutive unreachable results for 10 minutes;
+  each further failure doubles that, up to 6 hours.
 - **stale**: worked before, but more than 7 days ago.
 - **failing**: recent failures below the threshold, or never succeeded.
 
 Tunable with `siteKnowledge` in config: `freshMs`, `demoteAfter`,
-`blockedRetryMs` and `unreachableRetryMs`.
+`blockedRetryMs`, `unreachableRetryMs` and `maxRetryMs`.
 
 ## Admin API (operators only)
 
@@ -61,8 +63,11 @@ The admin portal's Site knowledge tab shows the same.
 `planLadder` in `src/fetch/ladder.mjs` builds the steps a request may use, in this order: HTTP direct, HTTP datacenter, HTTP residential (plus two fresh-IP rotations used only after a 429), browser residential, browser residential on a fresh IP, browser datacenter. Then:
 
 - A **proven** step moves to the front, keeping the cheapest proven first.
-- A **cooling** step is skipped and listed in `skipped` with `cooling`, except that a residential step cooling only because of a rate limit stays (a fresh IP gets a fresh limit).
+- A **cooling** step is skipped and listed in `skipped` with `cooling`, with two exceptions. A residential step cooling only because of a rate limit stays, since a fresh IP gets a fresh limit. A step that has worked for this host before stays, last in line: knowledge is per host, so blocks on one kind of page (a search, say) must not lock out pages that still work on that route.
+- After a **bot challenge** on an HTTP step (a challenge page, whatever its status), the next step is the first browser step: no HTTP client can pass it, and browsers solve challenges.
 - The **country** is the request's `country`, else the country of the host's proven routes, else US.
 - Steps excluded by a provider rule, over `max_credits`, or not allowed by `render` are skipped and listed.
 
-If every step is cooling, the request fails with `cooling_down` and the remaining wait, without sending anything.
+If every step is cooling and none has worked for the host before, the request fails with `cooling_down` and the remaining wait, without sending anything.
+
+When a request fails after several steps, its error is the strongest answer the site gave: a block on any step makes it `blocked`, even if a later step was unreachable.

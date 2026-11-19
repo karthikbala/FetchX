@@ -10,6 +10,27 @@ const SITE_KEY = /^[A-Za-z0-9_-]{10,200}$/;
 // A solve is only started (and paid for) when it can finish: solvers usually
 // answer in 15-40 s, and the page still has to submit and reload.
 const MIN_SOLVE_MS = 30_000;
+// Challenge pages (a block status or a challenge title) often load a script app that
+// draws its captcha widget a few seconds later; look for one this long before giving up.
+const CHALLENGE_WIDGET_WAIT_MS = 15_000;
+const CHALLENGE_STATUS = new Set([401, 403, 405, 429, 503]);
+const CHALLENGE_TITLE = /^(?:just a moment\.{0,3}|security check|robot check|verify (?:that )?you are (?:a )?human|bot or not\??|attention required|pardon our interruption|are you a (?:human|robot)\??|access denied|one more step)/i;
+
+export async function looksChallenged(page, status) {
+  if (CHALLENGE_STATUS.has(status)) return true;
+  try { return CHALLENGE_TITLE.test((await page.title()).trim()); } catch { return false; }
+}
+
+async function waitForWidget(page, remaining) {
+  const until = Date.now() + Math.min(CHALLENGE_WIDGET_WAIT_MS, Math.max(0, remaining() - MIN_SOLVE_MS));
+  while (Date.now() < until) {
+    await page.waitForTimeout(500).catch(() => {});
+    if (page.isClosed()) return null;
+    const found = await detectCaptcha(page).catch(() => null);
+    if (found) return found;
+  }
+  return null;
+}
 const HCAPTCHA_ROUNDS = 3;
 
 export async function detectCaptcha(page) {
@@ -121,12 +142,13 @@ async function solveHcaptcha(page, hooks, remaining) {
 }
 
 // Detects and solves at most `maxSolves` CAPTCHAs on the page. Never throws.
-export async function solvePageCaptchas(page, context, hooks, {deadline, settleMs = 0, maxSolves = 2}) {
+export async function solvePageCaptchas(page, context, hooks, {deadline, settleMs = 0, maxSolves = 2, challenged = false}) {
   const remaining = () => Math.max(0, deadline - Date.now());
   const summaries = [];
   for (let solve = 0; solve < maxSolves; solve++) {
     let found;
     try { found = await detectCaptcha(page); } catch { break; }
+    if (!found && solve === 0 && challenged) found = await waitForWidget(page, remaining);
     if (!found) break;
     const summary = {type: found.type, outcome: 'solving'};
     summaries.push(summary);

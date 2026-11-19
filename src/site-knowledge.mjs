@@ -11,7 +11,9 @@
 const HOST=/^(?=.{1,253}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 export const SITE_OUTCOMES=Object.freeze(['success','blocked','rate_limited','unreachable']);
 const CLASSES=['direct','datacenter','residential'],EXECUTIONS=['http','browser'],COUNTRY=/^[A-Z]{2}$/,TOKEN=/^[a-z0-9_-]{1,40}$/;
-export const SITE_KNOWLEDGE_DEFAULTS=Object.freeze({freshMs:7*86400000,demoteAfter:2,blockedRetryMs:86400000,unreachableRetryMs:3600000});
+// A route cools after demoteAfter consecutive failures: first for blockedRetryMs or
+// unreachableRetryMs, doubling with each further failure up to maxRetryMs.
+export const SITE_KNOWLEDGE_DEFAULTS=Object.freeze({freshMs:7*86400000,demoteAfter:2,blockedRetryMs:15*60000,unreachableRetryMs:10*60000,maxRetryMs:6*3600000});
 
 export function siteHost(value){
  let host;
@@ -62,8 +64,9 @@ export async function recordSiteOutcome(db,{host,execution,route,outcome,credits
  }else{
   const retryMs=outcome==='blocked'?policy.blockedRetryMs:policy.unreachableRetryMs;
   await db.query(`UPDATE site_routes SET failures=failures+1,consecutive_failures=consecutive_failures+1,last_outcome=$6,last_evidence=$7,last_failure_at=now(),
-   retry_not_before=CASE WHEN consecutive_failures+1>=$8 THEN greatest(coalesce(retry_not_before,now()),now()+$9*interval '1 millisecond') ELSE retry_not_before END,updated_at=now() WHERE ${where}`,
-   [...values,outcome,evidence,policy.demoteAfter,retryMs]);
+   retry_not_before=CASE WHEN consecutive_failures+1>=$8 THEN greatest(coalesce(retry_not_before,now()),
+    now()+least($10::float8,$9::float8*power(2,least(consecutive_failures+1-$8,20)))*interval '1 millisecond') ELSE retry_not_before END,updated_at=now() WHERE ${where}`,
+   [...values,outcome,evidence,policy.demoteAfter,retryMs,policy.maxRetryMs]);
  }
  return true;
 }

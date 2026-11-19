@@ -6,7 +6,7 @@ import {chmod, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {capturePage} from '../src/browser/capture.mjs';
-import {detectCaptcha, solvePageCaptchas} from '../src/browser/page-captcha.mjs';
+import {detectCaptcha, looksChallenged, solvePageCaptchas} from '../src/browser/page-captcha.mjs';
 import {startRelay} from '../src/browser/relay.mjs';
 import {BrowserWorkerPool} from '../src/browser/pool.mjs';
 import {startBrowserWorker} from '../src/browser/worker-service.mjs';
@@ -33,7 +33,7 @@ function site(pages) {
     const page = pages[new URL(req.url, 'http://x').pathname];
     if (!page) return res.writeHead(404).end('missing');
     const body = typeof page === 'function' ? page(req) : page;
-    res.writeHead(200, {'content-type': body.type ?? 'text/html; charset=utf-8', ...(body.headers ?? {})}).end(body.body ?? body);
+    res.writeHead(body.status ?? 200, {'content-type': body.type ?? 'text/html; charset=utf-8', ...(body.headers ?? {})}).end(body.body ?? body);
   });
 }
 
@@ -97,6 +97,32 @@ test('the caller\'s cookies reach the page\'s origin and the cookies the site se
     assert.equal(result.final_url, base + '/account');
     assert.match(seen, /session=caller/);
     assert.ok(result.cookies.some(cookie => cookie.name === 'step' && cookie.value === '2'));
+  });
+});
+
+test('a challenge page that draws its captcha late is waited for, then solved', {skip: !executable}, async t => {
+  let cleared = false;
+  const server = site({
+    // A block page whose script app adds the DataDome iframe two seconds after load.
+    '/search': req => (req.headers.cookie?.includes('datadome=good') ? (cleared = true, '<main>results</main>')
+      : {status: 429, body: `<title>Bot or Not?</title><div id="app"></div><script>setTimeout(() => {
+          const frame = document.createElement('iframe'); frame.src = 'https://geo.captcha-delivery.com/captcha/?initialCid=1&t=fe';
+          document.getElementById('app').append(frame); }, 2000)</script>`}),
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  await withBrowser(async browser => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const hooks = {captcha: async () => ({cookie: 'datadome=good; Path=/'})};
+    const response = await page.goto(`http://127.0.0.1:${port}/search`);
+    assert.equal(await looksChallenged(page, response.status()), true);
+    // Without the challenge signal nothing is waited for: an ordinary page pays no delay.
+    assert.deepEqual(await solvePageCaptchas(page, context, hooks, {deadline: Date.now() + 60_000}), []);
+    const solved = await solvePageCaptchas(page, context, hooks, {deadline: Date.now() + 60_000, challenged: true});
+    assert.deepEqual(solved, [{type: 'datadome', outcome: 'passed', submitted_via: 'cookie'}]);
+    assert.equal(cleared, true);
+    await context.close();
   });
 });
 
