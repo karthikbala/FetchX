@@ -79,7 +79,7 @@ export function server(gateway,{stripeFetch,stripeAutoProcess=true}={}){
  app.setErrorHandler((error,req,reply)=>{
   const clientError=error.validation||error.statusCode===400||error.statusCode===413||error.statusCode===415;
   const status=error instanceof GatewayError?error.status:clientError?(error.statusCode??400):500;
-  if(isPublicScrapeRequest(req))return reply.code(status).send(publicScrapeFailure(error));
+  if(isPublicScrapeRequest(req)){const body=publicScrapeFailure(error);if(body.retry_after)reply.header('Retry-After',String(body.retry_after));return reply.code(body.code==='retry_later'?429:status).send(body);}
   if(isRenderOperationRequest(req))return reply.code(status).send(publicRenderFailure(error,{key:req.body?.idempotency_key??req.params?.key,status}));
   if(isPublicFetchRequest(req))return reply.code(status).send(publicFetchFailure(error,{key:req.body?.idempotency_key??req.params?.key,status}));
   reply.code(status).send({error:error instanceof GatewayError?error.code:clientError?'request_invalid':'internal_error',...(error instanceof GatewayError&&error.details?{details:error.details}:{}),...(req.url.startsWith('/v2/')?{diagnostics:safeFailure(error,'request_admission')}:{} )});

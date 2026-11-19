@@ -6,7 +6,7 @@ import {gfm} from 'turndown-plugin-gfm';
 import {sha} from './crypto.mjs';
 import {GatewayError,ID,fail} from './policy.mjs';
 import {prepareBearerRender} from './control-playground.mjs';
-import {publicOperationErrorCode,publicOperationErrorMessage} from './v2-public-fetch.mjs';
+import {RETRY_LATER_DEFAULT_SECONDS,RETRY_LATER_SOURCE_CODES,publicOperationErrorCode,publicOperationErrorMessage,retryLaterSeconds} from './v2-public-fetch.mjs';
 import {PublicRenderGateway} from './v2-public-render.mjs';
 
 export const SCRAPE_PATH='/v2/scrape';
@@ -241,13 +241,18 @@ const messages={
  scrape_conversion_failed:'The rendered page could not be converted.'
 };
 export function publicScrapeFailure(error){
- const code=error instanceof GatewayError?publicOperationErrorCode(error.code):
+ let code=error instanceof GatewayError?publicOperationErrorCode(error.code):
   error?.validation||[400,413,415].includes(error?.statusCode)?'request_invalid':'internal_error';
- return {success:false,code,error:Object.hasOwn(messages,code)?messages[code]:publicOperationErrorMessage(code)};
+ // Source refusals and cooldowns surface only as "retry after N seconds".
+ let retryAfter=null;
+ if(code==='retry_later')retryAfter=error.retry_after_seconds??RETRY_LATER_DEFAULT_SECONDS;
+ else if(RETRY_LATER_SOURCE_CODES.has(code)){retryAfter=retryLaterSeconds({cooldown:error?.details});code='retry_later';}
+ return {success:false,code,error:Object.hasOwn(messages,code)?messages[code]:publicOperationErrorMessage(code),...(retryAfter===null?{}:{retry_after:retryAfter})};
 }
 
 function rejectCapture(render){
  const code=render.error.code;
+ if(code==='retry_later'){const e=new GatewayError('retry_later',429);e.retry_after_seconds=render.retry.retry_after_seconds;throw e;}
  if(code==='source_not_found')fail(code,404);
  if(['source_challenge','source_forbidden','destination_rejected'].includes(code))fail(code,403);
  if(code==='source_rate_limited')fail(code,429);

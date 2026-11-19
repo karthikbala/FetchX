@@ -3,7 +3,7 @@ import {GatewayError,ID,fail} from './policy.mjs';
 import {RENDER_PREPARATION_PATH,ensurePlaygroundProfile,isPlaygroundRef,playgroundPolicy,prepareBearerRender,readPlaygroundProfile} from './control-playground.mjs';
 import {PUBLIC_URL_KIND,isPublicUrlRef} from './v2-public-url.mjs';
 import {sourceChallenge} from './source-challenge.mjs';
-import {cooldownView} from './v2-public-fetch.mjs';
+import {RETRY_LATER_SOURCE_CODES,retryLaterOutcome,retryLaterSeconds} from './v2-public-fetch.mjs';
 import {BROWSER_MAX_WAIT_MS,BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
 import {isPublicOperationAdmissionError,publicFetchFailure,publicOperationErrorCode,publicOperationErrorMessage,publicResponseHeaders} from './v2-public-fetch.mjs';
 
@@ -55,21 +55,14 @@ function normalize(raw){
   ...(raw.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:raw.max_estimated_micro_usd}),...(raw.screenshot===true?{screenshot:true}:{}),...(raw.wait_ms===undefined?{}:{wait_ms:raw.wait_ms})};
 }
 
-function retry(key,code,state,{recoveryUrl=lookupUrl(key),replaySafe=true,retryAfter=null,routing=null}={}){
+function retry(key,code,state,{recoveryUrl=lookupUrl(key),replaySafe=true,retryAfter=null}={}){
  const advice={safe_to_retry:false,same_key_replay_safe:replaySafe,new_request_allowed:false,next_action:'recover_first',lookup_url:recoveryUrl};
  if(['reserved','running','unknown'].includes(state)||/unknown|incomplete|interrupted|internal_error|idempotency_conflict/.test(code??''))return advice;
  if(['browser_queue_full','browser_queue_timeout','browser_queue_cancelled'].includes(code))return {...advice,safe_to_retry:true,next_action:'retry_same_key'};
  if(!code)return {...advice,next_action:'complete'};
  if(code==='operation_not_found')return {...advice,next_action:'check_original_request'};
  if(code==='source_rate_limited'||code==='source_cooldown')return {...advice,next_action:'wait_for_source_retry_after',retry_after:retryAfter};
- if(code==='source_challenge'||code==='source_forbidden'){
-  // A challenge or denial on a shared route is usually tied to that IP or
-  // fingerprint. A new request on residential, after any cooldown, is the
-  // generic next step; the caller re-prepares to see that route's quote.
-  const escalate=routing&&routing.class!=='residential'&&typeof routing.country==='string';
-  return {...advice,next_action:escalate?'consider_residential_new_request':'review_source_access',...(retryAfter!==null?{retry_after:retryAfter}:{}),
-   ...(escalate?{new_request_allowed:true,suggested_proxy:{class:'residential',country:routing.country},requires_new_idempotency_key:true,requires_render_preparation:true}:{})};
- }
+ if(code==='source_challenge'||code==='source_forbidden')return {...advice,next_action:'review_source_access'};
  return {...advice,next_action:state==='rejected'?'fix_request_or_configuration':'review_saved_failure'};
 }
 
@@ -77,11 +70,13 @@ export function publicRenderFailure(error,{key=null,status,stage}={}){
  const context=error&&typeof error==='object'?failureContexts.get(error):null;
  const {supported,...base}=publicFetchFailure(error,{key,status,stage});
  const code=base.error.code,state=context?.state??base.state;
- const cooldown=error instanceof GatewayError&&code==='source_cooldown'?cooldownView(error.details):null;
+ if(code==='retry_later')return {...base,state,operation_id:context?.operationId??null,session_id:context?.sessionId??null,routing:context?.routing??null,
+  ...(context?.keyScope?{idempotency_key_scope:context.keyScope}:{}),execution:'browser',supported:{transport:'browser',render:true},
+  retry:{...base.retry,same_key_replay_safe:context?.keyScope===undefined||context.keyScope==='caller',...(context?.recoveryUrl?{lookup_url:context.recoveryUrl}:{})}};
  return {...base,state,operation_id:context?.operationId??null,session_id:context?.sessionId??null,routing:context?.routing??null,
   ...(context?.keyScope?{idempotency_key_scope:context.keyScope}:{}),execution:'browser',supported:{transport:'browser',render:true},
   diagnostics:context?.diagnostics??base.diagnostics,
-  error:{code,message:context?.message??message(code),stage:context?.stage??base.error.stage,...(cooldown?{details:cooldown}:{})},retry:retry(base.idempotency_key,code,state,{recoveryUrl:context?.recoveryUrl,replaySafe:context?.keyScope===undefined||context.keyScope==='caller',retryAfter:cooldown?String(cooldown.retry_after_seconds):null})};
+  error:{code,message:context?.message??message(code),stage:context?.stage??base.error.stage},retry:retry(base.idempotency_key,code,state,{recoveryUrl:context?.recoveryUrl,replaySafe:context?.keyScope===undefined||context.keyScope==='caller'})};
 }
 
 function rejectRenderProfile(code,{profile,managed,unavailable=false}={}){
@@ -161,18 +156,18 @@ async function renderResponse(v2,project,key,operation,{keyScope='caller',recove
  }
  const retryAfter=result?.retry_after??headers['retry-after']??null;
  const duration=operation.finished_at&&operation.created_at?new Date(operation.finished_at)-new Date(operation.created_at):null;
- return {success:!code,state:operation.state,gateway_http_status:200,operation_id:operation.id,session_id:operation.session_id,idempotency_key:key,idempotency_key_scope:keyScope,
-  ...(keyScope==='internal_operation'?{internal_idempotency_key:operation.idempotency_key}:{}),routing,execution:'browser',browser:result?.browser??null,
+ const response={success:!code,state:operation.state,gateway_http_status:200,operation_id:operation.id,session_id:operation.session_id,idempotency_key:key,idempotency_key_scope:keyScope,
+  ...(keyScope==='internal_operation'?{internal_idempotency_key:operation.idempotency_key}:{}),routing,execution:'browser',
   data:result?{status,final_url:result.final_url??dom?.url??null,content_type:dom?.headers?.['content-type']??headers['content-type']??null,text,body_base64:bodyBase64,headers,retry_after:retryAfter}:null,
   artifacts:artifacts.map(a=>responseArtifact(a,screenshot)),diagnostics:result?.diagnostics??null,
-  error:code?{code,message:message(code),stage:code.startsWith('source_')&&['source_rate_limited','source_challenge','source_forbidden','source_not_found','source_http_error'].includes(code)?'source_response':result?.diagnostics?.stage??'operation',
-   ...(code==='source_challenge'&&challenge?{details:{vendor:challenge.vendor,http_status:challenge.http_status}}:code==='source_cooldown'&&result?.cooldown?{details:cooldownView(result.cooldown)}:{})}:null,
-  retry:retry(key,code,operation.state,{recoveryUrl,replaySafe:keyScope==='caller',retryAfter,routing}),
+  error:code?{code,message:message(code),stage:code.startsWith('source_')&&['source_rate_limited','source_challenge','source_forbidden','source_not_found','source_http_error'].includes(code)?'source_response':result?.diagnostics?.stage??'operation'}:null,
+  retry:retry(key,code,operation.state,{recoveryUrl,replaySafe:keyScope==='caller',retryAfter}),
   usage:{accounting:operation.accounting,native_requests:null,browser_requests:result?.physical_requests??null,blocked_requests:result?.blocked_requests??null,
-   blocked_reasons:result?.blocked_reasons??null,subresource_origins:result?.subresource_origins??null,
    encoded_bytes:result?.encoded_bytes??null,decoded_bytes:result?.decoded_bytes??null,dom_bytes:result?.dom_bytes??null,screenshot_bytes:result?.screenshot_bytes??null,tunnel_bytes:result?.tunnel_bytes??null,
    capture_complete:result?.capture_complete??null,
    duration_ms:Number.isFinite(duration)?Math.max(0,duration):null,byte_basis:result?.network_byte_basis??null},application_acceptance:'not_evaluated'};
+ if(!RETRY_LATER_SOURCE_CODES.has(code))return response;
+ return retryLaterOutcome(response,{seconds:retryLaterSeconds({retryAfter,cooldown:result?.cooldown}),replaySafe:keyScope==='caller',lookupUrl:recoveryUrl});
 }
 
 export class PublicRenderGateway{

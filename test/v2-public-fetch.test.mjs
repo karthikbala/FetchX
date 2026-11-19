@@ -138,18 +138,23 @@ test('public HTTP fetch: explicit routes, durable isolation/idempotency, retaine
    const pair=await Promise.all([post(payload('concurrent-new')),post(payload('concurrent-new'))]);
    assert.equal(pair[0].status,200);assert.equal(pair[1].status,200);assert.equal(pair[0].body.operation_id,pair[1].body.operation_id);assert.equal(calls.length,count+2);
   });
-  await t.test('403/challenge/404/429 preserve source status and never escalate class or country',async()=>{
-   for(const [selected,code,action] of [['403','source_forbidden','consider_approved_residential_fresh_session'],['challenge','source_challenge','consider_approved_residential_fresh_session'],['404','source_not_found','check_url'],['429','source_rate_limited','wait_for_source_retry_after']]){
+  await t.test('403/challenge/429 become retry_later with only a wait; 404 keeps its status; no class or country escalation',async()=>{
+   for(const [selected,code,action] of [['403','retry_later','retry_after'],['challenge','retry_later','retry_after'],['404','source_not_found','check_url'],['429','retry_later','retry_after']]){
     mode=selected;const count=calls.length,result=await post(payload('source-'+selected));
-    assert.equal(result.status,200);assert.equal(result.body.gateway_http_status,200);assert.equal(result.body.success,false);assert.equal(result.body.state,'completed');assert.equal(result.body.error.code,code);assert.equal(result.body.error.stage,'source_response');assert.equal(result.body.retry.next_action,action);assert.equal(result.body.retry.safe_to_retry,['403','challenge'].includes(selected));assert.equal(result.body.retry.new_request_allowed,['403','challenge'].includes(selected));assert.equal(result.body.retry.same_key_replay_safe,true);
-    assert.equal(result.body.data.status,selected==='challenge'?200:Number(selected));assert.equal(result.body.routing.class,'datacenter');assert.equal(result.body.routing.country,'US');assert.equal(calls.length,count+1);
-    if(selected==='403'||selected==='challenge')assert.deepEqual(result.body.retry.suggested_proxy,{class:'residential',country:'US'});
-    if(selected==='429'){assert.equal(result.body.retry.retry_after,'120');assert.equal(result.body.retry.suggested_proxy,undefined);}
+    const later=code==='retry_later';
+    assert.equal(result.status,200);assert.equal(result.body.gateway_http_status,200);assert.equal(result.body.success,false);assert.equal(result.body.state,'completed');assert.equal(result.body.error.code,code);assert.equal(result.body.error.stage,'source_response');assert.equal(result.body.retry.next_action,action);assert.equal(result.body.retry.safe_to_retry,later);assert.equal(result.body.retry.new_request_allowed,later);assert.equal(result.body.retry.same_key_replay_safe,true);
+    assert.equal(result.body.routing.class,'datacenter');assert.equal(result.body.routing.country,'US');assert.equal(calls.length,count+1);
+    if(later){
+     // No reason, status, body, artifacts, vendor or diagnostics reach the caller.
+     assert.equal(result.body.data,null);assert.deepEqual(result.body.artifacts,[]);assert.equal(result.body.diagnostics,null);assert.equal(result.body.retry.suggested_proxy,undefined);
+     assert.equal(result.body.retry.retry_after,selected==='429'?'120':'15');assert.equal(result.body.retry.requires_new_idempotency_key,true);
+     assert.ok(!/forbidden|challenge|rate.?limit|403|429/i.test(JSON.stringify({error:result.body.error,retry:{...result.body.retry,lookup_url:null}})));
+    }else assert.equal(result.body.data.status,404);
     await noDispatch(async()=>{assert.deepEqual((await get('source-'+selected)).body,result.body);});
    }
    await store.pool.query('DELETE FROM source_limits');mode='comment';assert.equal((await post(payload('comment'))).body.success,true);
-   mode='post-challenge';const stateful=await post({...payload('post-challenge'),method:'POST',body_base64:Buffer.from('stateful').toString('base64')});assert.equal(stateful.body.error.code,'source_challenge');assert.equal(stateful.body.retry.next_action,'recover_first');assert.equal(stateful.body.retry.suggested_proxy,undefined);
-   mode='403';const direct=await post(payload('direct-forbidden',{class:'direct',country:null}));assert.equal(direct.body.routing.provider,'direct');assert.equal(direct.body.retry.next_action,'review_source_access');assert.equal(direct.body.retry.suggested_proxy,undefined);assert.equal(calls.at(-1).proxy,null);
+   mode='post-challenge';const stateful=await post({...payload('post-challenge'),method:'POST',body_base64:Buffer.from('stateful').toString('base64')});assert.equal(stateful.body.error.code,'retry_later');assert.equal(stateful.body.retry.safe_to_retry,false);assert.equal(stateful.body.retry.suggested_proxy,undefined);
+   mode='403';const direct=await post(payload('direct-forbidden',{class:'direct',country:null}));assert.equal(direct.body.routing.provider,'direct');assert.equal(direct.body.error.code,'retry_later');assert.equal(direct.body.retry.next_action,'retry_after');assert.equal(direct.body.retry.suggested_proxy,undefined);assert.equal(calls.at(-1).proxy,null);
    mode='json';
   });
   await t.test('unknown operations, retained partial evidence and held charges only recover',async()=>{

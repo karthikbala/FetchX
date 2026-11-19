@@ -72,6 +72,7 @@ function message(code){
   session_route_conflict:'The selected class and country differ from the pinned session. Use a fresh session and a new idempotency key to change routes.',
   session_profile_conflict:'The access profile differs from the pinned session. Use a fresh session and a new idempotency key.',
   session_busy_or_unknown:'This session has active or uncertain work. Recover that operation before submitting more work.',
+  retry_later:'Send this request again with a new idempotency key after retry_after seconds.',
   source_forbidden:'The source returned HTTP 403.',
   source_not_found:'The source returned HTTP 404. Check the requested URL.',
   source_rate_limited:'The source returned HTTP 429. Wait for its Retry-After before considering another request.',
@@ -169,7 +170,7 @@ function retryGuidance({key,code,state,method,route,profile,result,admission=fal
  if(code==='source_not_found')return {...recovery,next_action:'check_url'};
  if(['source_forbidden','source_challenge'].includes(code)){
   const approved=!isPublicUrlProfile(profile)&&route?.class==='datacenter'&&profile?.proxy_classes?.includes('residential')&&profile?.countries?.includes(route.country);
-  return {...recovery,next_action:approved?'consider_approved_residential_fresh_session':'review_source_access',...(result?.retry_after?{retry_after:result.retry_after}:{}),...(approved?{safe_to_retry:true,new_request_allowed:true,suggested_proxy:{class:'residential',country:route.country},requires_new_idempotency_key:true,requires_fresh_session:true}:{})};
+  return {...recovery,next_action:approved?'consider_approved_residential_fresh_session':'review_source_access',...(approved?{safe_to_retry:true,new_request_allowed:true,suggested_proxy:{class:'residential',country:route.country},requires_new_idempotency_key:true,requires_fresh_session:true}:{})};
  }
  if(code==='idempotency_conflict')return recovery;
  if(code==='client_quota_exhausted'||code==='residential_budget_exhausted')return {...recovery,next_action:'review_quota_or_budget'};
@@ -184,14 +185,41 @@ export function cooldownView(value){
  return {scope:'origin',origin:value.origin,cooldown_until:new Date(value.cooldown_until).toISOString(),retry_after_seconds:seconds};
 }
 
+// Callers are never told why a source refused us (403, 429, a challenge page or
+// an origin cooldown). They get one actionable outcome: retry after N seconds
+// with a new idempotency key. The classified reason stays in stored diagnostics
+// for routing and operators.
+export const RETRY_LATER_SOURCE_CODES=new Set(['source_rate_limited','source_forbidden','source_challenge','source_cooldown']);
+export const RETRY_LATER_DEFAULT_SECONDS=15;
+export function retryLaterSeconds({retryAfter=null,cooldown=null}={}){
+ const cooling=cooldownView(cooldown)?.retry_after_seconds??null;
+ let header=null;
+ if(typeof retryAfter==='string'||Number.isFinite(retryAfter)){
+  const raw=String(retryAfter).trim();
+  header=/^\d+$/.test(raw)?Number(raw):Math.ceil((Date.parse(raw)-Date.now())/1000);
+  if(!Number.isFinite(header))header=null;
+ }
+ if(cooling===null&&header===null)return RETRY_LATER_DEFAULT_SECONDS;
+ return Math.min(3600,Math.max(1,cooling??0,header??0));
+}
+export function retryLaterOutcome(response,{seconds,replaySafe=true,lookupUrl=null,idempotent=true}){
+ // Opt-in native retry evidence stays; it describes FetchX's own attempts.
+ const {requested,attempts,route_changed,effective_session_id,stop_reason}=response.retry??{};
+ return {...response,success:false,data:null,artifacts:[],diagnostics:null,
+  error:{code:'retry_later',message:message('retry_later'),stage:'source_response'},
+  retry:{safe_to_retry:idempotent,same_key_replay_safe:replaySafe,new_request_allowed:true,next_action:'retry_after',retry_after:String(seconds),retry_after_seconds:seconds,requires_new_idempotency_key:true,lookup_url:lookupUrl,
+   ...(requested===true?{requested,attempts,route_changed,effective_session_id,stop_reason}:{})}};
+}
+
 export function publicFetchFailure(error,{key=null,status,stage}={}){
  const context=error&&typeof error==='object'?failureContexts.get(error):null;
  const code=error instanceof GatewayError?publicCode(error.code):error?.validation||[400,413,415].includes(error?.statusCode)?'request_invalid':'internal_error';
  const gatewayStatus=status??(error instanceof GatewayError?error.status:[400,413,415].includes(error?.statusCode)?error.statusCode:500);
  const state=context?.state??(code==='internal_error'?'unknown':'rejected');
  key=context?.key??key;
- const cooldown=error instanceof GatewayError&&code==='source_cooldown'?cooldownView(error.details):null;
- return {success:false,state,gateway_http_status:gatewayStatus,operation_id:context?.operation_id??null,session_id:context?.session_id??null,idempotency_key:validKey(key)?key:null,...(context?.key_scope?{idempotency_key_scope:context.key_scope}:{}),routing:context?.routing??null,data:null,artifacts:[],diagnostics:null,error:{code,message:message(code),stage:context?.stage??stage??(code==='internal_error'?'unknown':'request_admission'),...(cooldown?{details:cooldown}:{})},retry:{...retryGuidance({key,code,state,admission:state==='rejected',result:cooldown?{retry_after:String(cooldown.retry_after_seconds)}:undefined}),same_key_replay_safe:context?.same_key_replay_safe??true,...(context?.lookup_url?{lookup_url:context.lookup_url}:{})},usage:null,application_acceptance:'not_evaluated',supported:{transport:'http',render:false}};
+ const body={success:false,state,gateway_http_status:gatewayStatus,operation_id:context?.operation_id??null,session_id:context?.session_id??null,idempotency_key:validKey(key)?key:null,...(context?.key_scope?{idempotency_key_scope:context.key_scope}:{}),routing:context?.routing??null,data:null,artifacts:[],diagnostics:null,error:{code,message:message(code),stage:context?.stage??stage??(code==='internal_error'?'unknown':'request_admission')},retry:{...retryGuidance({key,code,state,admission:state==='rejected'}),same_key_replay_safe:context?.same_key_replay_safe??true,...(context?.lookup_url?{lookup_url:context.lookup_url}:{})},usage:null,application_acceptance:'not_evaluated',supported:{transport:'http',render:false}};
+ if(!RETRY_LATER_SOURCE_CODES.has(code))return body;
+ return retryLaterOutcome(body,{seconds:retryLaterSeconds({cooldown:error?.details}),replaySafe:context?.same_key_replay_safe??true,lookupUrl:context?.lookup_url??null});
 }
 
 // Reconstruct from durable encrypted evidence only. No policy lookup, destination
@@ -227,11 +255,13 @@ export async function publicFetchResponse(v2,project,key,operation,{keyScope='ca
  if(body&&textual&&(!charset||/^(?:utf-8|utf8|us-ascii)$/i.test(charset))){try{text=new TextDecoder('utf-8',{fatal:true}).decode(body);}catch{}}
  const limitFailure=publicLimitFailure(code,operation,row.policy);
  const stage=code?.startsWith('source_')&&['source_rate_limited','source_forbidden','source_not_found','source_challenge','source_http_error'].includes(code)?'source_response':result?.diagnostics?.stage??'operation';
- return {success:!code&&operation.state==='completed',state:operation.state,gateway_http_status:200,operation_id:operation.id,session_id:operation.session_id,idempotency_key:key,idempotency_key_scope:keyScope,...(keyScope==='internal_operation'?{internal_idempotency_key:operation.idempotency_key}:{}),routing:route,
+ const response={success:!code&&operation.state==='completed',state:operation.state,gateway_http_status:200,operation_id:operation.id,session_id:operation.session_id,idempotency_key:key,idempotency_key_scope:keyScope,...(keyScope==='internal_operation'?{internal_idempotency_key:operation.idempotency_key}:{}),routing:route,
   data:result?{status:result.status??null,final_url:result.final_url??last?.url??null,content_type:contentType,body_base64:last?.decoded_body_base64??null,text,retry_after:result.retry_after??null,headers:publicResponseHeaders(last?.headers)}:null,
   artifacts:artifacts.map(a=>({id:a.id,kind:a.kind,status:a.status,...(a.attempt===undefined?{}:{attempt:a.attempt}),encoded_sha256:a.encoded_sha256??null,decoded_sha256:a.decoded_sha256??null,encoded_bytes:a.encoded_bytes??null,decoded_bytes:a.decoded_bytes??null,content_encoding:a.content_encoding??null,decoding_error:a.decoding_error??null})),
-  diagnostics:result?.diagnostics??null,error:code?{code,message:limitFailure?.message??(code==='source_transport_unknown'&&/TLS|SSL|CERT|SELF_SIGNED|ISSUER/.test(result?.diagnostics?.failure?.cause_code??'')?'Source TLS verification or negotiation failed. The transport outcome may be uncertain; recover before any new source work.':message(code)),stage,...(limitFailure?{details:limitFailure.details}:code==='source_challenge'&&challenge?{details:{vendor:challenge.vendor,http_status:challenge.http_status}}:code==='source_cooldown'&&cooldownView(result?.cooldown)?{details:cooldownView(result.cooldown)}:{})}:null,retry:{...retryGuidance({key,code,state:operation.state,method,route,profile:row.policy,result}),...retryEvidence(result),same_key_replay_safe:keyScope==='caller',lookup_url:recoveryUrl},
+  diagnostics:result?.diagnostics??null,error:code?{code,message:limitFailure?.message??(code==='source_transport_unknown'&&/TLS|SSL|CERT|SELF_SIGNED|ISSUER/.test(result?.diagnostics?.failure?.cause_code??'')?'Source TLS verification or negotiation failed. The transport outcome may be uncertain; recover before any new source work.':message(code)),stage,...(limitFailure?{details:limitFailure.details}:{})}:null,retry:{...retryGuidance({key,code,state:operation.state,method,route,profile:row.policy,result}),...retryEvidence(result),same_key_replay_safe:keyScope==='caller',lookup_url:recoveryUrl},
   usage:{accounting:operation.accounting,native_requests:result?.physical_requests??null,dns_requests:result?.dns_requests??null,encoded_bytes:result?.encoded_bytes??null,decoded_bytes:result?.decoded_bytes??null,tunnel_bytes:result?.tunnel_bytes??null,...(operation.accounting?.paid_credits?{wire_bytes:result?.wire_bytes??null,wire_bytes_lower_bound:result?.wire_bytes_lower_bound??null}:{}),dns_encoded_bytes:null,dns_decoded_bytes:null,dns_tunnel_bytes:null,byte_basis:operation.accounting?.paid_credits?'wire_includes_bidirectional_tls_connect_and_metered_dns_across_hops; encoded_and_decoded_are_native_response_bytes':result?.retry?'encoded_includes_native_and_metered_session_proxy_dns_when_retry_is_eligible; decoded_is_native_response_bytes; tunnel_includes_native_and_session_proxy_dns; separate_dns_bytes_unavailable':'encoded_and_decoded_are_native_response_bytes; tunnel_includes_native_and_session_proxy_dns; separate_dns_bytes_unavailable'},application_acceptance:'not_evaluated'};
+ if(!RETRY_LATER_SOURCE_CODES.has(code))return response;
+ return retryLaterOutcome(response,{seconds:retryLaterSeconds({retryAfter:result?.retry_after,cooldown:result?.cooldown}),replaySafe:keyScope==='caller',lookupUrl:recoveryUrl,idempotent:['GET','HEAD'].includes(method)});
 }
 
 export class PublicFetchGateway{
