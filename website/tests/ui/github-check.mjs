@@ -48,6 +48,8 @@ async function scenario(name, options, run) {
     const session = () => ({ user, projects: options.existing ? [project] : [], csrf_token: csrf, auth_methods: { github: linked } });
     if (path === '/status') return send({ enabled: true, mail_configured: options.mail !== false, github: { enabled: options.enabled !== false }, google: { enabled: !!options.google, client_id: options.google ? clientId : null }, api_base_url: 'https://api.fixture.example', capabilities: { native_http: true } });
     if (path === '/session') return signedIn ? send(session()) : fail('unauthorized');
+    // The workspace sidebar asks once per page whether to show the Admin link; these accounts are not operators.
+    if (path === '/admin/session') return fail(signedIn ? 'operator_required' : 'unauthorized', signedIn ? 403 : 401);
     if (path === '/auth/github/start') {
       assert.deepEqual(Object.keys(body), ['mode']); assert.ok(['login', 'link'].includes(body.mode)); mode = body.mode;
       if (mode === 'link') { assert.equal(signedIn, true); assert.equal(request.headers()['x-csrf-token'], csrf); }
