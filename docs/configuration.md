@@ -1,6 +1,6 @@
 # Configuration
 
-The gateway reads one JSON file, `GATEWAY_CONFIG` (default `/run/secrets/gateway.json`), at start. `scripts/init-config.mjs` writes a starting point. Keep it mode 0600, readable only by the service user (UID 10001), and out of Git. Environment: `DATABASE_URL`, `GATEWAY_PORT` (8788), `GATEWAY_HOST` (0.0.0.0).
+The gateway reads one JSON file, `GATEWAY_CONFIG` (default `/run/secrets/gateway.json`), at start. Spend limits marked as budgets below can also be changed in the admin portal without a restart; see [budgets](budgets.md). `scripts/init-config.mjs` writes a starting point. Keep it mode 0600, readable only by the service user (UID 10001), and out of Git. Environment: `DATABASE_URL`, `GATEWAY_PORT` (8788), `GATEWAY_HOST` (0.0.0.0).
 
 ```json
 {
@@ -25,7 +25,7 @@ The gateway reads one JSON file, `GATEWAY_CONFIG` (default `/run/secrets/gateway
 | `release` | Shown by `/healthz`. |
 | `artifactKey` | 64 hex characters. Seals stored requests and results (AES-256-GCM). Changing it makes stored results unreadable. |
 | `projects` | Projects provisioned here instead of in the console: `{id: {tokenHash, maxConcurrentRequests?}}`. They are unmetered. |
-| `fetchLimits` | Overrides for `DEFAULT_LIMITS` in `src/fetch/service.mjs`: body and wire caps, `contentDays` (7), `metadataDays` (90), `syncWaitMs` (60 s), `maxConcurrentPerProject` (10), `selfClearMs` (45 s: how long a bot check on a browser page may take to clear by itself before a captcha is solved). |
+| `fetchLimits` | Overrides for `DEFAULT_LIMITS` in `src/fetch/service.mjs`: body and wire caps, `contentDays` (7), `metadataDays` (90), `syncWaitMs` (60 s), `selfClearMs` (45 s: how long a bot check on a browser page may take to clear by itself before a captcha is solved). Budgets: `maxConcurrentPerProject` (10), `maxAttempts` (5), `maxCreditsPerRequest` (100,000). |
 | `destinations.blockedHosts` | Extra host names never fetched. `fetchx.ai` and the console origins are always blocked. |
 
 ## Routes
@@ -34,7 +34,7 @@ The gateway reads one JSON file, `GATEWAY_CONFIG` (default `/run/secrets/gateway
 | --- | --- |
 | `routes.direct` | `false` removes the direct route (every request then uses a proxy). |
 | `proxies` | Datacenter proxies: `{id, country, provider, url}`. `provider` defaults to `oxylabs`. |
-| `residential.providers.evomi`, `.dataimpulse` | `{enabled, username, password, countries?}`. The exit countries offered are `countries`, else `residential.countries`, else US. Requests alternate between the two after a rate limit. |
+| `residential.providers.evomi`, `.dataimpulse` | `{enabled, username, password, countries?, maxDailyMb?, maxMonthlyMb?}`. The two caps are budgets (no cap by default). The exit countries offered are `countries`, else `residential.countries`, else US. Requests alternate between the two after a rate limit. |
 | `dns` | `{endpoint, address, timeoutMs?}`: resolve names for proxied requests over DNS-over-HTTPS (`/resolve` or `/dns-query`) through the same proxy, so the exit country's answer is used. Without it, the gateway's resolver is used. |
 | `providerRules` | Extra provider rules; see [provider rules](provider-rules.md). Rules saved in the admin portal are loaded from the database every `providerRulesRefreshMs` (30 s). |
 | `siteKnowledge` | Overrides for `SITE_KNOWLEDGE_DEFAULTS`: `freshMs` (7 days), `demoteAfter` (2), `blockedRetryMs` (15 min), `unreachableRetryMs` (10 min), `maxRetryMs` (6 h); cooldowns double with each further failure up to the maximum. |
@@ -54,7 +54,7 @@ The gateway reads one JSON file, `GATEWAY_CONFIG` (default `/run/secrets/gateway
 
 | Key | Meaning |
 | --- | --- |
-| `captcha` | `{enabled, apiKey, maxTaskMicroUsd, maxDailyMicroUsd, maxTotalMicroUsd, maxTotalTasks, maxTasksPerRequest?, timeoutMs?, datadome?}`. `datadome: true` allows DataDome solving, which sends the attempt's proxy credentials to 2Captcha. See [captcha](captcha.md). |
+| `captcha` | `{enabled, apiKey, maxTaskMicroUsd, maxDailyMicroUsd, maxTotalMicroUsd, maxTotalTasks, maxTasksPerRequest?, timeoutMs?, datadome?}`. `datadome: true` allows DataDome solving, which sends the attempt's proxy credentials to 2Captcha. The limits, and `maxProjectDailyMicroUsd`, are budgets. See [captcha](captcha.md). |
 | `pricing` | Overrides for `DEFAULT_PRICES` in `src/billing/ledger.mjs`: `http`, `http_residential`, `browser`, `browser_residential`, `captcha`, `residential_included_mb`, `residential_overage_per_mb`. See [billing](billing.md). |
 
 ## Console
@@ -66,8 +66,9 @@ The gateway reads one JSON file, `GATEWAY_CONFIG` (default `/run/secrets/gateway
 | `enabled`, `origins`, `bridgeSecret` | The website origins and the shared secret its bridge sends (at least 32 characters). |
 | `apiBaseUrl` | The public API origin shown in the console and given to Connect clients. |
 | `sessionSecure` | `false` only for loopback development (with `allowLoopbackDevelopment`). |
-| `creditPolicy.trialCredits` | Trial credits per account (1,000, at most 1,000). |
+| `creditPolicy.trialCredits` | Trial credits per account (1,000, at most 1,000). A budget. |
 | `mail`, `google`, `github` | Sign-in methods; see [GitHub sign-in](github-sign-in.md) and [Google sign-in](google-sign-in.md). |
 | `agentConnectEnabled` | The Connect device flow for agents. |
 | `stripe` | Checkout; see [Stripe payments](stripe-payments.md) and [INR UPI](inr-upi-backend.md). |
 | `admin.enabled` | The operator portal at `/app/admin`. |
+| `admin.maxProbesPerDay` | Reachability probes per 24 hours (20). A budget. |

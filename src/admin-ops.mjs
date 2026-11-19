@@ -5,6 +5,7 @@ import {fail} from './policy.mjs';
 import {runProbe} from './reachability.mjs';
 import {seedFromProbe} from './site-knowledge.mjs';
 import {saveProviderRule} from './provider-rules.mjs';
+import {budget} from './budgets.mjs';
 
 const HOST=/^(?=.{1,253}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+$/,UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const plain=v=>!!v&&typeof v==='object'&&!Array.isArray(v);
@@ -35,7 +36,7 @@ export async function startProbe(store,gateway,input,{actor,run=runProbe,limits=
  const countries=input.countries;
  if(!Array.isArray(countries)||countries.length<1||countries.length>6||countries.some(c=>typeof c!=='string'||!/^[A-Z]{2}$/.test(c))||new Set(countries).size!==countries.length)fail('probe_countries_invalid',400);
  if(input.include_excluded!==undefined&&typeof input.include_excluded!=='boolean')fail('request_invalid',400);
- const configured=limits.maxProbesPerDay??gateway.config.controlPlane?.admin?.maxProbesPerDay,perDay=Number.isSafeInteger(configured)&&configured>=1&&configured<=1000?configured:20;
+ const perDay=limits.maxProbesPerDay??budget(gateway.config,'admin.maxProbesPerDay');
  const id=randomUUID();
  await store.tx(async c=>{
   await c.query('SELECT pg_advisory_xact_lock(1017)');

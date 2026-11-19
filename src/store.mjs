@@ -11,6 +11,7 @@ import {initProviderRules} from './provider-rules.mjs';
 import {initSiteKnowledge} from './site-knowledge.mjs';
 import {initCaptchaSolves} from './captcha/solver.mjs';
 import {initFetchStore} from './fetch/service.mjs';
+import {initBudgets} from './budgets.mjs';
 
 export class Store {
   constructor(url) {
@@ -72,6 +73,7 @@ export class Store {
     await initSiteKnowledge(this.pool);
     await initCaptchaSolves(this.pool);
     await initFetchStore(this.pool);
+    await initBudgets(this.pool);
   }
 
   async close() {

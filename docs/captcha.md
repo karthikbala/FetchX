@@ -25,7 +25,7 @@ A solve starts only when at least 30 seconds of the request's `timeout_ms` remai
 
 ## Budgets and records
 
-`config.captcha` sets the limits: `maxTaskMicroUsd` (per task), `maxDailyMicroUsd`, `maxTotalMicroUsd`, `maxTotalTasks`, and `maxTasksPerRequest` (4). A task's cost is reserved before it is created; a budget that would be exceeded fails the solve with `captcha_budget_exhausted` and the step continues without it. `captcha_solves` records each task with the host only, never the URL path or the token. An uncertain task creation is never retried.
+`config.captcha` sets the limits: `maxTaskMicroUsd` (per task), `maxDailyMicroUsd`, `maxTotalMicroUsd`, `maxTotalTasks`, `maxTasksPerRequest` (4) and `maxProjectDailyMicroUsd` (one project's 24 hours; the daily limit by default). They are [budgets](budgets.md): operators change them in the admin portal, without a restart, within hard bounds ($5 a day, $50 in total, $0.02 a task). A task's cost is reserved before it is created; a budget that would be exceeded fails the solve with `captcha_budget_exhausted` and the step continues without it. `captcha_solves` records each task with the host only, never the URL path or the token. An uncertain task creation is never retried.
 
 `node src/operator.mjs status` shows today's and total spend.
 

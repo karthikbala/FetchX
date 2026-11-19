@@ -16,6 +16,8 @@ Before creating a VM, the ledger reserves its full maximum lifetime, cleanup all
 
 Defaults are a 30-second sustained queue threshold, 120-second scale-up cooldown, five-minute idle drain, 15-minute boot deadline, one-hour maximum VM lifetime and a three-minute renewable workload lease. Scale-down first marks the worker draining, waits for in-flight work, then deletes the owned server and confirms IPv4 deletion. Thirty seconds of fresh unhealthy probes also drains a failed worker; replacement still counts the old VM against resource and spending limits until deletion is confirmed. Absolute-lifetime cleanup proceeds after its grace period even if gateway metrics are unavailable. A persisted per-VM egress counter also retires the workload at its configured byte limit (default 1 GiB), preserving usage across restarts. Sampling and stop latency can exceed that byte threshold slightly, so it is kept far below included provider traffic. A failed controller heartbeat stops the remote workload; stopping or powering off a VM does not end Hetzner billing. Actual deletion still depends on the controller host and Hetzner API being reachable. These are application-enforced cost controls, rather than a provider-side invoice lock.
 
+Operators can change the monthly budget and the additional-worker limit in the admin portal. The gateway passes them in `/v1/pool-metrics`, and the controller applies them only up to `monthly_budget_ceiling_micro_eur` and `max_additional_workers_ceiling` in its host config (by default the host values, so the portal can only lower them). See [budgets](budgets.md).
+
 Customer credits and proxy spending are unaffected by the controller. The infrastructure cap covers these managed VMs and Primary IPv4 addresses; it does not change existing host costs or customer source allowances.
 
 ## Worker snapshots
@@ -28,6 +30,8 @@ The controller bakes the snapshot itself whenever the worker bundle (`asset_mani
 3. Its disk is saved as a snapshot labelled with the deployment and bundle, and the bake VM is deleted.
 
 Older worker snapshots are then deleted. Until the new snapshot is ready, and whenever it doesn't match the current bundle, workers boot stock Ubuntu. The same fallback applies when a server type's disk is smaller than the snapshot's source disk, or when Hetzner refuses the snapshot. A refused snapshot also clears it, so a new bake starts.
+
+A snapshot can only boot servers whose disk is at least its source disk, so a bake uses the available option with the smallest disk (then the cheapest). If that type was out of stock and the snapshot came from a bigger disk, workers on the smaller type boot stock Ubuntu meanwhile; the controller checks every `bake_check_seconds` (900) and bakes again once the smaller type is available, then retires the bigger snapshot.
 
 `bake_timeout_seconds` (1800) bounds install and sealing. `bake_retry_seconds` (3600) spaces out attempts after a failure. A bake costs one VM-hour, and the snapshot is billed as Hetzner image storage.
 

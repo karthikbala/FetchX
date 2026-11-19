@@ -3,14 +3,16 @@
 // projects never grants twice. control_credit_accounts is also the row every
 // project's balance hangs off (see ledger.mjs).
 import {fail} from '../policy.mjs';
+import {budget} from '../budgets.mjs';
 
 export const TRIAL_CREDITS_PER_ACCOUNT = 1000;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const amount = value => Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000_000;
 const managed = project => typeof project === 'string' && project.startsWith('cp_');
 
+// A budget (src/budgets.mjs): config, or the admin portal, up to 1,000.
 export function trialCredits(config) {
-  const credits = config.controlPlane?.creditPolicy?.trialCredits ?? TRIAL_CREDITS_PER_ACCOUNT;
+  const credits = budget(config, 'billing.trialCredits');
   if (!amount(credits) || credits > TRIAL_CREDITS_PER_ACCOUNT) fail('credit_policy_invalid', 503);
   return credits;
 }

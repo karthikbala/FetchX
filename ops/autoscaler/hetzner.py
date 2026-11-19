@@ -70,7 +70,7 @@ def approved_prices(payload, config, machine_id, option=None):
             raise SafetyError("cloud_currency_not_eur")
         server_type = next(s for s in p["server_types"] if s["id"] == machine_id)
         server = next(x for x in server_type["prices"] if x["location"] == option["location"])
-        if type(server["included_traffic"]) is not int or server["included_traffic"] < config["max_vm_egress_bytes"] * config["max_additional_workers"]:
+        if type(server["included_traffic"]) is not int or server["included_traffic"] < config["max_vm_egress_bytes"] * config.get("max_additional_workers_ceiling", config["max_additional_workers"]):
             raise SafetyError("included_traffic_insufficient")
         ipv4 = next(s for s in p["primary_ips"] if s["type"] == "ipv4")
         ip = next(x for x in ipv4["prices"] if x["location"] == option["location"])
@@ -82,7 +82,9 @@ def approved_prices(payload, config, machine_id, option=None):
         raise SafetyError("cloud_pricing_invalid") from None
 
 
-def select_machine(types, pricing, config, cooldowns, now):
+def select_machine(types, pricing, config, cooldowns, now, smallest_disk=False):
+    """The cheapest eligible available option; with smallest_disk, the smallest disk
+    first (a worker snapshot boots only servers with at least its source disk)."""
     if pricing.get("pricing", {}).get("currency") != "EUR":
         raise SafetyError("cloud_currency_not_eur")
     eligible = []
@@ -94,10 +96,12 @@ def select_machine(types, pricing, config, cooldowns, now):
             server_rate, ip_rate = approved_prices(pricing, config, identity, option)
         except SafetyError:
             continue
-        eligible.append(dict(option, type_id=identity, server_hourly_micro_eur=server_rate, ipv4_hourly_micro_eur=ip_rate))
+        disk = next(s["disk"] for s in types["server_types"] if s["id"] == identity)
+        eligible.append(dict(option, type_id=identity, server_hourly_micro_eur=server_rate, ipv4_hourly_micro_eur=ip_rate, disk_gb=int(disk)))
     if not eligible:
         raise SafetyError("no_eligible_machine")
-    return min(eligible, key=lambda m: (m["server_hourly_micro_eur"] + m["ipv4_hourly_micro_eur"], m["server_type"], m["location"]))
+    cost = lambda m: (m["server_hourly_micro_eur"] + m["ipv4_hourly_micro_eur"], m["server_type"], m["location"])
+    return min(eligible, key=lambda m: (m["disk_gb"], *cost(m)) if smallest_disk else cost(m))
 
 
 class Hetzner:

@@ -16,6 +16,19 @@ const callbackLimits={
  '/v1/captcha':{kind:'captcha',limit:1024*1024,multiplier:0,extra:6},
  '/v1/artifact':{kind:'artifact',extra:2}
 };
+// What the autoscaler reports with each metrics read (header
+// X-FetchX-Autoscaler): its effective limits, the ceilings in its host config
+// and this month's committed spend. Shown in the admin portal; never trusted
+// for any decision here.
+const AUTOSCALER_INTS=['committed_micro_eur','monthly_budget_micro_eur','monthly_budget_ceiling_micro_eur','max_additional_workers','max_additional_workers_ceiling','workers'];
+export function autoscalerReport(header){
+ if(typeof header!=='string'||!header||header.length>1024)return null;
+ let value;try{value=JSON.parse(header);}catch{return null;}
+ if(!object(value)||Object.keys(value).sort().join()!==[...AUTOSCALER_INTS,'v','enabled','month_utc'].sort().join())return null;
+ if(value.v!==1||typeof value.enabled!=='boolean'||typeof value.month_utc!=='string'||!/^\d{4}-(0[1-9]|1[0-2])$/.test(value.month_utc))return null;
+ if(AUTOSCALER_INTS.some(k=>!Number.isSafeInteger(value[k])||value[k]<0))return null;
+ return {...value};
+}
 const connectFailure=socket=>socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
 const unavailable=()=>new GatewayError('browser_capacity',503);
 
@@ -38,6 +51,7 @@ export class BrowserWorkerPool{
  #start;
  #closing=false;
  #registryValid=false;
+ #autoscaler=null;
 
  constructor(config,{metrics,runtime,onClose}={}){
   if(!object(config)||Object.keys(config).some(k=>!['registry_path','callback_socket'].includes(k))||
@@ -52,7 +66,7 @@ export class BrowserWorkerPool{
   return this.#start??=(async()=>{
    this.#server=privateServer((req,res)=>{
     if(req.method==='GET'&&req.url==='/healthz')jsonResponse(res,this.#closing?503:200,{ready:!this.#closing});
-    else if(req.method==='GET'&&req.url==='/v1/pool-metrics'&&this.metrics)void this.#metrics(res);
+    else if(req.method==='GET'&&req.url==='/v1/pool-metrics'&&this.metrics)void this.#metrics(req,res);
     else this.#callback(req,res);
    });
    this.#server.on('connection',socket=>trackSocket(this.#sockets,socket));
@@ -117,7 +131,12 @@ export class BrowserWorkerPool{
   return (await this.#healthy(runtime,false)).some(entry=>this.#active(entry));
  }
 
- async #metrics(res){
+ // The autoscaler's last report, or null.
+ autoscalerStatus(){return this.#autoscaler?{...this.#autoscaler}:null;}
+
+ async #metrics(req,res){
+  const report=autoscalerReport(req.headers['x-fetchx-autoscaler']);
+  if(report)this.#autoscaler={...report,received_at:new Date().toISOString()};
   try{
    if(this.#closing)throw unavailable();
    const qualified=await this.runtime();
@@ -134,7 +153,8 @@ export class BrowserWorkerPool{
     }catch{return {id:entry.id,state:entry.state,ready:false,busy:true};}
    }));
    const aggregate=await this.metrics();
-   jsonResponse(res,200,{version:1,generated_at:new Date().toISOString(),queue:aggregate.queue,workers,max_concurrent_requests:aggregate.max_concurrent_requests});
+   jsonResponse(res,200,{version:1,generated_at:new Date().toISOString(),queue:aggregate.queue,workers,max_concurrent_requests:aggregate.max_concurrent_requests,
+    ...(aggregate.limits&&Object.keys(aggregate.limits).length?{limits:aggregate.limits}:{})});
   }catch{jsonResponse(res,503,{error:'browser_pool_metrics_unavailable'});}
  }
 

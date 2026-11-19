@@ -30,7 +30,7 @@ export async function openStore() {
   const store = new Store(databaseUrl);
   await store.init();
   await store.pool.query(`TRUNCATE fetch_requests, credit_reservations, credit_charges, credit_adjustments, captcha_solves, site_routes,
-    paid_credit_payment_holds CASCADE`);
+    paid_credit_payment_holds, budget_overrides, budget_audit CASCADE`);
   await store.pool.query('DELETE FROM paid_credit_grants');
   await store.pool.query('DELETE FROM control_credit_accounts WHERE project = $1', [PROJECT]);
   await store.pool.query('INSERT INTO control_credit_accounts (project, granted_credits) VALUES ($1, $2)', [PROJECT, 100]);

@@ -69,6 +69,11 @@ function message(code){
  if(code==='stripe_checkout_reconciliation_required')return 'The saved Stripe request needs operator reconciliation.';
  if(code==='stripe_checkout_conflict')return 'Use the original plan and request key to recover this checkout.';
  if(code==='paid_credit_payment_hold')return 'Paid credits are on hold pending payment review.';
+ if(code==='budget_version_conflict')return 'This budget changed since you loaded it. Reload and try again.';
+ if(code==='budget_value_invalid')return 'That value is outside the limits for this budget.';
+ if(code==='budget_reason_required')return 'Give a reason; it is recorded in the audit log.';
+ if(code==='budget_not_overridden')return 'This budget already uses its configured value.';
+ if(code==='budget_unknown')return 'This budget does not exist.';
  if(/rate|limit/.test(code))return 'This request exceeds an account limit. Try again later.';
  if(/not_found|forbidden|membership/.test(code))return 'This resource is unavailable for this account.';
  if(/code|challenge/.test(code))return 'The verification code could not be accepted. Request a new code if needed.';
