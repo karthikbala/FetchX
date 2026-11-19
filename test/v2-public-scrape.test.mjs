@@ -230,7 +230,7 @@ test('managed Scrape opts into reviewed direct Playground admission and preserve
    runs++;destinations.push(input.url);
    assert.ok(input.timeout_ms<=30000);
    assert.equal(input.policy.settle_ms,0);
-   assert.equal(input.policy.max_requests,32);
+   assert.equal(input.policy.max_requests,96);assert.equal(input.policy.subresources,'public');assert.equal(input.policy.max_wait_ms,10000);
    const request={url:input.url,method:'GET',headers:{accept:'text/html'},body_base64:null,resource_type:'document',redirect_depth:0,redirected_from:null};
    await hooks.admit(request);
    await relay.beforeConnect(relay.pinnedDestinations.get(new URL(input.url).hostname).destination);
@@ -277,7 +277,7 @@ test('managed Scrape opts into reviewed direct Playground admission and preserve
  for(const rejected of ['https://127.0.0.1/','https://private.local/','https://source.gov:444/','https://source.gov/#fragment']){
   assert.equal((await post({url:rejected})).json().success,false);
  }
- assert.equal((await post({...basic,waitFor:751})).json().code,'browser_wait_ceiling_rejected');
+ assert.equal((await post({...basic,waitFor:10001})).json().code,'browser_wait_ceiling_rejected');
  assert.equal(runs,0);
  assert.equal((await store.pool.query('SELECT count(*)::int n FROM control_playground_profiles')).rows[0].n,0);
 

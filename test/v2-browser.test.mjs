@@ -19,7 +19,7 @@ import {sha} from '../src/crypto.mjs';
 
 test('browser probe policy/runtime fail closed without exact local build, free entitlement and current qualification',async()=>{
  assert.equal(browserProbePolicy(undefined),null);assert.equal(browserProbePolicy({enabled:false}),null);
- for(const patch of [{max_requests:33},{max_decoded_bytes:8388609},{max_dom_bytes:1048577},{max_network_bytes:16777217},{settle_ms:2001},{script:'fetch(...)'}])assert.throws(()=>browserProbePolicy({enabled:true,...patch}),{code:'browser_probe_configuration'});
+ for(const patch of [{max_requests:129},{max_wait_ms:15001},{settle_ms:1000,max_wait_ms:999},{subresources:'any'},{max_decoded_bytes:8388609},{max_dom_bytes:1048577},{max_network_bytes:16777217},{settle_ms:2001},{script:'fetch(...)'}])assert.throws(()=>browserProbePolicy({enabled:true,...patch}),{code:'browser_probe_configuration'});
  assert.equal((await browserProbeRuntime({})).available,false);
  const root=await mkdtemp(join(tmpdir(),'probe-runtime-'));try{
   const path=join(root,'synthetic-not-a-browser');await writeFile(path,'not executed');await chmod(path,0o700);const hash=await binarySha(path);

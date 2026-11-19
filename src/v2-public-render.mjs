@@ -2,8 +2,9 @@ import {sha} from './crypto.mjs';
 import {GatewayError,ID,fail} from './policy.mjs';
 import {RENDER_PREPARATION_PATH,ensurePlaygroundProfile,isPlaygroundRef,playgroundPolicy,prepareBearerRender,readPlaygroundProfile} from './control-playground.mjs';
 import {PUBLIC_URL_KIND,isPublicUrlRef} from './v2-public-url.mjs';
-import {hasHtmlChallenge} from './source-challenge.mjs';
-import {BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
+import {sourceChallenge} from './source-challenge.mjs';
+import {cooldownView} from './v2-public-fetch.mjs';
+import {BROWSER_MAX_WAIT_MS,BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
 import {isPublicOperationAdmissionError,publicFetchFailure,publicOperationErrorCode,publicOperationErrorMessage,publicResponseHeaders} from './v2-public-fetch.mjs';
 
 const KIND='public_render_request_v1';
@@ -49,19 +50,26 @@ function normalize(raw){
  else if(typeof proxy.country!=='string'||!/^[A-Z]{2}$/.test(proxy.country))fail('country_required');
  if(raw.max_estimated_micro_usd!==undefined&&(!Number.isSafeInteger(raw.max_estimated_micro_usd)||raw.max_estimated_micro_usd<0))fail('cost_ceiling_invalid');
  if(raw.screenshot!==undefined&&typeof raw.screenshot!=='boolean')fail('browser_probe_invalid');
- if(raw.wait_ms!==undefined&&(!Number.isSafeInteger(raw.wait_ms)||raw.wait_ms<0||raw.wait_ms>2000))fail('browser_wait_ceiling_rejected');
+ if(raw.wait_ms!==undefined&&(!Number.isSafeInteger(raw.wait_ms)||raw.wait_ms<0||raw.wait_ms>BROWSER_MAX_WAIT_MS))fail('browser_wait_ceiling_rejected');
  return {idempotency_key:raw.idempotency_key,access_profile:{id:ref.id,version:ref.version},url:raw.url,proxy:{class:proxy.class,country:proxy.country},
   ...(raw.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:raw.max_estimated_micro_usd}),...(raw.screenshot===true?{screenshot:true}:{}),...(raw.wait_ms===undefined?{}:{wait_ms:raw.wait_ms})};
 }
 
-function retry(key,code,state,{recoveryUrl=lookupUrl(key),replaySafe=true,retryAfter=null}={}){
+function retry(key,code,state,{recoveryUrl=lookupUrl(key),replaySafe=true,retryAfter=null,routing=null}={}){
  const advice={safe_to_retry:false,same_key_replay_safe:replaySafe,new_request_allowed:false,next_action:'recover_first',lookup_url:recoveryUrl};
  if(['reserved','running','unknown'].includes(state)||/unknown|incomplete|interrupted|internal_error|idempotency_conflict/.test(code??''))return advice;
  if(['browser_queue_full','browser_queue_timeout','browser_queue_cancelled'].includes(code))return {...advice,safe_to_retry:true,next_action:'retry_same_key'};
  if(!code)return {...advice,next_action:'complete'};
  if(code==='operation_not_found')return {...advice,next_action:'check_original_request'};
  if(code==='source_rate_limited'||code==='source_cooldown')return {...advice,next_action:'wait_for_source_retry_after',retry_after:retryAfter};
- if(code==='source_challenge'||code==='source_forbidden')return {...advice,next_action:'review_source_access'};
+ if(code==='source_challenge'||code==='source_forbidden'){
+  // A challenge or denial on a shared route is usually tied to that IP or
+  // fingerprint. A new request on residential, after any cooldown, is the
+  // generic next step; the caller re-prepares to see that route's quote.
+  const escalate=routing&&routing.class!=='residential'&&typeof routing.country==='string';
+  return {...advice,next_action:escalate?'consider_residential_new_request':'review_source_access',...(retryAfter!==null?{retry_after:retryAfter}:{}),
+   ...(escalate?{new_request_allowed:true,suggested_proxy:{class:'residential',country:routing.country},requires_new_idempotency_key:true,requires_render_preparation:true}:{})};
+ }
  return {...advice,next_action:state==='rejected'?'fix_request_or_configuration':'review_saved_failure'};
 }
 
@@ -69,10 +77,11 @@ export function publicRenderFailure(error,{key=null,status,stage}={}){
  const context=error&&typeof error==='object'?failureContexts.get(error):null;
  const {supported,...base}=publicFetchFailure(error,{key,status,stage});
  const code=base.error.code,state=context?.state??base.state;
+ const cooldown=error instanceof GatewayError&&code==='source_cooldown'?cooldownView(error.details):null;
  return {...base,state,operation_id:context?.operationId??null,session_id:context?.sessionId??null,routing:context?.routing??null,
   ...(context?.keyScope?{idempotency_key_scope:context.keyScope}:{}),execution:'browser',supported:{transport:'browser',render:true},
   diagnostics:context?.diagnostics??base.diagnostics,
-  error:{code,message:context?.message??message(code),stage:context?.stage??base.error.stage},retry:retry(base.idempotency_key,code,state,{recoveryUrl:context?.recoveryUrl,replaySafe:context?.keyScope===undefined||context.keyScope==='caller'})};
+  error:{code,message:context?.message??message(code),stage:context?.stage??base.error.stage,...(cooldown?{details:cooldown}:{})},retry:retry(base.idempotency_key,code,state,{recoveryUrl:context?.recoveryUrl,replaySafe:context?.keyScope===undefined||context.keyScope==='caller',retryAfter:cooldown?String(cooldown.retry_after_seconds):null})};
 }
 
 function rejectRenderProfile(code,{profile,managed,unavailable=false}={}){
@@ -139,12 +148,13 @@ async function renderResponse(v2,project,key,operation,{keyScope='caller',recove
  const main=mainDocument(result,artifacts),dom=generatedArtifact(artifacts,'rendered_dom',result?.dom_artifact_id);
  const screenshot=generatedArtifact(artifacts,'browser_screenshot',result?.screenshot_artifact_id),headers=publicResponseHeaders(main?.headers);
  const bodyBase64=dom?.decoded_body_base64??null,text=bodyBase64===null?null:Buffer.from(bodyBase64,'base64').toString('utf8');
- const status=result?.status??null,challenge=hasHtmlChallenge({headers:dom?.headers,body:text})||hasHtmlChallenge({headers:main?.headers,body:typeof main?.decoded_body_base64==='string'?Buffer.from(main.decoded_body_base64,'base64'):null});
+ const status=result?.status??null,finalUrl=result?.final_url??dom?.url??main?.url;
+ const challenge=sourceChallenge({status,headers:main?.headers,body:typeof main?.decoded_body_base64==='string'?Buffer.from(main.decoded_body_base64,'base64'):null,url:finalUrl})??sourceChallenge({status,headers:dom?.headers,body:text,url:finalUrl});
  let code=operation.error?publicOperationErrorCode(operation.error):null;
  if(!code&&(operation.state!=='completed'||!result||result.partial))code='operation_incomplete';
  if(!code){
-  if(status===429)code='source_rate_limited';
-  else if(challenge)code='source_challenge';
+  if(challenge)code='source_challenge';
+  else if(status===429)code='source_rate_limited';
   else if(status===403)code='source_forbidden';
   else if(status===404)code='source_not_found';
   else if(!(status>=200&&status<300))code='source_http_error';
@@ -152,12 +162,14 @@ async function renderResponse(v2,project,key,operation,{keyScope='caller',recove
  const retryAfter=result?.retry_after??headers['retry-after']??null;
  const duration=operation.finished_at&&operation.created_at?new Date(operation.finished_at)-new Date(operation.created_at):null;
  return {success:!code,state:operation.state,gateway_http_status:200,operation_id:operation.id,session_id:operation.session_id,idempotency_key:key,idempotency_key_scope:keyScope,
-  ...(keyScope==='internal_operation'?{internal_idempotency_key:operation.idempotency_key}:{}),routing,execution:'browser',
+  ...(keyScope==='internal_operation'?{internal_idempotency_key:operation.idempotency_key}:{}),routing,execution:'browser',browser:result?.browser??null,
   data:result?{status,final_url:result.final_url??dom?.url??null,content_type:dom?.headers?.['content-type']??headers['content-type']??null,text,body_base64:bodyBase64,headers,retry_after:retryAfter}:null,
   artifacts:artifacts.map(a=>responseArtifact(a,screenshot)),diagnostics:result?.diagnostics??null,
-  error:code?{code,message:message(code),stage:code.startsWith('source_')&&['source_rate_limited','source_challenge','source_forbidden','source_not_found','source_http_error'].includes(code)?'source_response':result?.diagnostics?.stage??'operation'}:null,
-  retry:retry(key,code,operation.state,{recoveryUrl,replaySafe:keyScope==='caller',retryAfter}),
+  error:code?{code,message:message(code),stage:code.startsWith('source_')&&['source_rate_limited','source_challenge','source_forbidden','source_not_found','source_http_error'].includes(code)?'source_response':result?.diagnostics?.stage??'operation',
+   ...(code==='source_challenge'&&challenge?{details:{vendor:challenge.vendor,http_status:challenge.http_status}}:code==='source_cooldown'&&result?.cooldown?{details:cooldownView(result.cooldown)}:{})}:null,
+  retry:retry(key,code,operation.state,{recoveryUrl,replaySafe:keyScope==='caller',retryAfter,routing}),
   usage:{accounting:operation.accounting,native_requests:null,browser_requests:result?.physical_requests??null,blocked_requests:result?.blocked_requests??null,
+   blocked_reasons:result?.blocked_reasons??null,subresource_origins:result?.subresource_origins??null,
    encoded_bytes:result?.encoded_bytes??null,decoded_bytes:result?.decoded_bytes??null,dom_bytes:result?.dom_bytes??null,screenshot_bytes:result?.screenshot_bytes??null,tunnel_bytes:result?.tunnel_bytes??null,
    capture_complete:result?.capture_complete??null,
    duration_ms:Number.isFinite(duration)?Math.max(0,duration):null,byte_basis:result?.network_byte_basis??null},application_acceptance:'not_evaluated'};
@@ -213,7 +225,7 @@ export class PublicRenderGateway{
    }
   }
   if(!profile.browser_probe?.enabled)rejectRenderProfile('browser_probe_profile_unapproved',{profile});
-  if(input.wait_ms!==undefined&&input.wait_ms>profile.browser_probe.settle_ms)fail('browser_wait_ceiling_rejected');
+  if(input.wait_ms!==undefined&&input.wait_ms>(profile.browser_probe.max_wait_ms??profile.browser_probe.settle_ms))fail('browser_wait_ceiling_rejected');
   const request=this.v2.request({url:input.url,method:'GET'},profile);
   let url;try{url=new URL(request.url);}catch{fail('destination_rejected');}
   if(!profile.origins.includes(url.origin))fail('destination_rejected');

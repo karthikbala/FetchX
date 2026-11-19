@@ -1,6 +1,6 @@
 import {sha} from './crypto.mjs';
 import {GatewayError,ID,fail} from './policy.mjs';
-import {hasHtmlChallenge} from './source-challenge.mjs';
+import {sourceChallenge} from './source-challenge.mjs';
 import {ensurePlaygroundProfile,isPlaygroundRef,playgroundMessage} from './control-playground.mjs';
 import {PUBLIC_URL_REF,PUBLIC_URL_TRANSFER_LIMITS,isPublicUrlProfile} from './v2-public-url.mjs';
 
@@ -169,12 +169,19 @@ function retryGuidance({key,code,state,method,route,profile,result,admission=fal
  if(code==='source_not_found')return {...recovery,next_action:'check_url'};
  if(['source_forbidden','source_challenge'].includes(code)){
   const approved=!isPublicUrlProfile(profile)&&route?.class==='datacenter'&&profile?.proxy_classes?.includes('residential')&&profile?.countries?.includes(route.country);
-  return {...recovery,next_action:approved?'consider_approved_residential_fresh_session':'review_source_access',...(approved?{safe_to_retry:true,new_request_allowed:true,suggested_proxy:{class:'residential',country:route.country},requires_new_idempotency_key:true,requires_fresh_session:true}:{})};
+  return {...recovery,next_action:approved?'consider_approved_residential_fresh_session':'review_source_access',...(result?.retry_after?{retry_after:result.retry_after}:{}),...(approved?{safe_to_retry:true,new_request_allowed:true,suggested_proxy:{class:'residential',country:route.country},requires_new_idempotency_key:true,requires_fresh_session:true}:{})};
  }
  if(code==='idempotency_conflict')return recovery;
  if(code==='client_quota_exhausted'||code==='residential_budget_exhausted')return {...recovery,next_action:'review_quota_or_budget'};
  if(code==='operation_not_found')return {...recovery,next_action:'check_original_request'};
  return {...recovery,next_action:admission?'fix_request_or_configuration':'review_saved_failure'};
+}
+
+// Closed public view of an origin cooldown (scope, origin, expiry, seconds).
+export function cooldownView(value){
+ if(!value||value.scope!=='origin'||typeof value.origin!=='string'||!Number.isFinite(Date.parse(value.cooldown_until)))return null;
+ const seconds=Math.max(1,Math.ceil((Date.parse(value.cooldown_until)-Date.now())/1000));
+ return {scope:'origin',origin:value.origin,cooldown_until:new Date(value.cooldown_until).toISOString(),retry_after_seconds:seconds};
 }
 
 export function publicFetchFailure(error,{key=null,status,stage}={}){
@@ -183,7 +190,8 @@ export function publicFetchFailure(error,{key=null,status,stage}={}){
  const gatewayStatus=status??(error instanceof GatewayError?error.status:[400,413,415].includes(error?.statusCode)?error.statusCode:500);
  const state=context?.state??(code==='internal_error'?'unknown':'rejected');
  key=context?.key??key;
- return {success:false,state,gateway_http_status:gatewayStatus,operation_id:context?.operation_id??null,session_id:context?.session_id??null,idempotency_key:validKey(key)?key:null,...(context?.key_scope?{idempotency_key_scope:context.key_scope}:{}),routing:context?.routing??null,data:null,artifacts:[],diagnostics:null,error:{code,message:message(code),stage:context?.stage??stage??(code==='internal_error'?'unknown':'request_admission')},retry:{...retryGuidance({key,code,state,admission:state==='rejected'}),same_key_replay_safe:context?.same_key_replay_safe??true,...(context?.lookup_url?{lookup_url:context.lookup_url}:{})},usage:null,application_acceptance:'not_evaluated',supported:{transport:'http',render:false}};
+ const cooldown=error instanceof GatewayError&&code==='source_cooldown'?cooldownView(error.details):null;
+ return {success:false,state,gateway_http_status:gatewayStatus,operation_id:context?.operation_id??null,session_id:context?.session_id??null,idempotency_key:validKey(key)?key:null,...(context?.key_scope?{idempotency_key_scope:context.key_scope}:{}),routing:context?.routing??null,data:null,artifacts:[],diagnostics:null,error:{code,message:message(code),stage:context?.stage??stage??(code==='internal_error'?'unknown':'request_admission'),...(cooldown?{details:cooldown}:{})},retry:{...retryGuidance({key,code,state,admission:state==='rejected',result:cooldown?{retry_after:String(cooldown.retry_after_seconds)}:undefined}),same_key_replay_safe:context?.same_key_replay_safe??true,...(context?.lookup_url?{lookup_url:context.lookup_url}:{})},usage:null,application_acceptance:'not_evaluated',supported:{transport:'http',render:false}};
 }
 
 // Reconstruct from durable encrypted evidence only. No policy lookup, destination
@@ -201,12 +209,12 @@ export async function publicFetchResponse(v2,project,key,operation,{keyScope='ca
  // when the replacement route failed before returning a response.
  const last=result?.retry?native.find(a=>a.id===result.final_artifact_id):native.at(-1),body=typeof last?.decoded_body_base64==='string'?Buffer.from(last.decoded_body_base64,'base64'):null;
  const contentType=last?.headers?.['content-type']??null;
- const challenge=last&&hasHtmlChallenge({headers:last.headers,body});
+ const challenge=last?sourceChallenge({status:result?.status??last.status,headers:last.headers,body,url:last.url}):null;
  let code=operation.error?publicCode(operation.error):null;
  if(!code&&(['reserved','running','unknown'].includes(operation.state)||!result||result.partial))code='operation_incomplete';
  if(!code){
-  if(result.status===429)code='source_rate_limited';
-  else if(challenge)code='source_challenge';
+  if(challenge)code='source_challenge';
+  else if(result.status===429)code='source_rate_limited';
   else if(result.status===403)code='source_forbidden';
   else if(result.status===404)code='source_not_found';
   else if(!(result.status>=200&&result.status<300))code='source_http_error';
@@ -222,7 +230,7 @@ export async function publicFetchResponse(v2,project,key,operation,{keyScope='ca
  return {success:!code&&operation.state==='completed',state:operation.state,gateway_http_status:200,operation_id:operation.id,session_id:operation.session_id,idempotency_key:key,idempotency_key_scope:keyScope,...(keyScope==='internal_operation'?{internal_idempotency_key:operation.idempotency_key}:{}),routing:route,
   data:result?{status:result.status??null,final_url:result.final_url??last?.url??null,content_type:contentType,body_base64:last?.decoded_body_base64??null,text,retry_after:result.retry_after??null,headers:publicResponseHeaders(last?.headers)}:null,
   artifacts:artifacts.map(a=>({id:a.id,kind:a.kind,status:a.status,...(a.attempt===undefined?{}:{attempt:a.attempt}),encoded_sha256:a.encoded_sha256??null,decoded_sha256:a.decoded_sha256??null,encoded_bytes:a.encoded_bytes??null,decoded_bytes:a.decoded_bytes??null,content_encoding:a.content_encoding??null,decoding_error:a.decoding_error??null})),
-  diagnostics:result?.diagnostics??null,error:code?{code,message:limitFailure?.message??(code==='source_transport_unknown'&&/TLS|SSL|CERT|SELF_SIGNED|ISSUER/.test(result?.diagnostics?.failure?.cause_code??'')?'Source TLS verification or negotiation failed. The transport outcome may be uncertain; recover before any new source work.':message(code)),stage,...(limitFailure?{details:limitFailure.details}:{})}:null,retry:{...retryGuidance({key,code,state:operation.state,method,route,profile:row.policy,result}),...retryEvidence(result),same_key_replay_safe:keyScope==='caller',lookup_url:recoveryUrl},
+  diagnostics:result?.diagnostics??null,error:code?{code,message:limitFailure?.message??(code==='source_transport_unknown'&&/TLS|SSL|CERT|SELF_SIGNED|ISSUER/.test(result?.diagnostics?.failure?.cause_code??'')?'Source TLS verification or negotiation failed. The transport outcome may be uncertain; recover before any new source work.':message(code)),stage,...(limitFailure?{details:limitFailure.details}:code==='source_challenge'&&challenge?{details:{vendor:challenge.vendor,http_status:challenge.http_status}}:code==='source_cooldown'&&cooldownView(result?.cooldown)?{details:cooldownView(result.cooldown)}:{})}:null,retry:{...retryGuidance({key,code,state:operation.state,method,route,profile:row.policy,result}),...retryEvidence(result),same_key_replay_safe:keyScope==='caller',lookup_url:recoveryUrl},
   usage:{accounting:operation.accounting,native_requests:result?.physical_requests??null,dns_requests:result?.dns_requests??null,encoded_bytes:result?.encoded_bytes??null,decoded_bytes:result?.decoded_bytes??null,tunnel_bytes:result?.tunnel_bytes??null,...(operation.accounting?.paid_credits?{wire_bytes:result?.wire_bytes??null,wire_bytes_lower_bound:result?.wire_bytes_lower_bound??null}:{}),dns_encoded_bytes:null,dns_decoded_bytes:null,dns_tunnel_bytes:null,byte_basis:operation.accounting?.paid_credits?'wire_includes_bidirectional_tls_connect_and_metered_dns_across_hops; encoded_and_decoded_are_native_response_bytes':result?.retry?'encoded_includes_native_and_metered_session_proxy_dns_when_retry_is_eligible; decoded_is_native_response_bytes; tunnel_includes_native_and_session_proxy_dns; separate_dns_bytes_unavailable':'encoded_and_decoded_are_native_response_bytes; tunnel_includes_native_and_session_proxy_dns; separate_dns_bytes_unavailable'},application_acceptance:'not_evaluated'};
 }
 

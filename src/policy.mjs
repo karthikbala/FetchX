@@ -6,6 +6,9 @@ export class GatewayError extends Error {
   constructor(code, status=400){super(code);this.code=code;this.status=status;}
 }
 export const fail=(code,status)=>{throw new GatewayError(code,status);};
+// Origin cooldown when a 429 has no Retry-After; challenge pages served with
+// 429 keep the shorter one (see V2Gateway.cooldown).
+export const SOURCE_COOLDOWN_SECONDS=60,CHALLENGE_COOLDOWN_SECONDS=15;
 export const ID=/^[A-Za-z0-9_.:-]{1,160}$/;
 // Missing receipts retain their reservation but do not suspend the paid account.
 export const METERED_BLOCKING_ERRORS=Object.freeze(['cost_overrun','provider_account_rejected','sensitive_provider_response']);

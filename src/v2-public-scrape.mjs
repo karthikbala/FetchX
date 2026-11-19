@@ -1,3 +1,4 @@
+import {BROWSER_MAX_WAIT_MS} from './v2-browser-policy.mjs';
 import {randomUUID} from 'node:crypto';
 import {load} from 'cheerio';
 import TurndownService from 'turndown';
@@ -57,7 +58,7 @@ function normalize(raw){
  const types=formats.map(format=>exact(format,['type'])?format.type:format);
  if(types.some(format=>!FORMATS.includes(format)))fail('scrape_formats_unsupported');
  if(raw.onlyMainContent!==undefined&&typeof raw.onlyMainContent!=='boolean')fail('request_invalid');
- if(raw.waitFor!==undefined&&!integer(raw.waitFor,0,2000))fail('browser_wait_ceiling_rejected');
+ if(raw.waitFor!==undefined&&!integer(raw.waitFor,0,BROWSER_MAX_WAIT_MS))fail('browser_wait_ceiling_rejected');
  if(raw.timeout!==undefined&&!integer(raw.timeout,1000,300000))fail('scrape_timeout_invalid');
  return {url:sourceURL(raw.url),formats:FORMATS.filter(format=>types.includes(format)),onlyMainContent:raw.onlyMainContent??true,waitFor:raw.waitFor??0,timeout:raw.timeout??null};
 }

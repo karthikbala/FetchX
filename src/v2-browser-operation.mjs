@@ -1,8 +1,9 @@
 import {randomUUID} from 'node:crypto';
 import {Cookie,CookieJar} from 'tough-cookie';
-import {ID,GatewayError,fail} from './policy.mjs';
+import {ID,GatewayError,fail,CHALLENGE_COOLDOWN_SECONDS} from './policy.mjs';
 import {sha} from './crypto.mjs';
-import {browserProbePolicy,BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
+import {sourceChallenge} from './source-challenge.mjs';
+import {browserProbePolicy,BROWSER_MAX_WAIT_MS,BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
 import {admitPlaygroundRoute,isPlaygroundRef,materializePlaygroundProfile,playgroundOperationProfile} from './control-playground.mjs';
 import {safeFailure} from './v2-diagnostics.mjs';
 import {matchesRuntime,WORKER_TRANSPORT_ERROR} from './v2-browser-worker-wire.mjs';
@@ -11,6 +12,11 @@ import {residentialTrafficCharge,finishResidentialTrafficCharge} from './custome
 const plain=v=>v&&typeof v==='object'&&!Array.isArray(v);
 const sorted=v=>Array.isArray(v)?v.map(sorted):plain(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;
 const canonical=v=>JSON.stringify(sorted(v));
+// Cross-origin requests a page may make when its profile allows public
+// subresources; child-frame documents need frames:true as well.
+const SUBRESOURCE_TYPES=new Set(['script','stylesheet','image','font','xhr','fetch']);
+const PAGE_POST_TYPES=new Set(['xhr','fetch']),PAGE_POST_MAX_BYTES=65536;
+const NO_PACING={min_interval_ms:0};
 const matchingDomain=(domain,origins)=>origins.some(origin=>{const host=new URL(origin).hostname;return host===domain||host.endsWith('.'+domain);});
 function browserCookies(jar,origins){return jar.serializeSync().cookies.filter(c=>matchingDomain(c.domain,origins)).map(c=>({name:c.key,value:c.value,domain:(c.hostOnly?'':'.')+c.domain,path:c.path??'/',httpOnly:!!c.httpOnly,secure:!!c.secure,sameSite:c.sameSite==='strict'?'Strict':c.sameSite==='none'?'None':'Lax',expires:Number.isFinite(Date.parse(c.expires))?Math.floor(Date.parse(c.expires)/1000):-1}));}
 async function savedCookies(values,origins){
@@ -26,7 +32,7 @@ async function savedCookies(values,origins){
 const emptyResult=()=>({kind:'browser_network_probe',status:null,final_url:null,artifacts:[],physical_requests:0,physical_requests_basis:'admitted_browser_target_attempts',blocked_requests:0,blocked_reasons:{},capture_complete:false,encoded_bytes:null,decoded_bytes:0,dom_bytes:0,tunnel_bytes:null,provider_status:null,retry_after:null});
 
 export async function browserProbeOperation(v2,project,raw,identity,{timeoutMs}={}){
- if(!plain(raw)||Object.keys(raw).some(k=>!['idempotency_key','session_id','url','max_physical_requests','max_estimated_micro_usd','screenshot','wait_ms'].includes(k))||typeof raw.idempotency_key!=='string'||!ID.test(raw.idempotency_key)||typeof raw.session_id!=='string'||!/^[a-f0-9-]{36}$/i.test(raw.session_id)||typeof raw.url!=='string'||raw.url.length>12000||raw.max_physical_requests!==undefined&&!Number.isSafeInteger(raw.max_physical_requests)||raw.max_estimated_micro_usd!==undefined&&!Number.isSafeInteger(raw.max_estimated_micro_usd)||raw.screenshot!==undefined&&typeof raw.screenshot!=='boolean'||raw.wait_ms!==undefined&&(!Number.isSafeInteger(raw.wait_ms)||raw.wait_ms<0||raw.wait_ms>2000))fail('browser_probe_invalid');
+ if(!plain(raw)||Object.keys(raw).some(k=>!['idempotency_key','session_id','url','max_physical_requests','max_estimated_micro_usd','screenshot','wait_ms'].includes(k))||typeof raw.idempotency_key!=='string'||!ID.test(raw.idempotency_key)||typeof raw.session_id!=='string'||!/^[a-f0-9-]{36}$/i.test(raw.session_id)||typeof raw.url!=='string'||raw.url.length>12000||raw.max_physical_requests!==undefined&&!Number.isSafeInteger(raw.max_physical_requests)||raw.max_estimated_micro_usd!==undefined&&!Number.isSafeInteger(raw.max_estimated_micro_usd)||raw.screenshot!==undefined&&typeof raw.screenshot!=='boolean'||raw.wait_ms!==undefined&&(!Number.isSafeInteger(raw.wait_ms)||raw.wait_ms<0||raw.wait_ms>BROWSER_MAX_WAIT_MS))fail('browser_probe_invalid');
  if(timeoutMs!==undefined&&(!Number.isSafeInteger(timeoutMs)||timeoutMs<1))fail('browser_probe_invalid');
  const keyId=v2.controlCredits.keyId(project,identity);
  const hash=sha(canonical({kind:'browser_network_probe',...raw,...(timeoutMs===undefined?{}:{timeout_ms:timeoutMs})}));
@@ -43,7 +49,7 @@ export async function browserProbeOperation(v2,project,raw,identity,{timeoutMs}=
  if(!Number.isSafeInteger(maximum)||maximum<1||maximum>configured.max_requests)fail('browser_request_ceiling_rejected');
  if(raw.max_estimated_micro_usd!==undefined&&(!Number.isSafeInteger(raw.max_estimated_micro_usd)||raw.max_estimated_micro_usd<0))fail('cost_ceiling_invalid');
  const policy={...configured,max_requests:maximum,settle_ms:raw.wait_ms??configured.settle_ms},id=randomUUID(),reservedBytes=policy.max_network_bytes,reservedTunnel=route.class==='direct'?0:reservedBytes;
- if(policy.settle_ms>configured.settle_ms)fail('browser_wait_ceiling_rejected');
+ if(policy.settle_ms>configured.max_wait_ms)fail('browser_wait_ceiling_rejected');
  await admitPlaygroundRoute(v2,project,profile,{class:route.class,country:route.country,affinity:'session'},'browser',route);
  const attribution={project,keyId,userId:identity?.userId,requireSoleKey:identity?.requireSoleKey};
  const timeout=Math.min(profile.limits.timeout_ms,timeoutMs??Infinity);
@@ -87,7 +93,10 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
  if(replay)return v2.operationView(replay);
  const runtimeExpires=Date.parse(runtime.runtime?.expires_at);
  const deadline=Math.min(Date.now()+timeout,new Date(session.expires_at).getTime(),pricingDecision.dispatch_deadline_ms??Infinity,Number.isFinite(runtimeExpires)?runtimeExpires:Infinity),result=emptyResult();
- const pricingContext={profile,route,decision:pricingDecision,transport:'browser',fixedCredits},pinnedDestinations=new Map();
+ const pricingContext={profile,route,decision:pricingDecision,transport:'browser',fixedCredits},pinnedDestinations=new Map(),subresourceOrigins=new Set();
+ // A one-origin view of the profile for a public subresource: same limits and
+ // header rules, GET only, no credentials, cookies stay first-party.
+ const subresourceScope=(origin,post=false)=>({...profile,origins:[origin],paths:['^/'],methods:post?['GET','POST']:['GET'],method_paths:post?{GET:['^/'],POST:['^/']}:{GET:['^/']},credential_headers:[],guestAuth:[]});
  let relay=null,requests=0,dispatched=false,error=null,stage='dns',failure=null,cookieState=null,encodedSum=0,decodedSum=0,domSum=0,screenshotBytes=0,domArtifact=null,screenshotArtifact=null;
  const artifacts=[],seenKinds=new Set(),mainArtifacts=new Map();let admission=Promise.resolve(),callbackFailed=false,parentBlocked=0,runnerStarted=false,outputReceived=false,relayCloseUnknown=false,workerUnknown=false;
  try{
@@ -99,39 +108,58 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
   runnerStarted=true;const output=await (worker?.run??v2.browserRunner)({url:raw.url,timeout_ms:Math.max(1,deadline-Date.now()),deadline,policy,runtime:runtime.runtime,relay:relay.url,deny_relay:relay.deny_url,screenshot:raw.screenshot===true,cookies:browserCookies(jar,profile.origins)},{
    admit:(request,{signal}={})=>{const task=admission.then(async()=>{
     if(signal?.aborted||Date.now()>=deadline)fail('browser_probe_deadline_unknown',504);
-    if(!request||!['GET','HEAD'].includes(request.method)||typeof request.url!=='string'||!plain(request.headers)||request.body_base64!==null)fail('method_rejected');
+    // The page's own XHR/fetch POSTs are allowed only by policy; the gateway
+    // sees their size, never their body.
+    const pagePost=policy.page_post===true&&request?.method==='POST'&&PAGE_POST_TYPES.has(request.resource_type)&&Number.isSafeInteger(request.body_bytes)&&request.body_bytes>=0&&request.body_bytes<=PAGE_POST_MAX_BYTES;
+    if(!request||!(['GET','HEAD'].includes(request.method)||pagePost)||typeof request.url!=='string'||!plain(request.headers)||request.body_base64!==null)fail('method_rejected');
     if(requests>=maximum)fail('browser_request_limit',429);
     if(request.url.length>12000)fail('destination_rejected');
     if(!Number.isSafeInteger(request.redirect_depth)||request.redirect_depth<0||request.redirect_depth>profile.limits.max_redirects)fail('redirect_limit');
-    const destination=await v2.destination(request.url,profile,deadline);
-    v2.headers({method:request.method,headers:{}},profile,destination.url);
-    if(request.redirected_from&&new URL(request.redirected_from).origin!==destination.url.origin&&!(profile.kind==='discovery'&&profile.id.startsWith('discovery:')))fail('redirect_origin_rejected');
+    let target;try{target=new URL(request.url);}catch{fail('destination_rejected');}
+    const crossOrigin=!profile.origins.includes(target.origin);
+    const childFrame=policy.frames===true&&request.resource_type==='document'&&request.frame==='child';
+    if(request.resource_type==='document'&&request.frame==='child'&&!policy.frames)fail('frame_blocked');
+    if(crossOrigin&&(policy.subresources!=='public'||!(request.method==='GET'||pagePost)||!(SUBRESOURCE_TYPES.has(request.resource_type)||childFrame)))fail('destination_rejected');
+    const scope=crossOrigin?subresourceScope(target.origin,pagePost):pagePost?{...profile,methods:[...new Set([...profile.methods,'POST'])],method_paths:{...profile.method_paths,POST:['^/']}}:profile;
+    const destination=await v2.destination(request.url,scope,deadline);
+    if(crossOrigin)v2.assertRouteProvider(route,destination.url.hostname);
+    v2.headers({method:request.method,headers:{}},scope,destination.url);
+    // Subresources and child frames may follow redirects to other public origins
+    // (each hop is admitted above); the main navigation keeps its origin.
+    const pageAsset=policy.subresources==='public'&&!(request.resource_type==='document'&&request.frame!=='child');
+    if(request.redirected_from&&new URL(request.redirected_from).origin!==destination.url.origin&&!pageAsset&&!(profile.kind==='discovery'&&profile.id.startsWith('discovery:')))fail('redirect_origin_rejected');
     if(Buffer.byteLength(JSON.stringify(request.headers))>32768)fail('headers_rejected');
     for(const [name,value]of Object.entries(request.headers)){
-     if(typeof value!=='string'||/^(?:authorization|proxy-authorization|x-api-key|api-key|x-auth-|x-gateway|upgrade$)/i.test(name))fail('credential_scope_rejected');
+     // Render callers cannot set headers, so page-set API keys are the site's own;
+     // proxy credentials, gateway headers and FetchX keys stay blocked everywhere.
+     if(typeof value!=='string'||(policy.subresources==='public'?/^(?:proxy-authorization|x-gateway|upgrade$)/i:/^(?:authorization|proxy-authorization|x-api-key|api-key|x-auth-|x-gateway|upgrade$)/i).test(name))fail('credential_scope_rejected');
      for(const p of Object.values(v2.config.projects))if(sha(value.trim().replace(/^Bearer\s+/i,''))===p.tokenHash)fail('credential_scope_rejected');
     }
     await v2.rejectControlCredentials(request.headers);
-    await v2.pace(destination.url,profile.limits,deadline);
+    await v2.pace(destination.url,crossOrigin?{...profile.limits,...NO_PACING}:profile.limits,deadline);
     if(signal?.aborted||Date.now()>=deadline)fail('browser_probe_deadline_unknown',504);
     await v2.dispatchable(project,id,session.id,destination.url,pricingContext);
     if(signal?.aborted||Date.now()>=deadline)fail('browser_probe_deadline_unknown',504);
     requests++;
     // Validate every request's DNS answer set. The relay keeps the original
     // public pin for this host so neither Chromium nor the proxy re-resolves it.
-    const pin=pinnedDestinations.get(destination.url.hostname)??{destination,permits:0};
+    const pin=pinnedDestinations.get(destination.url.hostname)??{destination,permits:0,subresource:crossOrigin};
     pin.permits++;pinnedDestinations.set(destination.url.hostname,pin);
+    if(crossOrigin)subresourceOrigins.add(destination.url.origin);
     return {ok:true};
    });admission=task.catch(()=>{});return task.catch(error=>{parentBlocked++;throw error;});},
    cooldown:async ({url,status,retry_after})=>{
     const source=new URL(url);
-    if(!pinnedDestinations.has(source.hostname)||!profile.origins.includes(source.origin))fail('browser_probe_callback_unknown',502);
-    await v2.cooldown(source,{status,headers:{'retry-after':retry_after}});
+    if(!pinnedDestinations.has(source.hostname)||!profile.origins.includes(source.origin)&&!subresourceOrigins.has(source.origin))fail('browser_probe_callback_unknown',502);
+    await v2.cooldown(source,{status,headers:{'retry-after':retry_after}},{fallbackSeconds:CHALLENGE_COOLDOWN_SECONDS});
    },
    artifact:async artifact=>{
     try{
     if(!artifact||!['browser_response','rendered_dom','browser_screenshot'].includes(artifact.kind)||artifact.original_encoded_available!==false||artifact.encoded_body_base64!==null||artifact.encoded_sha256!==null||typeof artifact.url!=='string'||artifact.decoded_body_base64!==null&&typeof artifact.decoded_body_base64!=='string')fail('browser_probe_artifact_invalid',502);
-    const artifactUrl=new URL(artifact.url);if(!profile.origins.includes(artifactUrl.origin))fail('browser_probe_artifact_invalid',502);v2.headers({method:artifact.method,headers:{}},profile,artifactUrl);
+    const artifactUrl=new URL(artifact.url),firstParty=profile.origins.includes(artifactUrl.origin);
+    if(!firstParty&&(artifact.kind!=='browser_response'||artifact.main_document===true||!subresourceOrigins.has(artifactUrl.origin)))fail('browser_probe_artifact_invalid',502);
+    const posted=policy.page_post===true&&artifact.kind==='browser_response'&&artifact.method==='POST'&&artifact.request?.method==='POST';
+    v2.headers({method:artifact.method,headers:{}},firstParty?(posted?{...profile,methods:[...new Set([...profile.methods,'POST'])],method_paths:{...profile.method_paths,POST:['^/']}}:profile):subresourceScope(artifactUrl.origin,posted),artifactUrl);
     const body=artifact.decoded_body_base64===null?null:Buffer.from(artifact.decoded_body_base64,'base64');
     if(body&&(body.toString('base64')!==artifact.decoded_body_base64||sha(body)!==artifact.decoded_sha256||body.length!==artifact.decoded_bytes))fail('browser_probe_artifact_invalid',502);
     if(!body&&(artifact.decoded_sha256!==null||artifact.decoded_bytes!==null)||artifact.encoded_bytes===null&&artifact.encoded_size_basis!==null||artifact.encoded_bytes!==null&&(!Number.isSafeInteger(artifact.encoded_bytes)||artifact.encoded_bytes<0||artifact.encoded_size_basis!=='playwright_request_sizes'))fail('browser_probe_artifact_invalid',502);
@@ -139,7 +167,7 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
      if(!raw.screenshot||seenKinds.has(artifact.kind)||artifact.generated!==true||!body||body.length>BROWSER_SCREENSHOT_MAX_BYTES||artifact.headers?.['content-type']!=='image/jpeg'||body[0]!==0xff||body[1]!==0xd8)fail('browser_probe_artifact_invalid',502);
      seenKinds.add(artifact.kind);screenshotBytes=body.length;
     }else if(artifact.kind==='rendered_dom'){if(seenKinds.has('rendered_dom')||artifact.generated!==true||!body||body.length>policy.max_dom_bytes)fail('browser_probe_artifact_invalid',502);seenKinds.add('rendered_dom');domSum=body.length;}
-    else{if(artifacts.filter(a=>a.kind==='browser_response').length>=requests||decodedSum+(body?.length??0)>policy.max_decoded_bytes||!artifact.request||artifact.request.url!==artifact.url||!['GET','HEAD'].includes(artifact.request.method))fail('browser_probe_artifact_invalid',502);decodedSum+=body?.length??0;if(Number.isSafeInteger(artifact.encoded_bytes)&&artifact.encoded_bytes>=0)encodedSum+=artifact.encoded_bytes;}
+    else{if(artifacts.filter(a=>a.kind==='browser_response').length>=requests||decodedSum+(body?.length??0)>policy.max_decoded_bytes||!artifact.request||artifact.request.url!==artifact.url||!(['GET','HEAD'].includes(artifact.request.method)||posted))fail('browser_probe_artifact_invalid',502);decodedSum+=body?.length??0;if(Number.isSafeInteger(artifact.encoded_bytes)&&artifact.encoded_bytes>=0)encodedSum+=artifact.encoded_bytes;}
     if(Buffer.byteLength(JSON.stringify([artifact.headers,artifact.raw_headers,artifact.request?.headers]))>131072)fail('browser_probe_artifact_invalid',502);
     v2.rejectSecrets(artifact);const record={...artifact,id:randomUUID(),operation_id:id};
     await v2.store.pool.query('INSERT INTO v2_artifacts(id,operation,project,body) VALUES($1,$2,$3,$4)',[record.id,id,project,v2.sealer.seal(record,{compress:true})]);
@@ -147,7 +175,10 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
     if(record.kind==='rendered_dom')domArtifact=record.id;
     if(record.kind==='browser_screenshot')screenshotArtifact=record.id;
     if(record.kind==='browser_response'&&record.main_document===true)mainArtifacts.set(JSON.stringify([record.url,record.status]),record.id);
-    if(record.status===429)await v2.cooldown(new URL(record.url),{status:429,headers:record.headers});
+    if(record.status===429){
+     const challenged=record.headers?.['retry-after']===undefined&&!!sourceChallenge({status:429,headers:record.headers,body,url:record.url});
+     await v2.cooldown(new URL(record.url),{status:429,headers:record.headers},challenged?{fallbackSeconds:CHALLENGE_COOLDOWN_SECONDS}:{});
+    }
     return {ok:true};
     }catch(error){callbackFailed=true;throw error;}
    }
@@ -156,10 +187,10 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
   if(output.cookies)cookieState=await savedCookies(output.cookies,profile.origins);
   const native=artifacts.filter(a=>a.kind==='browser_response'),encodedComplete=native.length>0&&native.length===requests&&native.every(a=>Number.isSafeInteger(a.encoded_bytes));
   Object.assign(result,{status:output.status??null,final_url:output.final_url??null,blocked_requests:output.counts_complete===false?null:Math.max(parentBlocked,output.blocked_requests??0),blocked_reasons:output.blocked_reasons??{},capture_complete:!!output.capture_complete&&!parentBlocked&&!error&&native.length===requests&&seenKinds.has('rendered_dom')&&(!raw.screenshot||!!screenshotArtifact),encoded_bytes:encodedComplete?encodedSum:null,decoded_bytes:decodedSum,dom_bytes:domSum,screenshot_bytes:screenshotBytes,main_artifact_id:mainArtifacts.get(JSON.stringify([output.final_url,output.status]))??null,dom_artifact_id:domArtifact,screenshot_artifact_id:screenshotArtifact});
- }catch(e){workerUnknown=!!worker&&e?.code===WORKER_TRANSPORT_ERROR;error=e instanceof GatewayError?e.code:'browser_probe_internal_unknown';failure=safeFailure(e,stage,{dispatched:dispatched||requests>0});if(runnerStarted&&!outputReceived)result.blocked_requests=null;}
+ }catch(e){workerUnknown=!!worker&&e?.code===WORKER_TRANSPORT_ERROR;error=e instanceof GatewayError?e.code:'browser_probe_internal_unknown';if(e instanceof GatewayError&&e.code==='source_cooldown'&&e.details){result.retry_after=String(e.details.retry_after_seconds);result.cooldown=e.details;}failure=safeFailure(e,stage,{dispatched:dispatched||requests>0});if(runnerStarted&&!outputReceived)result.blocked_requests=null;}
  finally{if(relay){try{await relay.close();}catch(e){relayCloseUnknown=true;error??='browser_relay_close_unknown';failure??=safeFailure(e,'relay_close',{dispatched:dispatched||requests>0});}error??=relay.error??null;}}
  const rawObserved=relay?.bytes,observed=Number.isSafeInteger(rawObserved)&&rawObserved>=0?rawObserved:null,networkDispatched=dispatched||relay?.dispatched||false,meterIncomplete=relayCloseUnknown||relay?.meter_complete===false||/unknown|incomplete/.test(relay?.error??''),unknown=(networkDispatched||requests>0)&&(workerUnknown||meterIncomplete||!!error&&(callbackFailed||/unknown|incomplete|deadline/.test(error)));
- Object.assign(result,{artifacts,physical_requests:requests,tunnel_bytes:observed,provider_status:relay?.provider_status??null,target_connections:relay?.connections??0,capture_complete:result.capture_complete&&!unknown,diagnostics:{stage:error?stage:'completed',failure},network_byte_basis:route.class==='direct'?'bidirectional_origin_tls_stream_excludes_local_connect':'bidirectional_proxy_tunnel_includes_connect'});
+ Object.assign(result,{artifacts,physical_requests:requests,browser:{engine:runtime.runtime?.engine??null,version:runtime.runtime?.version??null},subresource_origins:subresourceOrigins.size,tunnel_bytes:observed,provider_status:relay?.provider_status??null,target_connections:relay?.connections??0,capture_complete:result.capture_complete&&!unknown,diagnostics:{stage:error?stage:'completed',failure},network_byte_basis:route.class==='direct'?'bidirectional_origin_tls_stream_excludes_local_connect':'bidirectional_proxy_tunnel_includes_connect'});
  await v2.store.tx(async c=>{
   const ledger=(await c.query('SELECT * FROM v2_ledger WHERE operation=$1 FOR UPDATE',[id])).rows[0];
   const usedRequests=unknown?maximum:requests,usedEncoded=unknown||result.encoded_bytes===null&&networkDispatched?reservedBytes:result.encoded_bytes??0;

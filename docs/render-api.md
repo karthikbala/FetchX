@@ -52,8 +52,11 @@ Native browser probes require a provisioned credential with the applicable
 profile and runtime policy.
 Use `direct` with `country: null`, or an approved `datacenter` or `residential`
 route with an uppercase country code. The optional `wait_ms` is an integer from
-zero through the profile's post-load wait limit, at most 2,000 milliseconds.
-Omission uses the profile default. `screenshot` defaults to `false` and captures
+zero through the profile's wait ceiling (`max_wait_ms`), at most 15,000
+milliseconds. Render preparation returns the ceiling as `execution.max_wait_ms`
+and the default as `execution.default_wait_ms`; read them instead of guessing.
+Managed (Playground) render allows up to 10,000 ms. Omission uses the profile
+default. `screenshot` defaults to `false` and captures
 a bounded 1 MiB viewport JPEG when enabled. The optional spending ceiling
 covers both the provider estimate and the maximum customer traffic reservation.
 
@@ -73,11 +76,58 @@ headers excluded. `artifacts` lists the retained browser responses and generated
 DOM. When retained, the generated `browser_screenshot` entry also includes
 `content_type: "image/jpeg"` and `body_base64`. Treat returned HTML as inert text.
 
-`usage` records browser requests, blocked requests, bytes, duration and
-accounting as available. For managed keys, `usage.accounting.request_credits`
-shows the original attribution and reservation state. Known challenge markers
-can produce `source_challenge` with a source HTTP 200. The result always reports
+`usage` records browser requests, blocked requests and their reasons
+(`blocked_reasons`), the number of other public origins that served
+subresources (`subresource_origins`), bytes, duration and accounting as
+available. `browser` names the engine and version that rendered the page. For
+managed keys, `usage.accounting.request_credits` shows the original attribution
+and reservation state. The result always reports
 `application_acceptance: "not_evaluated"`.
+
+### What a rendered page may load
+
+A browser profile decides how much of the page's own traffic is admitted:
+
+- `subresources`: `same_origin` (default for operator profiles) or `public`.
+  With `public`, the page's scripts, stylesheets, images, fonts and fetch/XHR
+  requests to other origins load when the origin is public HTTPS on port 443
+  and every DNS answer is a public address. Subresource redirects may cross
+  origins; each hop is admitted the same way. Site-set API headers (for example
+  `x-api-key`) are allowed; proxy credentials, gateway headers and FetchX keys
+  are always blocked.
+- `frames`: child frames (challenge widgets, embedded content) and their
+  requests load under the same rules.
+- `page_post`: the page's own XHR/fetch POST requests (body up to 64 KiB) are
+  admitted, for search and GraphQL data calls. Render callers still cannot send
+  a body or headers themselves.
+
+Managed (Playground) render enables all three. Every admitted request counts
+against the same request, byte, provider-rule and cooldown limits. The main
+navigation stays on the prepared origin. Cookies from all origins work during
+the render; only the prepared origin's cookies are kept on the session.
+Popups, downloads, WebSockets and workers stay blocked.
+
+### Challenges, rate limits and cooldowns
+
+A request that FetchX does not escalate on its own gets the source's outcome
+back clearly, so the caller can decide what to do next. (Automatic escalation
+across routes and engines is a separate, opt-in mode.)
+
+A recognised bot-manager interstitial is `source_challenge` whatever its HTTP
+status, including 200, 202, 403 and 429. `error.details.vendor` names the
+vendor when it can be attributed (`datadome`, `cloudflare`, `aws_waf`, `human`,
+`amazon`, otherwise `unknown`) and `error.details.http_status` keeps the source
+status. On a datacenter or direct route, `retry.next_action` is
+`consider_residential_new_request` with a `suggested_proxy`: prepare again for
+that route, then send a new request with a new idempotency key after any
+`retry_after`. A plain 429 stays `source_rate_limited`.
+
+A 429 puts the source origin on a cooldown shared by all callers: the
+`Retry-After` value when present, otherwise 60 seconds, or 15 seconds when the
+429 body is a challenge page. While it lasts, requests fail with
+`source_cooldown`, and `error.details` carries `scope: "origin"`, `origin`,
+`cooldown_until` and `retry_after_seconds` (also in `retry.retry_after`). Wait
+until then; repeating the request earlier only fails again.
 
 Datacenter estimates for browser traffic require explicit operator review. A
 scoped `datacenterPricingAttestations` entry uses `schema_version: 2` and

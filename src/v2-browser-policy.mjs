@@ -8,12 +8,22 @@ import {fail} from './policy.mjs';
 export const BROWSER_SCREENSHOT_MAX_BYTES=1048576;
 export const BROWSER_PROBE_QUALIFICATION_KIND='pinned-relay-egress-v2';
 
+export const BROWSER_MAX_WAIT_MS=15000;
 export function browserProbePolicy(raw){
  if(raw===undefined)return null;
- if(!raw||typeof raw!=='object'||Array.isArray(raw)||Object.keys(raw).some(k=>!['enabled','max_requests','max_network_bytes','max_decoded_bytes','max_dom_bytes','settle_ms'].includes(k))||typeof raw.enabled!=='boolean')fail('browser_probe_configuration',503);
+ if(!raw||typeof raw!=='object'||Array.isArray(raw)||Object.keys(raw).some(k=>!['enabled','max_requests','max_network_bytes','max_decoded_bytes','max_dom_bytes','settle_ms','max_wait_ms','subresources','frames','page_post'].includes(k))||typeof raw.enabled!=='boolean')fail('browser_probe_configuration',503);
  if(!raw.enabled)return null;
- const policy={enabled:true,max_requests:8,max_network_bytes:4194304,max_decoded_bytes:4194304,max_dom_bytes:524288,settle_ms:750,...raw};
- for(const [name,min,max]of [['max_requests',1,32],['max_network_bytes',1024,16777216],['max_decoded_bytes',1024,8388608],['max_dom_bytes',1024,1048576],['settle_ms',0,2000]])if(!Number.isSafeInteger(policy[name])||policy[name]<min||policy[name]>max)fail('browser_probe_configuration',503);
+ const policy={enabled:true,max_requests:8,max_network_bytes:4194304,max_decoded_bytes:4194304,max_dom_bytes:524288,settle_ms:750,subresources:'same_origin',frames:false,page_post:false,...raw};
+ // frames: child frames (challenge widgets, embedded content) load like the
+ // page. page_post: the page's own XHR/fetch POSTs (bounded body) are admitted.
+ if(typeof policy.frames!=='boolean'||typeof policy.page_post!=='boolean')fail('browser_probe_configuration',503);
+ // settle_ms is the default wait; max_wait_ms is the ceiling a caller may ask
+ // for. subresources:'public' admits GET scripts, styles and data requests to
+ // other public HTTPS origins (DNS and private-address checks still apply).
+ policy.max_wait_ms??=policy.settle_ms;
+ if(!['same_origin','public'].includes(policy.subresources))fail('browser_probe_configuration',503);
+ if(!Number.isSafeInteger(policy.max_wait_ms)||policy.max_wait_ms<policy.settle_ms||policy.max_wait_ms>BROWSER_MAX_WAIT_MS)fail('browser_probe_configuration',503);
+ for(const [name,min,max]of [['max_requests',1,128],['max_network_bytes',1024,16777216],['max_decoded_bytes',1024,8388608],['max_dom_bytes',1024,1048576],['settle_ms',0,2000]])if(!Number.isSafeInteger(policy[name])||policy[name]<min||policy[name]>max)fail('browser_probe_configuration',503);
  return policy;
 }
 export async function binarySha(path){const hash=createHash('sha256');for await(const part of createReadStream(path))hash.update(part);return hash.digest('hex');}
@@ -81,7 +91,10 @@ export async function browserProbeRuntime(config){
  return reason?{available:false,reason}:result;
 }
 
-export const BROWSER_PROBE_ARGS=Object.freeze(['--proxy-bypass-list=<-loopback>','--disable-quic','--disable-http2','--dns-prefetch-disable','--disable-background-networking','--disable-component-update','--disable-sync','--disable-default-apps','--no-first-run','--no-default-browser-check','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1']);
+export const BROWSER_PROBE_ARGS=Object.freeze(['--proxy-bypass-list=<-loopback>','--disable-quic','--disable-http2','--dns-prefetch-disable','--disable-background-networking','--disable-component-update','--disable-sync','--disable-default-apps','--no-first-run','--no-default-browser-check','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1',
+ // Keep cross-site iframes in the page's renderer so the page's request
+ // interception admits (or blocks) their requests under the same policy.
+ '--disable-site-isolation-trials','--disable-features=IsolateOrigins,site-per-process']);
 
 // Chromium sends ws/wss to the "other" proxy list (socks=), ahead of
 // either HTTP list. Only HTTPS has a route to the metered CONNECT listener.
