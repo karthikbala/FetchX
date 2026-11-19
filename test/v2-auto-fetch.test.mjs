@@ -25,17 +25,18 @@ const fixtureArtifact=(kind,url,bytes,extra={})=>({kind,url,status:200,method:'G
  content_encoding:null,encoded_body_base64:null,encoded_sha256:null,encoded_bytes:null,encoded_size_basis:null,original_encoded_available:false,
  decoded_body_base64:bytes.toString('base64'),decoded_sha256:sha(bytes),decoded_bytes:bytes.length,tunnel_bytes:null,provider_status:null,decoding_error:null,...extra});
 const routeClass=proxy=>!proxy?'direct':JSON.stringify(proxy).includes('dc-')?'datacenter':'residential';
+const residentialProvider=proxy=>{const text=JSON.stringify(proxy??null);return text.includes('evomi')?'evomi':text.includes('dataimpulse')?'dataimpulse':null;};
 
 test('auto mode climbs cheapest first, learns, reuses knowledge, bills only the success and replays without dispatch',{skip:!process.env.TEST_DATABASE_URL},async()=>{
  assert.match(new URL(process.env.TEST_DATABASE_URL).pathname,/^\/gateway_test_[A-Za-z0-9]+$/);
  const root=await mkdtemp(join(tmpdir(),'fetchx-auto-')),store=new Store(process.env.TEST_DATABASE_URL);await store.init();
  await store.pool.query('TRUNCATE v2_registry,v2_ledger_events,v2_artifacts,v2_ledger,v2_operations,v2_sessions,workflows,source_limits,site_routes RESTART IDENTITY CASCADE');
- const config=configFor(root),calls=[],seenHeaders=[];
+ const config=configFor(root),calls=[],seenHeaders=[],providers=[];
  // Per-class behaviour of the synthetic site.
  let site={direct:403,datacenter:403,residential:200};let uncertain=false;
  const gateway=new Gateway({store,config,profiles:{},resolve:async()=>[{address:'93.184.216.34',family:4}]});
  gateway.v2=new V2Gateway(gateway,{http:async(input,destination,limits,{proxy})=>{
-  const cls=routeClass(proxy);calls.push(cls);seenHeaders.push(input.headers);
+  const cls=routeClass(proxy);calls.push(cls);seenHeaders.push(input.headers);if(cls==='residential')providers.push(residentialProvider(proxy));
   if(uncertain)throw Object.assign(new GatewayError('source_timeout_unknown',504),{observed_encoded_bytes:0,observed_tunnel_bytes:400});
   const status=site[cls],headers={'content-type':'application/json'};if(status===429)headers['retry-after']='120';
   return {status,headers,raw_headers:Object.entries(headers).flat(),encoded:Buffer.from(status===200?'{"ok":true}':'{"blocked":true}'),tunnel_bytes:proxy?300:null,provider_status:proxy?200:null};
@@ -70,6 +71,8 @@ test('auto mode climbs cheapest first, learns, reuses knowledge, bills only the 
   // A rate limit rotates to fresh residential IPs (HTTP first). This profile cannot render and the
   // datacenter route is held by the site cooldown, so four attempts reach the site.
   assert.deepEqual(calls,['direct','residential','residential','residential']);
+  // Residential retries alternate providers: Evomi, then DataImpulse, then Evomi.
+  assert.deepEqual(providers.slice(-3),['evomi','dataimpulse','evomi']);
   assert.deepEqual(limited.body.auto.routes_tried.filter(r=>r.result!=='not_admitted').map(r=>[r.class,r.rotation??0,r.result]),[['direct',0,'rate_limited'],['residential',0,'rate_limited'],['residential',1,'rate_limited'],['residential',2,'rate_limited']]);
   assert.equal(limited.body.success,false);assert.equal(limited.body.auto.next.action,'retry_after');assert.equal(limited.body.auto.next.retry_after_seconds,120);
   assert.equal(limited.body.auto.billed_attempt,null);

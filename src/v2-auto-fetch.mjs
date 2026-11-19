@@ -24,6 +24,7 @@ import {providerRule} from './provider-rules.mjs';
 import {siteHost,siteRoutes} from './site-knowledge.mjs';
 
 export const AUTO_MAX_ATTEMPTS=5;
+const OTHER_PROVIDER={evomi:'dataimpulse',dataimpulse:'evomi'};
 const AUTO_MAX_SLOTS=10,AUTO_MAX_INLINE_WAIT_S=20;
 function cooldownSeconds(error){
  if(error?.code!=='source_cooldown')return null;
@@ -195,7 +196,7 @@ export async function autoFetch(gw,project,raw,identity,options={}){
  const fixed=browserHeaders(input.headers,(await ensureLadder()).headers);base.headers=fixed.headers;
  const {PublicRenderGateway}=await import('./v2-public-render.mjs');
  const render=new PublicRenderGateway(v2);
- let dispatched=0,cooldownResponse=null;const waited=new Set();
+ let dispatched=0,cooldownResponse=null,lastResidentialProvider=null;const waited=new Set();
  // Slots are recorded routes; a slot refused at admission costs nothing and
  // does not count toward max_attempts.
  for(let slot=0;slot<AUTO_MAX_SLOTS&&dispatched<maxAttempts;slot++){
@@ -208,9 +209,12 @@ export async function autoFetch(gw,project,raw,identity,options={}){
   });
   if(!route)break;
   const attemptKey=autoAttemptKey(key,slot),proxy={class:route.class,country:route.country};
+  // After a residential attempt fails, the next one uses the other residential
+  // provider (Evomi <-> DataImpulse), when it is enabled and allowed.
+  const preferProvider=route.class==='residential'&&lastResidentialProvider?OTHER_PROVIDER[lastResidentialProvider]??null:null;
   const run=()=>route.transport==='browser'
-   ?render.render(project,{idempotency_key:attemptKey,access_profile:base.access_profile,url:base.url,proxy,...(base.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:base.max_estimated_micro_usd})},identity)
-   :gw.fetch(project,{...base,idempotency_key:attemptKey,proxy},identity,options);
+   ?render.render(project,{idempotency_key:attemptKey,access_profile:base.access_profile,url:base.url,proxy,...(base.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:base.max_estimated_micro_usd})},identity,{preferProvider})
+   :gw.fetch(project,{...base,idempotency_key:attemptKey,proxy},identity,{...options,preferProvider});
   let response;
   try{response=await run();}
   catch(error){
@@ -233,7 +237,8 @@ export async function autoFetch(gw,project,raw,identity,options={}){
    if(wait!==null&&wait<=AUTO_MAX_INLINE_WAIT_S&&!waited.has(slot)){await new Promise(r=>setTimeout(r,wait*1000));waited.add(slot);slot--;tried.push({...route,result:'waited',code:'source_cooldown'});continue;}
    tried.push({...route,result:'not_admitted',code:'source_cooldown'});cooldownResponse??=response;continue;
   }
-  dispatched++;last=response;result=attemptResult(response);finalSlot=slot;finalTransport=route.transport;tried.push({...route,result});
+  dispatched++;last=response;result=attemptResult(response);
+  if(route.class==='residential'&&response.routing?.provider)lastResidentialProvider=response.routing.provider;finalSlot=slot;finalTransport=route.transport;tried.push({...route,result});
   // Data, a real 404, or an uncertain outcome ends the ladder. Uncertain source
   // work is never retried. A rate limit moves on to a fresh residential IP.
   if(['success','answered','uncertain'].includes(result))break;

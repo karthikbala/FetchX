@@ -271,11 +271,13 @@ export class V2Gateway{
   return route.class!=='residential'||(route.provider==='evomi'||publicUrl&&profile.version===PUBLIC_URL_V2_REF.version)&&
    reviewedPaidResidentialBudget(this.config,route.provider)?.provider===route.provider;
  }
- residentialProvider(profile,country,project){
+ // prefer: try this provider first (auto mode alternates providers after a failure).
+ residentialProvider(profile,country,project,{prefer=null}={}){
   const scopedBrowser=isPlaygroundRef(profile)&&profile.playground_execution==='browser'&&
    profile.browser_residential_provider_policy===REVIEWED_BROWSER_RESIDENTIAL_PROVIDER_POLICY;
   const reviewed=scopedBrowser?reviewedPaidCreditRoutes(this.config):null;
-  return ['evomi','dataimpulse'].find(provider=>{
+  const order=['evomi','dataimpulse'].sort((a,b)=>(a===prefer?0:1)-(b===prefer?0:1));
+  return order.find(provider=>{
    const settings=this.config.residential?.providers?.[provider],route={class:'residential',country,provider};
    return settings?.enabled&&settings.username&&settings.password&&(!settings.countries||settings.countries.includes(country))&&
     (!reviewed||reviewed.some(rule=>rule.accessProfile.id===PUBLIC_URL_V2_REF.id&&rule.accessProfile.version===PUBLIC_URL_V2_REF.version&&
@@ -386,7 +388,7 @@ export class V2Gateway{
   return this.registered('recipe',r);
  }
  async recipes(project){const recipes=[];for(const r of Object.values(this.config.v2?.recipes??{}))if(this.config.projects[project]?.v2_access_profiles?.includes(refKey(r.access_profile)))recipes.push(await this.recipe(project,{id:r.id,version:r.version}));return {recipes};}
- route(p,proxy,project){
+ route(p,proxy,project,{preferProvider=null}={}){
   if(!exact(proxy,['class','country','affinity'])||!['direct','datacenter','residential'].includes(proxy.class)||proxy.affinity!=='session')fail('capability_unsupported',409);
   if(!p.proxy_classes.includes(proxy.class))fail('proxy_class_forbidden',403);
   if(proxy.class==='direct'){if(proxy.country!==null)fail('direct_country_unverified');return {...proxy,provider:'direct',proxy_id:null};}
@@ -399,7 +401,7 @@ export class V2Gateway{
    const selected=pool[Math.floor(Math.random()*pool.length)];this.checkProxy(selected);
    return {...route,proxy_id:selected.id};
   }
-  const provider=this.residentialProvider(p,proxy.country,project);
+  const provider=this.residentialProvider(p,proxy.country,project,{prefer:preferProvider});
   if(!provider&&this.controlCredits.managed(project)&&!isPlaygroundRef(p))fail(isPublicUrlProfile(p)?'paid_credit_route_forbidden':'credit_route_forbidden',403);
   if(!provider)fail('residential_provider_unavailable',503);
   const residentialSession=randomBytes(5).toString('hex');
@@ -417,7 +419,7 @@ export class V2Gateway{
  sessionView(row){const r=this.sealer.open(row.route);return {id:row.id,access_profile:{id:row.policy.id,version:row.policy.version},transport:r.transport??'http',proxy:{class:r.class,country:r.country,affinity:r.affinity,provider:r.provider},state:new Date(row.expires_at)<=new Date()?'expired':row.state,expires_at:row.expires_at,requests:row.requests,encoded_bytes:Number(row.encoded_bytes),state_support:{cookie_jar:!isPublicUrlProfile(row.policy),local_storage:false,live_connection:false}};}
  async session(project,raw,options){return this.#openSession(project,raw,'http',options);}
  async renderSession(project,raw,options){return this.#openSession(project,raw,'browser',options);}
- async #openSession(project,raw,transport,{profile,paid=false}={}){
+ async #openSession(project,raw,transport,{profile,paid=false,preferProvider=null}={}){
   if(!exact(raw,['idempotency_key','access_profile','transport','proxy']))fail('session_invalid');key(raw.idempotency_key);
   if(raw.transport!==transport)fail('capability_unsupported',409);
   if(profile&&(!isPlaygroundRef(profile)||refKey(profile)!==refKey(raw.access_profile)))fail('access_profile_forbidden',403);
@@ -430,7 +432,7 @@ export class V2Gateway{
    await c.query('SELECT pg_advisory_xact_lock(2002)');
    const old=(await c.query('SELECT * FROM v2_sessions WHERE project=$1 AND key=$2',[project,raw.idempotency_key])).rows[0];
    if(old){if(old.input_hash!==hash)fail('idempotency_conflict',409);return this.sessionView(old);}
-   const route=this.route(p,raw.proxy,project),id=randomUUID();
+   const route=this.route(p,raw.proxy,project,{preferProvider}),id=randomUUID();
    if(paidSession&&!this.approvedPaidRoute(project,p,route))
     fail('paid_credit_route_forbidden',403);
    if(transport==='browser')route.transport='browser';

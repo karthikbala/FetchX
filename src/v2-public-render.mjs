@@ -198,15 +198,15 @@ export class PublicRenderGateway{
   return row;
  }
 
- async render(project,raw,identity){
+ async render(project,raw,identity,{preferProvider=null}={}){
   this.v2.controlCredits.keyId(project,identity);
   const input=normalize(raw),key=input.idempotency_key,hash=sha(JSON.stringify(input));
-  return this.respond(project,key,await this.capture(project,key,hash,()=>input,identity));
+  return this.respond(project,key,await this.capture(project,key,hash,()=>input,identity,{preferProvider}));
  }
 
  // The caller contract is fingerprinted separately from the configured
  // routing input. Existing captures can be recovered after route changes.
- async capture(project,key,hash,resolveInput,identity,{timeoutMs}={}){
+ async capture(project,key,hash,resolveInput,identity,{timeoutMs,preferProvider=null}={}){
   const internalKey=this.operationKey(key);
   if(await this.fingerprint(project,key,hash)){
    let retained;
@@ -233,7 +233,7 @@ export class PublicRenderGateway{
   // Bind before opening a session so even concurrent conflicting submissions
   // cannot create sessions with different routes under the caller's key.
   await this.fingerprint(project,key,hash,{bind:true});
-  const session=await this.v2.renderSession(project,{idempotency_key:this.sessionKey(key),access_profile:input.access_profile,transport:'browser',proxy:{...input.proxy,affinity:'session'}},{profile:candidate});
+  const session=await this.v2.renderSession(project,{idempotency_key:this.sessionKey(key),access_profile:input.access_profile,transport:'browser',proxy:{...input.proxy,affinity:'session'}},{profile:candidate,preferProvider});
   let operation;
   try{
    const {max_estimated_micro_usd,screenshot,wait_ms}=input;

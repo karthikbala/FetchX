@@ -257,7 +257,7 @@ export class PublicFetchGateway{
   if(saved&&hash!==undefined&&saved.hash!==hash)fail('idempotency_conflict',409);
   return saved;
  }
- async fetch(project,raw,identity,{automaticTransfer=true}={}){
+ async fetch(project,raw,identity,{automaticTransfer=true,preferProvider=null}={}){
   this.v2.controlCredits.keyId(project,identity);
   if(isAutoRequest(raw))return autoFetch(this,project,raw,identity,{automaticTransfer});
   // Transfer mode is a control-client preference for new admissions, outside the replay fingerprint.
@@ -280,7 +280,7 @@ export class PublicFetchGateway{
    if(session.transport!=='http')fail('capability_unsupported',409);
    if(session.access_profile.id!==input.access_profile.id||session.access_profile.version!==input.access_profile.version)fail('session_profile_conflict',409);
    if(session.proxy.class!==input.proxy.class||session.proxy.country!==input.proxy.country)fail('session_route_conflict',409);
-  }else session=await this.v2.session(project,{idempotency_key:names.session,access_profile:input.access_profile,transport:'http',proxy:{...input.proxy,affinity:'session'}},{profile:candidate,paid});
+  }else session=await this.v2.session(project,{idempotency_key:names.session,access_profile:input.access_profile,transport:'http',proxy:{...input.proxy,affinity:'session'}},{profile:candidate,paid,preferProvider});
   await this.fingerprint(project,input.idempotency_key,hash,{bind:true});
   let operation;
   try{operation=await this.v2.operation(project,{idempotency_key:names.operation,session_id:session.id,request,...(input.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:input.max_estimated_micro_usd}),...paidLimits(input),...(input.retry===true?{retry:true}:{})},identity,{automaticTransfer});}
