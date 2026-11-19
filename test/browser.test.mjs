@@ -129,7 +129,9 @@ test('page captchas: Turnstile through its form, reCAPTCHA through its callback,
     assert.deepEqual(await solvePageCaptchas(page, context, hooks, {deadline: Date.now() + 60_000}),
       [{type: 'recaptcha_v2', outcome: 'passed', submitted_via: 'callback'}]);
     await page.goto(`http://127.0.0.1:${port}/guarded`);
-    const datadome = await solvePageCaptchas(page, context, hooks, {deadline: Date.now() + 60_000});
+    // Camoufox ignores the automation cookie API, so the page has to set the cookie itself.
+    const ignoresCookieApi = {addCookies: async () => {}};
+    const datadome = await solvePageCaptchas(page, ignoresCookieApi, hooks, {deadline: Date.now() + 60_000});
     assert.deepEqual(datadome, [{type: 'datadome', outcome: 'passed', submitted_via: 'cookie'}]);
     assert.equal(datadomeCleared, true);
     assert.deepEqual(asked, ['turnstile', 'recaptcha_v2', 'datadome']);
