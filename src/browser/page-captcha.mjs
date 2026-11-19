@@ -77,6 +77,15 @@ function parseCookie(header) {
   return cookie;
 }
 
+// Runs in the page: sets a solved cookie for the page's own site.
+function setPageCookie({name, value, domain, path}) {
+  const scope = (domain ?? '').replace(/^\./, '').toLowerCase();
+  const parts = [`${name}=${value}`, `Path=${path?.startsWith('/') ? path : '/'}`, 'Max-Age=31536000', 'SameSite=Lax'];
+  if (scope && (location.hostname === scope || location.hostname.endsWith(`.${scope}`))) parts.push(`Domain=${scope}`);
+  if (location.protocol === 'https:') parts.push('Secure');
+  document.cookie = parts.join('; ');
+}
+
 async function settle(page, ms, remaining) {
   await page.waitForLoadState('domcontentloaded', {timeout: Math.min(15_000, remaining())}).catch(() => {});
   await page.waitForTimeout(Math.min(Math.max(ms, 1500), remaining())).catch(() => {});
@@ -128,7 +137,13 @@ export async function solvePageCaptchas(page, context, hooks, {deadline, settleM
       if (found.type === 'datadome') {
         const answer = await hooks.captcha({type: 'datadome', website_url: page.url(), captcha_url: found.captcha_url, user_agent: userAgent});
         const cookie = parseCookie(answer.cookie);
-        await context.addCookies([{name: cookie.name, value: cookie.value, url: page.url()}]);
+        if (!/^[A-Za-z0-9_-]{1,64}$/.test(cookie.name) || /[\x00-\x1f\x7f]/.test(cookie.value)) {
+          throw Object.assign(new Error('bad cookie'), {code: 'captcha_answer_invalid'});
+        }
+        // Camoufox's private browsing jar ignores the automation cookie API, so the
+        // page sets the cookie itself, the way DataDome's own script does.
+        await context.addCookies([{name: cookie.name, value: cookie.value, url: page.url()}]).catch(() => {});
+        await page.evaluate(setPageCookie, cookie);
         await page.reload({waitUntil: 'domcontentloaded', timeout: Math.min(30_000, remaining())});
         summary.submitted_via = 'cookie';
       } else if (found.type === 'hcaptcha') {
