@@ -128,7 +128,9 @@ class WorkerDriver:
         self.asset_path = self._absolute("asset_manifest")
         self.controller_ip = str(ipaddress.IPv4Address(config["controller_public_ipv4"]))
         self.boot_timeout = self._seconds("boot_timeout_seconds", 30, 3600)
+        self.bake_timeout = self._seconds("bake_timeout_seconds", 300, 3600) if "bake_timeout_seconds" in config else 1800
         self.lease_seconds = self._seconds("worker_lease_seconds", 30, 3600)
+        self._fingerprint = None
 
     def _absolute(self, key):
         raw = self.config[key]
@@ -197,7 +199,9 @@ class WorkerDriver:
             raise WorkerDriverError("worker socket path too long")
         return ident, folder, sock
 
-    def prepare(self, record):
+    def prepare(self, record, preinstalled=False):
+        """Cloud-init for one VM. preinstalled: it boots from a worker snapshot, so the
+        packages and assets are already there and only per-VM identity is written."""
         self._root()
         ident, folder, _ = self._paths(record)
         deadline = time.monotonic() + min(self.boot_timeout, 60)
@@ -243,7 +247,8 @@ class WorkerDriver:
             {"path": "/etc/ssh/fetchx-tunnel.match", "permissions": "0600", "content": ssh_match},
         ]
         cloud = {
-            "package_update": True, "packages": ["docker.io", "nftables", "python3", "ca-certificates"],
+            **({"package_update": False} if preinstalled else
+               {"package_update": True, "packages": ["docker.io", "nftables", "python3", "ca-certificates"]}),
             "ssh_pwauth": False, "disable_root": False,
             "ssh_deletekeys": True,
             "ssh_keys": {"ed25519_private": (folder / "host_ed25519").read_text(), "ed25519_public": host},
@@ -255,6 +260,8 @@ class WorkerDriver:
                 ["/usr/sbin/sshd", "-t"], ["/usr/bin/systemctl", "reload", "ssh"],
                 ["/usr/bin/systemctl", "daemon-reload"],
                 ["/usr/bin/systemctl", "enable", "--now", "docker", "nftables", "fetchx-worker-watchdog"],
+                # A snapshot boots with the bake VM's rules loaded; apply this VM's.
+                ["/usr/bin/systemctl", "restart", "nftables"],
             ],
         }
         # JSON is a YAML 1.2 subset; no string interpolation into cloud-init commands.
@@ -273,7 +280,7 @@ class WorkerDriver:
                 " ip protocol icmp accept\n ip6 nexthdr ipv6-icmp accept\n udp sport 67 udp dport 68 accept\n }\n"
                 " chain forward { type filter hook forward priority -10; policy drop; }\n}\n")
 
-    def _manifest(self, deadline=None):
+    def _manifest(self, deadline=None, verify_assets=True):
         _private(self.asset_path)
         _private(self.asset_path.parent, True)
         manifest = json.loads(self.asset_path.read_text())
@@ -288,7 +295,7 @@ class WorkerDriver:
             if not path.is_absolute() or path.parent != self.asset_path.parent:
                 raise WorkerDriverError("assets must be siblings of private asset manifest")
             _private(path)
-            if _sha(path, deadline) != manifest[key]["sha256"]:
+            if verify_assets and _sha(path, deadline) != manifest[key]["sha256"]:
                 raise WorkerDriverError("private asset digest mismatch")
             paths[key] = path
         remote = json.loads(_json(manifest))
@@ -296,6 +303,16 @@ class WorkerDriver:
         remote["browser"]["archive"] = "browser.tar"
         remote["seccomp"]["path"] = "seccomp.json"
         return remote, paths
+
+    def fingerprint(self):
+        """The installed-assets identity a VM reports (sha256 of its manifest). A snapshot
+        is used only while it matches; assets themselves are hashed before any upload."""
+        info = self.asset_path.stat()
+        stamp = (info.st_ino, info.st_size, info.st_mtime_ns)
+        if not self._fingerprint or self._fingerprint[0] != stamp:
+            manifest, _ = self._manifest(verify_assets=False)
+            self._fingerprint = (stamp, hashlib.sha256(_json(manifest).encode()).hexdigest())
+        return self._fingerprint[1]
 
     def _ssh(self, record, server, admin=True):
         ident, folder, _ = self._paths(record)
@@ -332,11 +349,8 @@ class WorkerDriver:
         self._record(record)
         self._renew(record, server, time.monotonic() + min(15, self.lease_seconds / 3))
 
-    def bootstrap(self, record, server):
-        self._root()
-        ident, folder, sock = self._paths(record)
-        deadline = time.monotonic() + min(self.boot_timeout, self._remaining(record))
-        manifest, paths = self._manifest(deadline)
+    def _installed(self, record, server, deadline):
+        """Waits for cloud-init, then returns the VM's installed-assets fingerprint (or None)."""
         # A failed SSH connection is retried for readiness only; cloud creation is never retried here.
         while True:
             try:
@@ -352,10 +366,16 @@ class WorkerDriver:
             if time.monotonic() + 2 >= deadline:
                 raise WorkerDriverError("worker cloud-init did not become ready before deadline")
             time.sleep(2)
+        return status.get("manifest_sha256")
+
+    def _install(self, record, server, manifest, paths, deadline):
+        """Uploads the assets unless this VM (or the snapshot it booted from) already has them."""
+        _, folder, _ = self._paths(record)
         fingerprint = hashlib.sha256(_json(manifest).encode()).hexdigest()
-        if status.get("manifest_sha256") not in (None, fingerprint):
+        installed = self._installed(record, server, deadline)
+        if installed not in (None, fingerprint):
             raise WorkerDriverError("installed worker assets differ; replacement requires a new VM")
-        if not status.get("manifest_sha256"):
+        if not installed:
             self._renew(record, server, deadline)
             # Materialize a private tar stream on disk: never buffer image/browser archives in RAM.
             with tempfile.TemporaryFile(dir=folder) as payload:
@@ -371,6 +391,26 @@ class WorkerDriver:
                     archive.addfile(info, io.BytesIO(raw))
                 payload.seek(0)
                 self._agent(record, server, "install", deadline, stdin=payload)
+        return fingerprint
+
+    def bake(self, record, server):
+        """Installs the assets on a bake VM, then seals it: per-VM identity removed and
+        powered off, ready to be saved as a worker snapshot. Never starts a worker."""
+        self._root()
+        deadline = time.monotonic() + min(self.bake_timeout, self._remaining(record))
+        manifest, paths = self._manifest(deadline)
+        fingerprint = self._install(record, server, manifest, paths, deadline)
+        if fingerprint != record.get("manifest_sha256"):
+            raise WorkerDriverError("worker assets changed during bake")
+        self._agent(record, server, "seal", deadline)
+        return {"sealed": True, "manifest_sha256": fingerprint}
+
+    def bootstrap(self, record, server):
+        self._root()
+        ident, folder, sock = self._paths(record)
+        deadline = time.monotonic() + min(self.boot_timeout, self._remaining(record))
+        manifest, paths = self._manifest(deadline)
+        self._install(record, server, manifest, paths, deadline)
         self._renew(record, server, deadline)
         self._agent(record, server, "start", deadline)
         self._negative_probes(record, server, deadline)

@@ -87,6 +87,8 @@ classic/containerd stores. Browser executable health must match the exact
 manifest version/SHA and Linux/x64. Gateway qualification expiry remains enforced
 by the gateway. Bootstrap also runs a synthetic Camoufox sandbox smoke test.
 
+With `snapshot_boot: true` the controller bakes a worker snapshot from this bundle by itself, and boots new workers from it once it is ready. See [worker snapshots](../../docs/hetzner-autoscaling.md#worker-snapshots). A new bundle means a new snapshot: until it is baked, workers boot stock Ubuntu and receive the upload.
+
 Initialize the durable ledger explicitly with the disabled configuration:
 
 ```sh

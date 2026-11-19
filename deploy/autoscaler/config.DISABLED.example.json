@@ -1,5 +1,6 @@
 {
   "enabled": false,
+  "snapshot_boot": false,
   "deployment": "fetchx-production",
   "state_dir": "/var/lib/fetchx-autoscaler",
   "registry_path": "/opt/crawling-platform/browser-pool/registry/workers.json",

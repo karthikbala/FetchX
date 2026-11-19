@@ -20,6 +20,10 @@ HOME = Path("/opt/fetchx-worker")
 NET = Path("/sys/class/net")
 BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 CONTAINER = "fetchx-autoscaled-worker"
+REMOTE_AGENT = Path("/usr/local/lib/fetchx-autoscaler/worker_agent.py")
+SSH_DIR = Path("/etc/ssh")
+ROOT_AUTHORIZED_KEYS = Path("/root/.ssh/authorized_keys")
+WATCHDOG_UNIT = Path("/etc/systemd/system/fetchx-worker-watchdog.service")
 HEX = re.compile(r"[a-f0-9]{64}\Z")
 DIGEST = re.compile(r"sha256:[a-f0-9]{64}\Z")
 
@@ -393,6 +397,41 @@ def start():
         raise
 
 
+# Per-VM state a snapshot must never carry: identity, lease, egress accounting and
+# readiness markers. Installed assets (manifest, image, browser, pin, seccomp) stay.
+PER_VM_FILES = ("worker.json", "lease.json", "egress.json", "egress.lock", "configured", "started", "retired", "smoke-passed")
+
+
+def seal():
+    """Turns an installed bake VM into a snapshot source, then powers it off. Only a VM
+    that never ran a worker can be sealed; a new VM from the snapshot gets fresh SSH host
+    keys, authorized keys, worker settings and lease from its own cloud-init."""
+    settings()
+    manifest = validate_manifest(json.loads((HOME / "manifest.json").read_text()))
+    if (HOME / "started").exists() or (HOME / "retired").exists() or run(["docker", "container", "inspect", CONTAINER], check=False).returncode == 0:
+        raise ValueError("only a VM that never ran a worker can be sealed")
+    if not image_matches(manifest) or sha(HOME / "seccomp.json") != manifest["seccomp"]["sha256"]:
+        raise ValueError("installed assets changed")
+    run(["systemctl", "disable", "--now", "fetchx-worker-watchdog"])
+    WATCHDOG_UNIT.unlink(missing_ok=True)
+    run(["systemctl", "daemon-reload"])
+    for name in PER_VM_FILES:
+        (HOME / name).unlink(missing_ok=True)
+    for path in [SSH_DIR / "fetchx-pool.authorized_keys", ROOT_AUTHORIZED_KEYS, *SSH_DIR.glob("ssh_host_*")]:
+        path.unlink(missing_ok=True)
+    run(["userdel", "fetchx-tunnel"], check=False)
+    run(["groupdel", "fetchx-worker"], check=False)
+    run(["journalctl", "--rotate"], check=False)
+    run(["journalctl", "--vacuum-time=1s"], check=False)
+    # New instance identity on next boot: cloud-init runs again, systemd makes a new machine-id.
+    run(["cloud-init", "clean", "--logs", "--machine-id"])
+    REMOTE_AGENT.unlink(missing_ok=True)
+    run(["sync"])
+    # A few seconds' delay lets this SSH session return before the VM stops.
+    run(["systemd-run", "--on-active=5", "--timer-property=AccuracySec=1s", "/usr/bin/systemctl", "poweroff"])
+    print(canonical({"sealed": True}))
+
+
 def main():
     if os.geteuid() != 0 or len(sys.argv) != 2:
         raise ValueError("root helper requires exactly one action")
@@ -404,7 +443,7 @@ def main():
     with open(HOME / "agent.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         {"configure": configure, "verify-sshd": verify_sshd, "status": status, "renew": renew,
-         "install": install, "start": start}[mode]()
+         "install": install, "start": start, "seal": seal}[mode]()
 
 
 if __name__ == "__main__":

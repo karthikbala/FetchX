@@ -119,7 +119,8 @@ class Controller:
                     monthly_budget_micro_eur=self.config["monthly_budget_micro_eur"],
                     committed_micro_eur=self.ledger.committed(now),
                     max_additional_workers=self.config["max_additional_workers"],
-                    workers=[{k: r.get(k) for k in ("id", "state", "server_id", "ipv4_id", "lease_expires_at", "reservation", "machine")} for r in rows],
+                    workers=[{k: r.get(k) for k in ("id", "state", "purpose", "image", "server_id", "ipv4_id", "lease_expires_at", "reservation", "machine")} for r in rows],
+                    snapshot=self.ledger.meta("snapshot"),
                     last_decision=dict(decision) if decision else None)
 
     def _decision(self, now, code, record=None):
@@ -189,6 +190,12 @@ class Controller:
                 elif kind == "renew" and r["state"] == "ready":
                     r["last_renewed_at"] = now
                     self.ledger.save(r)
+                elif kind == "bake" and r["state"] == "booting":
+                    if result.get("manifest_sha256") != r["manifest_sha256"]:
+                        raise SafetyError("bake_manifest_mismatch")
+                    r["bake_phase"] = "sealed"
+                    self.ledger.save(r)
+                    self._decision(now, "bake_sealed", r)
                 elif kind == "bootstrap":
                     self.driver.disconnect(r)
             except Exception:
@@ -303,6 +310,9 @@ class Controller:
             return
         if r.get("machine") and server.get("server_type", {}).get("id") != r["machine"]["type_id"]:
             self._drain(r, now, "machine_identity_mismatch")
+        if r.get("purpose") == "bake":
+            self._reconcile_bake(r, server, now)
+            return
         if r["state"] not in ("draining", "deleting"):
             if (not self.config["enabled"] or now >= r["lease_expires_at"] - self.config["drain_before_expiry_seconds"] or
                     (r["state"] == "booting" and now - r["created_at"] >= self.config["boot_timeout_seconds"])):
@@ -348,52 +358,118 @@ class Controller:
         elif r["state"] == "deleting":
             self._delete(r, server, now)
 
-    def _grow(self, metrics, now):
-        if not self.config["enabled"]:
-            self._decision(now, "disabled")
+    # ---------- worker snapshots ----------
+    # A bake VM boots stock Ubuntu, gets the worker assets installed and is sealed
+    # (per-VM identity removed, powered off); its disk becomes the snapshot new
+    # workers boot from. It is a ledger record like any worker (budget, ownership,
+    # hard lifetime, cleanup), but never registered and never runs a worker.
+
+    def _snapshot_labels(self, r):
+        return {"fetchx-deployment": self.config["deployment"], "fetchx-role": "worker-snapshot",
+                "fetchx-bake": r["id"], "fetchx-manifest": r["manifest_sha256"][:32]}
+
+    def _reconcile_bake(self, r, server, now):
+        if r["state"] in ("draining", "deleting"):
+            self._delete(r, server, now)
             return
-        rows = self.registry.read()
-        if len(rows) >= 64:
-            raise SafetyError("registry_resource_cap")
-        active = [w for w in metrics["workers"] if w["state"] == "active"]
-        if set((w["id"], w["state"]) for w in metrics["workers"]) != set((r["id"], r["state"]) for r in rows):
-            raise SafetyError("metrics_registry_mismatch")
-        registry_ids = {row["id"] for row in rows}
-        capacity = sum(row["state"] == "active" for row in rows)
-        capacity += sum(r["state"] == "booting" and r["id"] not in registry_ids for r in self.ledger.records())
-        if capacity >= metrics["max_concurrent_requests"]:
-            self.ledger.set_meta("pressure_since", None)
-            self._decision(now, "gateway_capacity_cap")
+        phase = r.get("bake_phase", "install")
+        # Imaging is bounded by the VM's hard lifetime: deleting the server mid-snapshot would waste it.
+        if not self.config["enabled"] or (phase in ("install", "sealed") and now - r["created_at"] >= self.config["bake_timeout_seconds"]):
+            self._drain(r, now, "bake_timeout" if self.config["enabled"] else "disabled_drain")
+            self._delete(r, server, now)
             return
-        pressure = (metrics["queue"]["pending"] > 0 and bool(active) and all(w["ready"] and w["busy"] for w in active) and
-                    metrics["queue"]["active"] >= min(len(active), metrics["max_concurrent_requests"]))
-        if not pressure:
-            self.ledger.set_meta("pressure_since", None)
-            self._decision(now, "no_sustained_pressure")
-            return
-        since = self.ledger.meta("pressure_since")
-        if since is None:
-            since = now
-            self.ledger.set_meta("pressure_since", since)
-        if now - since < self.config["scale_up_delay_seconds"] or metrics["queue"]["oldest_wait_ms"] < self.config["scale_up_delay_seconds"] * 1000:
-            self._decision(now, "scale_up_delay")
-            return
-        if any(r["state"] not in ("ready", "deleted", "cancelled", "draining", "deleting") or
-               (r["state"] in ("draining", "deleting") and (not r.get("server_id") or not r.get("ipv4_id")))
-               for r in self.ledger.records()):
-            self._decision(now, "growth_in_flight")
-            return
-        if now - self.ledger.meta("last_create_at", 0) < self.config["cooldown_seconds"]:
-            self._decision(now, "growth_cooldown")
-            return
-        server_types, pricing = self.cloud.server_types(), self.cloud.pricing()
-        now = int(self.clock())
-        metrics_snapshot(metrics, now, self.config["metrics_max_age_seconds"])
-        machine = select_machine(server_types, pricing, self.config,
-                                 self.ledger.meta("machine_cooldowns", {}), now)
-        record = self.ledger.reserve(now, uuid.uuid4().hex[:24], machine)
+        if phase == "install":
+            key = r["id"], "bake"
+            if key not in self.futures:
+                self.futures[key] = self.submit(self.driver.bake, dict(r), server)
+        elif phase == "sealed":
+            if server.get("status") != "off":
+                self._decision(now, "bake_waiting_poweroff", r)
+                return
+            # An earlier uncertain request may have created it: adopt by our labels, never post twice.
+            existing = [i for i in self.cloud.snapshots(self.config["deployment"])
+                        if i.get("labels", {}) == self._snapshot_labels(r)]
+            if len(existing) > 1:
+                raise SafetyError("duplicate_owned_snapshot")
+            if existing:
+                image = existing[0]
+            else:
+                try:
+                    image = self.cloud.create_snapshot(server["id"], "fetchx worker " + r["manifest_sha256"][:12], self._snapshot_labels(r))
+                except UncertainCreate:
+                    self._decision(now, "snapshot_uncertain", r)
+                    return
+            r.update(image_id=image["id"], bake_phase="imaging")
+            self.ledger.save(r)
+            self._decision(now, "snapshot_requested", r)
+        elif phase == "imaging":
+            image = self.cloud.image(r["image_id"])
+            if image is None or image.get("labels", {}) != self._snapshot_labels(r) or image.get("type") != "snapshot":
+                raise SafetyError("snapshot_identity_invalid")
+            if image.get("status") != "available":
+                self._decision(now, "snapshot_creating", r)
+                return
+            previous = self.ledger.meta("snapshot")
+            with self.ledger.transaction():
+                # A snapshot boots only servers whose disk is at least its source disk.
+                disk = image.get("disk_size")
+                self.ledger.set_meta("snapshot", {"image_id": image["id"], "manifest_sha256": r["manifest_sha256"], "created_at": now,
+                                                  "disk_gb": int(disk) if isinstance(disk, (int, float)) and not isinstance(disk, bool) and disk > 0 else None})
+                r["bake_phase"] = "done"
+                self.ledger.save(r)
+            self._decision(now, "snapshot_available", r)
+            # Older snapshots are no longer used; VMs already created from them are unaffected.
+            for old in self.cloud.snapshots(self.config["deployment"]):
+                labels = old.get("labels", {})
+                if (old.get("id") != image["id"] and labels.get("fetchx-role") == "worker-snapshot"
+                        and labels.get("fetchx-deployment") == self.config["deployment"]):
+                    self.cloud.delete_image(old["id"])
+                    self._decision(now, "snapshot_retired", r)
+            if previous and previous.get("image_id") not in (None, image["id"]):
+                self.cloud.delete_image(previous["image_id"])
+            self._drain(r, now, "bake_complete")
+            self._delete(r, server, now)
+        else:
+            self._drain(r, now, "bake_complete")
+            self._delete(r, server, now)
+
+    def _snapshot_for_boot(self, disk_gb=None):
+        """The snapshot image ID to boot a new worker from, or None for stock Ubuntu."""
+        snapshot = self.ledger.meta("snapshot")
+        if not self.config.get("snapshot_boot") or not snapshot:
+            return None
+        if not snapshot.get("disk_gb") or type(disk_gb) is not int or disk_gb < snapshot["disk_gb"]:
+            return None
         try:
-            prepared = self.driver.prepare(dict(record))
+            current = self.driver.fingerprint()
+        except Exception:
+            return None
+        return snapshot["image_id"] if snapshot.get("manifest_sha256") == current else None
+
+    def _maybe_bake(self, now):
+        if not self.config["enabled"] or not self.config["snapshot_boot"]:
+            return
+        records = self.ledger.records()
+        if any(r.get("purpose") == "bake" and r["state"] not in ("deleted", "cancelled") for r in records):
+            return
+        if now - self.ledger.meta("bake_started_at", 0) < self.config["bake_retry_seconds"]:
+            return
+        fingerprint = self.driver.fingerprint()
+        snapshot = self.ledger.meta("snapshot")
+        if snapshot and snapshot.get("manifest_sha256") == fingerprint:
+            return
+        self.ledger.set_meta("bake_started_at", now)
+        machine = select_machine(self.cloud.server_types(), self.cloud.pricing(), self.config,
+                                 self.ledger.meta("machine_cooldowns", {}), now)
+        record = self.ledger.reserve(now, uuid.uuid4().hex[:24], machine, purpose="bake", manifest_sha256=fingerprint)
+        self._create(record, now, preinstalled=False, image="ubuntu-24.04", growth=False)
+
+    def _create(self, record, now, preinstalled, image, growth, since=None):
+        """Prepares and posts one server for a fresh reservation. Growth creates also
+        start the cooldown; a failed placement cools that machine type either way."""
+        machine = record["machine"]
+        try:
+            prepared = self.driver.prepare(dict(record), preinstalled=preinstalled)
             if not isinstance(prepared["user_data"], str) or not prepared["user_data"]:
                 raise SafetyError("driver_prepare_invalid")
             now = int(self.clock())
@@ -417,10 +493,11 @@ class Controller:
         previous_create_at = self.ledger.meta("last_create_at", 0)
         with self.ledger.transaction():
             self.ledger.save(record)
-            self.ledger.set_meta("last_create_at", now)
-            self.ledger.set_meta("pressure_since", None)
+            if growth:
+                self.ledger.set_meta("last_create_at", now)
+                self.ledger.set_meta("pressure_since", None)
         try:
-            server = self.cloud.create(self.name(record), self.labels(record), prepared["user_data"], dict(record["machine"]), record["ssh_key_id"])
+            server = self.cloud.create(self.name(record), self.labels(record), prepared["user_data"], dict(machine), record["ssh_key_id"], image)
             if not self._owned(server, record) or server.get("name") != self.name(record) or type(server.get("id")) is not int:
                 raise UncertainCreate("create_uncertain")
             record.update(server_id=server["id"], state="booting")
@@ -428,7 +505,7 @@ class Controller:
             if type(ip) is int and ip > 0:
                 record["ipv4_id"] = ip
             self.ledger.save(record)
-            self._decision(now, "server_created", record)
+            self._decision(now, "bake_started" if record.get("purpose") == "bake" else "server_created", record)
         except UncertainCreate:
             record["state"] = "uncertain"
             self.ledger.save(record)
@@ -437,13 +514,69 @@ class Controller:
             record["state"] = "cancelled" if error.status is not None and 400 <= error.status < 500 else "uncertain"
             with self.ledger.transaction():
                 self.ledger.save(record)
-                if record["state"] == "cancelled" and error.provider_code:
+                if (record["state"] == "cancelled" and image != "ubuntu-24.04" and
+                        (error.status == 404 or error.provider_code in (None, "not_found", "invalid_input"))):
+                    # The snapshot is gone or unusable: boot stock Ubuntu and bake again.
+                    self.ledger.set_meta("snapshot", None)
+                    self.ledger.set_meta("bake_started_at", 0)
+                elif record["state"] == "cancelled" and error.provider_code:
                     cooldowns = self.ledger.meta("machine_cooldowns", {})
                     cooldowns[machine["server_type"] + "@" + machine["location"]] = now + self.config["machine_cooldown_seconds"]
                     self.ledger.set_meta("machine_cooldowns", cooldowns)
-                    self.ledger.set_meta("last_create_at", previous_create_at)
-                    self.ledger.set_meta("pressure_since", since)
+                    if growth:
+                        self.ledger.set_meta("last_create_at", previous_create_at)
+                        self.ledger.set_meta("pressure_since", since)
             self._decision(now, "create_rejected" if record["state"] == "cancelled" else "create_uncertain", record)
+            if image != "ubuntu-24.04" and self.ledger.meta("snapshot") is None:
+                self._decision(now, "snapshot_unusable", record)
+
+    def _grow(self, metrics, now):
+        if not self.config["enabled"]:
+            self._decision(now, "disabled")
+            return
+        rows = self.registry.read()
+        if len(rows) >= 64:
+            raise SafetyError("registry_resource_cap")
+        active = [w for w in metrics["workers"] if w["state"] == "active"]
+        if set((w["id"], w["state"]) for w in metrics["workers"]) != set((r["id"], r["state"]) for r in rows):
+            raise SafetyError("metrics_registry_mismatch")
+        registry_ids = {row["id"] for row in rows}
+        capacity = sum(row["state"] == "active" for row in rows)
+        capacity += sum(r["state"] == "booting" and r["id"] not in registry_ids and r.get("purpose") != "bake" for r in self.ledger.records())
+        if capacity >= metrics["max_concurrent_requests"]:
+            self.ledger.set_meta("pressure_since", None)
+            self._decision(now, "gateway_capacity_cap")
+            return
+        pressure = (metrics["queue"]["pending"] > 0 and bool(active) and all(w["ready"] and w["busy"] for w in active) and
+                    metrics["queue"]["active"] >= min(len(active), metrics["max_concurrent_requests"]))
+        if not pressure:
+            self.ledger.set_meta("pressure_since", None)
+            self._decision(now, "no_sustained_pressure")
+            return
+        since = self.ledger.meta("pressure_since")
+        if since is None:
+            since = now
+            self.ledger.set_meta("pressure_since", since)
+        if now - since < self.config["scale_up_delay_seconds"] or metrics["queue"]["oldest_wait_ms"] < self.config["scale_up_delay_seconds"] * 1000:
+            self._decision(now, "scale_up_delay")
+            return
+        if any(r.get("purpose") != "bake" and (r["state"] not in ("ready", "deleted", "cancelled", "draining", "deleting") or
+               (r["state"] in ("draining", "deleting") and (not r.get("server_id") or not r.get("ipv4_id"))))
+               for r in self.ledger.records()):
+            self._decision(now, "growth_in_flight")
+            return
+        if now - self.ledger.meta("last_create_at", 0) < self.config["cooldown_seconds"]:
+            self._decision(now, "growth_cooldown")
+            return
+        server_types, pricing = self.cloud.server_types(), self.cloud.pricing()
+        now = int(self.clock())
+        metrics_snapshot(metrics, now, self.config["metrics_max_age_seconds"])
+        machine = select_machine(server_types, pricing, self.config,
+                                 self.ledger.meta("machine_cooldowns", {}), now)
+        disk = next((t.get("disk") for t in server_types.get("server_types", []) if t.get("id") == machine["type_id"]), None)
+        image = self._snapshot_for_boot(disk)
+        record = self.ledger.reserve(now, uuid.uuid4().hex[:24], machine, image=image or "ubuntu-24.04")
+        self._create(record, now, preinstalled=image is not None, image=image or "ubuntu-24.04", growth=True, since=since)
 
     def once(self):
         now = int(self.clock())
@@ -482,6 +615,8 @@ class Controller:
                 now = int(self.clock())
                 metrics_snapshot(metrics, now, self.config["metrics_max_age_seconds"])
                 self._grow(metrics, now)
+            if not inventory_problem and not reconcile_problem:
+                self._maybe_bake(int(self.clock()))
         except (CloudError, SafetyError) as error:
             self.ledger.set_meta("pressure_since", None)
             self._decision(now, str(error))

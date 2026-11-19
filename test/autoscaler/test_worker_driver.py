@@ -241,6 +241,7 @@ class WorkerDriverTests(unittest.TestCase):
         control.ledger.reserve.return_value = {**self.record, "machine": machine}
         control.driver = self.worker
         control.cloud = Mock()
+        control.cloud.server_types.return_value = {"server_types": []}
         control.clock = time.time
         control._decision = Mock()
         metrics = {"version": 1, "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -328,6 +329,39 @@ class WorkerDriverTests(unittest.TestCase):
         http.return_value.getresponse.return_value.status = 200
         http.return_value.getresponse.return_value.read.return_value = json.dumps(body).encode()
         return remote, calls, http
+
+    def test_snapshot_boot_cloud_config_writes_identity_but_installs_nothing(self):
+        stock = json.loads(self.prepare()["user_data"].split("\n", 1)[1])
+        with patch.object(self.worker, "_run", side_effect=self.fake_run):
+            light = json.loads(self.worker.prepare(self.record, preinstalled=True)["user_data"].split("\n", 1)[1])
+        self.assertEqual(stock["packages"], ["docker.io", "nftables", "python3", "ca-certificates"])
+        self.assertNotIn("packages", light)
+        self.assertIs(light["package_update"], False)
+        for key in ("write_files", "runcmd", "users", "ssh_keys", "ssh_deletekeys"):
+            self.assertEqual(light[key], stock[key], key)
+
+    def test_fingerprint_is_the_installed_identity_and_follows_the_manifest(self):
+        remote, _ = self.worker._manifest()
+        self.assertEqual(self.worker.fingerprint(), hashlib.sha256(driver._json(remote).encode()).hexdigest())
+        before = self.worker.fingerprint()
+        self.manifest["seccomp"]["sha256"] = "d" * 64
+        self.save_manifest()
+        os.utime(self.assets / "manifest.json", ns=(time.time_ns() + 10**9, time.time_ns() + 10**9))
+        self.assertNotEqual(self.worker.fingerprint(), before)
+
+    def test_bake_installs_then_seals_and_never_starts_a_worker(self):
+        remote, calls, _ = self.bootstrap_fixture()
+        record = {**self.record, "manifest_sha256": self.worker.fingerprint()}
+        with patch.object(self.worker, "_agent", side_effect=remote):
+            self.assertEqual(self.worker.bake(record, self.server), {"sealed": True, "manifest_sha256": record["manifest_sha256"]})
+        self.assertEqual(calls, ["status", "renew", "install", "seal"])
+
+    def test_bake_refuses_a_bundle_that_changed_since_the_reservation(self):
+        remote, calls, _ = self.bootstrap_fixture()
+        record = {**self.record, "manifest_sha256": "e" * 64}
+        with patch.object(self.worker, "_agent", side_effect=remote), self.assertRaisesRegex(driver.WorkerDriverError, "changed during bake"):
+            self.worker.bake(record, self.server)
+        self.assertNotIn("seal", calls)
 
     def test_bootstrap_transfers_assets_and_returns_only_gateway_socket(self):
         remote, calls, http = self.bootstrap_fixture()
@@ -435,6 +469,57 @@ class AgentTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         agent.check_egress(initialize=True)
+
+    def seal_fixture(self):
+        system = self.home / "system"
+        (system / "ssh").mkdir(parents=True)
+        (system / "root").mkdir()
+        for name in ("ssh_host_ed25519_key", "ssh_host_ed25519_key.pub", "fetchx-pool.authorized_keys", "sshd_config"):
+            (system / "ssh" / name).write_text("synthetic")
+        for path in (system / "root/authorized_keys", system / "watchdog.service", system / "agent.py"):
+            path.write_text("synthetic")
+        for name, value in (("SSH_DIR", system / "ssh"), ("ROOT_AUTHORIZED_KEYS", system / "root/authorized_keys"),
+                            ("WATCHDOG_UNIT", system / "watchdog.service"), ("REMOTE_AGENT", system / "agent.py")):
+            patcher = patch.object(agent, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        (self.home / "manifest.json").write_text("{}")
+        (self.home / "seccomp.json").write_text("{}")
+        for name in ("lease.json", "configured", "egress.lock"):
+            (self.home / name).write_text("synthetic")
+        return system
+
+    def test_seal_strips_per_vm_identity_keeps_assets_and_powers_off(self):
+        system = self.seal_fixture()
+        commands = []
+        def run(argv, **kwargs):
+            commands.append(argv)
+            return result(1) if argv[:3] == ["docker", "container", "inspect"] else result()
+        with patch.object(agent, "validate_manifest", return_value={"seccomp": {"sha256": "ok"}}), patch.object(agent, "image_matches", return_value=True), patch.object(agent, "sha", return_value="ok"), patch.object(agent, "run", side_effect=run), patch("sys.stdout", io.StringIO()) as out:
+            agent.seal()
+        self.assertEqual(json.loads(out.getvalue()), {"sealed": True})
+        for name in agent.PER_VM_FILES:
+            self.assertFalse((self.home / name).exists(), name)
+        self.assertTrue((self.home / "manifest.json").exists() and (self.home / "seccomp.json").exists())
+        self.assertEqual(sorted(p.name for p in (system / "ssh").iterdir()), ["sshd_config"])
+        for path in (system / "root/authorized_keys", system / "watchdog.service", system / "agent.py"):
+            self.assertFalse(path.exists(), path)
+        self.assertIn(["cloud-init", "clean", "--logs", "--machine-id"], commands)
+        self.assertEqual(commands[-1][-2:], ["/usr/bin/systemctl", "poweroff"])
+        self.assertLess(commands.index(["systemctl", "disable", "--now", "fetchx-worker-watchdog"]), commands.index(commands[-1]))
+
+    def test_seal_refuses_a_vm_that_ran_or_retired_a_worker(self):
+        self.seal_fixture()
+        for marker in ("started", "retired"):
+            (self.home / marker).write_text("1")
+            with patch.object(agent, "validate_manifest", return_value={"seccomp": {"sha256": "ok"}}), patch.object(agent, "run", return_value=result(1)) as run:
+                with self.assertRaisesRegex(ValueError, "never ran a worker"):
+                    agent.seal()
+            self.assertNotIn(["systemctl", "disable", "--now", "fetchx-worker-watchdog"], [c.args[0] for c in run.call_args_list])
+            (self.home / marker).unlink()
+        with patch.object(agent, "validate_manifest", return_value={"seccomp": {"sha256": "ok"}}), patch.object(agent, "run", return_value=result(0)):
+            with self.assertRaisesRegex(ValueError, "never ran a worker"):
+                agent.seal()  # a container exists
 
     def test_egress_counts_device_interface_and_ignores_loopback_and_virtual(self):
         for name in ("lo", "docker0", "veth0"):
