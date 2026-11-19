@@ -1,3 +1,8 @@
+# The platform and its database. The engine runs from its own repository
+# (fetchx-engine) on the shared private network fetchx-internal (create it once:
+# docker network create fetchx-internal). The platform reaches it as
+# http://engine:8790, and it sends job events to http://platform-events:8789;
+# that port is not published to the host.
 name: fetchx
 services:
   db:
@@ -23,22 +28,26 @@ services:
     ports: [127.0.0.1:8788:8788]
     environment:
       DATABASE_URL: postgresql://fetchx:${FETCHX_DB_PASSWORD}@db/fetchx
-      GATEWAY_CONFIG: /run/secrets/gateway.json
+      PLATFORM_CONFIG: /run/secrets/platform.json
     volumes:
-      - ${FETCHX_HOME:?required}/secrets/gateway.json:/run/secrets/gateway.json:ro
-      - ${FETCHX_HOME:?required}/browser:/opt/gateway-browser:ro
+      - ${FETCHX_HOME:?required}/secrets/platform.json:/run/secrets/platform.json:ro
+    networks:
+      default: {}
+      fetchx-internal: {aliases: [platform-events]}
     read_only: true
-    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=512m"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=64m"]
     cap_drop: [ALL]
-    security_opt: [no-new-privileges:true, "seccomp=./deploy/chromium-seccomp.json"]
-    mem_limit: 2g
-    pids_limit: 256
-    stop_grace_period: 240s
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    pids_limit: 128
+    stop_grace_period: 30s
     healthcheck:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:8788/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 3
     logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
+networks:
+  fetchx-internal: {external: true}
 volumes:
   fetchx-db:

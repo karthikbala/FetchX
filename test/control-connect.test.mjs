@@ -4,7 +4,9 @@ import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import pg from 'pg';
 import {connectApiBase} from '../src/control-connect.mjs';
 import {Store} from '../src/store.mjs';
-import {createGateway,server} from '../src/server.mjs';
+import {createPlatform,server} from '../src/server.mjs';
+import {fakeEngine} from './fake-engine.mjs';
+import {SERVICE_TOKEN} from './helpers.mjs';
 
 const ORIGIN='http://127.0.0.1:4434';
 const API='http://127.0.0.1:8789';
@@ -42,8 +44,8 @@ test('Connect requires account approval, issues once under concurrency, and hono
  const otherOrigin='http://127.0.0.1:4435';
  const controlPlane={enabled:true,origins:[ORIGIN,otherOrigin],bridgeSecret:randomBytes(32).toString('hex'),sessionSecure:false,allowLoopbackDevelopment:true,apiBaseUrl:API,
   creditPolicy:{trialCredits:10}};
- const config={artifactKey:randomBytes(32).toString('hex'),projects:{},proxies:[],controlPlane};
- const gateway=createGateway({store,config,deps:{runtime:null,browserPool:null}});
+ const config={sealingKey:randomBytes(32).toString('hex'),projects:{},controlPlane,engine:{url:'http://engine.test:8790',serviceToken:SERVICE_TOKEN}};
+ const gateway=createPlatform({store,config,deps:{engineFetch:fakeEngine({token:SERVICE_TOKEN}).fetchImpl}});
  app=server(gateway);
  const identity=gateway.controlIdentity;
  const bridge={origin:ORIGIN,'x-fetchx-control-secret':controlPlane.bridgeSecret};

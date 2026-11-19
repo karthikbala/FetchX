@@ -1,0 +1,127 @@
+// docs/engine-api.json is a pinned copy of the engine's contract (the engine
+// repo holds the original and tests the engine against it). These tests hold
+// the platform side to it: every request the engine client sends is documented
+// and valid, the fake engine the platform tests use answers as the contract
+// says, and the admin portal forwards exactly the documented admin operations.
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import Ajv2020 from 'ajv/dist/2020.js';
+import spec from '../docs/engine-api.json' with {type: 'json'};
+import {ENGINE_CONTRACT} from '../src/engine/client.mjs';
+import {ADMIN_ROUTES} from '../src/control-admin.mjs';
+import {databaseUrl, html, openStore, platformFor} from './helpers.mjs';
+
+const ajv = new Ajv2020({allErrors: true, strict: false, validateFormats: false});
+const schemaId = 'urn:fetchx:engine-contract';
+ajv.addSchema({$id: schemaId, components: spec.components});
+const validator = schema => schema.$ref ? ajv.getSchema(schemaId + schema.$ref) : ajv.compile(schema);
+function assertValid(schema, value, label) {
+  const validate = validator(schema);
+  assert.ok(validate(value), `${label}: ${ajv.errorsText(validate.errors)}`);
+}
+const component = name => ({$ref: `#/components/schemas/${name}`});
+// The documented operation for a concrete method and path, with its path template.
+function operationFor(method, pathname) {
+  for (const [template, methods] of Object.entries(spec.paths)) {
+    const pattern = new RegExp('^' + template.replace(/\{[^}]+\}/g, '[^/]+') + '$');
+    if (pattern.test(pathname) && methods[method]) return {template, operation: methods[method]};
+  }
+  return null;
+}
+
+test('the pinned contract is the version the client speaks', () => {
+  assert.equal(spec.info.version, ENGINE_CONTRACT);
+});
+
+test('the admin portal forwards exactly the documented admin operations', () => {
+  const documented = Object.entries(spec.paths).filter(([path]) => path.startsWith('/internal/v1/admin/'))
+    .flatMap(([path, methods]) => Object.keys(methods).map(method => `${method.toUpperCase()} ${path.slice('/internal/v1'.length)}`)).sort();
+  const forwarded = ADMIN_ROUTES.map(([method, path]) => `${method} ${path.replace(/:([a-z]+)/g, '{$1}')}`).sort();
+  assert.deepEqual(forwarded, documented);
+  for (const [method, path, sendsBody] of ADMIN_ROUTES) {
+    const operation = spec.paths[`/internal/v1${path.replace(/:([a-z]+)/g, '{$1}')}`][method.toLowerCase()];
+    assert.equal(Boolean(operation.requestBody), sendsBody, `${method} ${path} body`);
+  }
+});
+
+test('engine client requests and fake engine answers and events match the contract', {skip: !databaseUrl}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const exchanges = [];
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  const {call, engine, events, platform} = await platformFor(store, {
+    script: request => request.url.includes('/wall') ? {status: 'failed', planned: ['http']}
+      : request.url.includes('/held') ? {hold: held} : {body: html('ok')},
+    wrapEngineFetch: fakeFetch => async (url, init) => {
+      const response = await fakeFetch(url, init);
+      exchanges.push({url: new URL(url), init, status: response.status, body: response.status === 204 ? null : await response.clone().arrayBuffer()});
+      return response;
+    },
+  });
+
+  const ok = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/a', formats: ['markdown'], tags: ['t'], webhook_url: 'https://hooks.example.com/x'}});
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/a', idempotency_key: ok.body.idempotency_key, formats: ['markdown'], tags: ['t'],
+    webhook_url: 'https://hooks.example.com/x'}});
+  await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/wall'}});
+  await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/a', render: 'always', max_credits: 1}});
+  await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/a', idempotency_key: ok.body.idempotency_key}});
+  await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/a', max_attempts: 9}});
+  await call('POST', '/v1/fetch', {body: {url: 'http://127.0.0.1/'}});
+  const pending = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/held', async: true}});
+  assert.equal(pending.status, 202);
+  await call('GET', `/v1/fetch/${pending.body.id}`);
+  await call('GET', `/v1/fetch/${pending.body.id}/content`);
+  await call('DELETE', `/v1/fetch/${pending.body.id}`);
+  release();
+  await engine.jobs.get(pending.body.id).done;
+  await call('GET', `/v1/fetch/${ok.body.id}?include_body=false`);
+  await call('GET', '/v1/fetch?limit=5&tag=t');
+  await call('GET', `/v1/fetch/${ok.body.id}/content`);
+  await call('GET', `/v1/fetch/${ok.body.id}/screenshot`);
+  await call('DELETE', `/v1/fetch/${ok.body.id}`);
+  await call('GET', `/v1/fetch/${ok.body.id}/content`);
+  await call('GET', '/v1/fetch/00000000-0000-4000-8000-000000000000');
+  await platform.engine.status();
+
+  const statuses = new Set();
+  for (const {url, init, status, body} of exchanges) {
+    const method = (init.method ?? 'GET').toLowerCase();
+    const label = `${method.toUpperCase()} ${url.pathname} -> ${status}`;
+    const found = operationFor(method, url.pathname);
+    assert.ok(found, `${label} is not documented`);
+    const {operation} = found;
+    assert.equal(init.headers.authorization, `Bearer ${platform.config.engine.serviceToken}`, label);
+    const parameters = operation.parameters ?? [];
+    for (const name of url.searchParams.keys()) assert.ok(parameters.some(p => p.in === 'query' && p.name === name), `${label}: query ${name} is not documented`);
+    for (const p of parameters.filter(p => p.in === 'query' && p.required)) assert.ok(url.searchParams.has(p.name), `${label}: ${p.name} is required`);
+    if (init.body !== undefined) {
+      // The engine validates the customer's request; the platform passes it on as
+      // sent, so a refused one is only checked for the platform's own fields.
+      const input = JSON.parse(init.body);
+      const checked = [400, 413].includes(status) ? {...input, request: {url: 'https://shop.example.com/'}} : input;
+      assertValid(operation.requestBody.content['application/json'].schema, checked, `${label} request`);
+    }
+    const response = operation.responses[status] ?? operation.responses[`${String(status)[0]}XX`];
+    assert.ok(response, `${label} is not a documented answer`);
+    const media = response.content && Object.entries(response.content)[0];
+    if (media?.[0] === 'application/json') assertValid(media[1].schema, JSON.parse(Buffer.from(body).toString()), label);
+    statuses.add(`${method.toUpperCase()} ${found.template} ${status}`);
+  }
+  // The run above reached each of these answers at least once.
+  for (const expected of ['POST /internal/v1/jobs 200', 'POST /internal/v1/jobs 202', 'POST /internal/v1/jobs 400', 'POST /internal/v1/jobs 402',
+    'POST /internal/v1/jobs 409', 'GET /internal/v1/jobs 200', 'GET /internal/v1/jobs/{id} 200', 'GET /internal/v1/jobs/{id} 202',
+    'GET /internal/v1/jobs/{id} 404', 'GET /internal/v1/jobs/{id}/content 200', 'GET /internal/v1/jobs/{id}/content 409',
+    'GET /internal/v1/jobs/{id}/content 410', 'GET /internal/v1/jobs/{id}/screenshot 404', 'DELETE /internal/v1/jobs/{id} 204',
+    'DELETE /internal/v1/jobs/{id} 409', 'GET /internal/v1/status 200']) {
+    assert.ok(statuses.has(expected), `not exercised: ${expected}`);
+  }
+
+  // The job.finished events the fake engine sends are what the engine sends.
+  const sent = [];
+  const answers = await engine.deliver({inject: async request => { sent.push(JSON.parse(request.payload)); return events.inject(request); }});
+  assert.ok(sent.length >= 3);
+  for (const event of sent) assertValid(component('JobFinishedEvent'), event, `event ${event.job_id}`);
+  assert.ok(answers.every(answer => answer.status === 200));
+});

@@ -1,4 +1,5 @@
-// The public API: seven endpoints, one version.
+// The public API: seven endpoints, one version. `service` is the FetchFront
+// (src/fetch/front.mjs): it bills, and the engine does the fetching.
 //   POST   /v1/fetch                  get a URL
 //   GET    /v1/fetch                  list recent requests
 //   GET    /v1/fetch/:id              one request's result (poll a pending one)
@@ -65,9 +66,7 @@ function usagePeriod(query) {
 
 export async function usageReport({service, ledger}, project, query = {}) {
   const {from, to} = usagePeriod(query);
-  const counts = (await service.store.pool.query(`SELECT count(*) FILTER (WHERE status = 'succeeded')::int AS succeeded,
-      count(*) FILTER (WHERE status = 'failed')::int AS failed FROM fetch_requests
-    WHERE project = $1 AND created_at >= $2 AND created_at < $3`, [project, from, to])).rows[0];
+  const counts = await service.counts(project, {from, to});
   const balance = await ledger.balance(project);
   const used = ledger.metered(project) ? await ledger.usage(project, {from, to}) : {credits: 0, by_step: [], captcha_solved: 0, daily: []};
   return {

@@ -9,43 +9,55 @@ curl https://app.fetchx.ai/v1/fetch \
   -d '{"url": "https://example.com/", "formats": ["markdown"]}'
 ```
 
+## Two repositories
+
+FetchX is two services:
+
+- **This repository, the platform:** the public API at `/v1`, accounts, projects and keys, credits and payments, customer webhooks, the console API behind fetchx.ai, the admin portal, and the website.
+- **[fetchx-engine](https://github.com/karthikbala/fetchx-engine) (private), the engine:** fetching. Proxies, residential IPs, Camoufox, captcha solving, provider rules and site knowledge, and the results it stores.
+
+The platform calls the engine over a private network with a service token ([the engine contract](docs/engine-api.json), pinned here). The engine never sees prices, credits or users: each job carries the project id as an opaque tenant and the cost tiers the project's credits cover. When a job finishes the engine sends a signed `job.finished` event, and the platform charges or releases the reservation exactly once.
+
 ## How it works
 
 - **One endpoint.** `POST /v1/fetch` takes a URL and returns the body as received, plus markdown, text, links, metadata, parsed JSON or a screenshot on request. Six more endpoints read results, download files, list, delete and report usage. See the [API guide](docs/api.md) and the [OpenAPI contract](docs/openapi.json).
-- **Auto mode.** Requests climb a ladder until the site answers: HTTP direct, a datacenter proxy, residential IPs (a fresh IP after each 429, alternating between Evomi and DataImpulse), then a Camoufox browser over residential and datacenter routes. Empty JavaScript shells go straight to a browser. Methods other than GET and HEAD get exactly one attempt.
-- **Site knowledge.** Every attempt is recorded per host; the next request starts at the step that worked, and failing routes rest instead of being retried. See [site knowledge](docs/site-knowledge.md).
-- **Captchas.** In the browser, Turnstile, reCAPTCHA v2 and hCaptcha are solved through 2Captcha, and DataDome when enabled. See [captcha solving](docs/captcha.md).
+- **Auto mode** (in the engine). Requests climb from plain HTTP through datacenter and residential routes to a Camoufox browser until the site answers, solving captchas on the way.
 - **Success-only billing.** A request reserves credits up front and is charged only if it succeeds, at the price of the step that worked. See [billing](docs/billing.md).
-- **Safe by default.** Only public addresses are fetched, checked after DNS and on every redirect, in HTTP and in the browser. Provider rules keep some providers off some hosts (Oxylabs never carries `.gov`). See [provider rules](docs/provider-rules.md).
+- **Safe by default.** The engine fetches only public addresses, checked after DNS and on every redirect; the platform does the same for customer webhooks.
 
 ## Repository
 
 | Path | What it is |
 | --- | --- |
-| `src/server.mjs` | The gateway: wires the services and serves the API, the console API and the Stripe webhook |
-| `src/fetch/` | Request parsing, address checks, HTTP transport, the auto-mode ladder, browser attempts, outputs |
-| `src/browser/` | Camoufox launch, page capture, captcha handling, the egress relay and the worker pool |
+| `src/server.mjs` | The platform: wires the services and serves the API, the console API, the Stripe webhook and the private engine-events listener |
+| `src/engine/` | The engine client and the signed-event listener |
+| `src/fetch/front.mjs` | Admission, reservations, settlement and the reconciler for fetches |
+| `src/fetch/webhooks.mjs` | Customer webhook delivery |
 | `src/billing/` | The credit ledger, purchases and trial grants |
-| `src/captcha/` | The 2Captcha client and its budget |
 | `src/api/v1.mjs` | The public API routes and error format |
-| `src/control*.mjs` | Console accounts, projects, keys, Connect, Stripe and the admin API |
+| `src/control*.mjs` | Console accounts, projects, keys, Connect, Stripe and the admin portal (forwarded to the engine) |
 | `clients/` | JavaScript and Python clients, and the Connect helper for agents |
 | `website/` | fetchx.ai: marketing pages, docs and the console (Astro on Cloudflare Pages) |
-| `deploy/`, `ops/` | Browser worker pool and Hetzner autoscaler |
 
 ## Run it locally
 
-Requires Node.js 24, PostgreSQL 16 and Docker Compose. Browser steps need a pinned Camoufox build ([browser setup](docs/browser.md)); without one, auto mode stops at HTTP.
+Requires Node.js 24, PostgreSQL 16, Docker Compose, and the engine running from its own repository.
 
 ```sh
-npm ci --ignore-scripts
+# In fetchx-engine: writes local/secrets/platform-link.json with the service token and event key.
 node scripts/init-config.mjs ./local
+docker network create fetchx-internal
+docker compose --env-file ./local/compose.env up -d --build
+
+# Here:
+npm ci --ignore-scripts
+node scripts/init-config.mjs ./local ../fetchx-engine/local/secrets/platform-link.json
 docker compose --env-file ./local/compose.env up -d --build
 curl http://localhost:8788/v1/fetch -H "Authorization: Bearer $(cat local/secrets/client.token)" \
   -H 'Content-Type: application/json' -d '{"url": "https://example.com/"}'
 ```
 
-`init-config.mjs` writes `local/secrets/gateway.json` with one unmetered project token; add proxy, captcha and browser settings there ([configuration](docs/configuration.md)). For the console, run `node scripts/control-preview.mjs --fixture --database-url postgresql://…/gateway_test_preview` and the website ([console](docs/console.md)).
+`init-config.mjs` writes `local/secrets/platform.json` with one unmetered project token and the engine link ([configuration](docs/configuration.md)). For the console alone, `node scripts/control-preview.mjs --fixture --database-url postgresql://…/gateway_test_preview` runs the platform with an in-process fake engine; see [console](docs/console.md).
 
 ## Test
 
@@ -54,8 +66,8 @@ createdb gateway_test_fetchx
 TEST_DATABASE_URL=postgresql:///gateway_test_fetchx npm test
 ```
 
-Tests run serially against a database whose name starts with `gateway_test_`; they never touch the network or a paid service. Set `BROWSER_TEST_EXECUTABLE` to a Chromium build to run the real-browser capture tests. `npm run api:check` keeps the TypeScript client types in step with the contract, and `python -m unittest discover -s test/autoscaler` covers the autoscaler. The website has its own `npm run check`, `npm test` and `npm run test:browser` in `website/`.
+Tests run serially against a database whose name starts with `gateway_test_`; they never touch the network, a paid service or a real engine. Platform tests use the fake engine in `test/fake-engine.mjs`, which `test/engine-contract.test.mjs` holds to the pinned contract. `npm run api:check` keeps the TypeScript client types in step with the public contract. The website has its own `npm run check`, `npm test` and `npm run test:browser` in `website/`.
 
 ## Operating
 
-[Operations](docs/operations.md) covers deploying, upgrading from the earlier releases, retention, backups and rollback.
+[Operations](docs/operations.md) covers deploying, retention, backups, rollback and incidents. [The split migration](docs/split-migration.md) is the one-time runbook for moving production from the single gateway to the platform and the engine.

@@ -1,0 +1,2361 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "FetchX engine private API",
+    "version": "1.0",
+    "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). info.version is the contract version; GET /internal/v1/status and /healthz report it."
+  },
+  "security": [
+    {
+      "ServiceToken": []
+    }
+  ],
+  "paths": {
+    "/internal/v1/jobs": {
+      "post": {
+        "operationId": "startJob",
+        "summary": "Start a job, or return the existing one for its idempotency key",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Finished within wait_ms.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobEnvelope"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Still running; poll GET /internal/v1/jobs/{id}.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The envelope or the request is wrong; nothing was started. Codes: invalid_request, url_not_allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "No planned step is in allowed_steps; nothing was started. Codes: budget_too_low.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused. Codes: idempotency_conflict, job_id_conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body over 1 MB. Codes: request_too_large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listJobs",
+        "summary": "A tenant's jobs, newest first",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad query. Codes: invalid_request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/jobs/{id}": {
+      "get": {
+        "operationId": "getJob",
+        "summary": "One job",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_body",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Finished.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobEnvelope"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Still running.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad query. Codes: invalid_request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not this tenant's job. Codes: not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteJobContent",
+        "summary": "Delete everything the site sent now; the summary and usage stay",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Codes: not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Still running. Codes: pending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/jobs/{id}/content": {
+      "get": {
+        "operationId": "getJobContent",
+        "summary": "The raw body, as received",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The body with the site's content type.",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Codes: not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Still running. Codes: pending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Expired or deleted. Codes: content_expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/jobs/{id}/screenshot": {
+      "get": {
+        "operationId": "getJobScreenshot",
+        "summary": "The screenshot (JPEG)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JPEG.",
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Codes: not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Still running. Codes: pending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Expired or deleted. Codes: content_expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/status": {
+      "get": {
+        "operationId": "engineStatus",
+        "summary": "Release, contract version, browser queue, captcha spend and event backlog",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/admin/rules": {
+      "get": {
+        "operationId": "listRules",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRule",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "x-fetchx-actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The operator's email, recorded in the audit trail."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/admin/rules/test": {
+      "post": {
+        "operationId": "testRule",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/admin/rules/{id}": {
+      "put": {
+        "operationId": "updateRule",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-fetchx-actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The operator's email, recorded in the audit trail."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteRule",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-fetchx-actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The operator's email, recorded in the audit trail."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/admin/rules/{id}/enable": {
+      "post": {
+        "operationId": "enableRule",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-fetchx-actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The operator's email, recorded in the audit trail."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/admin/rules/{id}/disable": {
+      "post": {
+        "operationId": "disableRule",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-fetchx-actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The operator's email, recorded in the audit trail."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/admin/rules/{id}/audit": {
+      "get": {
+        "operationId": "ruleAudit",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/admin/audit": {
+      "get": {
+        "operationId": "adminAudit",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/admin/probes": {
+      "get": {
+        "operationId": "listProbes",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "startProbe",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "x-fetchx-actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The operator's email, recorded in the audit trail."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/admin/probes/{pid}": {
+      "get": {
+        "operationId": "getProbe",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/admin/probes/{pid}/apply": {
+      "post": {
+        "operationId": "applyProbe",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-fetchx-actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The operator's email, recorded in the audit trail."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/admin/sites": {
+      "get": {
+        "operationId": "listSites",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/admin/sites/{host}": {
+      "get": {
+        "operationId": "getSite",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "host",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "forgetSite",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "host",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-fetchx-actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The operator's email, recorded in the audit trail."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, rule_invalid, rule_not_found, rule_version_conflict, probe_busy, probe_daily_limit). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ServiceToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The platform's service token; the engine stores only its SHA-256 (config.platform.tokenHashes, two during a rotation)."
+      }
+    },
+    "schemas": {
+      "FetchData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status_code",
+          "final_url",
+          "content_type",
+          "rendered",
+          "body_bytes"
+        ],
+        "properties": {
+          "status_code": {
+            "type": "integer",
+            "description": "The site's HTTP status."
+          },
+          "final_url": {
+            "type": "string",
+            "description": "The URL after redirects."
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rendered": {
+            "type": "boolean",
+            "description": "True when a browser produced the result."
+          },
+          "body_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "content_expired": {
+            "type": "boolean",
+            "description": "True after 7 days or DELETE: everything below is gone."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Selected response headers."
+          },
+          "cookies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Cookie"
+            },
+            "description": "Cookies the site set, for multi-step flows."
+          },
+          "body": {
+            "type": "string",
+            "description": "The body: utf-8 text, or base64 for binary. Left out when include_body is false or when it is too large to inline (see body_url)."
+          },
+          "body_encoding": {
+            "type": "string",
+            "enum": [
+              "utf-8",
+              "base64"
+            ]
+          },
+          "body_url": {
+            "type": "string",
+            "description": "Where to download a body too large to inline."
+          },
+          "markdown": {
+            "type": "string",
+            "description": "formats: markdown."
+          },
+          "text": {
+            "type": "string",
+            "description": "formats: text."
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "url",
+                "text"
+              ],
+              "properties": {
+                "url": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "formats: links."
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/PageMetadata"
+          },
+          "json": {
+            "description": "formats: json, the body parsed as JSON (null when it is not JSON)."
+          },
+          "screenshot": {
+            "type": "string",
+            "description": "formats: screenshot, base64 JPEG. Also at /v1/fetch/{id}/screenshot.",
+            "contentEncoding": "base64"
+          }
+        }
+      },
+      "Cookie": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "value",
+          "domain",
+          "path"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "expires": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PageMetadata": {
+        "type": "object",
+        "description": "formats: metadata.",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "canonical_url": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "open_graph": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Attempt": {
+        "type": "object",
+        "required": [
+          "transport",
+          "class",
+          "country",
+          "result",
+          "status_code"
+        ],
+        "properties": {
+          "transport": {
+            "type": "string",
+            "enum": [
+              "http",
+              "browser"
+            ]
+          },
+          "class": {
+            "type": "string",
+            "enum": [
+              "direct",
+              "datacenter",
+              "residential"
+            ]
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rotation": {
+            "type": "integer",
+            "description": "A fresh residential IP for the same step."
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "success",
+              "answered",
+              "blocked",
+              "rate_limited",
+              "login_required",
+              "site_error",
+              "needs_browser",
+              "unreachable",
+              "failed",
+              "too_large",
+              "uncertain",
+              "not_admitted",
+              "url_not_allowed"
+            ],
+            "description": "not_admitted means nothing reached the site on this step (for example the provider refused the host); it does not count as an attempt."
+          },
+          "code": {
+            "type": "string",
+            "description": "The underlying error, when result is not_admitted or failed."
+          },
+          "status_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "captcha": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Captchas met on this step, as type:outcome."
+          }
+        }
+      },
+      "SkippedStep": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "transport",
+          "class",
+          "country",
+          "reason"
+        ],
+        "properties": {
+          "transport": {
+            "type": "string",
+            "enum": [
+              "http",
+              "browser"
+            ]
+          },
+          "class": {
+            "type": "string",
+            "enum": [
+              "direct",
+              "datacenter",
+              "residential"
+            ]
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "For example excluded_by_provider_rule, over_max_credits or cooling."
+          }
+        }
+      },
+      "FetchError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message",
+          "next"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "blocked",
+              "rate_limited",
+              "login_required",
+              "site_error",
+              "unreachable",
+              "cooling_down",
+              "timeout",
+              "too_large",
+              "uncertain",
+              "route_unavailable",
+              "url_not_allowed"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "type": "integer"
+          },
+          "next": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "detail"
+            ],
+            "description": "What to do next.",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry_after",
+                  "retry_later",
+                  "use_auto",
+                  "provide_credentials",
+                  "check_url",
+                  "raise_timeout",
+                  "render_never",
+                  "recover"
+                ]
+              },
+              "retry_after_seconds": {
+                "type": "integer"
+              },
+              "detail": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object"
+              },
+              "retry_after_seconds": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "FetchRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The page, API or file to get. Public http or https only: private, local and metadata addresses are refused, checked after DNS and on every redirect.",
+            "maxLength": 12000
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "GET",
+              "HEAD",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE"
+            ],
+            "default": "GET",
+            "description": "Only GET and HEAD escalate. Other methods get one attempt, never a browser, and are never retried."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Headers for the site, cookies and Authorization included (stored encrypted, never logged). Up to 64 headers and 16 KB. Host, hop-by-hop, Forwarded and X-Forwarded-* are refused."
+          },
+          "body": {
+            "type": "string",
+            "description": "A text request body, up to 1 MB. Only with POST, PUT, PATCH or DELETE."
+          },
+          "body_base64": {
+            "type": "string",
+            "description": "A binary request body in base64, instead of body.",
+            "contentEncoding": "base64"
+          },
+          "render": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "always",
+              "never"
+            ],
+            "default": "auto",
+            "description": "auto tries HTTP first and moves to a browser when HTTP is blocked or the page is an empty JavaScript shell; always starts in a browser; never stays on HTTP."
+          },
+          "wait_for": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "In a browser, wait for a CSS selector or a fixed time. Implies a browser.",
+            "properties": {
+              "selector": {
+                "type": "string",
+                "description": "A CSS selector.",
+                "maxLength": 512
+              },
+              "ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              }
+            }
+          },
+          "country": {
+            "type": "string",
+            "description": "The exit country for proxy routes (ISO 3166-1 alpha-2). Defaults to the country that worked for this site before, else US.",
+            "pattern": "^[A-Z]{2}$"
+          },
+          "route": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "class"
+            ],
+            "description": "One fixed route; turns auto mode off: one attempt, with a precise error.",
+            "properties": {
+              "class": {
+                "type": "string",
+                "enum": [
+                  "direct",
+                  "datacenter",
+                  "residential"
+                ]
+              },
+              "country": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[A-Z]{2}$",
+                "description": "Required for datacenter and residential; null for direct."
+              },
+              "render": {
+                "type": "boolean",
+                "description": "true uses a browser on this route."
+              }
+            }
+          },
+          "formats": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "markdown",
+                "text",
+                "links",
+                "metadata",
+                "json",
+                "screenshot"
+              ]
+            },
+            "description": "Extra outputs. screenshot needs a browser."
+          },
+          "include_body": {
+            "type": "boolean",
+            "default": true,
+            "description": "Return the body. Set false when only formats are needed."
+          },
+          "max_attempts": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "default": 5,
+            "description": "The most attempts that may reach the site. Steps refused before anything is sent do not count."
+          },
+          "fix_headers": {
+            "type": "boolean",
+            "default": true,
+            "description": "Replace automation User-Agents (curl, python-requests\u2026) with a browser one and add a missing Accept and Accept-Language."
+          },
+          "max_credits": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Passed through from the customer. The platform enforces the ceiling and turns it into allowed_steps; the engine keeps it only in the idempotency hash."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 5000,
+            "maximum": 180000,
+            "default": 120000,
+            "description": "Total time for all attempts. A captcha solve can take up to a minute, so the default leaves room for one; a synchronous call still answers 202 after 60 seconds if the request is not finished."
+          },
+          "async": {
+            "type": "boolean",
+            "default": false,
+            "description": "true answers 202 at once; false waits up to 60 seconds, then answers 202."
+          },
+          "webhook_url": {
+            "type": "string",
+            "description": "A public https URL that receives the result when the request finishes.",
+            "format": "uri"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "The same key with the same body returns the same result and is charged once. Generated when absent.",
+            "pattern": "^[A-Za-z0-9_.:-]{1,160}$"
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
+            },
+            "description": "Your labels, to filter the list."
+          }
+        },
+        "description": "The customer request exactly as the platform received it on POST /v1/fetch."
+      },
+      "Job": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "status",
+          "idempotency_key",
+          "url",
+          "created_at",
+          "finished_at",
+          "tags",
+          "data",
+          "attempts",
+          "skipped",
+          "fixes",
+          "error"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "succeeded",
+              "failed"
+            ]
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "data": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FetchData"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the site answered: on success the real answer, on failure the last response. Null only when nothing reached the site."
+          },
+          "attempts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attempt"
+            },
+            "description": "One entry per step tried, in order. Providers are never named."
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkippedStep"
+            },
+            "description": "Steps that were not tried, and why."
+          },
+          "fixes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "user-agent",
+                "accept",
+                "accept-language"
+              ]
+            },
+            "description": "Headers FetchX corrected."
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FetchError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "description": "The caller-facing view of a job. The platform adds `credits` and returns it as the public FetchResult."
+      },
+      "Step": {
+        "type": "string",
+        "enum": [
+          "http",
+          "http_residential",
+          "browser",
+          "browser_residential"
+        ]
+      },
+      "Usage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "captcha_solved",
+          "wire_bytes"
+        ],
+        "description": "What a successful job used; the platform prices it. Null for a failed or pending job, which is never billed.",
+        "properties": {
+          "step": {
+            "$ref": "#/components/schemas/Step"
+          },
+          "captcha_solved": {
+            "type": "boolean"
+          },
+          "wire_bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "JobInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "tenant",
+          "request"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Made by the platform; the job id customers see."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:-]{1,100}$",
+            "description": "The platform project id. Every read must name it again."
+          },
+          "request": {
+            "$ref": "#/components/schemas/FetchRequest"
+          },
+          "allowed_steps": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/Step"
+            },
+            "description": "The cost tiers the reservation covers. Steps outside them are skipped (over_max_credits). Omitted or null allows every tier. Empty refuses with budget_too_low unless the idempotency key already has a job."
+          },
+          "wait_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 120000,
+            "description": "How long to wait for the result before answering 202. Defaults to the engine's sync wait (60 s). Ignored for async requests."
+          }
+        }
+      },
+      "JobEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "job",
+          "tenant",
+          "usage",
+          "webhook_url",
+          "deadline"
+        ],
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          },
+          "tenant": {
+            "type": "string"
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "webhook_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer webhook; the platform delivers it after settling."
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the job stops trying. A pending job is finished (or recovered as uncertain) by then."
+          },
+          "created": {
+            "type": "boolean",
+            "description": "On POST only: false when the idempotency key already had a job (nothing new was started)."
+          }
+        }
+      },
+      "JobList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "status",
+                "url",
+                "created_at",
+                "error_code",
+                "tags",
+                "idempotency_key"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "succeeded",
+                    "failed"
+                  ]
+                },
+                "url": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "error_code": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "JobFinishedEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "event_id",
+          "job_id",
+          "tenant",
+          "status",
+          "error_code",
+          "usage",
+          "webhook_url",
+          "finished_at"
+        ],
+        "description": "Sent to the platform (config.platform.eventsUrl) once per finished job, until it answers 2xx. Headers: x-fetchx-timestamp (Unix seconds) and x-fetchx-signature: sha256=HMAC-SHA256(eventKey, \"<timestamp>.<raw body>\").",
+        "properties": {
+          "type": {
+            "const": "job.finished"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "failed"
+            ]
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "webhook_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Status": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "service",
+          "release",
+          "contract",
+          "browser",
+          "captcha",
+          "events"
+        ],
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "release": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contract": {
+            "type": "string"
+          },
+          "browser": {
+            "type": "object"
+          },
+          "captcha": {
+            "type": "object"
+          },
+          "events": {
+            "type": "object",
+            "required": [
+              "undelivered"
+            ],
+            "properties": {
+              "undelivered": {
+                "type": "integer"
+              },
+              "oldest_undelivered": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "AdminObject": {
+        "type": "object",
+        "description": "An admin answer, passed through to the admin portal unchanged."
+      }
+    }
+  }
+}

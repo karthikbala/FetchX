@@ -27,7 +27,9 @@ trial (control_credit_accounts.granted_credits)
 - open reservations (credit_reservations)
 ```
 
-A request reserves at admission (`Ledger.reserve`), between the cheapest planned step and the smallest of `max_credits` and the most expensive one. If the balance cannot cover the cheapest step the call is refused with `402 insufficient_credits` before anything is sent. On success `Ledger.charge` records the price (never more than the reservation) and removes the reservation; otherwise `Ledger.release` removes it. Startup releases reservations left by a stopped process (`releaseOrphans`). A payment hold (an open dispute or a pending refund) makes `reserve` refuse with `402 payment_hold`.
+A request reserves at admission (`FetchFront.submit`, in one transaction with its `fetch_settlements` row): the smallest of `max_credits`, the most expensive step's worst case and the available balance. The job goes to the engine with `allowed_steps`, the cost tiers that reservation covers, and the engine skips the rest (`over_max_credits`). If no tier the job needs is covered, the engine refuses it before anything is sent and the platform answers `402 insufficient_credits` (with `available` and `needed`) or `402 max_credits_too_low` (with `min_credits`). A payment hold (an open dispute or a pending refund) answers `402 payment_hold`.
+
+The job's `usage` (the winning step, whether it solved a captcha, its wire bytes) arrives with the engine's signed `job.finished` event, or from the engine when the result is read or the reconciler looks it up. Settlement happens once per job: on success `Ledger.charge` records the price (never more than the reservation) and removes the reservation; otherwise `Ledger.release` removes it. A job the engine never started is released by the reconciler; one whose fate is unknown stays reserved until the engine confirms it.
 
 Projects provisioned in `config.projects` are unmetered: nothing is reserved or charged.
 
@@ -43,7 +45,7 @@ Credit packs are one-time Stripe Checkout payments: $2, $8, $20 and $100 (or the
 
 ## Operator corrections
 
-Inside the gateway container:
+Inside the platform container:
 
 ```sh
 node src/operator.mjs credits cp_<project-id> 500 "goodwill credit for incident 42"

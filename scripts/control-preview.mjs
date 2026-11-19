@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Runs the gateway on loopback for working on the console (website/) locally.
-// Sign-in codes go to a private mailbox file; no email, provider, browser or
-// payment is used. --fixture answers every fetch from an offline fake site.
+// Runs the platform on loopback for working on the console (website/) locally.
+// Sign-in codes go to a private mailbox file; no email or payment is used.
+// --fixture answers every fetch from an in-process fake engine; otherwise
+// fetches go to a FetchX engine you run on loopback (--engine-url).
 import {randomBytes, createHash} from 'node:crypto';
 import {constants} from 'node:fs';
 import {mkdir, chmod, lstat, readFile, open} from 'node:fs/promises';
@@ -9,35 +10,38 @@ import {resolve, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import pg from 'pg';
 import {Store} from '../src/store.mjs';
-import {GatewayError} from '../src/policy.mjs';
-import {createGateway, server} from '../src/server.mjs';
+import {createPlatform, server} from '../src/server.mjs';
+import {fakeEngine} from '../test/fake-engine.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)), '.local/console-preview');
 const BASE = 'http://127.0.0.1:8789';
 const LOOPBACK = ['127.0.0.1', 'localhost', '[::1]'];
-const HELP = `Usage: node scripts/control-preview.mjs --database-url <local gateway_test_* PostgreSQL URL> [--fixture] [--agent-connect] [--origin <loopback website origin>]
+const HELP = `Usage: node scripts/control-preview.mjs --database-url <local gateway_test_* PostgreSQL URL>
+         (--fixture | --engine-url <loopback engine URL>) [--agent-connect] [--origin <loopback website origin>]
 
 CONTROL_PREVIEW_DATABASE_URL may supply the database URL. The database is created
-if absent and reused. The gateway listens on ${BASE}; the default website origin
+if absent and reused. The platform listens on ${BASE}; the default website origin
 is http://127.0.0.1:4331.
---fixture        answer fetches from an offline fake site: /success, /forbidden,
+--fixture        answer fetches from an in-process fake engine: /success, /forbidden,
                  /not-found, /unknown and /slow on any host. Nothing leaves the machine.
+--engine-url     use a FetchX engine on loopback, e.g. http://127.0.0.1:8790; its
+                 service token comes from CONTROL_PREVIEW_ENGINE_TOKEN.
 --agent-connect  enable FetchX Connect.
-Without --fixture, fetches go to the real site over direct HTTP only.
 Codes go to .local/console-preview/mailbox.jsonl. No email is sent.
 `;
 
 function parseArguments(argv) {
-  const options = {database: process.env.CONTROL_PREVIEW_DATABASE_URL, fixture: false, agentConnect: false, origin: 'http://127.0.0.1:4331'};
+  const options = {database: process.env.CONTROL_PREVIEW_DATABASE_URL, fixture: false, agentConnect: false, origin: 'http://127.0.0.1:4331',
+    engineUrl: null};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') return {help: true};
     if (arg === '--fixture') { options.fixture = true; continue; }
     if (arg === '--agent-connect') { options.agentConnect = true; continue; }
-    if (arg === '--database-url' || arg === '--origin') {
+    if (arg === '--database-url' || arg === '--origin' || arg === '--engine-url') {
       const value = argv[++i];
       if (!value || value.startsWith('--')) throw new Error('preview_argument_missing');
-      options[arg === '--database-url' ? 'database' : 'origin'] = value;
+      options[{'--database-url': 'database', '--origin': 'origin', '--engine-url': 'engineUrl'}[arg]] = value;
       continue;
     }
     throw new Error('preview_argument_unknown');
@@ -51,6 +55,16 @@ function parseArguments(argv) {
   }
   if (!['http:', 'https:'].includes(origin.protocol) || !LOOPBACK.includes(origin.hostname) || origin.origin !== options.origin) {
     throw new Error('preview_exact_loopback_origin_required');
+  }
+  if (options.fixture === Boolean(options.engineUrl)) throw new Error('preview_choose_fixture_or_engine_url');
+  if (options.engineUrl) {
+    let engine;
+    try { engine = new URL(options.engineUrl); } catch { throw new Error('preview_url_invalid'); }
+    if (engine.protocol !== 'http:' || !LOOPBACK.includes(engine.hostname) || engine.pathname !== '/' || engine.search || engine.username) {
+      throw new Error('preview_loopback_engine_url_required');
+    }
+    if ((process.env.CONTROL_PREVIEW_ENGINE_TOKEN ?? '').length < 32) throw new Error('preview_engine_token_required');
+    options.engineUrl = engine.origin;
   }
   return {...options, url, databaseName: decodeURIComponent(url.pathname.slice(1))};
 }
@@ -77,11 +91,12 @@ async function stateFor(options) {
   const path = join(ROOT, 'state.json');
   try {
     const state = JSON.parse(await readFile(path, 'utf8'));
-    if (state.version !== 2 || state.fingerprint !== fingerprint) throw new Error('preview_state_mismatch_use_the_same_database');
-    return state;
+    if (![2, 3].includes(state.version) || state.fingerprint !== fingerprint) throw new Error('preview_state_mismatch_use_the_same_database');
+    // Version 2 called the sealing key artifactKey.
+    return {sealingKey: state.sealingKey ?? state.artifactKey, bridgeSecret: state.bridgeSecret};
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
-    const state = {version: 2, fingerprint, artifactKey: randomBytes(32).toString('hex'), bridgeSecret: randomBytes(32).toString('hex')};
+    const state = {version: 3, fingerprint, sealingKey: randomBytes(32).toString('hex'), bridgeSecret: randomBytes(32).toString('hex')};
     await privateWrite(path, JSON.stringify(state, null, 2) + '\n', {exclusive: true});
     return state;
   }
@@ -102,15 +117,17 @@ async function ensureDatabase(options) {
   }
 }
 
-// The offline fake site used by --fixture.
-async function fixtureExchange(request, destination) {
-  const path = destination.url.pathname;
-  if (path === '/slow') await new Promise(done => setTimeout(done, 1500));
-  if (path === '/unknown') throw Object.assign(new GatewayError('source_timeout', 504), {dispatched: true});
-  const status = path === '/forbidden' ? 403 : path === '/not-found' ? 404 : 200;
-  const body = request.method === 'HEAD' ? Buffer.alloc(0) : Buffer.from(`<html><head><title>Fixture ${status}</title></head><body><main>
-    <h1>Offline fixture</h1><p>Status ${status} for ${destination.url.href}</p><a href="/success">success</a></main></body></html>`);
-  return {status, headers: {'content-type': 'text/html; charset=utf-8'}, encoded: body, wire_bytes: body.length + 200, provider_status: null};
+// The offline fake site used by --fixture, as engine outcomes.
+function fixtureOutcome(request) {
+  let path;
+  try { path = new URL(request.url).pathname; } catch { path = '/'; }
+  const page = status => `<html><head><title>Fixture ${status}</title></head><body><main>
+    <h1>Offline fixture</h1><p>Status ${status} for ${request.url}</p><a href="/success">success</a></main></body></html>`;
+  if (path === '/forbidden') return {status: 'failed', planned: ['http'], body: page(403)};
+  if (path === '/unknown') return {status: 'failed', planned: ['http'], error_code: 'uncertain', body: ''};
+  // A site's 404 is an answer, and is billed as a success.
+  if (path === '/not-found') return {planned: ['http'], body: page(404), data: {status_code: 404}};
+  return {planned: ['http'], body: page(200), hold: path === '/slow' ? new Promise(done => setTimeout(done, 1500)) : undefined};
 }
 
 async function main() {
@@ -119,8 +136,10 @@ async function main() {
   const state = await stateFor(options);
   const mailbox = join(ROOT, 'mailbox.jsonl');
   await privateWrite(mailbox, '', {append: true});
+  const engineToken = options.fixture ? randomBytes(32).toString('hex') : process.env.CONTROL_PREVIEW_ENGINE_TOKEN;
   const config = {
-    release: 'console-preview', artifactKey: state.artifactKey, projects: {}, proxies: [],
+    release: 'console-preview', sealingKey: state.sealingKey, projects: {},
+    engine: {url: options.engineUrl ?? 'http://engine.preview:8790', serviceToken: engineToken},
     controlPlane: {enabled: true, origins: [options.origin], bridgeSecret: state.bridgeSecret, sessionSecure: false, allowLoopbackDevelopment: true,
       apiBaseUrl: BASE, agentConnectEnabled: options.agentConnect, creditPolicy: {trialCredits: 1000}},
   };
@@ -139,18 +158,18 @@ async function main() {
   try {
     await store.acquireRunnerLock(() => { process.stderr.write('preview_database_ownership_lost\n'); void stop().finally(() => { process.exitCode = 1; }); });
     await store.init();
-    const gateway = createGateway({store, config, deps: {
-      runtime: null, browserPool: null,
-      ...(options.fixture ? {exchange: fixtureExchange, resolve: async () => [{address: '93.184.216.34', family: 4}]} : {}),
+    const platform = createPlatform({store, config, deps: {
+      ...(options.fixture ? {engineFetch: fakeEngine({script: fixtureOutcome, token: engineToken}).fetchImpl} : {}),
+      // Customer webhooks are not sent from the preview.
+      webhookPost: async () => 200,
       mail: {configured: true, delivery: 'local_private_mailbox', sendCode: async message =>
         privateWrite(mailbox, JSON.stringify({delivered_by: 'local_private_mailbox', ...message}) + '\n', {append: true})},
     }});
-    await gateway.service.recover();
-    app = server(gateway, {stripeAutoProcess: false});
+    app = server(platform, {stripeAutoProcess: false});
     await app.listen({host: '127.0.0.1', port: 8789});
     for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void stop(); });
     process.stdout.write(`FetchX console preview: ${BASE}\nWebsite origin: ${options.origin}\nDatabase: ${options.databaseName}\n`
-      + `Fetches: ${options.fixture ? 'offline fixture site' : 'real sites, direct HTTP only'}\nSign-in codes: ${mailbox}\nWebsite bridge settings: ${join(ROOT, 'bridge.env')}\n`);
+      + `Fetches: ${options.fixture ? 'offline fixture engine' : `engine at ${options.engineUrl}`}\nSign-in codes: ${mailbox}\nWebsite bridge settings: ${join(ROOT, 'bridge.env')}\n`);
   } catch (error) {
     await stop();
     throw error;

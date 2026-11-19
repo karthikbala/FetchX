@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {FetchXClient, FetchXError} from '../clients/javascript.mjs';
-import {databaseUrl, gatewayFor, html, openStore, PROJECT, TOKEN} from './helpers.mjs';
+import {databaseUrl, html, openStore, platformFor, PROJECT, TOKEN} from './helpers.mjs';
 import {Ledger} from '../src/billing/ledger.mjs';
 
 const skip = !databaseUrl;
@@ -19,7 +19,7 @@ const transportFor = (app, {before, after} = {}) => async (url, options) => {
 test('the client covers every endpoint against the real app', {skip}, async t => {
   const store = await openStore();
   t.after(() => store.close());
-  const {app, gateway} = await gatewayFor(store, {site: c => c.url.includes('.pdf') ? {headers: {'content-type': 'application/pdf'}, body: '%PDF-1.4'}
+  const {app} = await platformFor(store, {script: request => request.url.includes('.pdf') ? {content_type: 'application/pdf', body: '%PDF-1.4'}
     : {body: html('client page')}});
   const client = new FetchXClient({url: 'https://api.fetchx.test/', token: TOKEN, fetch: transportFor(app)});
   const page = await client.fetch({url: 'https://shop.example.com/a', formats: ['markdown'], tags: ['sdk']});
@@ -43,20 +43,19 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
     error => error instanceof FetchXError && error.code === 'invalid_request' && error.status === 400 && error.details.field === 'max_attempts');
   const stranger = new FetchXClient({url: 'https://api.fetchx.test', token: 'fxk_wrong', fetch: transportFor(app)});
   await assert.rejects(stranger.usage(), {code: 'unauthorized', status: 401});
-  await gateway.service.close();
 });
 
 test('a lost reply is resent with the same key: one result, one charge', {skip}, async t => {
   const store = await openStore();
   t.after(() => store.close());
-  const {app, calls} = await gatewayFor(store, {site: () => ({body: html('once')})});
+  const {app, engine} = await platformFor(store, {script: () => ({body: html('once')})});
   let lost = 0;
   const client = new FetchXClient({url: 'https://api.fetchx.test', token: TOKEN, retries: 2, fetch: transportFor(app, {
     after: async () => { if (lost++ === 0) throw new Error('connection reset after the request was processed'); },
   })});
   const result = await client.fetch({url: 'https://shop.example.com/once'});
   assert.equal(result.status, 'succeeded');
-  assert.equal(calls.length, 1, 'the site was contacted once');
+  assert.equal(engine.jobs.size, 1, 'the engine ran one job');
   assert.equal((await new Ledger({store, config: {}}).balance(PROJECT)).credits, 99, 'charged once');
 });
 

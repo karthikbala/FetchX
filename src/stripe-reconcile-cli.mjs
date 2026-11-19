@@ -13,7 +13,7 @@ if(!process.env.DATABASE_URL||!event&&!checkout){
 }else{
  const store=new Store(process.env.DATABASE_URL);
  try{
-  const config=JSON.parse(await readFile(process.env.GATEWAY_CONFIG??'/run/secrets/gateway.json','utf8'));
+  const config=JSON.parse(await readFile(process.env.PLATFORM_CONFIG??'/run/secrets/platform.json','utf8'));
   const stripe=new ControlStripe({store,config,purchases:new Purchases({store})});
   const result=event?await stripe.reconcile({eventId:args[1]}):await stripe.recoverCheckout({orderId:args[1],sessionId:args[2]});
   process.stdout.write(JSON.stringify(result)+'\n');

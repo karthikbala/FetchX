@@ -4,11 +4,11 @@
 //   + adjustments (opening balances, operator corrections)
 //   - charges (successful requests)
 //   - open reservations (requests still running).
-// A request reserves its ceiling before anything is sent, and is charged only
-// if it succeeds, at the price of the step that got the data. Everything else
-// is released. An active payment hold (dispute, refund in progress) stops new
-// spending.
-import {GatewayError, fail} from '../policy.mjs';
+// A job reserves up to its ceiling before the engine starts it, and is charged
+// only if it succeeds, at the price of the step that got the data (at most the
+// reservation). Everything else is released. An active payment hold (dispute,
+// refund in progress) stops new spending. src/fetch/front.mjs drives this.
+import {fail} from '../policy.mjs';
 
 export const STEPS = Object.freeze(['http', 'http_residential', 'browser', 'browser_residential']);
 export const DEFAULT_PRICES = Object.freeze({
@@ -32,9 +32,6 @@ export function prices(config) {
   }
   return merged;
 }
-
-export const stepFor = ({transport, class: routeClass}) =>
-  `${transport}${routeClass === 'residential' ? '_residential' : ''}`;
 
 // The price of one successful step. Bytes are the wire bytes of that step.
 export function priceOf(table, {step, captchaSolved = false, wireBytes = 0}) {
@@ -118,25 +115,20 @@ export class Ledger {
     };
   }
 
-  // Reserves up to `ceiling` credits, at least `minimum`. Returns the amount
-  // reserved, or null for an unmetered project. Runs in the caller's transaction.
-  async reserve(client, {project, request, minimum, ceiling}) {
-    if (!this.metered(project)) return null;
+  // Serialises admissions for one project until the caller's transaction ends.
+  async lock(client, project) {
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['credits:' + project]);
-    const balance = await this.balance(project, client);
-    if (balance.held) fail('payment_hold', 402);
-    if (balance.available < minimum) {
-      const error = new GatewayError('insufficient_credits', 402);
-      error.details = {available: balance.available, needed: minimum};
-      throw error;
-    }
-    const credits = Math.min(ceiling, balance.available);
-    await client.query('INSERT INTO credit_reservations (request, project, credits) VALUES ($1, $2, $3)', [request, project, credits]);
-    return credits;
   }
 
-  // Charges a successful request (never more than it reserved) and closes its
-  // reservation. Idempotent per request.
+  // Holds `credits` for a job until it is charged or released. Call under lock()
+  // after checking balance(); runs in the caller's transaction.
+  async hold(client, {project, request, credits}) {
+    if (!Number.isSafeInteger(credits) || credits < 1) fail('invalid_request', 400);
+    await client.query('INSERT INTO credit_reservations (request, project, credits) VALUES ($1, $2, $3)', [request, project, credits]);
+  }
+
+  // Charges a successful job (never more than it reserved) and closes its
+  // reservation. Idempotent per job.
   async charge(client, {project, request, step, credits, captcha = false}) {
     if (!this.metered(project)) return 0;
     const reservation = (await client.query('DELETE FROM credit_reservations WHERE request = $1 RETURNING credits', [request])).rows[0];
@@ -150,13 +142,6 @@ export class Ledger {
 
   async release(client, {request}) {
     await client.query('DELETE FROM credit_reservations WHERE request = $1', [request]);
-  }
-
-  // Startup: requests that were running when the process stopped never
-  // finished, so nothing is owed for them.
-  async releaseOrphans(client, isOpen) {
-    const rows = (await client.query('SELECT request FROM credit_reservations')).rows;
-    for (const row of rows) if (!(await isOpen(row.request))) await this.release(client, {request: row.request});
   }
 
   async usage(project, {from, to}) {
