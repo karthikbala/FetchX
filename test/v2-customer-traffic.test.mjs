@@ -51,7 +51,9 @@ test('v2 facade persists exact customer traffic, protects both bounds and never 
    for(mode of ['tiny','source-failure','known-failure','unknown','partial','missing','missing-hop','negative','fractional','unsafe']){
     const raw={...payload(provider+'-'+mode),...(mode==='missing-hop'?{url:'https://source.example/redirect'}:{}),max_estimated_micro_usd:50},answer=await post(raw),operation=answer.body,charge=operation.usage.accounting.customer_traffic;
     assert.equal(answer.status,200,mode);assert.equal(operation.routing.provider,provider);assert.equal(operation.usage.accounting.estimated_micro_usd,25);assert.equal(operation.usage.accounting.invoice_micro_usd,null);assert.equal(operation.usage.accounting.customer_traffic_reservation.max_cost_usd,'0.000049152');
-    if(['tiny','source-failure','known-failure'].includes(mode)){assert.equal(charge.status,'measured',mode);assert.equal(charge.cost_usd,mode==='known-failure'?'0.000000034':'0.000000002');}else {assert.equal(charge.status,'unknown',mode);assert.equal(charge.cost_usd,null,mode);}
+    if(mode==='known-failure'){assert.equal(charge.status,'not_billed_failed_attempt',mode);assert.equal(charge.cost_usd,'0.000000000');assert.equal(charge.metered_bytes,17);}
+    else if(['tiny','source-failure'].includes(mode)){assert.equal(charge.status,'measured',mode);assert.equal(charge.cost_usd,'0.000000002');}
+    else if(mode==='missing-hop'){assert.equal(charge.status,'not_billed_failed_attempt',mode);assert.equal(charge.cost_usd,'0.000000000',mode);}else {assert.equal(charge.status,'unknown',mode);assert.equal(charge.cost_usd,null,mode);}
     if(['missing','missing-hop','negative','fractional','unsafe'].includes(mode))assert.equal(operation.usage.tunnel_bytes,null,mode);
     const saved=await ledger(operation.operation_id),beforeReplay=calls;config.residential.providers[provider].microUsdPerGB=8e6;
     assert.deepEqual((await post(raw)).body,operation);const recovered=await app.inject({url:'/v2/fetch/'+raw.idempotency_key,headers});assert.deepEqual(recovered.json(),operation);assert.equal(calls,beforeReplay);assert.deepEqual(await ledger(operation.operation_id),saved);config.residential.providers[provider].microUsdPerGB=1e6;
@@ -64,9 +66,9 @@ test('v2 facade persists exact customer traffic, protects both bounds and never 
   config.v2.dns={allowed_hosts:['source.example'],fallback_resolvers:[{id:'fixture',endpoint:'https://resolver.example/resolve'}],use_session_proxy:true};
   // Resolver policy is created with the gateway; recreate only the test adapter.
   const dnsV2=new V2Gateway(gateway,{http:v2.http,dnsHttp:async(input,destination)=>{dnsCalls++;const type=Number(destination.url.searchParams.get('type'));if(mode==='dns-unknown')throw Object.assign(new GatewayError('source_timeout_unknown',502),{observed_tunnel_bytes:11});return {status:200,headers:{},encoded:Buffer.from(JSON.stringify({Status:mode==='dns-failure'?2:0,Question:[{name:'source.example',type}],Answer:type===1?[{name:'source.example',type,data:'93.184.216.34'}]:[]})),tunnel_bytes:mode==='dns-missing'?null:11};}});
-  for(mode of ['dns-ok','dns-failure','dns-unknown','dns-missing']){const session=await dnsV2.session('a',{idempotency_key:mode,access_profile:{id:'meter',version:1},transport:'http',proxy:{class:'residential',country:'US',affinity:'session'}}),before=dnsCalls,result=await dnsV2.operation('a',{idempotency_key:mode,session_id:session.id,request:{url:'https://source.example/redirect'}});assert.equal(result.accounting.customer_traffic.status,['dns-ok','dns-failure'].includes(mode)?'measured':'unknown');assert.equal(result.accounting.customer_traffic.cost_usd,mode==='dns-ok'?'0.000000092':mode==='dns-failure'?'0.000000022':null);assert.equal(dnsCalls-before,mode==='dns-ok'?4:1);}
-  // Measured overrun can never charge beyond the original customer byte bound.
-  mode='overrun';const overrun=(await post(payload('overrun'))).body;assert.equal(overrun.usage.accounting.customer_traffic.metered_bytes,24585);assert.equal(overrun.usage.accounting.customer_traffic.billable_bytes,24576);assert.equal(overrun.usage.accounting.customer_traffic.cost_usd,'0.000049152');
+  for(mode of ['dns-ok','dns-failure','dns-unknown','dns-missing']){const session=await dnsV2.session('a',{idempotency_key:mode,access_profile:{id:'meter',version:1},transport:'http',proxy:{class:'residential',country:'US',affinity:'session'}}),before=dnsCalls,result=await dnsV2.operation('a',{idempotency_key:mode,session_id:session.id,request:{url:'https://source.example/redirect'}});assert.equal(result.accounting.customer_traffic.status,mode==='dns-ok'?'measured':mode==='dns-failure'?'not_billed_failed_attempt':'unknown');assert.equal(result.accounting.customer_traffic.cost_usd,mode==='dns-ok'?'0.000000092':mode==='dns-failure'?'0.000000000':null);assert.equal(dnsCalls-before,mode==='dns-ok'?4:1);}
+  // A measured overrun fails the attempt, and a failed attempt is never billed.
+  mode='overrun';const overrun=(await post(payload('overrun'))).body;assert.equal(overrun.usage.accounting.customer_traffic.metered_bytes,24585);assert.equal(overrun.usage.accounting.customer_traffic.billable_bytes,0);assert.equal(overrun.usage.accounting.customer_traffic.cost_usd,'0.000000000');
  }finally{await app.close();await store.pool.query('TRUNCATE v2_registry,v2_ledger_events,v2_artifacts,v2_ledger,v2_operations,v2_sessions,workflows,source_limits RESTART IDENTITY CASCADE');await store.close();await rm(root,{recursive:true,force:true});}
 });
 
@@ -91,10 +93,11 @@ test('v2 browser customer charges distinguish complete source failures, incomple
    for(mode of ['ok','source-failure','partial','unknown','incomplete-meter','late-error','close-error','missing','negative','cancel','overrun']){
     const s=await session(provider+'-'+mode),raw={idempotency_key:provider+'-'+mode,session_id:s.id,url:'https://source.example/data',max_estimated_micro_usd:9},result=await v2.browserProbe('a',raw),charge=result.accounting.customer_traffic;
     assert.equal(result.accounting.provider,provider);assert.equal(result.accounting.estimated_micro_usd,mode==='cancel'?0:5);assert.equal(result.accounting.customer_traffic_reservation.max_cost_usd,'0.000008192');
-    assert.equal(charge.status,['ok','source-failure','partial','overrun'].includes(mode)?'measured':mode==='cancel'?'no_traffic':'unknown',mode);
-    assert.equal(charge.cost_usd,['ok','source-failure','partial'].includes(mode)?'0.000000034':mode==='cancel'?'0.000000000':mode==='overrun'?'0.000008192':null,mode);
+    // A failed attempt (here FetchX's own cost overrun) is never billed.
+    assert.equal(charge.status,['ok','source-failure','partial'].includes(mode)?'measured':mode==='overrun'?'not_billed_failed_attempt':mode==='cancel'?'no_traffic':'unknown',mode);
+    assert.equal(charge.cost_usd,['ok','source-failure','partial'].includes(mode)?'0.000000034':['cancel','overrun'].includes(mode)?'0.000000000':null,mode);
     if(mode==='partial')assert.equal(result.result.capture_complete,false);
-    if(mode==='overrun'){assert.equal(charge.metered_bytes,4105);assert.equal(charge.billable_bytes,4096);}
+    if(mode==='overrun'){assert.equal(charge.metered_bytes,4105);assert.equal(charge.billable_bytes,0);}
     const before=runs;config.residential.providers[provider].microUsdPerGB=9e6;assert.deepEqual(await v2.browserProbe('a',raw),result);assert.equal(runs,before);config.residential.providers[provider].microUsdPerGB=1e6;
    }
   }

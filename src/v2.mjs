@@ -1,4 +1,6 @@
-import {observeSiteOutcome,siteOutcome} from './site-knowledge.mjs';
+import {observeSiteOutcome,siteOutcome,unbilledAttempt} from './site-knowledge.mjs';
+// The largest byte count any meter saw, or null when no meter reported one.
+const observedBytes=values=>{const seen=values.filter(v=>Number.isSafeInteger(v)&&v>=0);return seen.length?Math.max(...seen):null;};
 import {randomUUID,randomBytes} from 'node:crypto';
 import {CookieJar} from 'tough-cookie';
 import {sha} from './crypto.mjs';
@@ -886,17 +888,19 @@ export class V2Gateway{
    const accountedTunnel=providerDispatched?Math.max(Number(ledger.reserved_tunnel_bytes),tunnel??0):0;
    const partialTraffic=['encoded_body_limit','tunnel_byte_limit','source_body_incomplete'].includes(error);
    if(tunnel!==null&&tunnel>Number(ledger.reserved_tunnel_bytes))error='cost_overrun';
-   const customerTraffic=finishResidentialTrafficCharge(ledger.customer_traffic,{dispatched:providerDispatched,unknown,partial:partialTraffic,bytes:tunnel,maxBillableBytes:Number(ledger.customer_traffic_reservation?.reserved_bytes??ledger.reserved_tunnel_bytes)});
+   const failedAttempt=unbilledAttempt({state:unknown?'unknown':error?'failed':'completed',error,status:last?.response.status,headers:last?.response.headers,body:last?.body,method:input.method,// A proxied route with a missing tunnel meter has unknown bytes, so it is never treated as zero.
+    responseBytes:tunnel===null&&route.class!=='direct'?null:observedBytes([tunnel,encoded,wire,wireLower])});
+   const customerTraffic=finishResidentialTrafficCharge(ledger.customer_traffic,{failedAttempt,dispatched:providerDispatched,unknown,partial:partialTraffic,bytes:tunnel,maxBillableBytes:Number(ledger.customer_traffic_reservation?.reserved_bytes??ledger.reserved_tunnel_bytes)});
    const state=unknown?'unknown':error?'failed':'completed';
    await c.query('UPDATE v2_operations SET state=$2,error=$3,result=$4,summary=$5,finished_at=clock_timestamp() WHERE id=$1',[id,state,error,this.sealer.seal(result,{compress:true}),operationSummary(result)]);
    await c.query('UPDATE v2_ledger SET state=$2,accounted_requests=$3,accounted_encoded_bytes=$4,observed_tunnel_bytes=$5,accounted_tunnel_bytes=$6,estimated_micro_usd=CASE WHEN $7 THEN estimated_micro_usd ELSE 0 END,customer_traffic=$8 WHERE operation=$1',[id,unknown?'unknown':providerDispatched?'unreconciled':'cancelled_before_dispatch',requestsAccounted,encodedAccounted,tunnel,accountedTunnel,providerDispatched,customerTraffic]);
    if(paidQuote){
     const invalidDestination=nativeDispatches===0&&(error==='destination_rejected'||stage==='request_policy');
     const fetchxFailure=['operation_internal_error','sensitive_provider_response','provider_account_rejected','proxy_configuration_invalid','proxy_configuration_unavailable','paid_dns_unavailable','proxy_response_invalid','pricing_attestation_unavailable'].includes(error);
-    await this.controlPaidCredits.finish(c,{project,operation:id,dispatched:providerDispatched&&!invalidDestination,unknown,measuredBytes:wire,confirmedAtCap:wireLower>=wireCap,fetchxFailure});
+    await this.controlPaidCredits.finish(c,{project,operation:id,dispatched:providerDispatched&&!invalidDestination,unknown:unknown&&!failedAttempt,measuredBytes:wire,confirmedAtCap:wireLower>=wireCap,fetchxFailure,failedAttempt});
    }else{
     const credits=fixedCredits?this.controlPaidCredits:this.controlCredits;
-    await credits.finish(c,{project,operation:id,dispatched:providerDispatched,unknown});
+    await credits.finish(c,{project,operation:id,dispatched:providerDispatched&&!failedAttempt,unknown:unknown&&!failedAttempt});
    }
    await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'finish',$2)",[id,{state,error,physical_requests:requests,dns_requests:dnsRequests,encoded_bytes:encoded,observed_tunnel_bytes:tunnel,...(retryPlan?{retry:result.retry,attempts}:{}),...(customerTraffic?{customer_traffic:customerTraffic}:{})}]);
    await c.query('UPDATE v2_sessions SET requests=requests-$2+$3,encoded_bytes=encoded_bytes-$4+$5 WHERE id=$1',[session.id,ledger.reserved_requests,requestsAccounted,ledger.reserved_encoded_bytes,encodedAccounted]);

@@ -145,7 +145,8 @@ function publicLimitFailure(code,operation,profile){
  const current=paid.max_transfer_bytes/1_000_000;
  const details={max_transfer_mb:current,max_allowed_transfer_mb:maximum,reserved_credits:paid.reserved_credits};
  const summary=message(code)+` This operation reserved a ${current} MB transfer ceiling.`;
- if(operation.state!=='failed'||operation.result?.partial||paid.state!=='settled')
+ // A failed attempt is released rather than settled (never billed); the advice is the same.
+ if(operation.state!=='failed'||operation.result?.partial||!['settled','released'].includes(paid.state))
   return {details,message:summary+' Recover the saved operation using its original key before considering new source work.'};
  if(current>=maximum)return {details,message:summary};
  const next=current+step;

@@ -512,16 +512,18 @@ export class ControlPaidCredits{
   if(!allowed.rowCount)fail('paid_credit_reservation_unavailable',409);
  }
 
- async finish(c,{project,operation,dispatched,unknown=false,measuredBytes,confirmedAtCap=false,fetchxFailure=false}){
+ async finish(c,{project,operation,dispatched,unknown=false,measuredBytes,confirmedAtCap=false,fetchxFailure=false,failedAttempt=false}){
   const row=(await c.query(`SELECT * FROM paid_credit_reservations
    WHERE project=$1 AND operation=$2 AND state='reserved' FOR UPDATE`,[project,operation])).rows[0];
   if(!row)return null;
   const logical=fixed(row);
   let state='held',billable=null,basis='uncertain';
-  if(fetchxFailure===true||dispatched===false&&(!logical||unknown===false)){
+  if(fetchxFailure===true||failedAttempt===true||dispatched===false&&(!logical||unknown===false)){
    state='released';
    if(!logical)billable=0;
-   basis=fetchxFailure===true?'fetchx_failure_refund':'verified_no_dispatch';
+   // Customers are never billed for a failed attempt (Karthik, 2026-11-19).
+   // Recorded as a refund basis so the existing ledger constraints need no migration.
+   basis=fetchxFailure===true||failedAttempt===true?'fetchx_failure_refund':'verified_no_dispatch';
   }else if(logical){
    if(dispatched===true&&unknown===false){state='settled';basis='logical_operation';}
   }else if(dispatched===true){

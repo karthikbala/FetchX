@@ -147,3 +147,14 @@ export async function seedFromProbe(db,report,{config}={}){
  }
  return seeded;
 }
+
+// Billing rule: a customer is billed only for an attempt that succeeded.
+// Returns true when the attempt must not be billed: it failed, the source
+// blocked or rate-limited it, or a GET/HEAD ended uncertain with no response
+// bytes (nothing stateful can have happened, so nothing is held).
+export function unbilledAttempt({state,error,status,headers,body,challenge,method='GET',responseBytes=null}){
+ if(state==='unknown')return ['GET','HEAD'].includes(method)&&responseBytes===0;
+ if(state==='failed'||error)return true;
+ const outcome=siteOutcome({state,error,status,headers,body,challenge});
+ return outcome==='blocked'||outcome==='rate_limited'||outcome==='unreachable';
+}

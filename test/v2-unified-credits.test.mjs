@@ -165,13 +165,13 @@ test('verified purchase unifies scoped HTTP, browser and metered public HTTP whi
  assert.equal(targetCalls,2);
  const pending={...scoped('uncertain-http',http),url:url+'unknown'};
  const uncertain=await fetch.fetch(project,pending,identity);
- assert.equal(uncertain.state,'unknown');assert.equal(uncertain.usage.accounting.request_credits.state,'held');
+ assert.equal(uncertain.state,'unknown');assert.equal(uncertain.usage.accounting.request_credits.state,'released','an uncertain GET with no response bytes is never billed');
  assert.equal((await fetch.fetch(project,pending,identity)).operation_id,uncertain.operation_id);
  assert.equal(targetCalls,3);
  const usage=await v2.usage(project);
  assert.deepEqual(usage.entitlement,{mode:'unmetered',max_daily_operations:null});
  assert.deepEqual(usage.credit_balance,{mode:'unified',...usage.paid_credits});
- assert.equal(usage.request_credits.available,0);assert.equal(usage.credit_balance.available,9_899);
+ assert.equal(usage.request_credits.available,0);assert.equal(usage.credit_balance.available,9_901,'failed attempts and the zero-byte uncertain GET are released, not billed');
 
  holdDuringBrowser=true;
  const blocked=await render.render(project,scoped('held-browser',browser),identity);
