@@ -102,11 +102,10 @@ export async function browserProbeLaunchOptions(runtime,{relay,denyRelay,cacheDi
  if(engine==='chromium'){
   options={executablePath:runtime.executablePath,headless:true,args,timeout};
  }else if(engine==='cloakbrowser'&&runtime.entitlement==='unlicensed'){
-  process.env.CLOAKBROWSER_BINARY_PATH=runtime.executablePath;
-  process.env.CLOAKBROWSER_AUTO_UPDATE='false';
-  process.env.CLOAKBROWSER_LICENSE_KEY='';
-  process.env.CLOAKBROWSER_CACHE_DIR=cacheDir;
-  const sdk=await import('cloakbrowser');
+  // The qualified probe runtime is the keyless pinned build, served by the
+  // 0.6.x-compatible wrapper. A licensed 0.7 build does not satisfy this gate.
+  const {pinnedCloakBrowser}=await import('./cloakbrowser-runtime.mjs');
+  const {sdk}=await pinnedCloakBrowser(runtime,cacheDir);
   // CloakBrowser's SDK defaults include --no-sandbox. Use reviewed args only.
   options=await sdk.buildLaunchOptions({headless:true,stealthArgs:false,geoip:false,humanize:false,browserVersion:runtime.version,args:[...args,'--fingerprint-platform=linux'],launchOptions:{chromiumSandbox:true,timeout}});
  }else fail('browser_probe_runtime_unqualified',503);

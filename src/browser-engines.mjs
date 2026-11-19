@@ -3,6 +3,7 @@ import {createReadStream} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {isAbsolute,dirname,join,basename} from 'node:path';
 import {fail,checkedURL,checkedHeaders} from './policy.mjs';
+import {pinnedCloakBrowser} from './cloakbrowser-runtime.mjs';
 
 // A launcher upgrade must review its paired browser, protocol and model together.
 export const CAMOUFOX_PIN=Object.freeze({launcher:'0.5.9',playwright:'1.62.1',version:'158.0.1-beta.41',model:'6530b8322cdaa4ec042921c8d9a0369a0e6e0269ba636c01a7203e4a2f109936'});
@@ -35,10 +36,13 @@ export async function verifyCamoufoxBuild(tier){
  }catch{fail('browser_model_unavailable',503);}
  return tier;
 }
-export function camoufoxLaunchOptions(tier,profile,relay,cacheDir){
+function requireBrowserRelay(relay){
  let proxy;try{proxy=new URL(relay);}catch{fail('browser_proxy_required',503);}
  // Only the gateway's private, bounded CONNECT relay can be a browser proxy.
  if(proxy.protocol!=='http:'||proxy.hostname!=='127.0.0.1'||!proxy.port||proxy.username||proxy.password||proxy.pathname!=='/'||proxy.search||proxy.hash)fail('browser_proxy_required',503);
+}
+export function camoufoxLaunchOptions(tier,profile,relay,cacheDir){
+ requireBrowserRelay(relay);
  if(typeof profile.locale!=='string'||typeof profile.timezone!=='string')fail('browser_identity_unconfigured',500);
  try{new Intl.DateTimeFormat(profile.locale,{timeZone:profile.timezone});}catch{fail('browser_identity_invalid',500);}
  const delay=profile.browserActionDelayMs??150;
@@ -76,12 +80,15 @@ export async function launchPinnedBrowser(tier,profile,relay,cacheDir){
   return Camoufox(camoufoxLaunchOptions(tier,profile,relay,cacheDir));
  }
  if(await fileSha256(tier.executablePath)!==tier.sha256)fail('browser_build_mismatch',503);
- process.env.CLOAKBROWSER_BINARY_PATH=tier.executablePath;process.env.CLOAKBROWSER_AUTO_UPDATE='false';
- process.env.CLOAKBROWSER_LICENSE_KEY='';process.env.CLOAKBROWSER_CACHE_DIR=cacheDir;
- const {launch}=await import('cloakbrowser');
- return launch({licenseKey:tier.licenseKey,headless:true,geoip:false,humanize:true,browserVersion:tier.version,
-  proxy:{server:relay},chromiumSandbox:true,launchOptions:{chromiumSandbox:true,timeout:20000},
-  args:['--fingerprint-platform=linux','--proxy-bypass-list=<-loopback>','--disable-quic','--disable-background-networking','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--license-through-proxy']});
+ requireBrowserRelay(relay);
+ const {sdk,licenseKey}=await pinnedCloakBrowser(tier,cacheDir);
+ // Playwright's chromiumSandbox does not override an explicit --no-sandbox.
+ // Keep the SDK fingerprint defaults but omit that switch in both wrappers.
+ const stealthArgs=sdk.getDefaultStealthArgs().filter(arg=>!/^--no-sandbox(?:=|$)/.test(arg));
+ const fingerprintPlatform=licenseKey&&process.platform==='darwin'?'macos':'linux';
+ return sdk.launch({licenseKey,headless:true,geoip:false,humanize:true,browserVersion:tier.version,stealthArgs:false,
+  proxy:{server:relay},launchOptions:{chromiumSandbox:true,timeout:20000},
+  args:[...stealthArgs,`--fingerprint-platform=${fingerprintPlatform}`,'--proxy-bypass-list=<-loopback>','--disable-quic','--disable-background-networking','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--license-through-proxy',...(licenseKey?['--license-route=proxy']:[])]});
 }
 // Shared by both engines. The injected resolver is for synthetic tests; workers
 // use checkedURL's real public-IP resolver and never accept resolver input.

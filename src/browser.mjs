@@ -5,16 +5,17 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {fail} from './policy.mjs';
 import {browserEngine,verifyCamoufoxBuild} from './browser-engines.mjs';
+import {cloakBrowserLicenseKey} from './cloakbrowser-runtime.mjs';
 let active=0;
 export async function checkBrowserTier(config,tier,{fetchImpl=fetch,engine='cloakbrowser'}={}){
  browserEngine({browserEngine:engine});
  if(engine==='camoufox'){if(tier!=='free')fail('browser_tier_unsupported',503);return verifyCamoufoxBuild(config.browser?.camoufox?.free);}
  const t=config.browser?.[tier];if(!t?.executablePath||!t.sha256||!t.version)fail('browser_tier_unavailable',503);
  await access(t.executablePath).catch(()=>fail('browser_tier_unavailable',503));
- if(tier==='free'&&t.entitlement==='unlicensed')return t;
- if(!t.licenseKey)fail('browser_entitlement_unavailable',503);
- let info;try{const r=await fetchImpl('https://cloakbrowser.dev/api/license/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({license_key:t.licenseKey}),signal:AbortSignal.timeout(10000)});if(!r.ok)throw Error();info=await r.json();}catch{fail('browser_entitlement_unverified',503);}
- if(!info.valid||info.expires&&(!Number.isFinite(Date.parse(info.expires))||Date.parse(info.expires)<=Date.now()))fail('browser_entitlement_expired',503);
+ const licenseKey=cloakBrowserLicenseKey(t);
+ if(!licenseKey){if(tier!=='free')fail('browser_paid_subscription_required',503);return t;}
+ let info;try{const r=await fetchImpl('https://cloakbrowser.dev/api/license/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({license_key:licenseKey}),redirect:'error',signal:AbortSignal.timeout(10000)});if(!r.ok)throw Error();info=await r.json();}catch{fail('browser_entitlement_unverified',503);}
+ if(!info?.valid||info.expires&&(!Number.isFinite(Date.parse(info.expires))||Date.parse(info.expires)<=Date.now()))fail('browser_entitlement_expired',503);
  if(tier==='paid'&&!['solo','team','business','scale','enterprise'].includes(String(info.plan).toLowerCase()))fail('browser_paid_subscription_required',503);
  return t;
 }
