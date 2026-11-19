@@ -28,3 +28,30 @@ The browser stays on the existing proxy, cookies and user agent throughout solvi
 Unsupported flows fail without paid guessing: hCaptcha, DataDome, reCAPTCHA v3/Enterprise-specific tasks, managed Cloudflare challenge pages requiring challenge data or user-agent replacement, callback-only widgets, and external login/MFA. This release does not claim universal site unblocking. Public tests use synthetic fixtures and a real local Chromium process; live source qualification is separate.
 
 Provider contracts: [reCAPTCHA v2](https://2captcha.com/api-docs/recaptcha-v2), [Turnstile](https://2captcha.com/api-docs/cloudflare-turnstile), [task creation](https://2captcha.com/api-docs/create-task), [result polling](https://2captcha.com/api-docs/get-task-result).
+
+## Generic solving in auto mode (v2 renders)
+
+Auto mode's browser steps (`POST /v2/fetch` with `proxy.class: "auto"`) can solve
+one CAPTCHA per attempt without a per-site profile:
+
+- **Detection** runs in the browser worker and reads only public widget attributes:
+  a `.cf-turnstile[data-sitekey]` (or a `data-sitekey` element with a
+  `cf-turnstile-response` field), a `.g-recaptcha[data-sitekey]`, or a reCAPTCHA
+  v2 anchor frame. hCaptcha, DataDome and Cloudflare managed challenge pages are
+  not solved; they are reported.
+- **Solving** happens in the parent gateway, so the 2captcha key never reaches the
+  worker or the page. It uses proxyless Turnstile or reCAPTCHA v2 tasks for the
+  exact page URL being rendered. There is at most one task per v2 operation. An
+  uncertain task creation is never retried.
+- **Applying the token:** the token goes into the widget's own response field.
+  The page then gets it through the widget's declared `data-callback`, or
+  through the widget's own form. The worker then waits for the page to load and
+  checks whether the widget is gone.
+- **Budgets:** the same `captcha` limits apply (`maxTaskMicroUsd`,
+  `maxDailyMicroUsd`, `maxTotalMicroUsd`, `maxTotalTasks` and the per-project
+  `maxDailyCaptchaMicroUsd`), shared with v1 tasks. Tasks are recorded in
+  `v2_captcha_tasks` with the host only, never the URL path or the token.
+- **Cost:** a solve is FetchX's cost. The customer is billed only if the attempt succeeds.
+
+Browser workers must run this release too. A worker that predates it rejects
+CAPTCHA-enabled render input, and older gateways keep working with new workers.

@@ -107,7 +107,15 @@ the wait.
 Explicit routes (`direct`, `datacenter`, `residential`) never escalate. Their
 error codes report exactly what happened, as before.
 
-Not in auto mode yet: CloakBrowser as a last-resort engine and captcha solving.
-Both exist only in v1 residential workflows today. The v2 browser pool runs one
-qualified engine (Camoufox), so adding them to auto mode needs per-request
-engine selection in the pool. That is a follow-up.
+- **Residential providers:** after a residential attempt fails or is rate
+  limited, the next residential attempt uses the other provider (Evomi and
+  DataImpulse alternate), when it is enabled and allowed.
+- **CAPTCHA:** browser steps in auto mode may solve one Turnstile or reCAPTCHA v2
+  widget per attempt through 2captcha. See `docs/captcha.md`. Explicit
+  `/v2/render` calls never solve.
+
+The browser steps run on the v2 render pool's qualified engine (pinned Chromium
+or keyless CloakBrowser, as configured), not Camoufox. Camoufox is used only in
+v1 residential workflows. CloakBrowser as a separate last-resort step stays out
+of auto mode until there is evidence of a challenge Camoufox cannot pass and
+CloakBrowser can.
