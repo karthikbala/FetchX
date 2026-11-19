@@ -211,7 +211,7 @@ test('invalid facade options produce the documented gateway failure envelopes', 
   [fetchPath, {proxy: {class: 'direct', country: 'US'}}, 400, 'direct_country_unverified'],
   [fetchPath, {proxy: {class: 'datacenter', country: null}}, 400, 'country_required'],
   [fetchPath, {screenshot: true}, 409, 'capability_unsupported'],
-  [renderPath, {wait_ms: 2001}, 400, 'browser_wait_ceiling_rejected'],
+  [renderPath, {wait_ms: 15001}, 400, 'browser_wait_ceiling_rejected'],
   [renderPath, {retry: true}, 400, 'browser_probe_invalid'],
  ]) {
   const request = {...exampleRequest(path), ...patch};
@@ -277,6 +277,13 @@ test('paid credit, transfer limit and render preparation shapes match the contra
  assert.equal(request.max_transfer_mb.minimum, PUBLIC_URL_TRANSFER_LIMITS.min_transfer_mb);
  assert.equal(request.max_transfer_mb.maximum, PUBLIC_URL_TRANSFER_LIMITS.max_transfer_mb);
  assert.equal(request.max_transfer_mb.multipleOf, PUBLIC_URL_TRANSFER_LIMITS.step_mb);
+ const {cooldownView} = await import('../src/v2-public-fetch.mjs');
+ const {sourceChallenge} = await import('../src/source-challenge.mjs');
+ const cooldown = cooldownView({scope: 'origin', origin: 'https://source.example', cooldown_until: new Date(Date.now() + 15000).toISOString()});
+ assertValid(schema('CooldownDetails'), cooldown, 'cooldown details');
+ const challenge = sourceChallenge({status: 429, headers: {'content-type': 'text/html'}, body: Buffer.from('<title>Just a moment...</title>'), url: 'https://source.example/'});
+ assert.ok(challenge, 'fixture challenge page is recognized');
+ assertValid(schema('ChallengeDetails'), challenge, 'challenge details');
  const preparation = media(spec.paths['/v2/render/prepare'].post.requestBody).schema;
  assertValid(preparation, {url: 'https://source.example/', proxy: {class: 'direct', country: null}}, 'preparation request');
  const invalid = validator(preparation);

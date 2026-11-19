@@ -2233,8 +2233,8 @@
           "wait_ms": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 2000,
-            "description": "Post-load wait in milliseconds, limited by the access profile. Omission uses the profile default."
+            "maximum": 15000,
+            "description": "Post-load wait in milliseconds for client-side rendering to settle, limited by the access profile's max_wait_ms. Omission uses the profile default."
           }
         },
         "required": [
@@ -2261,9 +2261,19 @@
             "description": "Stage at which the failure was reported."
           },
           "details": {
-            "type": "object",
-            "additionalProperties": true,
-            "description": "Optional structured guidance. On a Public URL transfer cutoff it reports max_transfer_mb, max_allowed_transfer_mb, reserved_credits and, when a larger ceiling is possible, next.max_transfer_mb and next.max_credits for a new operation with a new idempotency key."
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChallengeDetails"
+              },
+              {
+                "$ref": "#/components/schemas/CooldownDetails"
+              },
+              {
+                "type": "object",
+                "additionalProperties": true
+              }
+            ],
+            "description": "Optional structured guidance. source_challenge reports the vendor and HTTP status; source_cooldown reports the origin and its expiry. On a Public URL transfer cutoff it reports max_transfer_mb, max_allowed_transfer_mb, reserved_credits and, when a larger ceiling is possible, next.max_transfer_mb and next.max_credits for a new operation with a new idempotency key."
           }
         },
         "required": [
@@ -2289,7 +2299,7 @@
           },
           "next_action": {
             "type": "string",
-            "description": "Suggested caller action. Use read-only recovery when uncertain. Known values include complete, recover_by_key, check_url, review_source_access, wait_for_source_retry_after, review_proxy_configuration, review_transfer_limit and retry_same_key."
+            "description": "Suggested caller action. Use read-only recovery when uncertain. Known values include complete, recover_by_key, check_url, review_source_access, wait_for_source_retry_after, consider_approved_residential_fresh_session (Fetch), consider_residential_new_request (Render), review_proxy_configuration, review_transfer_limit and retry_same_key."
           },
           "lookup_url": {
             "type": [
@@ -2303,7 +2313,7 @@
               "string",
               "null"
             ],
-            "description": "The source Retry-After value, if retained. It may be a delay or an HTTP date."
+            "description": "Seconds or an HTTP date to wait before a new request. Also reported with source_challenge and source_forbidden when the source or a FetchX cooldown sets a wait."
           },
           "suggested_proxy": {
             "$ref": "#/components/schemas/ProxySelection"
@@ -2334,6 +2344,10 @@
               "string",
               "null"
             ]
+          },
+          "requires_render_preparation": {
+            "type": "boolean",
+            "description": "Render only. Call POST /v2/render/prepare for the suggested route before the new request, to get its profile and quote."
           }
         },
         "required": [
@@ -2776,6 +2790,25 @@
               "null"
             ],
             "minimum": 0
+          },
+          "blocked_reasons": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Count of page requests the browser policy blocked, by reason."
+          },
+          "subresource_origins": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Number of other public origins the page loaded subresources from."
           }
         },
         "required": [
@@ -3005,6 +3038,36 @@
                   "render"
                 ],
                 "description": "Render response shape marker reported in a structured failure. This does not guarantee availability."
+              },
+              "browser": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "engine": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "Browser engine that served the render, for example camoufox."
+                      },
+                      "version": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "engine",
+                      "version"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Engine and version that served the render, when known."
               }
             },
             "required": [
@@ -3505,6 +3568,26 @@
             "properties": {
               "enabled": {
                 "type": "boolean"
+              },
+              "max_wait_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "settle_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "subresources": {
+                "type": "string",
+                "description": "public lets the page load scripts, styles, images, fonts and data calls from other public origins within the caps."
+              },
+              "frames": {
+                "type": "boolean",
+                "description": "Whether child-frame documents may load."
+              },
+              "page_post": {
+                "type": "boolean",
+                "description": "Whether the page's own XHR or fetch POSTs (up to 64 KiB) may be sent."
               }
             },
             "required": [
@@ -4995,6 +5078,54 @@
             "type": "string"
           }
         }
+      },
+      "ChallengeDetails": {
+        "type": "object",
+        "description": "Reported with source_challenge. The page was a bot-manager interstitial; a challenge page wins over its HTTP status, including 403 and 429.",
+        "properties": {
+          "vendor": {
+            "type": "string",
+            "description": "Protection vendor when the passive classifier can attribute it, otherwise unknown."
+          },
+          "http_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        },
+        "required": [
+          "vendor",
+          "http_status"
+        ]
+      },
+      "CooldownDetails": {
+        "type": "object",
+        "description": "Reported with source_cooldown. FetchX holds new requests to this origin until cooldown_until.",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "const": "origin"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "cooldown_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "retry_after_seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "scope",
+          "origin",
+          "cooldown_until",
+          "retry_after_seconds"
+        ]
       }
     }
   }

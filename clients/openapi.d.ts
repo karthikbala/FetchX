@@ -390,7 +390,7 @@ export interface components {
              * @default false
              */
             screenshot?: boolean;
-            /** @description Post-load wait in milliseconds, limited by the access profile. Omission uses the profile default. */
+            /** @description Post-load wait in milliseconds for client-side rendering to settle, limited by the access profile's max_wait_ms. Omission uses the profile default. */
             wait_ms?: number;
         };
         FacadeError: {
@@ -400,8 +400,8 @@ export interface components {
             message: string;
             /** @description Stage at which the failure was reported. */
             stage: string;
-            /** @description Optional structured guidance. On a Public URL transfer cutoff it reports max_transfer_mb, max_allowed_transfer_mb, reserved_credits and, when a larger ceiling is possible, next.max_transfer_mb and next.max_credits for a new operation with a new idempotency key. */
-            details?: {
+            /** @description Optional structured guidance. source_challenge reports the vendor and HTTP status; source_cooldown reports the origin and its expiry. On a Public URL transfer cutoff it reports max_transfer_mb, max_allowed_transfer_mb, reserved_credits and, when a larger ceiling is possible, next.max_transfer_mb and next.max_credits for a new operation with a new idempotency key. */
+            details?: components["schemas"]["ChallengeDetails"] | components["schemas"]["CooldownDetails"] | {
                 [key: string]: unknown;
             };
         };
@@ -412,11 +412,11 @@ export interface components {
             same_key_replay_safe: boolean;
             /** @description Whether this result permits consideration of new source work. */
             new_request_allowed: boolean;
-            /** @description Suggested caller action. Use read-only recovery when uncertain. Known values include complete, recover_by_key, check_url, review_source_access, wait_for_source_retry_after, review_proxy_configuration, review_transfer_limit and retry_same_key. */
+            /** @description Suggested caller action. Use read-only recovery when uncertain. Known values include complete, recover_by_key, check_url, review_source_access, wait_for_source_retry_after, consider_approved_residential_fresh_session (Fetch), consider_residential_new_request (Render), review_proxy_configuration, review_transfer_limit and retry_same_key. */
             next_action: string;
             /** @description Relative read-only recovery URL, when available. */
             lookup_url: string | null;
-            /** @description The source Retry-After value, if retained. It may be a delay or an HTTP date. */
+            /** @description Seconds or an HTTP date to wait before a new request. Also reported with source_challenge and source_forbidden when the source or a FetchX cooldown sets a wait. */
             retry_after?: string | null;
             suggested_proxy?: components["schemas"]["ProxySelection"];
             requires_new_idempotency_key?: boolean;
@@ -428,6 +428,8 @@ export interface components {
             route_changed?: boolean;
             effective_session_id?: components["schemas"]["ResourceId"];
             stop_reason?: string | null;
+            /** @description Render only. Call POST /v2/render/prepare for the suggested route before the new request, to get its profile and quote. */
+            requires_render_preparation?: boolean;
         };
         FacadeData: {
             /** @description Source HTTP status. It can be null and is independent of gateway_http_status. */
@@ -536,6 +538,12 @@ export interface components {
             screenshot_bytes: number | null;
             capture_complete: boolean | null;
             duration_ms: number | null;
+            /** @description Count of page requests the browser policy blocked, by reason. */
+            blocked_reasons?: {
+                [key: string]: number;
+            } | null;
+            /** @description Number of other public origins the page loaded subresources from. */
+            subresource_origins?: number | null;
         };
         FacadeResponse: {
             /** @description Whether FetchX obtained a successful source result. HTTP 200 alone does not establish this. */
@@ -597,6 +605,12 @@ export interface components {
                 /** @constant */
                 render: true;
             };
+            /** @description Engine and version that served the render, when known. */
+            browser?: {
+                /** @description Browser engine that served the render, for example camoufox. */
+                engine: string | null;
+                version: string | null;
+            } | null;
         };
         NativeError: {
             /** @description Machine-readable gateway error code. */
@@ -722,6 +736,14 @@ export interface components {
             /** @description Native browser probe limits when applicable. For managed projects use the Render profile issued by the playground. */
             browser_probe?: {
                 enabled: boolean;
+                max_wait_ms?: number;
+                settle_ms?: number;
+                /** @description public lets the page load scripts, styles, images, fonts and data calls from other public origins within the caps. */
+                subresources?: string;
+                /** @description Whether child-frame documents may load. */
+                frames?: boolean;
+                /** @description Whether the page's own XHR or fetch POSTs (up to 64 KiB) may be sent. */
+                page_post?: boolean;
             };
             /** @description Present for discovery and public_url_http profiles. */
             kind?: string;
@@ -1100,6 +1122,21 @@ export interface components {
             success: false;
             code: string;
             error: string;
+        };
+        /** @description Reported with source_challenge. The page was a bot-manager interstitial; a challenge page wins over its HTTP status, including 403 and 429. */
+        ChallengeDetails: {
+            /** @description Protection vendor when the passive classifier can attribute it, otherwise unknown. */
+            vendor: string;
+            http_status: number | null;
+        };
+        /** @description Reported with source_cooldown. FetchX holds new requests to this origin until cooldown_until. */
+        CooldownDetails: {
+            /** @constant */
+            scope: "origin";
+            origin: string;
+            /** Format: date-time */
+            cooldown_until: string;
+            retry_after_seconds: number;
         };
     };
     responses: never;

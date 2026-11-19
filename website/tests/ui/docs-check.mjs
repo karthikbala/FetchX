@@ -33,7 +33,7 @@ try {
   assert.match(await renderPage.locator('#recovery').innerText(), /GET \/v2\/render\/\{key\}/);
   const renderRequest = contract.paths['/v2/render'].post.requestBody.content['application/json'].examples.example.value;
   assert.deepEqual(JSON.parse(await renderPage.locator('#request [data-doc-code] code').first().textContent()), renderRequest);
-  assert.match(await renderPage.locator('#request tr').filter({ hasText: 'wait_ms' }).innerText(), /Maximum 2000/);
+  assert.match(await renderPage.locator('#request tr').filter({ hasText: 'wait_ms' }).innerText(), /Maximum 15000/);
   assert.match(await renderPage.locator('#request tr').filter({ hasText: 'proxy.class' }).innerText(), /direct.*datacenter.*residential/);
   await renderPage.goto(base + '/docs/reference');
   assert.ok(await renderPage.locator('#endpoints a[href="/openapi.json"]').isVisible());
