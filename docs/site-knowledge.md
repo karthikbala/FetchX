@@ -57,3 +57,44 @@ Tunable with `siteKnowledge` in config: `freshMs`, `demoteAfter`,
 - `GET /control/admin/sites/:host` returns every known route for a host.
 - `DELETE /control/admin/sites/:host` forgets a host so it is relearned. This is
   written to the routing audit log as `site:<host>`.
+
+## Auto mode (`POST /v2/fetch` with `proxy.class: "auto"`)
+
+```json
+{"idempotency_key": "k1", "url": "https://example.com/page", "proxy": {"class": "auto"}, "max_attempts": 5}
+```
+
+`proxy.country` is optional. `max_attempts` runs from 1 to 5 and defaults to 5.
+
+- **Ladder:** direct, then datacenter, then residential, limited to what the
+  access profile allows. Routes proven for the host come first. Routes that are
+  cooling, or excluded by a provider rule (such as Oxylabs for `.gov`), are skipped.
+- **Each attempt** is an ordinary fetch under a derived key, so admission, cost
+  ceilings, budgets and provider rules all apply. The route for each attempt is
+  recorded before dispatch. A same-key replay or `GET /v2/fetch/:key` returns
+  the same final attempt without new source work.
+- **Stops** on success, a real 404, an uncertain result (never retried), a
+  rate limit (429 or cooldown), or a caller limit (credits, quota, cost ceiling).
+- **Only GET and HEAD escalate.** Other methods make one attempt.
+- **Fixing client mistakes:** an automation or missing User-Agent is replaced
+  with a browser one (or removed if the profile does not allow the header), and
+  missing `accept` and `accept-language` headers are added when allowed. All
+  other headers are sent as given.
+- **Billing:** only the successful attempt is billed. Failed attempts are released.
+
+The response is the final attempt's normal fetch response plus an `auto`
+object. It holds `attempts`, `max_attempts`, `routes_tried` (class, country and
+result; never providers), `routes_skipped`, `billed_attempt`,
+`headers_adjusted` and `next`. `next` is null on success, and otherwise one of:
+
+- `{"action": "retry_after", "retry_after_seconds": N}` when the site is rate limiting.
+- `{"action": "use_render", "endpoint": "/v2/render"}` when every HTTP route was blocked.
+- `{"action": "recover"}` when the outcome is uncertain: look up the same key first.
+- `{"action": "retry_later", "retry_after_seconds": N}` when the site was unreachable.
+
+If every allowed route is cooling, the request is refused with no dispatch. It
+returns HTTP 429 with `source_cooldown`, and `error.details.auto.next` gives
+the wait.
+
+Explicit routes (`direct`, `datacenter`, `residential`) never escalate. Their
+error codes report exactly what happened, as before.
