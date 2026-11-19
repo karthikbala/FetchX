@@ -456,11 +456,20 @@ class Controller:
             return
         fingerprint = self.driver.fingerprint()
         snapshot = self.ledger.meta("snapshot")
-        if snapshot and snapshot.get("manifest_sha256") == fingerprint:
+        current = bool(snapshot) and snapshot.get("manifest_sha256") == fingerprint
+        if current:
+            # A snapshot boots only servers with at least its source disk. One baked on
+            # a bigger type (the smallest was out of stock) is baked again once it's back.
+            if not snapshot.get("disk_gb") or snapshot["disk_gb"] <= 40:
+                return
+            if now - self.ledger.meta("bake_checked_at", 0) < self.config["bake_check_seconds"]:
+                return
+            self.ledger.set_meta("bake_checked_at", now)
+        machine = select_machine(self.cloud.server_types(), self.cloud.pricing(), self.config,
+                                 self.ledger.meta("machine_cooldowns", {}), now, smallest_disk=True)
+        if current and machine["disk_gb"] >= snapshot["disk_gb"]:
             return
         self.ledger.set_meta("bake_started_at", now)
-        machine = select_machine(self.cloud.server_types(), self.cloud.pricing(), self.config,
-                                 self.ledger.meta("machine_cooldowns", {}), now)
         record = self.ledger.reserve(now, uuid.uuid4().hex[:24], machine, purpose="bake", manifest_sha256=fingerprint)
         self._create(record, now, preinstalled=False, image="ubuntu-24.04", growth=False)
 
@@ -573,8 +582,7 @@ class Controller:
         metrics_snapshot(metrics, now, self.config["metrics_max_age_seconds"])
         machine = select_machine(server_types, pricing, self.config,
                                  self.ledger.meta("machine_cooldowns", {}), now)
-        disk = next((t.get("disk") for t in server_types.get("server_types", []) if t.get("id") == machine["type_id"]), None)
-        image = self._snapshot_for_boot(disk)
+        image = self._snapshot_for_boot(machine.get("disk_gb"))
         record = self.ledger.reserve(now, uuid.uuid4().hex[:24], machine, image=image or "ubuntu-24.04")
         self._create(record, now, preinstalled=image is not None, image=image or "ubuntu-24.04", growth=True, since=since)
 
