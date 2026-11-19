@@ -15,6 +15,10 @@ Browser steps solve the captchas they meet, through [2Captcha](https://2captcha.
 
 Detection and the page work run in the browser (`src/browser/page-captcha.mjs`), reading only public widget attributes. Solving runs in the gateway (`src/captcha/solver.mjs`), so the 2Captcha key never reaches a worker or a page. A capture asks the gateway for each solve through the `captcha` callback.
 
+## Time
+
+A solve starts only when at least 30 seconds of the request's `timeout_ms` remain, so FetchX does not pay for one that cannot finish. 2Captcha usually answers in 15-40 seconds, which is why `timeout_ms` defaults to 120 seconds (180 at most). A synchronous call still answers 202 after 60 seconds; poll or use a webhook for the rest.
+
 ## Budgets and records
 
 `config.captcha` sets the limits: `maxTaskMicroUsd` (per task), `maxDailyMicroUsd`, `maxTotalMicroUsd`, `maxTotalTasks`, and `maxTasksPerRequest` (4). A task's cost is reserved before it is created; a budget that would be exceeded fails the solve with `captcha_budget_exhausted` and the step continues without it. `captcha_solves` records each task with the host only, never the URL path or the token. An uncertain task creation is never retried.

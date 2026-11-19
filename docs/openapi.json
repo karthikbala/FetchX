@@ -1543,9 +1543,9 @@
      "timeout_ms": {
       "type": "integer",
       "minimum": 5000,
-      "maximum": 120000,
-      "default": 60000,
-      "description": "Total time for all attempts."
+      "maximum": 180000,
+      "default": 120000,
+      "description": "Total time for all attempts. A captcha solve can take up to a minute, so the default leaves room for one; a synchronous call still answers 202 after 60 seconds if the request is not finished."
      },
      "async": {
       "type": "boolean",

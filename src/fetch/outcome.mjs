@@ -66,21 +66,50 @@ export function detectChallenge({status = null, headers = {}, body = null} = {})
   return null;
 }
 
-// An HTML page with almost no text and a single application root: the real
-// content is drawn by JavaScript, so auto mode should move to a browser.
+const SHELL_SCAN_BYTES = 1_048_576;
+const NEEDS_JAVASCRIPT = /enable javascript|requires javascript|javascript is (?:disabled|required|not available)/i;
+const APP_ROOT = /<(div|main|section|app-root)\b[^>]*\bid=["'](?:root|app|__next|__nuxt|main|application)["'][^>]*>\s*<\/\1>|<app-root\b/i;
+
+const visibleText = html => html
+  .replace(/<(script|style|noscript|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+  .replace(/<[^>]+>/g, ' ')
+  .replace(/&[a-z#0-9]+;/gi, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+// Prose carried by the page's own inline scripts: string literals of three or
+// more words that are not markup, code or URLs. External scripts and JSON-LD
+// (which repeats the page for search engines) are not counted.
+function scriptProse(html) {
+  let total = 0;
+  for (const [, attributes, code] of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
+    if (/\bsrc\s*=/i.test(attributes) || /\btype\s*=\s*["']?application\/ld\+json/i.test(attributes)) continue;
+    for (const [literal] of code.matchAll(/"(?:[^"\\\n]|\\.){12,}"|'(?:[^'\\\n]|\\.){12,}'/g)) {
+      const inner = literal.slice(1, -1).replace(/\\u00a0|\\[nt]/g, ' ');
+      if (/[<>{};=]|https?:|\/\//.test(inner)) continue;
+      if (inner.trim().split(/\s+/).length >= 3 && /\p{L}{2}/u.test(inner)) total += inner.length;
+    }
+  }
+  return total;
+}
+
+// An HTML page whose content is drawn by JavaScript, so auto mode moves to a
+// browser. Generic signals only:
+// - scripts and next to no text (a loader, an app shell, a script redirect);
+// - little text, and the page says it needs JavaScript or has an empty app root;
+// - modest text while its inline scripts carry several times more prose (the
+//   content ships as data and is rendered in the browser).
 export function isJavaScriptShell({headers = {}, body = null} = {}) {
   if (!isHtml(headers)) return false;
-  const html = bodyText(body);
+  const html = Buffer.isBuffer(body) ? body.subarray(0, SHELL_SCAN_BYTES).toString('utf8')
+    : typeof body === 'string' ? body.slice(0, SHELL_SCAN_BYTES) : '';
   if (!/<script\b/i.test(html)) return false;
-  const text = html
-    .replace(/<(script|style|noscript|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&[a-z#0-9]+;/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const appRoot = /<(div|main|section|app-root)\b[^>]*\bid=["'](?:root|app|__next|__nuxt|main|application)["'][^>]*>\s*<\/\1>/i.test(html)
-    || /<app-root\b/i.test(html);
-  return text.length < 200 && (appRoot || /enable javascript|requires javascript|javascript is (?:disabled|required)/i.test(html));
+  const text = visibleText(html).length;
+  if (text < 150) return true;
+  if (text < 500 && (APP_ROOT.test(html) || NEEDS_JAVASCRIPT.test(html))) return true;
+  if (text >= 1500) return false;
+  const prose = scriptProse(html);
+  return prose >= 500 && prose > 3 * text;
 }
 
 // Classifies a site response. `answered` is a real 404/410: the site's answer,

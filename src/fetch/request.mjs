@@ -14,8 +14,9 @@ export const LIMITS = Object.freeze({
   maxRequestBodyBytes: 1_000_000,
   maxWaitMs: 10_000,
   minTimeoutMs: 5_000,
-  maxTimeoutMs: 120_000,
-  defaultTimeoutMs: 60_000,
+  // Room for a page, a captcha solve (often 15-60 s) and the reload.
+  maxTimeoutMs: 180_000,
+  defaultTimeoutMs: 120_000,
   maxCredits: 100_000,
 });
 const FIELDS = ['url', 'method', 'headers', 'body', 'body_base64', 'render', 'formats', 'include_body', 'wait_for', 'country',

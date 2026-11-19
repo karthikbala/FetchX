@@ -39,6 +39,30 @@ test('a JavaScript shell over HTTP asks for a browser', () => {
   assert.equal(isJavaScriptShell({headers: html, body: '<html><body><div id="root"><h1>Real content</h1>' + 'words '.repeat(80) + '</div><script></script></body></html>'}), false);
 });
 
+test('pages whose content arrives by script are shells; server-rendered pages are not', () => {
+  const sentence = i => `"Synthetic record number ${i} says something long enough to read as prose."`;
+  const page = (body, head = '') => `<html><head><title>Records</title>${head}</head><body>${body}</body></html>`;
+  // The records ship as data in an inline script; the HTML shows only the chrome.
+  const dataInScript = page(`<h1>Records</h1><a href="/login">Login</a><script>var data = [${Array.from({length: 12}, (_, i) => `{"text": ${sentence(i)}}`).join(',')}];
+    for (const r of data) document.body.insertAdjacentHTML('beforeend', r.text);</script>`);
+  assert.equal(isJavaScriptShell({headers: html, body: dataInScript}), true);
+  assert.equal(classifyResponse({status: 200, headers: html, body: Buffer.from(dataInScript)}).outcome, 'needs_browser');
+  // The same data, but also rendered on the server: a browser adds nothing.
+  const rendered = page('<main>' + Array.from({length: 30}, (_, i) => `<p>${sentence(i).slice(1, -1)}</p>`).join('') + '</main>'
+    + `<script>self.payload = [${Array.from({length: 30}, (_, i) => sentence(i)).join(',')}];</script>`);
+  assert.equal(isJavaScriptShell({headers: html, body: rendered}), false);
+  // A loader with next to no text.
+  assert.equal(isJavaScriptShell({headers: html, body: page('<p>Loading...</p><script src="/app.js"></script>')}), true);
+  // A page that says it needs JavaScript, with some text around it.
+  assert.equal(isJavaScriptShell({headers: html, body: page('<p>' + 'Sign in to continue. '.repeat(15) + '</p><noscript>Please enable JavaScript.</noscript><script src="/a.js"></script>')}), true);
+  // No scripts at all (a meta refresh) is the site's answer.
+  assert.equal(isJavaScriptShell({headers: html, body: page('Redirecting', '<meta http-equiv="refresh" content="0;url=/home">')}), false);
+  // JSON-LD repeats the page for search engines; it is not content waiting for a browser.
+  const described = page('<h1>' + 'A short product page with a little text. '.repeat(5) + '</h1>'
+    + `<script type="application/ld+json">{"description": ${'"' + 'A long description of the product for search engines to read. '.repeat(20) + '"'}}</script>`);
+  assert.equal(isJavaScriptShell({headers: html, body: described}), false);
+});
+
 test('Retry-After is read and capped', () => {
   assert.equal(retryAfterSeconds({'retry-after': '120'}), 120);
   assert.equal(retryAfterSeconds({'retry-after': '99999'}), 3600);

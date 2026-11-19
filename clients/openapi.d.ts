@@ -221,8 +221,8 @@ export interface components {
             /** @description The most this request may cost. Steps that would cost more are skipped. */
             max_credits?: number;
             /**
-             * @description Total time for all attempts.
-             * @default 60000
+             * @description Total time for all attempts. A captcha solve can take up to a minute, so the default leaves room for one; a synchronous call still answers 202 after 60 seconds if the request is not finished.
+             * @default 120000
              */
             timeout_ms?: number;
             /**

@@ -7,7 +7,9 @@
 // No caller scripts, no guessed selectors, and an unsupported widget is reported
 // rather than guessed at.
 const SITE_KEY = /^[A-Za-z0-9_-]{10,200}$/;
-const MIN_SOLVE_MS = 20_000;
+// A solve is only started (and paid for) when it can finish: solvers usually
+// answer in 15-40 s, and the page still has to submit and reload.
+const MIN_SOLVE_MS = 30_000;
 const HCAPTCHA_ROUNDS = 3;
 
 export async function detectCaptcha(page) {

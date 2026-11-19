@@ -18,7 +18,7 @@ success teaches the route for everyone.
 
 ## Where it learns from
 
-- Every attempt of every request (`FetchService.#learn`), as soon as it has a result.
+- Every attempt of every request (`FetchService.#learn`), as soon as it has a result. An attempt that ended without an answer because the request's own `timeout_ms` ran out (a slow captcha solve, say) is not recorded: it says nothing about the route.
 - Completed admin reachability probes (`http` routes only).
 
 Recording runs with short lock and statement timeouts, and a failure to record
