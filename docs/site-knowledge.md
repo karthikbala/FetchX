@@ -39,15 +39,20 @@ cut off by the request's own deadline, and 404/5xx responses teach nothing.
 
 ## Route states
 
-- **proven**: succeeded within the last 7 days and has fewer than 2 consecutive failures.
+- **proven**: succeeded within the last 7 days and has fewer than 2 consecutive
+  failures (6 for a residential browser route).
 - **cooling**: `retry_not_before` is in the future. Two consecutive blocks cool a
   route for 15 minutes, and two consecutive unreachable results for 10 minutes;
-  each further failure doubles that, up to 6 hours.
+  each further failure doubles that, up to 6 hours. A residential browser route
+  cools only after six in a row: each of its attempts is a fresh exit IP, and a
+  wall there is mostly that IP's reputation, which the next draw does not share
+  (Expedia passed 5 of 12 fresh draws on 2026-11-19), so two walls in a row are
+  common and say little about the route.
 - **stale**: worked before, but more than 7 days ago.
 - **failing**: recent failures below the threshold, or never succeeded.
 
 Tunable with `siteKnowledge` in config: `freshMs`, `demoteAfter`,
-`blockedRetryMs`, `unreachableRetryMs` and `maxRetryMs`.
+`residentialBrowserDemoteAfter`, `blockedRetryMs`, `unreachableRetryMs` and `maxRetryMs`.
 
 ## Admin API (operators only)
 

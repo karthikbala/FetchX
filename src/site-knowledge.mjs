@@ -13,7 +13,15 @@ export const SITE_OUTCOMES=Object.freeze(['success','blocked','rate_limited','un
 const CLASSES=['direct','datacenter','residential'],EXECUTIONS=['http','browser'],COUNTRY=/^[A-Z]{2}$/,TOKEN=/^[a-z0-9_-]{1,40}$/;
 // A route cools after demoteAfter consecutive failures: first for blockedRetryMs or
 // unreachableRetryMs, doubling with each further failure up to maxRetryMs.
-export const SITE_KNOWLEDGE_DEFAULTS=Object.freeze({freshMs:7*86400000,demoteAfter:2,blockedRetryMs:15*60000,unreachableRetryMs:10*60000,maxRetryMs:6*3600000});
+// A residential browser route is judged on more draws (residentialBrowserDemoteAfter):
+// each of its attempts is a fresh exit IP, and a wall there is mostly that IP's
+// reputation, which the next draw does not share (a DataDome crawl passed about
+// 2 fresh draws in 5, and Expedia 5 in 12). Two walls in a row are common
+// there; six in a row mean the route itself is refused.
+export const SITE_KNOWLEDGE_DEFAULTS=Object.freeze({freshMs:7*86400000,demoteAfter:2,residentialBrowserDemoteAfter:6,
+ blockedRetryMs:15*60000,unreachableRetryMs:10*60000,maxRetryMs:6*3600000});
+const demoteAfterFor=(policy,{execution,proxy_class})=>execution==='browser'&&proxy_class==='residential'
+ ?policy.residentialBrowserDemoteAfter:policy.demoteAfter;
 
 export function siteHost(value){
  let host;
@@ -66,7 +74,7 @@ export async function recordSiteOutcome(db,{host,execution,route,outcome,credits
   await db.query(`UPDATE site_routes SET failures=failures+1,consecutive_failures=consecutive_failures+1,last_outcome=$6,last_evidence=$7,last_failure_at=now(),
    retry_not_before=CASE WHEN consecutive_failures+1>=$8 THEN greatest(coalesce(retry_not_before,now()),
     now()+least($10::float8,$9::float8*power(2,least(consecutive_failures+1-$8,20)))*interval '1 millisecond') ELSE retry_not_before END,updated_at=now() WHERE ${where}`,
-   [...values,outcome,evidence,policy.demoteAfter,retryMs,policy.maxRetryMs]);
+   [...values,outcome,evidence,demoteAfterFor(policy,key),retryMs,policy.maxRetryMs]);
  }
  return true;
 }
@@ -86,7 +94,7 @@ export async function observeSiteOutcome(store,input){
 export function routeState(row,now=Date.now(),config){
  const policy={...SITE_KNOWLEDGE_DEFAULTS,...config?.siteKnowledge};
  if(row.retry_not_before&&+new Date(row.retry_not_before)>now)return 'cooling';
- if(row.last_success_at&&row.consecutive_failures<policy.demoteAfter)return now-+new Date(row.last_success_at)<=policy.freshMs?'proven':'stale';
+ if(row.last_success_at&&row.consecutive_failures<demoteAfterFor(policy,row))return now-+new Date(row.last_success_at)<=policy.freshMs?'proven':'stale';
  return 'failing';
 }
 export async function siteRoutes(db,host,{execution=null,config,now=Date.now()}={}){

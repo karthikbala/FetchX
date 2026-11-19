@@ -136,14 +136,16 @@ test('cooling sites are refused without sending anything; admission checks credi
   for (const route of [{class: 'direct', provider: '', country: ''}, {class: 'datacenter', provider: 'oxylabs', country: 'US'},
     {class: 'residential', provider: 'evomi', country: 'US'}]) {
     for (const execution of ['http', 'browser']) {
-      for (let i = 0; i < 2; i++) await recordSiteOutcome(store.pool, {host: 'https://cold.example.com/', execution, route, outcome: 'blocked'});
+      // A residential browser route is judged on six fresh exit IPs, the rest on two.
+      const walls = execution === 'browser' && route.class === 'residential' ? 6 : 2;
+      for (let i = 0; i < walls; i++) await recordSiteOutcome(store.pool, {host: 'https://cold.example.com/', execution, route, outcome: 'blocked'});
     }
   }
   const {call, calls} = await gatewayFor(store);
   const cold = await call('POST', '/v1/fetch', {body: {url: 'https://cold.example.com/'}});
   assert.equal(cold.body.status, 'failed');
   assert.equal(cold.body.error.code, 'cooling_down');
-  assert.ok(cold.body.error.retry_after_seconds > 600 && cold.body.error.retry_after_seconds <= 900, 'two blocks cool a route for 15 minutes');
+  assert.ok(cold.body.error.retry_after_seconds > 600 && cold.body.error.retry_after_seconds <= 900, 'a route cools for 15 minutes');
   assert.equal(calls.length, 0);
   const low = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/', render: 'always', max_credits: 5}});
   assert.equal(low.status, 402);
