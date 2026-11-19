@@ -213,7 +213,7 @@ export async function autoFetch(gw,project,raw,identity,options={}){
   // provider (Evomi <-> DataImpulse), when it is enabled and allowed.
   const preferProvider=route.class==='residential'&&lastResidentialProvider?OTHER_PROVIDER[lastResidentialProvider]??null:null;
   const run=()=>route.transport==='browser'
-   ?render.render(project,{idempotency_key:attemptKey,access_profile:base.access_profile,url:base.url,proxy,...(base.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:base.max_estimated_micro_usd})},identity,{preferProvider})
+   ?render.render(project,{idempotency_key:attemptKey,access_profile:base.access_profile,url:base.url,proxy,...(base.max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd:base.max_estimated_micro_usd})},identity,{preferProvider,captcha:true})
    :gw.fetch(project,{...base,idempotency_key:attemptKey,proxy},identity,{...options,preferProvider});
   let response;
   try{response=await run();}

@@ -8,6 +8,8 @@ const CALLBACK_ENVELOPE_BYTES=512*1024;
 const callbackLimits={
  '/v1/admit':{kind:'admit',limit:128*1024,multiplier:4,extra:0},
  '/v1/cooldown':{kind:'cooldown',limit:64*1024,extra:0},
+ // At most one solve per render.
+ '/v1/captcha':{kind:'captcha',limit:16*1024,multiplier:0,extra:1},
  '/v1/artifact':{kind:'artifact',extra:2}
 };
 const connectFailure=socket=>socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
@@ -19,7 +21,7 @@ function attemptContext(input,hooks){
  const maxRequests=input.policy.max_requests;
  const artifactBytes=4*Math.ceil((input.policy.max_decoded_bytes+input.policy.max_dom_bytes+(input.screenshot?BROWSER_SCREENSHOT_MAX_BYTES:0))/3)+CALLBACK_ENVELOPE_BYTES*(maxRequests+2);
  return {port:Number(relay[1]),maxRequests,deadline:input.deadline,hooks,artifactBytes,
-  controller:new AbortController(),sockets:new Set(),tasks:new Set(),counts:{admit:0,cooldown:0,artifact:0,connect:0}};
+  controller:new AbortController(),sockets:new Set(),tasks:new Set(),counts:{admit:0,cooldown:0,artifact:0,connect:0,captcha:0}};
 }
 
 export class BrowserWorkerPool{
@@ -152,7 +154,7 @@ export class BrowserWorkerPool{
   const run=async()=>{
    try{
     const {engine,version,sha256,platform,arch,expires_at}=input.runtime;
-    const payload={url:input.url,timeout_ms:input.timeout_ms,deadline:input.deadline,policy:input.policy,runtime:{engine,version,sha256,platform,arch,expires_at},screenshot:input.screenshot,cookies:input.cookies};
+    const payload={url:input.url,timeout_ms:input.timeout_ms,deadline:input.deadline,policy:input.policy,runtime:{engine,version,sha256,platform,arch,expires_at},screenshot:input.screenshot,cookies:input.cookies,...(input.captcha===true?{captcha:true}:{})};
     const {status,value}=await requestJson(slot.entry.socket_path,'/v1/render',{data:payload,token,signal:attempt.controller.signal});
     if(status===409&&value?.error==='browser_capacity')throw unavailable();
     if(status!==200||!object(value)||typeof value.capture_complete!=='boolean'||typeof value.counts_complete!=='boolean'||

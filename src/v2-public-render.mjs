@@ -198,15 +198,15 @@ export class PublicRenderGateway{
   return row;
  }
 
- async render(project,raw,identity,{preferProvider=null}={}){
+ async render(project,raw,identity,{preferProvider=null,captcha=false}={}){
   this.v2.controlCredits.keyId(project,identity);
   const input=normalize(raw),key=input.idempotency_key,hash=sha(JSON.stringify(input));
-  return this.respond(project,key,await this.capture(project,key,hash,()=>input,identity,{preferProvider}));
+  return this.respond(project,key,await this.capture(project,key,hash,()=>input,identity,{preferProvider,captcha}));
  }
 
  // The caller contract is fingerprinted separately from the configured
  // routing input. Existing captures can be recovered after route changes.
- async capture(project,key,hash,resolveInput,identity,{timeoutMs,preferProvider=null}={}){
+ async capture(project,key,hash,resolveInput,identity,{timeoutMs,preferProvider=null,captcha=false}={}){
   const internalKey=this.operationKey(key);
   if(await this.fingerprint(project,key,hash)){
    let retained;
@@ -238,7 +238,7 @@ export class PublicRenderGateway{
   try{
    const {max_estimated_micro_usd,screenshot,wait_ms}=input;
    operation=await this.v2.browserProbe(project,{idempotency_key:internalKey,session_id:session.id,url:input.url,
-    ...(max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd}),...(screenshot===true?{screenshot:true}:{}),...(wait_ms===undefined?{}:{wait_ms})},identity,{timeoutMs});
+    ...(max_estimated_micro_usd===undefined?{}:{max_estimated_micro_usd}),...(screenshot===true?{screenshot:true}:{}),...(wait_ms===undefined?{}:{wait_ms})},identity,{timeoutMs,captcha});
   }catch(error){
    if(error&&typeof error==='object'){
     const rejected=isPublicOperationAdmissionError(error)||error instanceof GatewayError&&admissionCodes.has(error.code);

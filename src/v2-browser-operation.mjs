@@ -32,7 +32,8 @@ async function savedCookies(values,origins){
 }
 const emptyResult=()=>({kind:'browser_network_probe',status:null,final_url:null,artifacts:[],physical_requests:0,physical_requests_basis:'admitted_browser_target_attempts',blocked_requests:0,blocked_reasons:{},capture_complete:false,encoded_bytes:null,decoded_bytes:0,dom_bytes:0,tunnel_bytes:null,provider_status:null,retry_after:null});
 
-export async function browserProbeOperation(v2,project,raw,identity,{timeoutMs}={}){
+// captcha: internal (auto mode) permission to solve one supported CAPTCHA widget.
+export async function browserProbeOperation(v2,project,raw,identity,{timeoutMs,captcha=false}={}){
  if(!plain(raw)||Object.keys(raw).some(k=>!['idempotency_key','session_id','url','max_physical_requests','max_estimated_micro_usd','screenshot','wait_ms'].includes(k))||typeof raw.idempotency_key!=='string'||!ID.test(raw.idempotency_key)||typeof raw.session_id!=='string'||!/^[a-f0-9-]{36}$/i.test(raw.session_id)||typeof raw.url!=='string'||raw.url.length>12000||raw.max_physical_requests!==undefined&&!Number.isSafeInteger(raw.max_physical_requests)||raw.max_estimated_micro_usd!==undefined&&!Number.isSafeInteger(raw.max_estimated_micro_usd)||raw.screenshot!==undefined&&typeof raw.screenshot!=='boolean'||raw.wait_ms!==undefined&&(!Number.isSafeInteger(raw.wait_ms)||raw.wait_ms<0||raw.wait_ms>BROWSER_MAX_WAIT_MS))fail('browser_probe_invalid');
  if(timeoutMs!==undefined&&(!Number.isSafeInteger(timeoutMs)||timeoutMs<1))fail('browser_probe_invalid');
  const keyId=v2.controlCredits.keyId(project,identity);
@@ -59,11 +60,11 @@ export async function browserProbeOperation(v2,project,raw,identity,{timeoutMs}=
  const worker=admission?.worker??await v2.browserPool?.acquire(runtime.runtime);
  try{
   if(admission){const qualified=await v2.browserRuntime(v2.config);if(!qualified.available||!matchesRuntime(qualified.runtime,runtime.runtime)||qualified.runtime.expires_at!==runtime.runtime.expires_at)fail(qualified.reason??'browser_probe_runtime_unqualified',409);}
-  return await executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,managed,profile,runtime,maximum,policy,id,reservedBytes,reservedTunnel,attribution,timeout,worker});
+  return await executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,managed,profile,runtime,maximum,policy,id,reservedBytes,reservedTunnel,attribution,timeout,worker,captcha:captcha===true&&!!v2.config.captcha?.enabled});
  }finally{worker?.release();await admission?.finish();}
 }
 
-async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,managed,profile,runtime,maximum,policy,id,reservedBytes,reservedTunnel,attribution,timeout,worker}){
+async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,managed,profile,runtime,maximum,policy,id,reservedBytes,reservedTunnel,attribution,timeout,worker,captcha=false}){
  let replay,pricingDecision,fixedCredits=false;
  await v2.store.tx(async c=>{
   await c.query('SELECT pg_advisory_xact_lock(1002)');
@@ -106,7 +107,7 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
   const proxy=v2.resolveProxy(route),jar=CookieJar.deserializeSync(v2.sealer.open(session.cookie_jar));
   relay=await v2.browserRelay({profile,pinnedDestinations,proxy,limits:policy,deadline,beforeConnect:async destination=>{await v2.dispatchable(project,id,session.id,destination.url,pricingContext);dispatched=true;}});
   stage='browser';
-  runnerStarted=true;const output=await (worker?.run??v2.browserRunner)({url:raw.url,timeout_ms:Math.max(1,deadline-Date.now()),deadline,policy,runtime:runtime.runtime,relay:relay.url,deny_relay:relay.deny_url,screenshot:raw.screenshot===true,cookies:browserCookies(jar,profile.origins)},{
+  runnerStarted=true;const output=await (worker?.run??v2.browserRunner)({url:raw.url,timeout_ms:Math.max(1,deadline-Date.now()),deadline,policy,runtime:runtime.runtime,relay:relay.url,deny_relay:relay.deny_url,screenshot:raw.screenshot===true,cookies:browserCookies(jar,profile.origins),...(captcha?{captcha:true}:{})},{
    admit:(request,{signal}={})=>{const task=admission.then(async()=>{
     if(signal?.aborted||Date.now()>=deadline)fail('browser_probe_deadline_unknown',504);
     // The page's own XHR/fetch POSTs are allowed only by policy; the gateway
@@ -149,6 +150,14 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
     if(crossOrigin)subresourceOrigins.add(destination.url.origin);
     return {ok:true};
    });admission=task.catch(()=>{});return task.catch(error=>{parentBlocked++;throw error;});},
+   captcha:async (data,{signal}={})=>{
+    // One solve per operation, only for the page this operation is rendering.
+    if(!captcha||!data||typeof data.website_url!=='string')fail('captcha_not_enabled',403);
+    let page;try{page=new URL(data.website_url);}catch{fail('captcha_request_invalid',400);}
+    if(!pinnedDestinations.has(page.hostname)||!profile.origins.includes(page.origin))fail('captcha_request_invalid',400);
+    const answer=await v2.gateway.captchaSolver.solveV2({project,operation:id,type:data.type,websiteURL:data.website_url,siteKey:data.site_key,invisible:data.invisible===true,userAgent:data.user_agent},{signal});
+    return {ok:true,token:answer.token};
+   },
    cooldown:async ({url,status,retry_after})=>{
     const source=new URL(url);
     if(!pinnedDestinations.has(source.hostname)||!profile.origins.includes(source.origin)&&!subresourceOrigins.has(source.origin))fail('browser_probe_callback_unknown',502);
@@ -187,6 +196,7 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
   outputReceived=true;workerUnknown=!!worker&&/unknown|incomplete|deadline/.test(output.error??'');error=workerUnknown?output.error:relay.error??output.error??null;
   if(output.cookies)cookieState=await savedCookies(output.cookies,profile.origins);
   const native=artifacts.filter(a=>a.kind==='browser_response'),encodedComplete=native.length>0&&native.length===requests&&native.every(a=>Number.isSafeInteger(a.encoded_bytes));
+  if(output.captcha&&typeof output.captcha.type==='string'&&typeof output.captcha.outcome==='string')result.captcha={type:output.captcha.type.slice(0,40),outcome:output.captcha.outcome.slice(0,60)};
   Object.assign(result,{status:output.status??null,final_url:output.final_url??null,blocked_requests:output.counts_complete===false?null:Math.max(parentBlocked,output.blocked_requests??0),blocked_reasons:output.blocked_reasons??{},capture_complete:!!output.capture_complete&&!parentBlocked&&!error&&native.length===requests&&seenKinds.has('rendered_dom')&&(!raw.screenshot||!!screenshotArtifact),encoded_bytes:encodedComplete?encodedSum:null,decoded_bytes:decodedSum,dom_bytes:domSum,screenshot_bytes:screenshotBytes,main_artifact_id:mainArtifacts.get(JSON.stringify([output.final_url,output.status]))??null,dom_artifact_id:domArtifact,screenshot_artifact_id:screenshotArtifact});
  }catch(e){workerUnknown=!!worker&&e?.code===WORKER_TRANSPORT_ERROR;error=e instanceof GatewayError?e.code:'browser_probe_internal_unknown';if(e instanceof GatewayError&&e.code==='source_cooldown'&&e.details){result.retry_after=String(e.details.retry_after_seconds);result.cooldown=e.details;}failure=safeFailure(e,stage,{dispatched:dispatched||requests>0});if(runnerStarted&&!outputReceived)result.blocked_requests=null;}
  finally{if(relay){try{await relay.close();}catch(e){relayCloseUnknown=true;error??='browser_relay_close_unknown';failure??=safeFailure(e,'relay_close',{dispatched:dispatched||requests>0});}error??=relay.error??null;}}

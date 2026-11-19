@@ -34,6 +34,7 @@ export async function runBrowserProbe(input,hooks,{signal}={}){
      else if(message?.kind==='admit')result=await hooks.admit(message.data,{signal:controller.signal});
      else if(message?.kind==='artifact')result=await hooks.artifact(message.data);
      else if(message?.kind==='cooldown')result=await hooks.cooldown(message.data);
+     else if(message?.kind==='captcha'&&hooks.captcha)result=await hooks.captcha(message.data,{signal:controller.signal});
      else throw new Error();
     }catch(e){error=/^[a-z][a-z0-9_]{1,100}$/.test(e.code??'')?e.code:'browser_probe_callback_unknown';}
     try{if(child.connected)child.send({id:message?.id,result,error},()=>{});}catch{}

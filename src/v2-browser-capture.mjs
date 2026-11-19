@@ -1,3 +1,4 @@
+import {solvePageCaptcha} from './captcha-generic.mjs';
 import {sha} from './crypto.mjs';
 import {GatewayError} from './policy.mjs';
 import {BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
@@ -182,6 +183,9 @@ export async function captureBrowserProbe(browser,input,policy,hooks){
   });
   try{await page.goto(input.url,{waitUntil:'domcontentloaded',timeout:Math.min(input.timeout_ms,remaining(input))});}catch(e){error??=safeBrowserError(e);}
   if(!page.isClosed()&&policy.settle_ms)await page.waitForTimeout(Math.min(policy.settle_ms,remaining(input)));
+  // Auto mode only: solve a supported CAPTCHA widget once, through the parent.
+  let captcha=null;
+  if(input.captcha===true&&hooks.captcha&&!page.isClosed())captcha=await solvePageCaptcha(page,hooks,{deadline:input.deadline,settleMs:policy.settle_ms});
   stopped=true;
   let timer;
   try{await Promise.race([Promise.allSettled([...pending]),new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(new GatewayError('browser_request_incomplete')),remaining(input));})]);}catch{error??='browser_request_incomplete';}finally{clearTimeout(timer);}
@@ -199,7 +203,7 @@ export async function captureBrowserProbe(browser,input,policy,hooks){
    }
   }
   const cookies=await context.cookies();
-  return {status:mainResponse?.status??null,final_url:mainResponse?.url??null,physical_requests:admitted,blocked_requests:blocked,blocked_reasons:blockedReasons,counts_complete:true,capture_complete:!!domBytes&&!error&&blocked===0&&pending.size===0&&accepted.size===0,encoded_bytes:encodedComplete?encoded:null,decoded_bytes:decoded,dom_bytes:domBytes,screenshot_bytes:screenshotBytes,error,cookies};
+  return {status:mainResponse?.status??null,final_url:mainResponse?.url??null,physical_requests:admitted,blocked_requests:blocked,blocked_reasons:blockedReasons,counts_complete:true,capture_complete:!!domBytes&&!error&&blocked===0&&pending.size===0&&accepted.size===0,encoded_bytes:encodedComplete?encoded:null,decoded_bytes:decoded,dom_bytes:domBytes,screenshot_bytes:screenshotBytes,error,cookies,...(captcha?{captcha}:{})};
  }finally{
   stopped=true;
   for(const resolve of networkWaiters.values())resolve();

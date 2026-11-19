@@ -137,7 +137,7 @@ test('auto mode request validation',{skip:!process.env.TEST_DATABASE_URL},async(
 test('auto mode escalates from blocked HTTP to a rendered residential browser and learns it',{skip:!process.env.TEST_DATABASE_URL,timeout:30_000},async()=>{
  const root=await mkdtemp(join(tmpdir(),'fetchx-auto-b-')),store=new Store(process.env.TEST_DATABASE_URL);await store.init();
  await store.pool.query('TRUNCATE v2_registry,v2_ledger_events,v2_artifacts,v2_ledger,v2_operations,v2_sessions,workflows,source_limits,site_routes RESTART IDENTITY CASCADE');
- const config=configFor(root);config.v2.accessProfiles['source@1'].browser_probe={enabled:true,max_requests:8,max_network_bytes:65536,max_decoded_bytes:16384,max_dom_bytes:16384,settle_ms:0,max_wait_ms:0,subresources:'same_origin',frames:false,page_post:false};
+ const config=configFor(root);config.captcha={enabled:true};const solves=[],captchaFlags=[];config.v2.accessProfiles['source@1'].browser_probe={enabled:true,max_requests:8,max_network_bytes:65536,max_decoded_bytes:16384,max_dom_bytes:16384,settle_ms:0,max_wait_ms:0,subresources:'same_origin',frames:false,page_post:false};
  const calls=[];let relay,browserRuns=0;
  const gateway=new Gateway({store,config,profiles:{},resolve:async()=>[{address:'93.184.216.34',family:4}]});
  gateway.v2=new V2Gateway(gateway,{browserRuntime:async()=>({available:true,runtime:{synthetic:true,engine:'camoufox'}}),
@@ -145,23 +145,30 @@ test('auto mode escalates from blocked HTTP to a rendered residential browser an
    return {status:403,headers,raw_headers:Object.entries(headers).flat(),encoded:Buffer.from('<title>denied</title>'),tunnel_bytes:proxy?300:null,provider_status:proxy?200:null};},
   relayFactory:async options=>{relay=options;return {url:'http://127.0.0.1:1',bytes:512,meter_complete:true,connections:1,provider_status:200,close:async()=>{}};},
   browserRunner:async(input,hooks)=>{
-   browserRuns++;calls.push('browser:'+routeClass(relay.proxy));
+   browserRuns++;calls.push('browser:'+routeClass(relay.proxy));captchaFlags.push(input.captcha===true);
    const request={url:input.url,method:'GET',headers:{accept:'text/html'},body_base64:null,resource_type:'document',redirect_depth:0,redirected_from:null};
    await hooks.admit(request);
    await relay.beforeConnect(relay.pinnedDestinations.get(new URL(input.url).hostname).destination);
+   if(input.captcha){const answer=await hooks.captcha({type:'turnstile',website_url:input.url,site_key:'0x4AAAAAAAsyntheticKey01',user_agent:'Mozilla/5.0 test'});assert.equal(answer.token,'synthetic-token-'.repeat(2));}
    await hooks.artifact(fixtureArtifact('browser_response',input.url,Buffer.from('<main>rendered data</main>'),{request,main_document:true}));
    await hooks.artifact(fixtureArtifact('rendered_dom',input.url,Buffer.from('<html><main>rendered data</main></html>'),{generated:true}));
    return {status:200,final_url:input.url,capture_complete:true,counts_complete:true};
   }});
+ gateway.captchaSolver.solveV2=async request=>{solves.push(request);return {token:'synthetic-token-'.repeat(2),cost_micro_usd:1450};};
  const app=server(gateway),auth={authorization:'Bearer token-a'};
  const post=async input=>{const r=await app.inject({method:'POST',url:'/v2/fetch',headers:auth,payload:input});return {status:r.statusCode,body:r.json()};};
  const payload=key=>({idempotency_key:key,access_profile:{id:'source',version:1},url:'https://source.example/page',proxy:{class:'auto'}});
  try{
   const first=await post(payload('render-1'));
-  assert.equal(first.status,200,JSON.stringify(first.body.error));assert.equal(first.body.success,true,JSON.stringify(first.body.auto));
+  assert.equal(first.status,200,JSON.stringify(first.body.error));assert.equal(first.body.success,true,JSON.stringify([first.body.error,first.body.diagnostics]));
   assert.deepEqual(calls,['http:direct','http:datacenter','http:residential','browser:residential']);
   assert.deepEqual(first.body.auto.routes_tried.at(-1),{transport:'browser',class:'residential',country:'US',result:'success'});
   assert.equal(first.body.auto.billed_attempt,4);
+  // Auto mode renders may solve one CAPTCHA, through the parent's solver, for the rendered page only.
+  assert.deepEqual(captchaFlags,[true]);assert.equal(solves.length,1);assert.equal(solves[0].websiteURL,'https://source.example/page');assert.equal(solves[0].type,'turnstile');
+  // An explicit /v2/render does not get CAPTCHA solving.
+  const explicit=await app.inject({method:'POST',url:'/v2/render',headers:auth,payload:{idempotency_key:'explicit-render',access_profile:{id:'source',version:1},url:'https://source.example/page',proxy:{class:'residential',country:'US'}}});
+  assert.equal(explicit.json().success,true,JSON.stringify(explicit.json().error));assert.deepEqual(captchaFlags,[true,false]);assert.equal(solves.length,1);calls.pop();
   // Lookup returns the rendered final attempt without dispatching.
   const before=calls.length;
   const looked=await app.inject({url:'/v2/fetch/render-1',headers:auth});

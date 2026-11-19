@@ -16,6 +16,9 @@ export function validateCaptchaProfile(p){
 export async function initCaptcha(pool){await pool.query(`
  CREATE TABLE IF NOT EXISTS captcha_tasks(id uuid PRIMARY KEY,attempt uuid NOT NULL REFERENCES attempts(id),operation uuid NOT NULL REFERENCES operations(id),workflow uuid NOT NULL UNIQUE REFERENCES workflows(id),project text NOT NULL,type text NOT NULL,provider_task_id text,state text NOT NULL DEFAULT 'reserved',reserved_micro_usd bigint NOT NULL,actual_micro_usd bigint,error text,verification text NOT NULL DEFAULT 'not_submitted',created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now());
  CREATE INDEX IF NOT EXISTS captcha_tasks_project_created ON captcha_tasks(project,created_at);
+ -- v2 renders (auto mode): one generic solve per v2 operation. No URL or token is stored.
+ CREATE TABLE IF NOT EXISTS v2_captcha_tasks(id uuid PRIMARY KEY,operation uuid NOT NULL UNIQUE,project text NOT NULL,type text NOT NULL,host text NOT NULL,provider_task_id text,state text NOT NULL DEFAULT 'reserved',reserved_micro_usd bigint NOT NULL,actual_micro_usd bigint,error text,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now());
+ CREATE INDEX IF NOT EXISTS v2_captcha_tasks_project_created ON v2_captcha_tasks(project,created_at);
 `);}
 export function microUsd(value){
  if(typeof value!=='string'||!/^\d{1,6}(?:\.\d{1,6})?$/.test(value))fail('captcha_cost_unverified',502);
@@ -76,6 +79,50 @@ export class CaptchaSolver {
   }catch(e){error=e instanceof GatewayError?e.code:'captcha_provider_outcome_unknown';throw new GatewayError(error,e instanceof GatewayError?e.status:502);}
   finally{await this.store.pool.query('UPDATE captcha_tasks SET state=$2,actual_micro_usd=$3,error=$4,updated_at=now() WHERE id=$1',[reservation.id,state,actual,error]);}
  }
+ // Generic solve for a v2 render (auto mode). Budgets are shared with v1 tasks.
+ // One task per operation; an uncertain create is never retried.
+ async solveV2({project,operation,type,websiteURL,siteKey,invisible=false,userAgent},{signal}={}){
+  const settings=this.config.captcha;
+  if(!settings?.enabled||!settings.apiKey)fail('captcha_solver_unavailable',503);
+  if(!['turnstile','recaptcha_v2'].includes(type)||typeof siteKey!=='string'||!/^[A-Za-z0-9_-]{10,200}$/.test(siteKey)||typeof userAgent!=='string'||!userAgent||userAgent.length>512)fail('captcha_request_invalid',400);
+  let url;try{url=new URL(websiteURL);}catch{fail('captcha_request_invalid',400);}
+  if(url.protocol!=='https:'||url.username||url.password)fail('captcha_request_invalid',400);
+  const maximum=bounded(settings.maxTaskMicroUsd,20000),daily=bounded(settings.maxDailyMicroUsd,5000000),total=bounded(settings.maxTotalMicroUsd,20000000),tasks=bounded(settings.maxTotalTasks,10000);
+  const id=randomUUID();
+  await this.store.tx(async db=>{
+   await db.query('SELECT pg_advisory_xact_lock(1009)');
+   if((await db.query('SELECT 1 FROM v2_captcha_tasks WHERE operation=$1',[operation])).rowCount)fail('captcha_already_attempted',409);
+   if((await db.query("SELECT 1 FROM captcha_tasks WHERE error IN ('captcha_account_rejected','captcha_cost_overrun') UNION ALL SELECT 1 FROM v2_captcha_tasks WHERE error IN ('captcha_account_rejected','captcha_cost_overrun') LIMIT 1")).rowCount)fail('captcha_account_held',409);
+   const used=(await db.query(`WITH t AS (SELECT project,created_at,coalesce(actual_micro_usd,reserved_micro_usd) amount FROM captcha_tasks UNION ALL SELECT project,created_at,coalesce(actual_micro_usd,reserved_micro_usd) FROM v2_captcha_tasks)
+    SELECT count(*)::int tasks,coalesce(sum(amount),0)::text total,coalesce(sum(amount) FILTER(WHERE created_at>now()-interval '24 hours'),0)::text daily,coalesce(sum(amount) FILTER(WHERE project=$1 AND created_at>now()-interval '24 hours'),0)::text project FROM t`,[project])).rows[0];
+   if(used.tasks>=tasks||Number(used.total)+maximum>total||Number(used.daily)+maximum>daily||Number(used.project)+maximum>bounded(this.config.projects?.[project]?.maxDailyCaptchaMicroUsd??daily,5000000))fail('captcha_budget_exhausted',429);
+   await db.query('INSERT INTO v2_captcha_tasks(id,operation,project,type,host,reserved_micro_usd) VALUES($1,$2,$3,$4,$5,$6)',[id,operation,project,type,url.hostname,maximum]);
+  });
+  const task={type:type==='recaptcha_v2'?'RecaptchaV2TaskProxyless':'TurnstileTaskProxyless',websiteURL:url.href,websiteKey:siteKey,...(type==='recaptcha_v2'?{isInvisible:invisible===true,userAgent}:{})};
+  let state='unknown',actual=null,error=null;
+  try{
+   const created=await this.post('createTask',{task},signal);
+   if(created.errorId){state='rejected';actual=0;fail(['ERROR_KEY_DOES_NOT_EXIST','ERROR_ZERO_BALANCE','ERROR_ACCOUNT_SUSPENDED','ERROR_IP_NOT_ALLOWED'].includes(created.errorCode)?'captcha_account_rejected':'captcha_task_rejected',503);}
+   if(!Number.isSafeInteger(created.taskId)||created.taskId<=0)fail('captcha_provider_outcome_unknown',502);
+   await this.store.pool.query("UPDATE v2_captcha_tasks SET provider_task_id=$2,state='processing',updated_at=now() WHERE id=$1",[id,String(created.taskId)]);
+   const timeout=bounded(settings.timeoutMs??120000,120000),deadline=this.now()+timeout;
+   while(this.now()<deadline){
+    if(signal?.aborted)fail('captcha_session_closed',409);
+    await this.wait(5000,undefined,{signal});if(this.now()>=deadline)break;
+    const data=await this.post('getTaskResult',{taskId:created.taskId},signal);
+    if(data.errorId)fail('captcha_solver_failed',502);
+    if(data.status==='processing')continue;
+    if(data.status!=='ready')fail('captcha_provider_outcome_unknown',502);
+    actual=microUsd(data.cost);state='ready';
+    if(actual>maximum)fail('captcha_cost_overrun',503);
+    const token=data.solution?.[type==='recaptcha_v2'?'gRecaptchaResponse':'token'];
+    if(typeof token!=='string'||!/^\S{20,16384}$/.test(token))fail('captcha_solution_invalid',502);
+    return {token,cost_micro_usd:actual};
+   }
+   fail('captcha_timeout',504);
+  }catch(e){error=e instanceof GatewayError?e.code:'captcha_provider_outcome_unknown';throw new GatewayError(error,e instanceof GatewayError?e.status:502);}
+  finally{await this.store.pool.query('UPDATE v2_captcha_tasks SET state=$2,actual_micro_usd=$3,error=$4,updated_at=now() WHERE id=$1',[id,state,actual,error]);}
+ }
  async report(w,attempt,verification){
   if(!['submitted','verified','rejected','unknown'].includes(verification))fail('captcha_report_invalid');
   await this.store.pool.query("UPDATE captcha_tasks SET verification=$3,updated_at=now() WHERE workflow=$1 AND attempt=$2 AND state='ready' AND verification NOT IN ('verified','rejected')",[w.id,attempt,verification]);
@@ -92,7 +139,10 @@ export class CaptchaSolver {
   await this.store.pool.query("UPDATE captcha_tasks SET state='reconciled',actual_micro_usd=$2,error=$3,updated_at=now() WHERE id=$1 AND state='unknown' AND actual_micro_usd IS NULL",[id,cost,error]);
   return {state:'reconciled',cost_micro_usd:cost,redispatched:false,solution_applied:false};
  }
- async recover(){await this.store.pool.query("UPDATE captcha_tasks SET state='unknown',error='captcha_interrupted_unknown',updated_at=now() WHERE state IN ('reserved','processing')");}
+ async recover(){
+  await this.store.pool.query("UPDATE captcha_tasks SET state='unknown',error='captcha_interrupted_unknown',updated_at=now() WHERE state IN ('reserved','processing')");
+  await this.store.pool.query("UPDATE v2_captcha_tasks SET state='unknown',error='captcha_interrupted_unknown',updated_at=now() WHERE state IN ('reserved','processing')");
+ }
 }
 export async function captchaStatus(pool,config,project){
  const usage=(await pool.query("SELECT type,state,verification,count(*)::int tasks,sum(coalesce(actual_micro_usd,reserved_micro_usd))::text accounted_micro_usd,sum(actual_micro_usd)::text known_micro_usd FROM captcha_tasks WHERE ($1::text IS NULL OR project=$1) GROUP BY type,state,verification",[project])).rows;

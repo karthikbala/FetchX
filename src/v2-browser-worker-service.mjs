@@ -54,7 +54,8 @@ async function workerRelay(callbackSocket,token,controller,maxRequests){
 }
 
 function renderInput(value,runtime){
- if(!object(value)||Object.keys(value).length!==7||typeof value.url!=='string'||value.url.length>12000||!/^https:\/\//i.test(value.url)||
+ // captcha is optional so older gateways keep working during a rolling deploy.
+ if(!object(value)||Object.keys(value).length!==(Object.hasOwn(value,'captcha')?8:7)||value.captcha!==undefined&&value.captcha!==true||typeof value.url!=='string'||value.url.length>12000||!/^https:\/\//i.test(value.url)||
   !Number.isSafeInteger(value.deadline)||value.deadline<=Date.now()||
   !Number.isSafeInteger(value.timeout_ms)||value.timeout_ms<1||value.timeout_ms>45000||typeof value.screenshot!=='boolean'||!Array.isArray(value.cookies)||
   !matchesRuntime(value.runtime,runtime)||!Number.isFinite(Date.parse(value.runtime.expires_at))||value.deadline>Date.parse(value.runtime.expires_at))throw new Error('invalid worker render input');
@@ -108,7 +109,7 @@ export async function startBrowserWorker({socketPath,callbackSocket,pin,runner=r
     const hook=kind=>async data=>{
      let response;
      try{
-      response=await requestJson(callbackSocket,'/v1/'+kind,{data,token,signal,limit:12*1024*1024,responseLimit:8192});
+      response=await requestJson(callbackSocket,'/v1/'+kind,{data,token,signal,limit:12*1024*1024,responseLimit:kind==='captcha'?32768:8192});
      }catch{
       controller.abort(WORKER_TRANSPORT_ERROR);
       throw new GatewayError(WORKER_TRANSPORT_ERROR,502);
@@ -124,7 +125,7 @@ export async function startBrowserWorker({socketPath,callbackSocket,pin,runner=r
      return response.value;
     };
     result=await runner({...input,timeout_ms:Math.max(1,Math.min(input.timeout_ms,input.deadline-Date.now())),relay:local.url,deny_relay:local.deny_url},
-     {admit:hook('admit'),artifact:hook('artifact'),cooldown:hook('cooldown')},{signal});
+     {admit:hook('admit'),artifact:hook('artifact'),cooldown:hook('cooldown'),captcha:hook('captcha')},{signal});
     signal.throwIfAborted();
    }catch(error){
     const code=signal.aborted?signal.reason:error instanceof GatewayError?error.code:WORKER_TRANSPORT_ERROR;
