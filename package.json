@@ -8,6 +8,9 @@
   },
   "scripts": {
     "start": "node src/main.mjs",
+    "api:generate": "openapi-typescript docs/openapi.json --output clients/openapi.d.ts --default-non-nullable false",
+    "api:check": "npm run api:generate -- --check",
+    "test:types": "tsc -p clients/tsconfig.test.json",
     "test": "node --test --test-concurrency=1 test/*.test.mjs"
   },
   "dependencies": {
@@ -24,5 +27,10 @@
     "turndown": "7.2.4",
     "turndown-plugin-gfm": "1.0.2",
     "undici": "7.30.1"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
   }
 }

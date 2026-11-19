@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { docPages } from '../../src/data/api-docs.ts';
+import contract from '../../../docs/openapi.json' with { type: 'json' };
 
 const base = process.env.TEST_BASE_URL || 'http://127.0.0.1:4328';
 const browser = await chromium.launch();
@@ -18,6 +19,37 @@ try {
   assert.match(await page.locator('[data-doc-search-status]').innerText(), /no matching/i);
   await search.press('Escape');
   assert.ok(await page.getByRole('navigation', { name: 'API documentation' }).isVisible());
+
+  const specification = await context.request.get(base + '/openapi.json');
+  assert.equal(specification.status(), 200);
+  assert.match(specification.headers()['content-type'], /^application\/json\b/);
+  assert.deepEqual(await specification.json(), contract);
+
+  const renderPage = await context.newPage();
+  await renderPage.goto(base + '/docs/render');
+  assert.match(await renderPage.locator('.docs-endpoint').innerText(), /POST\s+\/v2\/render/);
+  assert.match(await renderPage.locator('#availability').innerText(), /fetch:write/);
+  assert.match(await renderPage.locator('#availability').innerText(), /features\.browser_render/);
+  assert.match(await renderPage.locator('#recovery').innerText(), /GET \/v2\/render\/\{key\}/);
+  const renderRequest = contract.paths['/v2/render'].post.requestBody.content['application/json'].examples.example.value;
+  assert.deepEqual(JSON.parse(await renderPage.locator('#request [data-doc-code] code').first().textContent()), renderRequest);
+  assert.match(await renderPage.locator('#request tr').filter({ hasText: 'wait_ms' }).innerText(), /Maximum 2000/);
+  assert.match(await renderPage.locator('#request tr').filter({ hasText: 'proxy.class' }).innerText(), /direct.*datacenter.*residential/);
+  await renderPage.goto(base + '/docs/reference');
+  assert.ok(await renderPage.locator('#endpoints a[href="/openapi.json"]').isVisible());
+  assert.match(await renderPage.locator('#endpoints tr').filter({ has: renderPage.getByRole('cell', { name: 'POST /v2/render', exact: true }) }).innerText(), /fetch:write/);
+  const limit = renderPage.locator('#listOperations').getByRole('row').filter({
+    has: renderPage.getByRole('cell', { name: 'limit', exact: true }),
+  }).filter({
+    has: renderPage.getByRole('cell', { name: 'query', exact: true }),
+  });
+  assert.match(await limit.innerText(), /Default is 25.*Minimum 1.*Maximum 50/s);
+  const renderMarkdown = await context.request.get(base + '/docs/render.md');
+  assert.equal(renderMarkdown.status(), 200);
+  const markdown = await renderMarkdown.text();
+  assert.match(markdown, /`POST \/v2\/render`/);
+  assert.ok(markdown.includes(JSON.stringify(renderRequest, null, 2)));
+  await renderPage.close();
 
   const example = page.locator('[data-doc-code]').filter({ has: page.getByRole('tablist') }).first();
   const tabs = example.getByRole('tab');
@@ -57,7 +89,7 @@ try {
       ), 'Missing section ' + route + '#' + section.id);
     }
   }
-  console.log('Docs search, keyboard tabs, clipboard, mobile navigation and static content passed.');
+  console.log('Docs search, keyboard tabs, clipboard, mobile navigation, OpenAPI download, Render reference and Markdown passed.');
 } finally {
   await browser.close();
 }

@@ -9,6 +9,7 @@ export const GET: APIRoute = () => new Response([
   '## Product and resources', '',
   ...publicPages.filter(page => !page.path.startsWith('/docs')).map(page => `- [${page.title}](https://fetchx.ai${page.path}): ${page.description}`), '',
   '## API documentation', '',
+  '- [FetchX v2 OpenAPI contract](https://fetchx.ai/openapi.json): Machine-readable customer endpoints, schemas and examples.',
   ...docPages.map(page => `- [${page.title}](https://fetchx.ai/docs/${page.slug || 'quickstart'}.md): ${page.description}`), '',
-  'The v2 fetch endpoint supports native HTTP and requires an approved access profile, explicit route and durable idempotency key. Self-service account access does not enable browser execution. Reviewed browser workflows use the separate v1 API and require independent qualification and configuration. API transport success and application data acceptance are separate.', '',
+  'The v2 Fetch endpoint returns native HTTP responses. The v2 Render endpoint opens a dedicated browser session for one approved URL. Both require an approved access profile, explicit route and durable idempotency key. Render availability depends on project policy, browser credit policy for managed keys and a qualified runtime. Reviewed browser interactions use the v1 workflow API. API transport success and application data acceptance are separate.', '',
 ].join('\n'), { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });

@@ -7,7 +7,8 @@ existing v2 session and operation APIs.
 Every endpoint requires a project credential in `Authorization: Bearer <token>`.
 Managed `fxk_` keys need `fetch:write` for submission and `fetch:read` for recovery.
 Profiles, sessions, idempotency keys and artifacts remain isolated by project.
-Use authenticated TLS or a private listener.
+Use authenticated TLS or a private listener. The [v2 OpenAPI contract](openapi.json)
+contains machine-readable schemas and examples.
 
 ## Request
 
@@ -460,4 +461,5 @@ projections: a native key is not a facade POST binding, and an internal key is n
 the caller key. Recover using the read-only URL. Canonical facade POST and key lookup responses
 retain the actual supplied caller key and scope `caller`.
 
-Existing v1 and native [v2 APIs](api-v2.md) remain compatible.
+See the [API compatibility policy](api-compatibility.md) for versioning and
+coexistence with [v1 workflows](api.md) and the [native v2 API](api-v2.md).

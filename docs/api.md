@@ -1,6 +1,9 @@
-# FetchX API, version 0.2
+# FetchX v1 workflow API
 
-FetchX provides authenticated HTTP fetching, managed CloakBrowser rendering and reviewed interactions through one service. It is a self-hosted service, not a claim that every protected site is supported. Source profiles define destinations, country, rendering, methods, readiness and budgets. All routes except `/healthz` require `Authorization: Bearer <project-token>`.
+FetchX v1 provides authenticated HTTP fetching, configured browser rendering and reviewed interactions. Source profiles define destinations, country, rendering, methods, readiness and budgets. The `/v1` routes require a provisioned project credential in `Authorization: Bearer <project-token>`.
+
+For the customer v2 endpoints, see the [OpenAPI contract](openapi.json) and the
+[API compatibility policy](api-compatibility.md).
 
 ## Fetch and recover
 

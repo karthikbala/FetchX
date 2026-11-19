@@ -40,7 +40,7 @@ Failures return `{ "success": false, "code": "...", "error": "..." }`. The respo
 
 Point the official JavaScript SDK's `apiUrl` or Python SDK's `api_url` to the FetchX base URL, without a `/v2` suffix. Call `scrape()` with the FetchX key and supported options. The JavaScript SDK uses `onlyMainContent` and `waitFor`. The Python SDK uses `only_main_content` and `wait_for`. Both SDKs return the document from the response's `data` field. For requests that need recoverable idempotency, use a client that can set and retain the `X-Idempotency-Key` header. When using the SDK without a caller-generated key, configure a single transport attempt so a lost connection cannot create a second scrape.
 
-The [OpenAPI contract](scrape-openapi.json) defines the wire types. To regenerate the TypeScript definitions, run `npx openapi-typescript@7.13.0 docs/scrape-openapi.json --default-non-nullable=false -o clients/scrape-v2.d.ts` from the repository root.
+The [v2 OpenAPI contract](openapi.json) defines the wire types alongside Fetch and Render. The bundled [JavaScript client](../clients/javascript.mjs) exposes `scrapeV2(input, idempotencyKey)` and the [Python client](../clients/python.py) exposes `scrape_v2(idempotency_key, **request)`; both send your key as `X-Idempotency-Key`. Run `npm run api:generate` to regenerate `clients/openapi.d.ts`.
 
 ## Operator configuration
 

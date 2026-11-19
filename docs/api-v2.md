@@ -1,5 +1,12 @@
 # FetchX v2 HTTP foundation
 
+The [v2 OpenAPI contract](openapi.json) covers the customer-facing Fetch and
+Render endpoints and their scoped discovery and recovery routes. This guide also
+describes native v2 submission routes for provisioned project tokens. Managed
+`fxk_` keys submit work through the [Fetch API](fetch-api.md) and, when enabled
+for the project, the [Render API](render-api.md). They use separate scopes for
+discovery, operation reads and usage. See the [API compatibility policy](api-compatibility.md).
+
 This additive API does not migrate v1 workflows, ledger rows, or captures. The
 current implementation supports native HTTP with direct, configured datacenter,
 and configured residential routing. The optional one-shot render endpoint runs a

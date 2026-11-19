@@ -31,8 +31,10 @@ Use [`POST /v2/fetch`](docs/fetch-api.md) for one-call HTTP fetching with an exp
 `proxy.class` and `proxy.country`, an approved `access_profile`, and an idempotency
 key. It returns native status/body, the pinned route, retained hashes, safe failure
 guidance and accounting; `GET /v2/fetch/:key` recovers without source traffic.
-Rendering options are rejected on this HTTP endpoint. Existing v1 rendered recipes
-remain separate.
+Use [`POST /v2/render`](docs/render-api.md) for one-shot browser navigation when
+your gateway and project enable it. See the [v2 OpenAPI contract](docs/openapi.json)
+for customer endpoints and the [API compatibility policy](docs/api-compatibility.md)
+for versioning.
 
 The additive [v2 HTTP foundation](docs/api-v2.md) also works with a local Node
 process and PostgreSQL, including direct native HTTP, independently requested
@@ -54,8 +56,10 @@ The website also has a [self-service account workspace](docs/self-service-backen
 email verification, projects, scoped API keys, a native HTTP playground, retained
 history and request credits. It is disabled until an operator configures the
 gateway bridge, verification mail, reviewed source grants and credit policy.
-New account keys support native HTTP only; existing provisioned workflow tokens
-retain their contracts. Paid subscriptions and automatic refills are not enabled.
+Scoped account keys can submit Fetch and, when the browser policy and runtime
+permit it, Render requests. Existing provisioned workflow tokens retain their
+approved v1 and native v2 access. Paid subscriptions and automatic refills are
+not enabled.
 
 ```sh
 git clone https://github.com/karthikbala/FetchX.git

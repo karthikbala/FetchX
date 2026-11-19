@@ -16,7 +16,7 @@ Four product pages cover the scraping API, web unblocker, JavaScript rendering a
 
 ## Prioritized launch backlog
 
-The P0 software implementation and operator setup are documented in [self-service backend](self-service-backend.md). Identity, projects, scoped keys, approved HTTP source admission, the first-request bridge, retained history and conservative credits are implemented locally. Commercial approval, production mail delivery, measured paid-route economics and deployment are release gates; a local passing test does not approve or activate them. Account keys deliberately remain HTTP-only while the P1 browser and AI work is outstanding.
+The P0 software implementation and operator setup are documented in [self-service backend](self-service-backend.md). Identity, projects, scoped keys, approved HTTP source admission, the first-request bridge, retained history and conservative credits are implemented locally. Commercial approval, production mail delivery, measured paid-route economics and deployment are release gates; a local passing test does not approve or activate them. P0 account access used HTTP only. The [current v2 contract](openapi.json) also describes Render for projects that meet its browser policy and runtime requirements.
 
 | Priority | Capability | Required backend work | Acceptance before publication |
 | --- | --- | --- | --- |
@@ -68,7 +68,7 @@ That design-only receipt predates the P0 account integration below. The initial 
 - Added PostgreSQL-backed email verification, sessions, memberships, project provisioning and scoped keys. Key hashes, rotation and revocation are authoritative on the gateway. Only the first project per verified account receives the configured trial grant.
 - Connected the website through a private server bridge with exact origins, HttpOnly cookies, CSRF, bounded payloads and no automatic POST retry. The workspace reads actual approved profiles, request outcomes, latency, credit balances and holds.
 - Added credit reservations to existing admission/completion transactions. Concurrent admissions cannot overspend; replay does not charge again. Proven predispatch cancellations release credits; possible dispatches retain holds through recovery and restart.
-- Native HTTP account keys do not grant v1/browser execution, residential access, arbitrary source grants, subscription changes or automatic refills. Source-response success remains distinct from application acceptance and provider invoice reconciliation.
+- The P0 review granted only direct HTTP access through account keys. Source-response success remains distinct from application acceptance and provider invoice reconciliation.
 - The local review is non-indexed at `http://127.0.0.1:4331/`. Its separate disposable gateway allows direct GET/HEAD of example.com only; verification goes to a private local mailbox, with no real email or paid-provider calls.
 
 Production release still requires approved mail and bridge configuration, backup/migration review, real inbox acceptance, qualified advertised capabilities, commercial terms, measured paid-route economics and hosting crawler review. Public prices remain proposals; the local review allocation is not an offer.

@@ -1,0 +1,5001 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "FetchX customer API",
+    "version": "2.0.0",
+    "description": "The managed customer API uses /v2. Provisioned project Bearer tokens retain their approved v2 and v1 APIs. Provisioned native submissions, v1 workflows and jobs, and the website control plane have separate reference material. API major versions, service releases and immutable profile or recipe versions are separate."
+  },
+  "servers": [
+    {
+      "url": "https://{gatewayHost}",
+      "description": "Replace the example host with the gateway supplied for your project.",
+      "variables": {
+        "gatewayHost": {
+          "default": "gateway.example",
+          "description": "Provisioned gateway host."
+        }
+      }
+    }
+  ],
+  "security": [
+    {
+      "ProjectBearer": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Fetch",
+      "description": "One-call native HTTP and retained result recovery."
+    },
+    {
+      "name": "Render",
+      "description": "Gated browser rendering and retained result recovery."
+    },
+    {
+      "name": "Scrape",
+      "description": "Render one page and convert its retained DOM to Markdown, HTML or links."
+    },
+    {
+      "name": "Discovery",
+      "description": "Read project capability, profile and recipe configuration."
+    },
+    {
+      "name": "Observability",
+      "description": "Read project usage, operation history and retained evidence."
+    }
+  ],
+  "paths": {
+    "/v2/fetch": {
+      "post": {
+        "operationId": "fetch",
+        "tags": [
+          "Fetch"
+        ],
+        "summary": "Fetch a native HTTP response",
+        "description": "Runs one native HTTP operation against an approved destination. Keep the caller key and identical inputs for safe recovery. Rendering and scripts are unavailable on this endpoint.",
+        "x-managed-key-scope": "fetch:write",
+        "requestBody": {
+          "description": "JSON request subject to gateway and access profile limits.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FetchRequest"
+              },
+              "examples": {
+                "example": {
+                  "summary": "Submit with an approved profile",
+                  "value": {
+                    "idempotency_key": "quickstart-001",
+                    "access_profile": {
+                      "id": "source.http",
+                      "version": 1
+                    },
+                    "url": "https://source.example/data",
+                    "proxy": {
+                      "class": "direct",
+                      "country": null
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The retained operation, including successful source results, source errors and incomplete operations. Check success, state and data.status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Successful native response",
+                    "value": {
+                      "success": true,
+                      "state": "completed",
+                      "gateway_http_status": 200,
+                      "operation_id": "00000000-0000-4000-8000-000000000001",
+                      "session_id": "00000000-0000-4000-8000-000000000002",
+                      "idempotency_key": "quickstart-001",
+                      "idempotency_key_scope": "caller",
+                      "routing": {
+                        "class": "direct",
+                        "country": null,
+                        "provider": "direct"
+                      },
+                      "diagnostics": {
+                        "stage": "completed",
+                        "failure": null,
+                        "dns": []
+                      },
+                      "error": null,
+                      "retry": {
+                        "safe_to_retry": false,
+                        "same_key_replay_safe": true,
+                        "new_request_allowed": false,
+                        "next_action": "complete",
+                        "lookup_url": "/v2/fetch/quickstart-001"
+                      },
+                      "application_acceptance": "not_evaluated",
+                      "data": {
+                        "status": 200,
+                        "final_url": "https://source.example/data",
+                        "content_type": "application/json",
+                        "body_base64": "eyJ2YWx1ZSI6NDJ9",
+                        "text": "{\"value\":42}",
+                        "retry_after": null,
+                        "headers": {
+                          "content-type": "application/json"
+                        }
+                      },
+                      "artifacts": [
+                        {
+                          "id": "00000000-0000-4000-8000-000000000003",
+                          "kind": "native_response",
+                          "status": 200,
+                          "encoded_sha256": "dc60e632a90329ccfd34fbe904d94704dbbb6669575185e26389854ff64139c3",
+                          "decoded_sha256": "dc60e632a90329ccfd34fbe904d94704dbbb6669575185e26389854ff64139c3",
+                          "encoded_bytes": 12,
+                          "decoded_bytes": 12,
+                          "content_encoding": "identity",
+                          "decoding_error": null
+                        }
+                      ],
+                      "usage": {
+                        "accounting": {
+                          "provider": "direct",
+                          "reserved_tunnel_bytes": 0,
+                          "observed_tunnel_bytes": null,
+                          "estimated_micro_usd": 0,
+                          "invoice_micro_usd": null,
+                          "basis": "direct_no_provider_invoice"
+                        },
+                        "native_requests": 1,
+                        "dns_requests": 1,
+                        "encoded_bytes": 12,
+                        "decoded_bytes": 12,
+                        "tunnel_bytes": null,
+                        "dns_encoded_bytes": null,
+                        "dns_decoded_bytes": null,
+                        "dns_tunnel_bytes": null,
+                        "byte_basis": "encoded_and_decoded_are_native_response_bytes; tunnel_includes_native_and_session_proxy_dns; separate_dns_bytes_unavailable"
+                      }
+                    }
+                  },
+                  "sourceDenied": {
+                    "summary": "Retained source HTTP 403 with gateway HTTP 200",
+                    "value": {
+                      "success": false,
+                      "state": "completed",
+                      "gateway_http_status": 200,
+                      "operation_id": "00000000-0000-4000-8000-000000000001",
+                      "session_id": "00000000-0000-4000-8000-000000000002",
+                      "idempotency_key": "quickstart-001",
+                      "idempotency_key_scope": "caller",
+                      "routing": {
+                        "class": "direct",
+                        "country": null,
+                        "provider": "direct"
+                      },
+                      "diagnostics": {
+                        "stage": "completed",
+                        "failure": null,
+                        "dns": []
+                      },
+                      "error": {
+                        "code": "source_forbidden",
+                        "message": "The source returned HTTP 403.",
+                        "stage": "source_response"
+                      },
+                      "retry": {
+                        "safe_to_retry": false,
+                        "same_key_replay_safe": true,
+                        "new_request_allowed": false,
+                        "next_action": "review_source_access",
+                        "lookup_url": "/v2/fetch/quickstart-001"
+                      },
+                      "application_acceptance": "not_evaluated",
+                      "data": {
+                        "status": 403,
+                        "final_url": "https://source.example/data",
+                        "content_type": "text/plain",
+                        "body_base64": "Rm9yYmlkZGVu",
+                        "text": "Forbidden",
+                        "retry_after": null,
+                        "headers": {
+                          "content-type": "text/plain"
+                        }
+                      },
+                      "artifacts": [
+                        {
+                          "id": "00000000-0000-4000-8000-000000000003",
+                          "kind": "native_response",
+                          "status": 403,
+                          "encoded_sha256": "78342a0905a72ce44da083dcb5d23b8ea0c16992ba2a82eece97e033d76ba3d3",
+                          "decoded_sha256": "78342a0905a72ce44da083dcb5d23b8ea0c16992ba2a82eece97e033d76ba3d3",
+                          "encoded_bytes": 9,
+                          "decoded_bytes": 9,
+                          "content_encoding": "identity",
+                          "decoding_error": null
+                        }
+                      ],
+                      "usage": {
+                        "accounting": {
+                          "provider": "direct",
+                          "reserved_tunnel_bytes": 0,
+                          "observed_tunnel_bytes": null,
+                          "estimated_micro_usd": 0,
+                          "invoice_micro_usd": null,
+                          "basis": "direct_no_provider_invoice"
+                        },
+                        "native_requests": 1,
+                        "dns_requests": 1,
+                        "encoded_bytes": 9,
+                        "decoded_bytes": 9,
+                        "tunnel_bytes": null,
+                        "dns_encoded_bytes": null,
+                        "dns_decoded_bytes": null,
+                        "dns_tunnel_bytes": null,
+                        "byte_basis": "encoded_and_decoded_are_native_response_bytes; tunnel_includes_native_and_session_proxy_dns; separate_dns_bytes_unavailable"
+                      }
+                    }
+                  },
+                  "uncertain": {
+                    "summary": "Unknown operation recovered without a new dispatch",
+                    "value": {
+                      "success": false,
+                      "state": "unknown",
+                      "gateway_http_status": 200,
+                      "operation_id": "00000000-0000-4000-8000-000000000001",
+                      "session_id": "00000000-0000-4000-8000-000000000002",
+                      "idempotency_key": "quickstart-001",
+                      "idempotency_key_scope": "caller",
+                      "routing": {
+                        "class": "direct",
+                        "country": null,
+                        "provider": "direct"
+                      },
+                      "diagnostics": null,
+                      "error": {
+                        "code": "interrupted_unknown",
+                        "message": "The operation outcome is uncertain. Recover the saved operation; do not replay source work.",
+                        "stage": "operation"
+                      },
+                      "retry": {
+                        "safe_to_retry": false,
+                        "same_key_replay_safe": true,
+                        "new_request_allowed": false,
+                        "next_action": "recover_first",
+                        "lookup_url": "/v2/fetch/quickstart-001"
+                      },
+                      "application_acceptance": "not_evaluated",
+                      "data": null,
+                      "artifacts": [],
+                      "usage": {
+                        "accounting": {
+                          "provider": "direct",
+                          "reserved_tunnel_bytes": 0,
+                          "observed_tunnel_bytes": null,
+                          "estimated_micro_usd": 0,
+                          "invoice_micro_usd": null,
+                          "basis": "direct_no_provider_invoice"
+                        },
+                        "native_requests": null,
+                        "dns_requests": null,
+                        "encoded_bytes": null,
+                        "decoded_bytes": null,
+                        "tunnel_bytes": null,
+                        "dns_encoded_bytes": null,
+                        "dns_decoded_bytes": null,
+                        "dns_tunnel_bytes": null,
+                        "byte_basis": "encoded_and_decoded_are_native_response_bytes; tunnel_includes_native_and_session_proxy_dns; separate_dns_bytes_unavailable"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid project Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing key scope or an authorization or policy restriction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested project-owned resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A bound request conflicts with this input, or the requested capability is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The JSON request exceeds the gateway body limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported request content type.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A gateway limit, source cooldown or cost ceiling prevents admission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal gateway failure. Recover by the original key before considering new source work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Gateway capacity, route availability or operator configuration prevents completion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "The retained artifact quota prevents admission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Other gateway error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/fetch/{key}": {
+      "get": {
+        "operationId": "lookupFetch",
+        "tags": [
+          "Fetch"
+        ],
+        "summary": "Recover Fetch by caller key",
+        "description": "Read-only recovery of a project-owned Fetch operation. This does not start, retry or resume source work.",
+        "x-managed-key-scope": "fetch:read",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Original caller-supplied idempotency key. URL-encode it as a single path segment.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Identifier"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The retained operation, including successful source results, source errors and incomplete operations. Check success, state and data.status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid project Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing key scope or an authorization or policy restriction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested project-owned resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A bound request conflicts with this input, or the requested capability is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal gateway failure. Recover by the original key before considering new source work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Other gateway error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/fetch/operations/{id}": {
+      "get": {
+        "operationId": "getFetchOperation",
+        "tags": [
+          "Fetch"
+        ],
+        "summary": "Read an HTTP operation in Fetch format",
+        "description": "Read any project-owned v2 HTTP operation through the Fetch envelope, including provisioned native HTTP operations. A native or internal operation key is distinct from the caller key and cannot be replayed as a facade submission. Browser operations return capability_unsupported.",
+        "x-managed-key-scope": "fetch:read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project-owned operation ID.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ResourceId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The retained operation, including successful source results, source errors and incomplete operations. Check success, state and data.status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid project Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing key scope or an authorization or policy restriction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested project-owned resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A bound request conflicts with this input, or the requested capability is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal gateway failure. Recover by the original key before considering new source work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Other gateway error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/render/prepare": {
+      "post": {
+        "operationId": "prepareRender",
+        "tags": [
+          "Render"
+        ],
+        "summary": "Check a managed Render target and get its browser profile",
+        "description": "Managed fxk_ keys only. Runs the Playground's browser policy for one public HTTPS URL and proxy. It does not resolve or contact the source, reserve credits or create a profile record. When ready is true, submit the returned url and access_profile with the same proxy and a new idempotency key to POST /v2/render.",
+        "x-managed-key-scope": "fetch:write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderPreparationRequest"
+              },
+              "examples": {
+                "example": {
+                  "summary": "Prepare a direct render",
+                  "value": {
+                    "url": "https://source.example/",
+                    "proxy": {
+                      "class": "direct",
+                      "country": null
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Preparation result. Inspect errors when ready is false.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderPreparation"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Ready to render",
+                    "value": {
+                      "ready": true,
+                      "execution": "browser",
+                      "url": "https://source.example/",
+                      "access_profile": {
+                        "id": "playground:0000000000000000000000000000000000000000000000000000000000000000",
+                        "version": 1
+                      },
+                      "quote": {
+                        "credits": 5,
+                        "max_estimated_micro_usd": 1200
+                      },
+                      "errors": []
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Managed key required or scope missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/render": {
+      "post": {
+        "operationId": "render",
+        "tags": [
+          "Render"
+        ],
+        "summary": "Render a page in a dedicated browser session",
+        "description": "Opens an approved HTTPS page with GET in a dedicated browser session. Render requires a qualified runtime and an approved browser profile and route. Managed projects use the Render profile issued by their playground for the selected destination and need approved browser credit weights. Check features.browser_render in GET /v2/capabilities. This endpoint accepts an optional wait and viewport screenshot.",
+        "x-managed-key-scope": "fetch:write",
+        "requestBody": {
+          "description": "JSON request, at most 96 KiB. Replace the example profile with the approved browser profile for the project.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderRequest"
+              },
+              "examples": {
+                "example": {
+                  "summary": "Submit with an approved profile",
+                  "value": {
+                    "idempotency_key": "render-001",
+                    "access_profile": {
+                      "id": "source.browser",
+                      "version": 1
+                    },
+                    "url": "https://source.example/",
+                    "proxy": {
+                      "class": "direct",
+                      "country": null
+                    },
+                    "screenshot": true,
+                    "wait_ms": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The retained operation, including successful source results, source errors and incomplete operations. Check success, state and data.status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Retained rendered page and viewport screenshot",
+                    "value": {
+                      "success": true,
+                      "state": "completed",
+                      "gateway_http_status": 200,
+                      "operation_id": "00000000-0000-4000-8000-000000000001",
+                      "session_id": "00000000-0000-4000-8000-000000000002",
+                      "idempotency_key": "render-001",
+                      "idempotency_key_scope": "caller",
+                      "routing": {
+                        "class": "direct",
+                        "country": null,
+                        "provider": "direct"
+                      },
+                      "diagnostics": {
+                        "stage": "completed",
+                        "failure": null
+                      },
+                      "error": null,
+                      "retry": {
+                        "safe_to_retry": false,
+                        "same_key_replay_safe": true,
+                        "new_request_allowed": false,
+                        "next_action": "complete",
+                        "lookup_url": "/v2/render/render-001"
+                      },
+                      "application_acceptance": "not_evaluated",
+                      "execution": "browser",
+                      "data": {
+                        "status": 200,
+                        "final_url": "https://source.example/",
+                        "content_type": "text/html; charset=utf-8",
+                        "body_base64": "PG1haW4+RXhhbXBsZTwvbWFpbj4=",
+                        "text": "<main>Example</main>",
+                        "retry_after": null,
+                        "headers": {
+                          "content-type": "text/html; charset=utf-8"
+                        }
+                      },
+                      "artifacts": [
+                        {
+                          "id": "00000000-0000-4000-8000-000000000003",
+                          "kind": "browser_response",
+                          "status": 200,
+                          "encoded_sha256": null,
+                          "decoded_sha256": "08bb7d885e743d3bd0374f230ae5df59e2b731ae577109277bc3d544a3b7cc99",
+                          "encoded_bytes": null,
+                          "decoded_bytes": 20,
+                          "content_encoding": "identity",
+                          "decoding_error": null
+                        },
+                        {
+                          "id": "00000000-0000-4000-8000-000000000004",
+                          "kind": "rendered_dom",
+                          "status": 200,
+                          "encoded_sha256": null,
+                          "decoded_sha256": "08bb7d885e743d3bd0374f230ae5df59e2b731ae577109277bc3d544a3b7cc99",
+                          "encoded_bytes": null,
+                          "decoded_bytes": 20,
+                          "content_encoding": null,
+                          "decoding_error": null
+                        },
+                        {
+                          "id": "00000000-0000-4000-8000-000000000005",
+                          "kind": "browser_screenshot",
+                          "status": 200,
+                          "encoded_sha256": null,
+                          "decoded_sha256": "8aab595e535aefb505b71b4f448bc49c132cf3afa95a64f1072bb450653e30ad",
+                          "encoded_bytes": null,
+                          "decoded_bytes": 159,
+                          "content_encoding": null,
+                          "decoding_error": null,
+                          "content_type": "image/jpeg",
+                          "body_base64": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AP//Z"
+                        }
+                      ],
+                      "usage": {
+                        "accounting": {
+                          "provider": "direct",
+                          "reserved_tunnel_bytes": 0,
+                          "observed_tunnel_bytes": null,
+                          "estimated_micro_usd": 0,
+                          "invoice_micro_usd": null,
+                          "basis": "direct_no_provider_invoice"
+                        },
+                        "native_requests": null,
+                        "browser_requests": 1,
+                        "blocked_requests": 0,
+                        "encoded_bytes": null,
+                        "decoded_bytes": 20,
+                        "dom_bytes": 20,
+                        "screenshot_bytes": 159,
+                        "tunnel_bytes": 1024,
+                        "capture_complete": true,
+                        "duration_ms": 750,
+                        "byte_basis": "bidirectional_origin_tls_stream_excludes_local_connect"
+                      }
+                    }
+                  },
+                  "uncertain": {
+                    "summary": "Unknown Render operation recovered without a new dispatch",
+                    "value": {
+                      "success": false,
+                      "state": "unknown",
+                      "gateway_http_status": 200,
+                      "operation_id": "00000000-0000-4000-8000-000000000001",
+                      "session_id": "00000000-0000-4000-8000-000000000002",
+                      "idempotency_key": "render-001",
+                      "idempotency_key_scope": "caller",
+                      "routing": {
+                        "class": "direct",
+                        "country": null,
+                        "provider": "direct"
+                      },
+                      "diagnostics": null,
+                      "error": {
+                        "code": "interrupted_unknown",
+                        "message": "The operation outcome is uncertain. Recover the saved operation; do not replay source work.",
+                        "stage": "operation"
+                      },
+                      "retry": {
+                        "safe_to_retry": false,
+                        "same_key_replay_safe": true,
+                        "new_request_allowed": false,
+                        "next_action": "recover_first",
+                        "lookup_url": "/v2/render/render-001"
+                      },
+                      "application_acceptance": "not_evaluated",
+                      "execution": "browser",
+                      "data": null,
+                      "artifacts": [],
+                      "usage": {
+                        "accounting": {
+                          "provider": "direct",
+                          "reserved_tunnel_bytes": 0,
+                          "observed_tunnel_bytes": null,
+                          "estimated_micro_usd": 0,
+                          "invoice_micro_usd": null,
+                          "basis": "direct_no_provider_invoice"
+                        },
+                        "native_requests": null,
+                        "browser_requests": null,
+                        "blocked_requests": null,
+                        "encoded_bytes": null,
+                        "decoded_bytes": null,
+                        "dom_bytes": null,
+                        "screenshot_bytes": null,
+                        "tunnel_bytes": null,
+                        "capture_complete": null,
+                        "duration_ms": 750,
+                        "byte_basis": "bidirectional_origin_tls_stream_excludes_local_connect"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid project Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing key scope or an authorization or policy restriction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested project-owned resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A bound request conflicts with this input, or the requested capability is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The JSON request exceeds the gateway body limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported request content type.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A gateway limit, source cooldown or cost ceiling prevents admission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal gateway failure. Recover by the original key before considering new source work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Gateway capacity, route availability or operator configuration prevents completion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "The retained artifact quota prevents admission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Other gateway error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/render/{key}": {
+      "get": {
+        "operationId": "lookupRender",
+        "tags": [
+          "Render"
+        ],
+        "summary": "Recover Render by caller key",
+        "description": "Read-only recovery of a project-owned Render operation. Recovery reads retained evidence even if execution is now unavailable. It does not open a browser session or send source work.",
+        "x-managed-key-scope": "fetch:read",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Original caller-supplied idempotency key. URL-encode it as a single path segment.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Identifier"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The retained operation, including successful source results, source errors and incomplete operations. Check success, state and data.status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid project Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing key scope or an authorization or policy restriction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested project-owned resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A bound request conflicts with this input, or the requested capability is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal gateway failure. Recover by the original key before considering new source work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Other gateway error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/scrape": {
+      "post": {
+        "operationId": "scrape",
+        "summary": "Render one page and convert its retained DOM",
+        "description": "Requires an enabled project-specific route or operator-reviewed managed Direct Scrape. Managed keys need fetch:write and use the existing project-bound public HTTPS Playground browser policy and operation credits. Saved captures replay by the original X-Idempotency-Key even when new Scrape admission is disabled; project and key authorization still apply.",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Idempotency-Key",
+            "description": "Replay with this key to recover the original capture. The gateway generates a key when omitted.",
+            "schema": {
+              "$ref": "#/components/schemas/Identifier"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScrapeRequest"
+              },
+              "examples": {
+                "example": {
+                  "summary": "Render a page and return Markdown",
+                  "value": {
+                    "url": "https://source.example/",
+                    "formats": [
+                      "markdown",
+                      "links"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rendered page and requested formats",
+            "headers": {
+              "X-Idempotency-Key": {
+                "required": true,
+                "schema": {
+                  "$ref": "#/components/schemas/Identifier"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrapeSuccess"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Converted page",
+                    "value": {
+                      "success": true,
+                      "data": {
+                        "metadata": {
+                          "sourceURL": "https://source.example/",
+                          "url": "https://source.example/",
+                          "statusCode": 200,
+                          "contentType": "text/html; charset=utf-8",
+                          "title": "Example"
+                        },
+                        "markdown": "# Example",
+                        "links": [
+                          "https://source.example/about"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected, source failure, or operation outcome unavailable",
+            "headers": {
+              "X-Idempotency-Key": {
+                "schema": {
+                  "$ref": "#/components/schemas/Identifier"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrapeFailure"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Scrape unavailable for this project",
+                    "value": {
+                      "success": false,
+                      "code": "capability_unsupported",
+                      "error": "Scrape is not enabled for this project."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Scrape"
+        ],
+        "x-managed-key-scope": "fetch:write"
+      }
+    },
+    "/v2/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "tags": [
+          "Discovery"
+        ],
+        "summary": "Read gateway capabilities",
+        "description": "Read the current v2 capability configuration for this project. Availability does not grant access to a destination, profile or route.",
+        "x-managed-key-scope": "profiles:read",
+        "responses": {
+          "200": {
+            "description": "Read gateway capabilities.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid project Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing key scope or an authorization or policy restriction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal gateway failure. Recover by the original key before considering new source work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Gateway capacity, route availability or operator configuration prevents completion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Other gateway error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/access-profiles": {
+      "get": {
+        "operationId": "listAccessProfiles",
+        "tags": [
+          "Discovery"
+        ],
+        "summary": "List approved access profiles",
+        "description": "Read the project’s configured access profiles, route reservations and limits. Managed Render uses the browser profile issued through the playground.",
+        "x-managed-key-scope": "profiles:read",
+        "responses": {
+          "200": {
+            "description": "List approved access profiles.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessProfilesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid project Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing key scope or an authorization or policy restriction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A bound request conflicts with this input, or the requested capability is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal gateway failure. Recover by the original key before considering new source work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Gateway capacity, route availability or operator configuration prevents completion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Other gateway error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/recipes": {
+      "get": {
+        "operationId": "listRecipes",
+        "tags": [
+          "Discovery"
+        ],
+        "summary": "List approved native HTTP recipes",
+        "description": "Read approved recipes and their immutable versions. Recipe execution is part of the provisioned native API.",
+        "x-managed-key-scope": "profiles:read",
+        "responses": {
+          "200": {
+            "description": "List approved native HTTP recipes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid project Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing key scope or an authorization or policy restriction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested project-owned resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A bound request conflicts with this input, or the requested capability is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal gateway failure. Recover by the original key before considering new source work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Gateway capacity, route availability or operator configuration prevents completion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Other gateway error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/usage": {
+      "get": {
+        "operationId": "getUsage",
+        "tags": [
+          "Observability"
+        ],
+        "summary": "Read project usage",
+        "description": "Read lifetime v2 usage and accounting for this project, including estimates, known invoice amounts and separately tracked request credits where applicable.",
+        "x-managed-key-scope": "usage:read",
+        "responses": {
+          "200": {
+            "description": "Read project usage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid project Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing key scope or an authorization or policy restriction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal gateway failure. Recover by the original key before considering new source work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Gateway capacity, route availability or operator configuration prevents completion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Other gateway error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/operations": {
+      "get": {
+        "operationId": "listOperations",
+        "tags": [
+          "Observability"
+        ],
+        "summary": "List recent operations",
+        "description": "Read recent operation summaries for this project. This bounded window has no cursor and omits source bodies and artifacts.",
+        "x-managed-key-scope": "fetch:read",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Recent window size, from 1 to 50. The gateway returns the newest operations first.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 25
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List recent operations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecentOperationsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid project Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing key scope or an authorization or policy restriction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal gateway failure. Recover by the original key before considering new source work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Gateway capacity, route availability or operator configuration prevents completion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Other gateway error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/operations/by-key/{key}": {
+      "get": {
+        "operationId": "lookupOperation",
+        "tags": [
+          "Observability"
+        ],
+        "summary": "Read a native operation by stored key",
+        "description": "Read project-owned operation metadata by the native key. This does not start or resume work.",
+        "x-managed-key-scope": "fetch:read",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Stored native operation key. For facade operations, recover using the caller key at /v2/fetch/{key} or /v2/render/{key}.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Identifier"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read a native operation by stored key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid project Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing key scope or an authorization or policy restriction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested project-owned resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal gateway failure. Recover by the original key before considering new source work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Gateway capacity, route availability or operator configuration prevents completion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Other gateway error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/operations/{id}": {
+      "get": {
+        "operationId": "getOperation",
+        "tags": [
+          "Observability"
+        ],
+        "summary": "Read an operation by ID",
+        "description": "Read the project-owned operation record, execution type, result metadata and accounting. This does not start or resume work.",
+        "x-managed-key-scope": "fetch:read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project-owned operation ID.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ResourceId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read an operation by ID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid project Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing key scope or an authorization or policy restriction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested project-owned resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal gateway failure. Recover by the original key before considering new source work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Gateway capacity, route availability or operator configuration prevents completion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Other gateway error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/artifacts/{id}": {
+      "get": {
+        "operationId": "getArtifact",
+        "tags": [
+          "Observability"
+        ],
+        "summary": "Read a retained artifact",
+        "description": "Read project-owned retained evidence and its encoding metadata. Treat retained bodies and headers as sensitive source data.",
+        "x-managed-key-scope": "fetch:read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project-owned artifact ID.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ResourceId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read a retained artifact.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Artifact"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid project Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing key scope or an authorization or policy restriction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested project-owned resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal gateway failure. Recover by the original key before considering new source work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Other gateway error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ProjectBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Project Bearer credential. Managed fxk_ keys need the operation’s x-managed-key-scope. Scopes limit API actions. Approved destinations, profiles, routes and spending still apply."
+      }
+    },
+    "schemas": {
+      "Identifier": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+        "pattern": "^[A-Za-z0-9_.:-]+$"
+      },
+      "ResourceId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}$"
+      },
+      "ProfileReference": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "id",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "ProxyClass": {
+        "type": "string",
+        "enum": [
+          "direct",
+          "datacenter",
+          "residential"
+        ]
+      },
+      "CountryCode": {
+        "type": "string",
+        "pattern": "^[A-Z]{2}$"
+      },
+      "ProxySelection": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "class": {
+                "type": "string",
+                "const": "direct"
+              },
+              "country": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "class",
+              "country"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "class": {
+                "type": "string",
+                "enum": [
+                  "datacenter",
+                  "residential"
+                ]
+              },
+              "country": {
+                "$ref": "#/components/schemas/CountryCode"
+              }
+            },
+            "required": [
+              "class",
+              "country"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "Routing": {
+        "type": "object",
+        "properties": {
+          "class": {
+            "$ref": "#/components/schemas/ProxyClass"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CountryCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "description": "Effective provider identifier. A direct route reports direct."
+          }
+        },
+        "required": [
+          "class",
+          "country",
+          "provider"
+        ]
+      },
+      "FetchRequest": {
+        "type": "object",
+        "properties": {
+          "idempotency_key": {
+            "$ref": "#/components/schemas/Identifier",
+            "description": "Caller-generated durable key. Save it before submitting. A changed request under a bound key returns 409."
+          },
+          "access_profile": {
+            "$ref": "#/components/schemas/ProfileReference",
+            "description": "Approved access profile reference with its immutable version. Required for provisioned projects. For managed fxk_ keys, omitting it selects public-url-http version 1 when that paid public URL profile is available to the project."
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "minLength": 1,
+            "maxLength": 12000,
+            "description": "Approved absolute HTTPS destination. Profile rules restrict origin, path and method."
+          },
+          "proxy": {
+            "$ref": "#/components/schemas/ProxySelection",
+            "description": "Explicit proxy class and country. Use null for direct or an approved uppercase country for a proxied route."
+          },
+          "max_estimated_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Optional conservative spending ceiling in micro-USD. Admission fails when the estimate exceeds it or cannot be guaranteed."
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/ResourceId",
+            "description": "Optional existing HTTP session with the same profile version, proxy class and country."
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "GET",
+              "HEAD",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE"
+            ],
+            "default": "GET",
+            "description": "Approved native HTTP method."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Only source headers approved for this destination. Keep gateway credentials and cookies out of these values."
+          },
+          "body_base64": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "contentEncoding": "base64",
+            "maxLength": 1398104,
+            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+            "description": "Canonical base64 for the native request body, subject to the profile limit. Omit or set null for GET or HEAD."
+          },
+          "retry": {
+            "type": "boolean",
+            "default": false,
+            "description": "Opt in to the gateway’s bounded retry for eligible pristine HTTP reads on a dedicated datacenter route. It never authorizes retry of uncertain or stateful work. Paid routes reject retry: true."
+          },
+          "max_transfer_mb": {
+            "type": "number",
+            "minimum": 0.25,
+            "maximum": 20,
+            "multipleOf": 0.25,
+            "description": "Paid HTTP only. Bidirectional wire ceiling in decimal MB, in 0.25 MB steps. Omit on Public URL HTTP to size the reservation from the available balance, max_credits and the transfer limits. Supplying it on an eligible direct or datacenter profile selects paid billing."
+          },
+          "max_credits": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "Paid HTTP only. Positive cap on the prepaid credits the gateway may reserve for this request. Admission fails with max_credits_exceeded when the reservation needs more."
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "url",
+          "proxy"
+        ],
+        "additionalProperties": false
+      },
+      "RenderRequest": {
+        "type": "object",
+        "properties": {
+          "idempotency_key": {
+            "$ref": "#/components/schemas/Identifier",
+            "description": "Caller-generated durable key. Save it before submitting. A changed request under a bound key returns 409."
+          },
+          "access_profile": {
+            "$ref": "#/components/schemas/ProfileReference",
+            "description": "Approved access profile reference with its immutable version."
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "minLength": 1,
+            "maxLength": 12000,
+            "description": "Approved absolute HTTPS destination. Profile rules restrict origin, path and method."
+          },
+          "proxy": {
+            "$ref": "#/components/schemas/ProxySelection",
+            "description": "Explicit proxy class and country. Use null for direct or an approved uppercase country for a proxied route."
+          },
+          "max_estimated_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Optional conservative spending ceiling in micro-USD. Admission fails when the estimate exceeds it or cannot be guaranteed."
+          },
+          "screenshot": {
+            "type": "boolean",
+            "default": false,
+            "description": "Capture a viewport JPEG of at most 1 MiB when approved and available."
+          },
+          "wait_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2000,
+            "description": "Post-load wait in milliseconds, limited by the access profile. Omission uses the profile default."
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "access_profile",
+          "url",
+          "proxy"
+        ],
+        "additionalProperties": false
+      },
+      "FacadeError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable error code. Handle unknown codes conservatively."
+          },
+          "message": {
+            "type": "string",
+            "description": "Safe human-readable description. Branch on code."
+          },
+          "stage": {
+            "type": "string",
+            "description": "Stage at which the failure was reported."
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Optional structured guidance. On a Public URL transfer cutoff it reports max_transfer_mb, max_allowed_transfer_mb, reserved_credits and, when a larger ceiling is possible, next.max_transfer_mb and next.max_credits for a new operation with a new idempotency key."
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "stage"
+        ]
+      },
+      "RetryGuidance": {
+        "type": "object",
+        "properties": {
+          "safe_to_retry": {
+            "type": "boolean",
+            "description": "Whether the gateway can suggest a deliberate new source request, subject to the other conditions here."
+          },
+          "same_key_replay_safe": {
+            "type": "boolean",
+            "description": "Whether an identical submission using the caller key can recover an existing operation without redispatching it. An unbound key can still admit work."
+          },
+          "new_request_allowed": {
+            "type": "boolean",
+            "description": "Whether this result permits consideration of new source work."
+          },
+          "next_action": {
+            "type": "string",
+            "description": "Suggested caller action. Use read-only recovery when uncertain. Known values include complete, recover_by_key, check_url, review_source_access, wait_for_source_retry_after, review_proxy_configuration, review_transfer_limit and retry_same_key."
+          },
+          "lookup_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Relative read-only recovery URL, when available."
+          },
+          "retry_after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The source Retry-After value, if retained. It may be a delay or an HTTP date."
+          },
+          "suggested_proxy": {
+            "$ref": "#/components/schemas/ProxySelection"
+          },
+          "requires_new_idempotency_key": {
+            "type": "boolean"
+          },
+          "requires_fresh_session": {
+            "type": "boolean"
+          },
+          "requested": {
+            "type": "boolean",
+            "description": "Fetch reported on an explicitly requested bounded gateway retry."
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of gateway attempts in the retained retry evidence."
+          },
+          "route_changed": {
+            "type": "boolean"
+          },
+          "effective_session_id": {
+            "$ref": "#/components/schemas/ResourceId"
+          },
+          "stop_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "safe_to_retry",
+          "same_key_replay_safe",
+          "new_request_allowed",
+          "next_action",
+          "lookup_url"
+        ]
+      },
+      "FacadeData": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Source HTTP status. It can be null and is independent of gateway_http_status."
+          },
+          "final_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Final source URL in the retained evidence, if known."
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body_base64": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "contentEncoding": "base64",
+            "description": "Retained decoded response bytes for Fetch or generated UTF-8 DOM bytes for Render."
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Retained UTF-8 text, when available. Treat HTML as inert content."
+          },
+          "retry_after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The source Retry-After value, if retained. It may be a delay or an HTTP date."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Allowlisted source response headers. This excludes cookies and credential headers."
+          }
+        },
+        "required": [
+          "status",
+          "final_url",
+          "content_type",
+          "body_base64",
+          "text",
+          "retry_after",
+          "headers"
+        ]
+      },
+      "ArtifactSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ResourceId"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Evidence kind such as native_response, download, browser_response, rendered_dom or browser_screenshot."
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Source status associated with this evidence, when available."
+          },
+          "encoded_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "decoded_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "encoded_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "decoded_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "content_encoding": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decoding_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempt": {
+            "type": "integer",
+            "description": "Fetch attempt number when the gateway retained retry evidence."
+          },
+          "content_type": {
+            "type": "string",
+            "const": "image/jpeg",
+            "description": "Present for an included Render viewport screenshot."
+          },
+          "body_base64": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "maxLength": 1398104,
+            "description": "Included viewport JPEG for a retained screenshot when available."
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "encoded_sha256",
+          "decoded_sha256",
+          "encoded_bytes",
+          "decoded_bytes",
+          "content_encoding",
+          "decoding_error"
+        ]
+      },
+      "RequestCreditAttribution": {
+        "type": "object",
+        "properties": {
+          "credits": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string",
+            "description": "Reservation state, such as reserved, settled, held or released."
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "policy_version": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "logical_http_operation",
+              "logical_browser_operation"
+            ]
+          }
+        },
+        "required": [
+          "credits",
+          "state",
+          "key_id",
+          "policy_version",
+          "unit"
+        ]
+      },
+      "Accounting": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "reserved_tunnel_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "observed_tunnel_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "estimated_micro_usd": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Conservative configured estimate. Null means no guarantee is available."
+          },
+          "invoice_micro_usd": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Authoritatively reconciled provider invoice amount, if known."
+          },
+          "basis": {
+            "type": "string"
+          },
+          "request_credits": {
+            "$ref": "#/components/schemas/RequestCreditAttribution"
+          },
+          "pricing": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Route-specific pricing evidence, when available."
+          },
+          "customer_traffic": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Customer traffic accounting, when available."
+          },
+          "customer_traffic_reservation": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Conservative customer traffic reservation, when available."
+          },
+          "paid_credits": {
+            "$ref": "#/components/schemas/PaidCreditAttribution"
+          }
+        },
+        "required": [
+          "provider",
+          "reserved_tunnel_bytes",
+          "observed_tunnel_bytes",
+          "estimated_micro_usd",
+          "invoice_micro_usd",
+          "basis"
+        ]
+      },
+      "FetchUsage": {
+        "type": "object",
+        "properties": {
+          "accounting": {
+            "$ref": "#/components/schemas/Accounting",
+            "description": "Provider accounting, conservative estimates and managed request credits where applicable."
+          },
+          "native_requests": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Known native HTTP requests. Null for Render."
+          },
+          "encoded_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "decoded_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "tunnel_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "byte_basis": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the byte counters measure. Measurements and reservations are separate from invoices."
+          },
+          "dns_requests": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "dns_encoded_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "dns_decoded_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "dns_tunnel_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "wire_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Paid HTTP only. Complete local observation of bidirectional wire bytes, including TLS, CONNECT, DNS over HTTPS and redirects, when available."
+          },
+          "wire_bytes_lower_bound": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Paid HTTP only. Confirmed wire bytes."
+          }
+        },
+        "required": [
+          "accounting",
+          "native_requests",
+          "encoded_bytes",
+          "decoded_bytes",
+          "tunnel_bytes",
+          "byte_basis",
+          "dns_requests",
+          "dns_encoded_bytes",
+          "dns_decoded_bytes",
+          "dns_tunnel_bytes"
+        ]
+      },
+      "RenderUsage": {
+        "type": "object",
+        "properties": {
+          "accounting": {
+            "$ref": "#/components/schemas/Accounting",
+            "description": "Provider accounting, conservative estimates and managed request credits where applicable."
+          },
+          "native_requests": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Known native HTTP requests. Null for Render."
+          },
+          "encoded_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "decoded_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "tunnel_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "byte_basis": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the byte counters measure. Measurements and reservations are separate from invoices."
+          },
+          "browser_requests": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "blocked_requests": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "dom_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "screenshot_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "capture_complete": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        },
+        "required": [
+          "accounting",
+          "native_requests",
+          "encoded_bytes",
+          "decoded_bytes",
+          "tunnel_bytes",
+          "byte_basis",
+          "browser_requests",
+          "blocked_requests",
+          "dom_bytes",
+          "screenshot_bytes",
+          "capture_complete",
+          "duration_ms"
+        ]
+      },
+      "FacadeResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether FetchX obtained a successful source result. HTTP 200 alone does not establish this."
+          },
+          "state": {
+            "type": "string",
+            "description": "Durable operation state, or rejected for many admission failures. Reserved, running or unknown results require recovery."
+          },
+          "gateway_http_status": {
+            "type": "integer",
+            "description": "HTTP status of the gateway response. Retained operations use 200 even when the source denied access or capture is incomplete."
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Durable operation identifier, if available."
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Owning session identifier, if available."
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Identifier"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Caller key for facade submission and key lookup. An operation-ID projection can show a native key or null."
+          },
+          "idempotency_key_scope": {
+            "type": "string",
+            "description": "caller, native_operation or internal_operation, when available. Only caller keys can be used for same-key facade replay."
+          },
+          "internal_idempotency_key": {
+            "$ref": "#/components/schemas/Identifier",
+            "description": "Internal operation key in an operation-ID projection. It cannot be used as the original caller key."
+          },
+          "routing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Routing"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Effective pinned route, if available."
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FacadeData"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Retained source data. Can be null before evidence is available."
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactSummary"
+            },
+            "description": "Retained evidence references. GET /v2/artifacts/{id} retrieves a full project-owned artifact."
+          },
+          "diagnostics": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "Safe diagnostics, when available. Fields vary by failure stage and transport."
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FacadeError"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Structured gateway or source failure when present. Retained failures can have gateway HTTP 200."
+          },
+          "retry": {
+            "$ref": "#/components/schemas/RetryGuidance"
+          },
+          "application_acceptance": {
+            "type": "string",
+            "const": "not_evaluated",
+            "description": "The caller decides whether the retained evidence satisfies its application."
+          }
+        },
+        "required": [
+          "success",
+          "state",
+          "gateway_http_status",
+          "operation_id",
+          "session_id",
+          "idempotency_key",
+          "routing",
+          "data",
+          "artifacts",
+          "diagnostics",
+          "error",
+          "retry",
+          "application_acceptance"
+        ]
+      },
+      "FetchResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FacadeResponse"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "usage": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/FetchUsage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "supported": {
+                "type": "object",
+                "properties": {
+                  "transport": {
+                    "type": "string",
+                    "const": "http"
+                  },
+                  "render": {
+                    "type": "boolean",
+                    "const": false
+                  }
+                },
+                "required": [
+                  "transport",
+                  "render"
+                ],
+                "description": "Fetch capabilities reported in a structured failure."
+              }
+            },
+            "required": [
+              "usage"
+            ]
+          }
+        ]
+      },
+      "RenderResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FacadeResponse"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "usage": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RenderUsage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "execution": {
+                "type": "string",
+                "const": "browser",
+                "description": "Execution mode for Render."
+              },
+              "supported": {
+                "type": "object",
+                "properties": {
+                  "transport": {
+                    "type": "string",
+                    "const": "browser"
+                  },
+                  "render": {
+                    "type": "boolean",
+                    "const": true
+                  }
+                },
+                "required": [
+                  "transport",
+                  "render"
+                ],
+                "description": "Render response shape marker reported in a structured failure. This does not guarantee availability."
+              }
+            },
+            "required": [
+              "usage",
+              "execution"
+            ]
+          }
+        ]
+      },
+      "NativeError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Machine-readable gateway error code."
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Additional safe information when provided by the gateway."
+          },
+          "diagnostics": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "Safe diagnostics, when available. Fields vary by failure stage and transport."
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "CapabilitiesResponse": {
+        "type": "object",
+        "properties": {
+          "api_version": {
+            "type": "string",
+            "const": "2"
+          },
+          "transports": {
+            "type": "object",
+            "properties": {
+              "http": {
+                "type": "boolean"
+              },
+              "browser": {
+                "type": "boolean",
+                "description": "Native transport field. Read features.browser_render to check the separate Render facade."
+              }
+            },
+            "required": [
+              "http",
+              "browser"
+            ]
+          },
+          "proxy_classes": {
+            "type": "object",
+            "properties": {
+              "direct": {
+                "type": "boolean"
+              },
+              "datacenter": {
+                "type": "boolean"
+              },
+              "residential": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "direct",
+              "datacenter",
+              "residential"
+            ]
+          },
+          "features": {
+            "type": "object",
+            "properties": {
+              "native_responses": {
+                "type": "boolean"
+              },
+              "downloads": {
+                "type": "boolean"
+              },
+              "encoded_bodies": {
+                "type": "boolean"
+              },
+              "cookie_jar": {
+                "type": "boolean"
+              },
+              "json_pointers": {
+                "type": "boolean"
+              },
+              "dom_selectors": {
+                "type": "boolean"
+              },
+              "websockets": {
+                "type": "boolean"
+              },
+              "local_storage": {
+                "type": "boolean"
+              },
+              "live_leases": {
+                "type": "boolean"
+              },
+              "discovery_profiles": {
+                "type": "boolean"
+              },
+              "browser_network_probe": {
+                "type": "boolean",
+                "description": "Native browser probe availability for provisioned projects."
+              },
+              "browser_render": {
+                "type": "boolean",
+                "description": "Whether Render is currently available for this project. For managed keys this uses the Playground's browser route checks, including runtime, reviewed route pricing and route health. Use POST /v2/render/prepare for a target-specific check."
+              }
+            },
+            "required": [
+              "native_responses",
+              "downloads",
+              "encoded_bodies",
+              "cookie_jar",
+              "json_pointers",
+              "dom_selectors",
+              "websockets",
+              "local_storage",
+              "live_leases",
+              "discovery_profiles",
+              "browser_network_probe",
+              "browser_render"
+            ]
+          },
+          "retries": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string"
+              },
+              "max_physical_retries": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "default_physical_retries": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "opt_in": {
+                "type": "string"
+              },
+              "scope": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "owner",
+              "max_physical_retries",
+              "default_physical_retries",
+              "opt_in",
+              "scope"
+            ]
+          },
+          "profile_approval": {
+            "type": "string"
+          },
+          "browser_probe": {
+            "type": "object",
+            "properties": {
+              "available": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "original_encoded_available": {
+                "type": "boolean"
+              },
+              "max_requests": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max_decoded_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max_dom_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "proxy_classes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ProxyClass"
+                }
+              },
+              "methods": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "GET",
+                    "HEAD",
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE"
+                  ]
+                }
+              },
+              "live_leases": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "available",
+              "reason",
+              "original_encoded_available",
+              "max_requests",
+              "max_decoded_bytes",
+              "max_dom_bytes",
+              "proxy_classes",
+              "methods",
+              "live_leases"
+            ]
+          },
+          "discovery_profile_policy": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "enabled"
+            ],
+            "description": "Additional provisioned discovery limits are included when configured."
+          },
+          "capability_scope": {
+            "type": "string",
+            "const": "project",
+            "description": "The capability view is for the authenticated project."
+          },
+          "paid_http": {
+            "type": "object",
+            "description": "Managed projects only. Paid HTTP readiness.",
+            "properties": {
+              "proxy_classes": {
+                "type": "object",
+                "properties": {
+                  "direct": {
+                    "type": "boolean"
+                  },
+                  "datacenter": {
+                    "type": "boolean"
+                  },
+                  "residential": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "direct",
+                  "datacenter",
+                  "residential"
+                ]
+              },
+              "public_url_access_profile": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ProfileReference"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "public_url_access_profiles": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ProfileReference"
+                },
+                "description": "Present when extended Public URL coverage is ready."
+              },
+              "public_url_transfer_limits": {
+                "$ref": "#/components/schemas/TransferLimits"
+              }
+            },
+            "required": [
+              "proxy_classes",
+              "public_url_access_profile"
+            ]
+          }
+        },
+        "required": [
+          "api_version",
+          "transports",
+          "proxy_classes",
+          "features",
+          "retries",
+          "profile_approval",
+          "browser_probe",
+          "discovery_profile_policy",
+          "capability_scope"
+        ]
+      },
+      "AccessProfile": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "origins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "paths": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "method_paths": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "GET",
+                "HEAD",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ]
+            }
+          },
+          "headers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "proxy_classes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProxyClass"
+            }
+          },
+          "countries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CountryCode"
+            }
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "max_requests": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max_encoded_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max_decoded_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max_session_encoded_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max_input_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max_tunnel_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max_redirects": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max_expansion_ratio": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "timeout_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "min_interval_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ttl_seconds": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "max_requests",
+              "max_encoded_bytes",
+              "max_decoded_bytes",
+              "max_session_encoded_bytes",
+              "max_input_bytes",
+              "max_tunnel_bytes",
+              "max_redirects",
+              "max_expansion_ratio",
+              "timeout_ms",
+              "min_interval_ms",
+              "ttl_seconds"
+            ]
+          },
+          "route_reservations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "class": {
+                  "$ref": "#/components/schemas/ProxyClass"
+                },
+                "country": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CountryCode"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "provider": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "reserved_tunnel_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "estimated_micro_usd": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "customer_traffic_reservation": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "pricing": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "paid_credit_reservation": {
+                  "$ref": "#/components/schemas/PaidCreditQuote"
+                }
+              },
+              "required": [
+                "class",
+                "country",
+                "provider",
+                "reserved_tunnel_bytes",
+                "estimated_micro_usd"
+              ]
+            }
+          },
+          "browser_probe": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "enabled"
+            ],
+            "description": "Native browser probe limits when applicable. For managed projects use the Render profile issued by the playground."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Present for discovery and public_url_http profiles."
+          },
+          "max_paid_cost_micro_usd": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "transfer_limits": {
+            "$ref": "#/components/schemas/TransferLimits",
+            "description": "Public URL HTTP profiles only."
+          },
+          "max_daily_operations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Public URL HTTP profiles only. Paid daily operation quota, if configured."
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "origins",
+          "paths",
+          "method_paths",
+          "methods",
+          "headers",
+          "proxy_classes",
+          "countries",
+          "limits",
+          "route_reservations"
+        ]
+      },
+      "AccessProfilesResponse": {
+        "type": "object",
+        "properties": {
+          "access_profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccessProfile"
+            }
+          }
+        },
+        "required": [
+          "access_profiles"
+        ]
+      },
+      "Recipe": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "kind": {
+            "type": "string",
+            "const": "http"
+          },
+          "access_profile": {
+            "$ref": "#/components/schemas/ProfileReference"
+          },
+          "request": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "GET",
+                  "HEAD",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE"
+                ]
+              },
+              "path_pattern": {
+                "type": "string"
+              }
+            }
+          },
+          "json_pointers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "kind",
+          "access_profile"
+        ]
+      },
+      "RecipesResponse": {
+        "type": "object",
+        "properties": {
+          "recipes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Recipe"
+            }
+          }
+        },
+        "required": [
+          "recipes"
+        ]
+      },
+      "Operation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ResourceId"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "Durable operation state such as reserved, running, completed, failed or unknown."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Native operation error code, if present. See source status independently."
+          },
+          "execution": {
+            "type": "string",
+            "enum": [
+              "http",
+              "browser"
+            ]
+          },
+          "access_profile": {
+            "$ref": "#/components/schemas/ProfileReference"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "idempotency_key": {
+            "$ref": "#/components/schemas/Identifier",
+            "description": "Stored native operation key. Fetch or Render facade operations use an internal key here."
+          },
+          "session_id": {
+            "$ref": "#/components/schemas/ResourceId"
+          },
+          "recipe": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProfileReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "status": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "final_url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "artifacts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "$ref": "#/components/schemas/ResourceId"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "encoded_bytes": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    },
+                    "decoded_bytes": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    },
+                    "content_encoding": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "attempt": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind"
+                  ]
+                }
+              },
+              "physical_requests": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "encoded_bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "decoded_bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "tunnel_bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "provider_status": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "retry_after": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The source Retry-After value, if retained. It may be a delay or an HTTP date."
+              },
+              "diagnostics": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": true,
+                "description": "Safe diagnostics, when available. Fields vary by failure stage and transport."
+              },
+              "extracted": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Native recipe outputs, when evaluated. Keys are recipe-specific."
+              },
+              "capture_complete": {
+                "type": "boolean"
+              },
+              "partial": {
+                "type": "boolean",
+                "description": "Only part of the evidence was retained. Unknown work must be recovered before sending a new request."
+              },
+              "additional_dispatches_unknown": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "status",
+              "final_url",
+              "artifacts",
+              "physical_requests"
+            ],
+            "description": "Retained native result metadata. The transport determines additional fields."
+          },
+          "accounting": {
+            "$ref": "#/components/schemas/Accounting"
+          }
+        },
+        "required": [
+          "id",
+          "key_id",
+          "state",
+          "error",
+          "execution",
+          "access_profile",
+          "created_at",
+          "finished_at",
+          "idempotency_key",
+          "session_id",
+          "recipe",
+          "result",
+          "accounting"
+        ]
+      },
+      "RecentOperationsResponse": {
+        "type": "object",
+        "properties": {
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/ResourceId"
+                },
+                "key_id": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "description": "Durable operation state such as reserved, running, completed, failed or unknown."
+                },
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Native operation error code, if present. See source status independently."
+                },
+                "execution": {
+                  "type": "string",
+                  "enum": [
+                    "http",
+                    "browser"
+                  ]
+                },
+                "access_profile": {
+                  "$ref": "#/components/schemas/ProfileReference"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "finished_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "latency_ms": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "routing": {
+                  "$ref": "#/components/schemas/Routing"
+                },
+                "source_http_status": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "physical_requests": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "encoded_bytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "decoded_bytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "tunnel_bytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "diagnostics": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": true,
+                  "description": "Safe diagnostics, when available. Fields vary by failure stage and transport."
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "estimated_micro_usd": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "invoice_micro_usd": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "request_credits": {
+                  "$ref": "#/components/schemas/RequestCreditAttribution"
+                }
+              },
+              "required": [
+                "id",
+                "key_id",
+                "state",
+                "error",
+                "execution",
+                "access_profile",
+                "created_at",
+                "finished_at",
+                "latency_ms",
+                "routing",
+                "source_http_status",
+                "physical_requests",
+                "encoded_bytes",
+                "decoded_bytes",
+                "tunnel_bytes",
+                "diagnostics",
+                "provider",
+                "estimated_micro_usd",
+                "invoice_micro_usd"
+              ]
+            }
+          },
+          "scope": {
+            "type": "string",
+            "const": "v2_project_recent"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "required": [
+          "operations",
+          "scope",
+          "limit"
+        ]
+      },
+      "UsageResponse": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "entitlement": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "unmetered",
+                  "metered"
+                ]
+              },
+              "max_daily_operations": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              }
+            },
+            "required": [
+              "mode",
+              "max_daily_operations"
+            ]
+          },
+          "outcomes": {
+            "type": "object",
+            "properties": {
+              "source_successes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "source_failures": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "gateway_failures": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "unknown": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "physical_requests": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "encoded_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "decoded_bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "source_successes",
+              "source_failures",
+              "gateway_failures",
+              "unknown",
+              "physical_requests",
+              "encoded_bytes",
+              "decoded_bytes"
+            ]
+          },
+          "outcomes_by_key": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "source_successes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "source_failures": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "gateway_failures": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "unknown": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "physical_requests": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "encoded_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "decoded_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "source_successes",
+                "source_failures",
+                "gateway_failures",
+                "unknown",
+                "physical_requests",
+                "encoded_bytes",
+                "decoded_bytes"
+              ]
+            }
+          },
+          "by_key_and_state": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key_id": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "operations": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "reserved_or_actual_requests": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "reserved_or_actual_encoded_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "held_tunnel_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "observed_tunnel_bytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "estimated_micro_usd": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "unknown_estimate_operations": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "known_invoice_micro_usd": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "unknown_invoice_operations": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "key_id",
+                "state",
+                "operations",
+                "reserved_or_actual_requests",
+                "reserved_or_actual_encoded_bytes",
+                "held_tunnel_bytes",
+                "observed_tunnel_bytes",
+                "estimated_micro_usd",
+                "unknown_estimate_operations",
+                "known_invoice_micro_usd",
+                "unknown_invoice_operations"
+              ]
+            }
+          },
+          "request_credits": {
+            "type": "object",
+            "properties": {
+              "granted": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "available": {
+                "type": "integer"
+              },
+              "reserved": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "settled": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "held": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "released": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "unit": {
+                "type": "string"
+              },
+              "basis": {
+                "type": "string"
+              },
+              "commercial_enabled": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "granted",
+              "available",
+              "reserved",
+              "settled",
+              "held",
+              "released",
+              "unit",
+              "basis",
+              "commercial_enabled"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "const": "v2_project_lifetime"
+          },
+          "application_acceptance": {
+            "type": "string",
+            "const": "not_measured"
+          },
+          "invoice_basis": {
+            "type": "string",
+            "const": "unknown_until_authoritative_reconciliation"
+          },
+          "paid_credits": {
+            "$ref": "#/components/schemas/PaidCreditBalance",
+            "description": "Managed projects only. Prepaid credit balance."
+          },
+          "credit_balance": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaidCreditBalance"
+              }
+            ],
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "const": "unified"
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "description": "Present when trial and purchased credits share one balance."
+          }
+        },
+        "required": [
+          "project",
+          "key_id",
+          "entitlement",
+          "outcomes",
+          "outcomes_by_key",
+          "by_key_and_state",
+          "scope",
+          "application_acceptance",
+          "invoice_basis"
+        ]
+      },
+      "Artifact": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ResourceId"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Evidence kind such as native_response, download, browser_response, rendered_dom or browser_screenshot."
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Source status associated with this evidence, when available."
+          },
+          "encoded_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "decoded_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "encoded_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "decoded_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "content_encoding": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decoding_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/ResourceId"
+          },
+          "url": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "GET",
+              "HEAD",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE"
+            ]
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "description": "Retained source or generated artifact headers. Treat full artifact contents as sensitive."
+          },
+          "raw_headers": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "captured_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "encoded_body_base64": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "contentEncoding": "base64"
+          },
+          "decoded_body_base64": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "contentEncoding": "base64"
+          },
+          "tunnel_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "provider_status": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "encoded_size_basis": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "original_encoded_available": {
+            "type": "boolean"
+          },
+          "generated": {
+            "type": "boolean"
+          },
+          "main_document": {
+            "type": "boolean"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "request": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Browser request metadata when retained."
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "encoded_sha256",
+          "decoded_sha256",
+          "encoded_bytes",
+          "decoded_bytes",
+          "content_encoding",
+          "decoding_error",
+          "operation_id",
+          "url",
+          "method",
+          "headers",
+          "raw_headers",
+          "captured_at",
+          "encoded_body_base64",
+          "decoded_body_base64",
+          "tunnel_bytes",
+          "provider_status"
+        ]
+      },
+      "PaidCreditQuote": {
+        "type": "object",
+        "description": "Prepaid credit reservation for one billing block or the requested ceiling.",
+        "properties": {
+          "tariff_version": {
+            "type": "string"
+          },
+          "route_class": {
+            "$ref": "#/components/schemas/ProxyClass"
+          },
+          "block_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "credits_per_block": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_transfer_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reserved_credits": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "tariff_version",
+          "route_class",
+          "block_bytes",
+          "credits_per_block",
+          "max_transfer_bytes",
+          "reserved_credits"
+        ]
+      },
+      "PaidCreditAttribution": {
+        "type": "object",
+        "description": "Prepaid credits reserved and settled for this operation.",
+        "properties": {
+          "unit": {
+            "type": "string",
+            "const": "credits"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "prepaid_http_wire_credits",
+              "prepaid_logical_operation_credits"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "description": "Reservation state, such as reserved, held, settled or released."
+          },
+          "reserved_credits": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "used_credits": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "billable_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "billable_blocks": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "settlement_basis": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "policy_version": {
+            "type": "string"
+          },
+          "tariff_version": {
+            "type": "string"
+          },
+          "route_class": {
+            "type": "string"
+          },
+          "block_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "credits_per_block": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "max_transfer_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        },
+        "required": [
+          "unit",
+          "basis",
+          "state",
+          "reserved_credits",
+          "used_credits",
+          "billable_bytes",
+          "settlement_basis",
+          "policy_version",
+          "tariff_version",
+          "route_class",
+          "block_bytes",
+          "credits_per_block",
+          "max_transfer_bytes"
+        ]
+      },
+      "TransferLimits": {
+        "type": "object",
+        "properties": {
+          "min_transfer_mb": {
+            "type": "number"
+          },
+          "max_transfer_mb": {
+            "type": "number"
+          },
+          "step_mb": {
+            "type": "number"
+          },
+          "max_encoded_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_decoded_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "body_limit_basis": {
+            "type": "string"
+          },
+          "default_transfer_policy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "min_transfer_mb",
+          "max_transfer_mb",
+          "step_mb",
+          "max_encoded_bytes",
+          "max_decoded_bytes",
+          "body_limit_basis",
+          "default_transfer_policy"
+        ]
+      },
+      "PaidCreditBalance": {
+        "type": "object",
+        "properties": {
+          "unit": {
+            "type": "string",
+            "const": "credits"
+          },
+          "reserved": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "held": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "used": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "granted": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "available": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "revoked_unused": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "payment_hold": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "unit",
+          "reserved",
+          "held",
+          "used",
+          "granted",
+          "available",
+          "revoked_unused",
+          "payment_hold"
+        ]
+      },
+      "RenderPreparationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12000,
+            "description": "Public HTTPS target to render."
+          },
+          "proxy": {
+            "$ref": "#/components/schemas/ProxySelection"
+          }
+        },
+        "required": [
+          "url",
+          "proxy"
+        ]
+      },
+      "RenderPreparation": {
+        "type": "object",
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "description": "True when the returned profile, route and quote can be used now. Admission checks again before dispatch."
+          },
+          "execution": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "browser",
+              null
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Normalized target to submit to POST /v2/render."
+          },
+          "access_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProfileReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "credits": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "max_estimated_micro_usd": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "credits",
+                  "max_estimated_micro_usd"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "field",
+                "code",
+                "message"
+              ]
+            }
+          }
+        },
+        "required": [
+          "ready",
+          "execution",
+          "url",
+          "access_profile",
+          "quote",
+          "errors"
+        ]
+      },
+      "ScrapeFormat": {
+        "type": "string",
+        "enum": [
+          "markdown",
+          "html",
+          "rawHtml",
+          "links"
+        ]
+      },
+      "ScrapeRequest": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 12000,
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]://"
+          },
+          "formats": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "default": [
+              "markdown"
+            ],
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ScrapeFormat"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "$ref": "#/components/schemas/ScrapeFormat"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "onlyMainContent": {
+            "type": "boolean",
+            "default": true
+          },
+          "waitFor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2000,
+            "default": 0,
+            "description": "Additional settle time in milliseconds, subject to the access profile limit."
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 300000,
+            "description": "Requested browser operation deadline in milliseconds, capped by the access profile and existing dispatch limits."
+          },
+          "origin": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "Discarded SDK attribution."
+          },
+          "integration": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "Discarded SDK attribution."
+          },
+          "mobile": {
+            "type": "boolean",
+            "const": false,
+            "description": "Discarded Python SDK default."
+          },
+          "removeBase64Images": {
+            "type": "boolean",
+            "const": true,
+            "description": "Discarded Python SDK default."
+          },
+          "fastMode": {
+            "type": "boolean",
+            "const": false,
+            "description": "Discarded Python SDK default."
+          },
+          "blockAds": {
+            "type": "boolean",
+            "const": true,
+            "description": "Discarded Python SDK default."
+          },
+          "maxAge": {
+            "type": "integer",
+            "const": 14400000,
+            "description": "Discarded Python SDK default."
+          },
+          "storeInCache": {
+            "type": "boolean",
+            "const": true,
+            "description": "Discarded Python SDK default."
+          }
+        }
+      },
+      "ScrapeMetadata": {
+        "type": "object",
+        "required": [
+          "sourceURL",
+          "url",
+          "statusCode"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "sourceURL": {
+            "type": "string",
+            "format": "uri"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "statusCode": {
+            "type": "integer"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          }
+        }
+      },
+      "ScrapeDocument": {
+        "type": "object",
+        "required": [
+          "metadata"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "metadata": {
+            "$ref": "#/components/schemas/ScrapeMetadata"
+          },
+          "markdown": {
+            "type": "string"
+          },
+          "html": {
+            "type": "string"
+          },
+          "rawHtml": {
+            "type": "string"
+          },
+          "links": {
+            "type": "array",
+            "maxItems": 1024,
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        }
+      },
+      "ScrapeSuccess": {
+        "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/ScrapeDocument"
+          }
+        }
+      },
+      "ScrapeFailure": {
+        "type": "object",
+        "required": [
+          "success",
+          "code",
+          "error"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": false
+          },
+          "code": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
