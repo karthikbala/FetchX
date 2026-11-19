@@ -115,7 +115,9 @@ class FakeCloud:
         self.calls.append("create_snapshot")
         if not any(s["id"] == server_id and s["status"] == "off" for s in self.servers):
             raise AssertionError("snapshots are taken only from a powered-off bake VM")
-        image = dict(id=900 + len(self.images), type="snapshot", status="creating", labels=dict(labels), description=description, disk_size=40.0)
+        server = next(s for s in self.servers if s["id"] == server_id)
+        disk = next(t["disk"] for t in self.server_types()["server_types"] if t["id"] == server["server_type"]["id"])
+        image = dict(id=900 + len(self.images), type="snapshot", status="creating", labels=dict(labels), description=description, disk_size=float(disk))
         self.images.append(image)
         if self.snapshot_error:
             raise self.snapshot_error
@@ -351,6 +353,49 @@ class ControllerTests(unittest.TestCase):
         self.tick(700)
         self.assertIsNone(self.controller.ledger.meta("snapshot"))
         self.assertEqual(self.controller.ledger.meta("bake_started_at"), self.now, "a new bake starts at once")
+
+    def test_bake_uses_the_smallest_disk_and_rebakes_when_a_smaller_type_returns(self):
+        self.options_fixture()
+        for t in self.cloud.types:
+            t["disk"] = 40 if t["name"] == "cx23" else 80
+        self.snapshots_on()
+        self.controller.config["bake_check_seconds"] = 900
+        self.run_bake()
+        first = self.bake_record()
+        self.assertEqual(first["machine"]["server_type"], "cpx22", "cx23 is out of stock: the cheapest available")
+        self.assertEqual(self.controller.ledger.meta("snapshot")["disk_gb"], 80)
+        # Nothing smaller in stock: no re-bake, however often it is checked.
+        self.tick(1000)
+        self.tick(1000)
+        self.assertEqual(len([r for r in self.controller.ledger.records() if r.get("purpose") == "bake"]), 1)
+        # The 40 GB type is back: bake again on it, then retire the 80 GB snapshot.
+        self.cloud.types[0]["locations"][0]["available"] = True
+        self.tick(1000)
+        bakes = [r for r in self.controller.ledger.records() if r.get("purpose") == "bake"]
+        self.assertEqual(len(bakes), 2)
+        newer = next(r for r in bakes if r["id"] != first["id"])
+        self.assertEqual(newer["machine"]["server_type"], "cx23")
+        for _ in range(3):
+            self.tick()
+        self.power_off()
+        for _ in range(2):
+            self.tick()
+        self.cloud.images[-1]["status"] = "available"
+        self.tick()
+        self.assertEqual(self.controller.ledger.meta("snapshot")["disk_gb"], 40)
+        self.assertEqual([i["id"] for i in self.cloud.images], [901], "the 80 GB snapshot is deleted")
+        # At the smallest size there is nothing left to improve.
+        self.tick(5000)
+        self.assertEqual(len([r for r in self.controller.ledger.records() if r.get("purpose") == "bake"]), 2)
+
+    def test_snapshot_bakes_prefer_the_smallest_disk_over_price(self):
+        self.options_fixture()
+        for t in self.cloud.types:
+            t["disk"] = {"cx23": 40, "cx33": 80, "cpx22": 160, "ccx13": 80}[t["name"]]
+        cheapest = select_machine(self.cloud.server_types(), self.cloud.price, self.controller.config, {}, self.now)
+        smallest = select_machine(self.cloud.server_types(), self.cloud.price, self.controller.config, {}, self.now, smallest_disk=True)
+        self.assertEqual((cheapest["server_type"], cheapest["disk_gb"]), ("cpx22", 160))
+        self.assertEqual((smallest["server_type"], smallest["disk_gb"]), ("ccx13", 80), "cx23 and cx33 are out of stock")
 
     def test_placement_rejection_keeps_the_snapshot_and_cools_the_type(self):
         self.snapshots_on()

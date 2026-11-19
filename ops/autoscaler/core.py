@@ -32,7 +32,7 @@ def validate_config(raw):
                     poll_seconds=5, worker_lease_seconds=180, renew_seconds=60,
                     drain_before_expiry_seconds=90, hard_delete_grace_seconds=60,
                     max_vm_egress_bytes=1073741824, machine_cooldown_seconds=120,
-                    snapshot_boot=False, bake_timeout_seconds=1800, bake_retry_seconds=3600)
+                    snapshot_boot=False, bake_timeout_seconds=1800, bake_retry_seconds=3600, bake_check_seconds=900)
     for key, value in defaults.items():
         c.setdefault(key, value)
     if type(c["enabled"]) is not bool:
