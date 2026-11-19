@@ -11,7 +11,10 @@ const ROUTES=['direct','datacenter','residential'];
 const METHODS={http:['GET','HEAD'],browser:['GET']};
 const HTTP_HEADERS=['accept','accept-language','user-agent'];
 const LIMITS={max_requests:32,max_encoded_bytes:2097152,max_decoded_bytes:8388608,max_session_encoded_bytes:16777216,max_input_bytes:1,max_tunnel_bytes:4194304,max_redirects:2,max_expansion_ratio:100,timeout_ms:30000,min_interval_ms:250,ttl_seconds:900};
-const BROWSER={enabled:true,max_requests:32,max_network_bytes:8388608,max_decoded_bytes:8388608,max_dom_bytes:1048576,settle_ms:750};
+// Managed render runs modern pages: their scripts, styles and data calls on
+// other public origins load (images and fonts on those origins stay blocked),
+// and callers may wait up to max_wait_ms for client-side rendering to settle.
+const BROWSER={enabled:true,max_requests:96,max_network_bytes:8388608,max_decoded_bytes:8388608,max_dom_bytes:1048576,settle_ms:750,max_wait_ms:10000,subresources:'public'};
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const COUNTRY=/^[A-Z]{2}$/;
 const plain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
@@ -78,7 +81,8 @@ function buildProfile(project,policy,origin,execution){
   id:PLAYGROUND_PREFIX+sha(JSON.stringify([project,policy.version,origin,execution])),version:1,kind:'playground',
   playground_execution:execution,playground_policy_version:policy.version,
   origins:[origin],paths:['^/'],methods:methods(execution),method_paths:Object.fromEntries(methods(execution).map(method=>[method,['^/']])),
-  headers:headers(execution),credential_headers:[],proxy_classes,countries:[...new Set([...mode.datacenter,...mode.residential])].sort(),limits:{...policy.limits},
+  headers:headers(execution),credential_headers:[],proxy_classes,countries:[...new Set([...mode.datacenter,...mode.residential])].sort(),
+  limits:{...policy.limits,...(execution==='browser'?{max_requests:Math.max(policy.limits.max_requests,policy.browser.max_requests)}:{})},
   ...(execution==='browser'?{browser_probe:{...policy.browser},
    ...(policy.browserResidentialProviderPolicy?{browser_residential_provider_policy:policy.browserResidentialProviderPolicy}:{})}:{})
  };
@@ -246,7 +250,7 @@ async function inspectMode(v2,project,policy,execution,origin){
  }
  const usable=Object.values(routes).some(route=>route.available);
  const needsTarget=Object.values(routes).some(route=>route.reason==='playground_target_required');
- return {execution:{id:execution,available:usable,reason:usable?null:disabled??(needsTarget?'playground_target_required':'playground_no_route'),methods:methods(execution),headers:headers(execution),...(execution==='browser'?{max_wait_ms:BROWSER.settle_ms}:{})},routes,quotes,issues,profile};
+ return {execution:{id:execution,available:usable,reason:usable?null:disabled??(needsTarget?'playground_target_required':'playground_no_route'),methods:methods(execution),headers:headers(execution),...(execution==='browser'?{max_wait_ms:BROWSER.max_wait_ms,default_wait_ms:BROWSER.settle_ms}:{})},routes,quotes,issues,profile};
 }
 
 async function inspect(v2,project,origin,selectedExecution){

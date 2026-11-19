@@ -52,8 +52,11 @@ Native browser probes require a provisioned credential with the applicable
 profile and runtime policy.
 Use `direct` with `country: null`, or an approved `datacenter` or `residential`
 route with an uppercase country code. The optional `wait_ms` is an integer from
-zero through the profile's post-load wait limit, at most 2,000 milliseconds.
-Omission uses the profile default. `screenshot` defaults to `false` and captures
+zero through the profile's wait ceiling (`max_wait_ms`), at most 15,000
+milliseconds. Render preparation returns the ceiling as `execution.max_wait_ms`
+and the default as `execution.default_wait_ms`; read them instead of guessing.
+Managed (Playground) render allows up to 10,000 ms. Omission uses the profile
+default. `screenshot` defaults to `false` and captures
 a bounded 1 MiB viewport JPEG when enabled. The optional spending ceiling
 covers both the provider estimate and the maximum customer traffic reservation.
 
@@ -73,11 +76,41 @@ headers excluded. `artifacts` lists the retained browser responses and generated
 DOM. When retained, the generated `browser_screenshot` entry also includes
 `content_type: "image/jpeg"` and `body_base64`. Treat returned HTML as inert text.
 
-`usage` records browser requests, blocked requests, bytes, duration and
-accounting as available. For managed keys, `usage.accounting.request_credits`
-shows the original attribution and reservation state. Known challenge markers
-can produce `source_challenge` with a source HTTP 200. The result always reports
+`usage` records browser requests, blocked requests and their reasons
+(`blocked_reasons`), the number of other public origins that served
+subresources (`subresource_origins`), bytes, duration and accounting as
+available. `browser` names the engine and version that rendered the page. For
+managed keys, `usage.accounting.request_credits` shows the original attribution
+and reservation state. The result always reports
 `application_acceptance: "not_evaluated"`.
+
+### Subresources on other origins
+
+A browser profile's `subresources` policy decides whether the page may load
+scripts, stylesheets and `fetch`/XHR GET requests from other origins.
+`same_origin` (the default for operator profiles) blocks them. `public` (the
+Managed render default) admits them when the origin is public HTTPS on port 443
+and every DNS answer is a public address. They count against the same request,
+byte and provider rules as first-party requests. Cookies, credentials, frames,
+documents, images, fonts and non-GET methods on other origins stay blocked.
+
+### Challenges, rate limits and cooldowns
+
+A recognised bot-manager interstitial is `source_challenge` whatever its HTTP
+status, including 200, 202, 403 and 429. `error.details.vendor` names the
+vendor when it can be attributed (`datadome`, `cloudflare`, `aws_waf`, `human`,
+`amazon`, otherwise `unknown`) and `error.details.http_status` keeps the source
+status. On a datacenter or direct route, `retry.next_action` is
+`consider_residential_new_request` with a `suggested_proxy`: prepare again for
+that route, then send a new request with a new idempotency key after any
+`retry_after`. A plain 429 stays `source_rate_limited`.
+
+A 429 puts the source origin on a cooldown shared by all callers: the
+`Retry-After` value when present, otherwise 60 seconds, or 15 seconds when the
+429 body is a challenge page. While it lasts, requests fail with
+`source_cooldown`, and `error.details` carries `scope: "origin"`, `origin`,
+`cooldown_until` and `retry_after_seconds` (also in `retry.retry_after`). Wait
+until then; repeating the request earlier only fails again.
 
 Datacenter estimates for browser traffic require explicit operator review. A
 scoped `datacenterPricingAttestations` entry uses `schema_version: 2` and

@@ -23,8 +23,10 @@ export async function browserRelay({profile,resolve,pinnedDestinations=null,prox
   try{
    if(closed||error||Date.now()>=deadline||head.length||!/^([a-z0-9.-]+):443$/.test(req.url)||connections>=limits.max_requests)throw new GatewayError('browser_connect_rejected');
    const hostname=req.url.slice(0,-4);
-   if(!profile.origins.some(origin=>new URL(origin).hostname===hostname))throw new GatewayError('browser_connect_rejected');
    const pinned=pinnedDestinations?.get(hostname);
+   // Other hosts are reachable only through a pin the gateway admitted as a
+   // public subresource for this operation (DNS and address checks done).
+   if(!profile.origins.some(origin=>new URL(origin).hostname===hostname)&&!(pinned?.subresource===true&&pinned.permits>0))throw new GatewayError('browser_connect_rejected');
    if(pinnedDestinations&&!(pinned?.permits>0))throw new GatewayError('browser_connect_rejected');
    if(pinned)pinned.permits--;
    connections++;

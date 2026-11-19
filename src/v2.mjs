@@ -1,7 +1,7 @@
 import {randomUUID,randomBytes} from 'node:crypto';
 import {CookieJar} from 'tough-cookie';
 import {sha} from './crypto.mjs';
-import {ID,GatewayError,fail,checkedHeaders} from './policy.mjs';
+import {ID,GatewayError,fail,checkedHeaders,SOURCE_COOLDOWN_SECONDS,CHALLENGE_COOLDOWN_SECONDS} from './policy.mjs';
 import {providerProxy,paidResidentialLedgerSql,reviewedPaidResidentialBudget} from './residential.mjs';
 import {nativeHttp,pinnedDestination,decodeNative,PAID_WIRE_READ_BYTES} from './v2-http.mjs';
 import {createSourceResolver,reviewedPaidDns,resolvePaidSource} from './v2-dns.mjs';
@@ -10,6 +10,7 @@ import {safeFailure,proxyRefusedBeforeConnect} from './v2-diagnostics.mjs';
 import {DISCOVERY_PREFIX,discoveryPolicy,discoveryOrigins,discoveryProfileBody,assertDiscoveryCeiling} from './v2-discovery.mjs';
 import {browserProbePolicy,browserProbePoolRuntime,browserProbeRuntime,BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
 import {browserRelay} from './v2-browser-relay.mjs';
+import {sourceChallenge} from './source-challenge.mjs';
 import {runBrowserProbe} from './v2-browser-runner.mjs';
 import {browserProbeOperation} from './v2-browser-operation.mjs';
 import {BrowserWorkerPool} from './v2-browser-pool.mjs';
@@ -109,6 +110,15 @@ function operationSummary(result){
  return {source_http_status:result.status??null,physical_requests:result.physical_requests??null,encoded_bytes:result.encoded_bytes??null,decoded_bytes:result.decoded_bytes??null,tunnel_bytes:result.tunnel_bytes??null,diagnostics:result.diagnostics??null};
 }
 const operationExecution=kind=>kind==='browser_probe'?'browser':'http';
+
+// Origin cooldowns are shared source protection. Failures name the scope and
+// expiry so a caller can schedule its next attempt instead of probing.
+export function cooldownFailure(hostname,until){
+ const e=new GatewayError('source_cooldown',429),at=new Date(until);
+ const seconds=Math.max(1,Math.ceil((at.getTime()-Date.now())/1000));
+ e.details={scope:'origin',origin:hostname,cooldown_until:at.toISOString(),retry_after_seconds:seconds};
+ throw e;
+}
 
 export class V2Gateway{
  constructor(gateway,{http=nativeHttp,dnsHttp=nativeHttp,browserRuntime=browserProbeRuntime,browserRunner=runBrowserProbe,relayFactory=browserRelay}={}){this.gateway=gateway;this.store=gateway.store;this.config=gateway.config;this.sealer=gateway.sealer;this.http=http;this.resolve=createSourceResolver(this.config.v2?.dns,{systemLookup:gateway.resolve,http:dnsHttp});Object.assign(this,{browserRuntime,browserRunner,browserRelay:relayFactory});
@@ -628,7 +638,7 @@ export class V2Gateway{
    const source='origin:'+url.hostname;await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[source]);
    await c.query('INSERT INTO source_limits(source) VALUES($1) ON CONFLICT DO NOTHING',[source]);
    const row=(await c.query('SELECT * FROM source_limits WHERE source=$1 FOR UPDATE',[source])).rows[0];
-   if(new Date(row.cooldown_until)>new Date())fail('source_cooldown',429);
+   if(new Date(row.cooldown_until)>new Date())cooldownFailure(url.hostname,row.cooldown_until);
    const at=Math.max(Date.now(),new Date(row.next_at).getTime());if(at>=deadline)fail('source_pacing_deadline',429);
    await c.query('UPDATE source_limits SET next_at=$2 WHERE source=$1',[source,new Date(at+limits.min_interval_ms)]);return Math.max(0,at-Date.now());
   });
@@ -648,7 +658,8 @@ export class V2Gateway{
    const row=(await c.query('SELECT s.state,s.expires_at,o.state AS operation_state FROM v2_sessions s JOIN v2_operations o ON o.session_id=s.id WHERE s.id=$1 AND s.project=$2 AND o.id=$3',[session,project,id])).rows[0];
    if(!row||!['reserved','running'].includes(row.operation_state))fail('operation_not_dispatchable',409);
    if(row.state!=='open'||new Date(row.expires_at)<=new Date())fail('session_expired',409);
-   if((await c.query('SELECT 1 FROM source_limits WHERE source=$1 AND cooldown_until>now()',['origin:'+url.hostname])).rowCount)fail('source_cooldown',429);
+   const cooling=(await c.query('SELECT cooldown_until FROM source_limits WHERE source=$1 AND cooldown_until>now()',['origin:'+url.hostname])).rows[0];
+   if(cooling)cooldownFailure(url.hostname,cooling.cooldown_until);
    if(pricingContext?.paidQuote&&!this.approvedPaidRoute(project,pricingContext.profile,pricingContext.route))fail('paid_credit_route_forbidden',403);
    if(pricingContext?.paidQuote||pricingContext?.fixedCredits)await this.controlPaidCredits.assertDispatch(c,{project,operation:id});
    this.assertPricingDispatch(project,pricingContext);
@@ -677,10 +688,14 @@ export class V2Gateway{
   try{return await Promise.race([pinnedDestination(raw,p,resolve,{addressPreference:context?.addressPreference}),new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(new GatewayError('dns_deadline',504)),Math.max(1,deadline-Date.now()));})]);}
   finally{clearTimeout(timer);}
  }
- async cooldown(url,response){
+ // A 429 without Retry-After first takes a short provisional cooldown. Once the
+ // body is known, a plain rate limit extends it to the full default; a bot
+ // challenge served with 429 keeps the short one, because the block is tied to
+ // the route/fingerprint and the caller's remedy is a different route.
+ async cooldown(url,response,{fallbackSeconds=SOURCE_COOLDOWN_SECONDS}={}){
   if(response.status!==429&&!response.headers['retry-after'])return;
   const raw=response.headers['retry-after'],s=/^\d+$/.test(raw??'')?Number(raw):Math.ceil((Date.parse(raw)-Date.now())/1000);
-  const until=new Date(Date.now()+Math.min(3600,Math.max(1,Number.isFinite(s)?s:60))*1000);
+  const until=new Date(Date.now()+Math.min(3600,Math.max(1,Number.isFinite(s)?s:fallbackSeconds))*1000);
   await this.store.pool.query('INSERT INTO source_limits(source,next_at,cooldown_until) VALUES($1,$2,$2) ON CONFLICT(source) DO UPDATE SET next_at=GREATEST(source_limits.next_at,EXCLUDED.next_at),cooldown_until=GREATEST(source_limits.cooldown_until,EXCLUDED.cooldown_until)',['origin:'+url.hostname,until]);
  }
  async admitNativeRetry(project,id,session,p,route,plan,pricingContext,deadline,attempt){
@@ -701,7 +716,8 @@ export class V2Gateway{
    if((await c.query('SELECT 1 FROM v2_operations WHERE session_id=$1 AND id<>$2 LIMIT 1',[session.id,id])).rowCount)fail('retry_ineligible',409);
    const cookies=CookieJar.deserializeSync(this.sealer.open(locked.cookie_jar)).serializeSync().cookies;
    if(cookies.length)fail('retry_ineligible',409);
-   if((await c.query('SELECT 1 FROM source_limits WHERE source=$1 AND cooldown_until>now()',['origin:'+new URL(attempt.url).hostname])).rowCount)fail('source_cooldown',429);
+   const cooling=(await c.query('SELECT cooldown_until FROM source_limits WHERE source=$1 AND cooldown_until>now()',['origin:'+new URL(attempt.url).hostname])).rows[0];
+   if(cooling)cooldownFailure(new URL(attempt.url).hostname,cooling.cooldown_until);
    this.assertPricingDispatch(project,nextPricing);
    const admitted=await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'native_retry_admitted',$2) ON CONFLICT DO NOTHING RETURNING id",[id,{attempt:1,route_changed:true,reason:attempt.reason,diagnostics:attempt.diagnostics}]);
    if(admitted.rowCount!==1)fail('retry_already_admitted',409);
@@ -744,6 +760,7 @@ export class V2Gateway{
    if(wire>wireCap)fail('max_transfer_bytes_exceeded',502);
    return response;
   };
+  let cooldownDetails=null;
   for(let attempt=1;attempt<=2;attempt++){
    const start={requests,dnsRequests,encoded,decoded,tunnel,dns:dns.length,artifacts:artifacts.length};let caught=null;
    try{
@@ -819,7 +836,7 @@ export class V2Gateway{
      if(!paidQuote&&tunnel!==null)tunnel=Number.isSafeInteger(response.tunnel_bytes)&&response.tunnel_bytes>=0&&Number.isSafeInteger(tunnel+response.tunnel_bytes)?tunnel+response.tunnel_bytes:null;
      stage='response_accounting';
      if(!publicUrl)for(const value of response.headers['set-cookie']??[])await jar.setCookie(value,destination.url.href,{ignoreError:true});
-     await this.cooldown(destination.url,response);
+     await this.cooldown(destination.url,response,{fallbackSeconds:CHALLENGE_COOLDOWN_SECONDS});
      let body=null,decodingError=null;
      stage='content_decoding';
      try{
@@ -831,6 +848,7 @@ export class V2Gateway{
       if(publicUrl&&output.length>remainingDecoded)fail('decoded_body_limit',502);
       body=output;decoded+=body.length;
      }catch(e){decodingError=e instanceof GatewayError?e.code:'content_decoding_failed';}
+     if(response.status===429&&!response.headers['retry-after']&&!sourceChallenge({status:429,headers:response.headers,body,url:current.url}))await this.cooldown(destination.url,response);
      const artifact={id:randomUUID(),operation_id:id,kind:/attachment/i.test(response.headers['content-disposition']??'')?'download':'native_response',url:current.url,method:current.method,status:response.status,headers:response.headers,raw_headers:response.raw_headers??null,captured_at:new Date().toISOString(),content_encoding:response.headers['content-encoding']??'identity',encoded_body_base64:response.encoded.toString('base64'),decoded_body_base64:body?.toString('base64')??null,encoded_bytes:response.encoded.length,decoded_bytes:body?.length??null,encoded_sha256:sha(response.encoded),decoded_sha256:body?sha(body):null,tunnel_bytes:response.tunnel_bytes??null,provider_status:response.provider_status??null,decoding_error:decodingError,...(retryPlan?{attempt}:{})};
      this.rejectSecrets(artifact);
      stage='artifact_storage';
@@ -855,7 +873,7 @@ export class V2Gateway{
      }
      break;
     }
-   }catch(e){caught=e;error=e instanceof GatewayError?e.code:'operation_internal_error';if(proxyRefusedBeforeConnect(e))stage='proxy_connect';failure=safeFailure(e,stage,{dispatched:requests>start.requests});unknown=paidQuote?paidUnknown||(nativeDispatches>0||dnsRequests>dnsNotDispatched)&&error==='operation_internal_error':dnsUncertain||requests>0&&/unknown|incomplete|internal_error/.test(error);}
+   }catch(e){caught=e;error=e instanceof GatewayError?e.code:'operation_internal_error';cooldownDetails=e instanceof GatewayError&&e.code==='source_cooldown'?e.details??null:null;if(proxyRefusedBeforeConnect(e))stage='proxy_connect';failure=safeFailure(e,stage,{dispatched:requests>start.requests});unknown=paidQuote?paidUnknown||(nativeDispatches>0||dnsRequests>dnsNotDispatched)&&error==='operation_internal_error':dnsUncertain||requests>0&&/unknown|incomplete|internal_error/.test(error);}
    const report={attempt,route_changed:attempt>1,stage:failure?.stage??'completed',error,failure,source_status:last?.response.status??null,provider_status:failure?.provider_status??last?.response.provider_status??null,physical_requests:requests-start.requests,dns_requests:dnsRequests-start.dnsRequests,encoded_bytes:encoded-start.encoded,decoded_bytes:decoded-start.decoded,tunnel_bytes:tunnel===null||start.tunnel===null?null:tunnel-start.tunnel,dns:dns.slice(start.dns),artifacts:artifacts.slice(start.artifacts).map(a=>a.id)};
    if(retryPlan)attempts.push(report);
    if(!retryPlan)break;
@@ -876,7 +894,7 @@ export class V2Gateway{
   }
   let extracted={};
   if(!error&&recipe?.json_pointers){try{const value=JSON.parse(last.body.toString('utf8'));extracted=Object.fromEntries(Object.entries(recipe.json_pointers).map(([name,path])=>[name,pointer(value,path)]));}catch{error='recipe_json_invalid';}}
-  const result={status:last?.response.status??null,final_url:last?.url??null,artifacts,extracted,physical_requests:requests,dns_requests:dnsRequests,encoded_bytes:encoded,decoded_bytes:decoded,tunnel_bytes:tunnel,...(paidQuote?{wire_bytes:wire,wire_bytes_lower_bound:wireLower}:{}),provider_status:failure?.provider_status??last?.response.provider_status??null,retry_after:last?.response.headers['retry-after']??null,diagnostics:{stage:failure?.stage??'completed',failure,dns,...(retryPlan?{attempts}:{})},...(retryPlan?{final_artifact_id:finalArtifact,retry:{requested:true,attempts:attempts.length,route_changed:routeChanged,effective_session_id:session.id,stop_reason:stopReason}}:{})};
+  const result={status:last?.response.status??null,final_url:last?.url??null,artifacts,extracted,physical_requests:requests,dns_requests:dnsRequests,encoded_bytes:encoded,decoded_bytes:decoded,tunnel_bytes:tunnel,...(paidQuote?{wire_bytes:wire,wire_bytes_lower_bound:wireLower}:{}),provider_status:failure?.provider_status??last?.response.provider_status??null,retry_after:last?.response.headers['retry-after']??(error==='source_cooldown'&&cooldownDetails?String(cooldownDetails.retry_after_seconds):null),...(error==='source_cooldown'&&cooldownDetails?{cooldown:cooldownDetails}:{}),diagnostics:{stage:failure?.stage??'completed',failure,dns,...(retryPlan?{attempts}:{})},...(retryPlan?{final_artifact_id:finalArtifact,retry:{requested:true,attempts:attempts.length,route_changed:routeChanged,effective_session_id:session.id,stop_reason:stopReason}}:{})};
   await this.store.tx(async c=>{
    const ledger=(await c.query('SELECT * FROM v2_ledger WHERE operation=$1 FOR UPDATE',[id])).rows[0];
    const held=unknown;const requestsAccounted=held?ledger.reserved_requests:requests,encodedAccounted=held?Number(ledger.reserved_encoded_bytes):encoded;

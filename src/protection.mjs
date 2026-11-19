@@ -75,7 +75,7 @@ export function classifyProtection(response={},input={}){
  html=sourceMarkup(html);
  const tags=resources(html);
  const title=/<title\b[^>]*>([^<]{0,300})<\/title\s*>/i.exec(html)?.[1]?.trim()??'';
- const securityTitle=/^(?:just a moment\.{0,3}|security check(?:\s*[|–-].*)?|robot check|verify (?:that )?you are (?:a )?human)$/i.test(title);
+ const securityTitle=/^(?:just a moment\.{0,3}|security check(?:\s*[|–-].*)?|robot check|verify (?:that )?you are (?:a )?human|bot or not\??|attention required!?(?:\s*\|.*)?|pardon our interruption|are you a (?:human|robot)\??)$/i.test(title);
  if(securityTitle)add('security_title');
  const challengeCandidates=[];
  const challenge=(vendor,confidence,signal)=>{present(vendor,confidence,signal);challengeCandidates.push({vendor,confidence});};
@@ -83,11 +83,14 @@ export function classifyProtection(response={},input={}){
  const inlineCloudflare=/\b(?:window\.)?_cf_chl_opt\s*=/.test(html)&&/\.src\s*=\s*["']\/cdn-cgi\/challenge-platform\//.test(html);
  if(securityTitle&&(inlineCloudflare||tags.some(tag=>tag.tag==='script'&&tag.path.startsWith('/cdn-cgi/challenge-platform/'))))challenge('cloudflare','corroborated','cf_interstitial');
  if(tags.some(tag=>tag.tag==='script'&&hostIs(tag.host,'datadome.co')))present('datadome','indicative','dd_tag');
- if(tags.some(tag=>tag.tag==='iframe'&&hostIs(tag.host,'captcha-delivery.com'))&&(status===403||securityTitle))challenge('datadome','corroborated','dd_response_frame');
+ const blockStatus=status===403||status===429;
+ if(tags.some(tag=>tag.tag==='iframe'&&hostIs(tag.host,'captcha-delivery.com'))&&(blockStatus||securityTitle))challenge('datadome','corroborated','dd_response_frame');
+ // DataDome's response page configures its loader with an inline dd={cid,...} object.
+ else if((blockStatus||securityTitle)&&/\bvar\s+dd\s*=\s*\{[^}]{0,2000}['"]cid['"]\s*:/.test(html))challenge('datadome','corroborated','dd_response_frame');
  const aws=headers.get('x-amzn-waf-action')?.trim().toLowerCase();
  if(aws==='challenge')challenge('aws_waf','explicit','aws_challenge');
  if(aws==='captcha')challenge('aws_waf','explicit','aws_captcha');
- if(tags.some(tag=>hostIs(tag.host,'px-cdn.net')&&tag.host.startsWith('captcha.'))&&(status===403||securityTitle))challenge('human','corroborated','human_challenge');
+ if(tags.some(tag=>hostIs(tag.host,'px-cdn.net')&&tag.host.startsWith('captcha.'))&&(blockStatus||securityTitle))challenge('human','corroborated','human_challenge');
  // A site-specific form is only attributed to Amazon on an Amazon source.
  let sourceHost='';try{sourceHost=new URL(input.url).hostname;}catch{}
  if(/^(?:www\.)?amazon\.(?:com|in|co\.uk|de|fr|co\.jp)$/.test(sourceHost)&&tags.some(tag=>tag.tag==='form'&&tag.path==='/errors/validateCaptcha'))challenge('amazon','corroborated','amazon_captcha');
@@ -98,7 +101,7 @@ export function classifyProtection(response={},input={}){
  ])if(matches){result.widgets.push(name);add(name+'_widget');}
  // A widget or cookie may be present on a fully accessible/login page. Neither
  // establishes a blocked response, an IP ban, or the root cause of a challenge.
- if(status===429){add('status_429');return finish('source','rate_limited','unknown','explicit',['honor_source_cooldown']);}
+ if(status===429)add('status_429');
  if(status===401){add('status_401');return finish('source','authentication_required','unknown','explicit',['check_authentication']);}
  const strongest=new Map();
  for(const candidate of challengeCandidates){
@@ -108,8 +111,10 @@ export function classifyProtection(response={},input={}){
  const unique=[...strongest.values()];
  if(unique.length||securityTitle){
   const single=unique.length===1?unique[0]:null;
-  return finish('source','challenge',single?.vendor??'unknown',single?.confidence??'indicative',['inspect_challenge_dependencies','preserve_session_identity','qualify_browser_engine']);
+  // A challenge served with 429 is still a challenge; the cooldown applies too.
+  return finish('source','challenge',single?.vendor??'unknown',single?.confidence??'indicative',[...(status===429?['honor_source_cooldown']:[]),'inspect_challenge_dependencies','preserve_session_identity','qualify_browser_engine']);
  }
+ if(status===429)return finish('source','rate_limited','unknown','explicit',['honor_source_cooldown']);
  if(status===403){add('status_403');return finish('source','access_denied','unknown','explicit',['inspect_denial']);}
  if([404,410].includes(status)){add('status_404_410');return finish('source','source_unavailable','unknown','explicit',['check_source_availability']);}
  if(status>=500){add('status_5xx');return finish('source','upstream_error','unknown','explicit',['inspect_upstream']);}

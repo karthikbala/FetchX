@@ -67,9 +67,12 @@ test('CAPTCHA widgets on a login or product page are not inferred to block colle
  assert.deepEqual(found.widgets,['turnstile','recaptcha','hcaptcha']);assert.equal(found.kind,'no_block_observed');assert.equal(found.vendor,'unknown');
 });
 
-test('source 429 and 401 take priority over a challenge; a response is not an IP ban',()=>{
+test('a 429 challenge is a challenge that also honors cooldown; plain 429 and 401 keep their kinds; a response is not an IP ban',()=>{
  const headers={'cf-mitigated':'challenge'};
- const limited=classify({status:429,headers});
+ const challenged=classify({status:429,headers});
+ assert.equal(challenged.kind,'challenge');assert.equal(challenged.vendor,'cloudflare');assert.equal(challenged.playbooks[0],'honor_source_cooldown');
+ assert.ok(challenged.signals.includes('status_429'));
+ const limited=classify({status:429,headers:{}});
  assert.equal(limited.kind,'rate_limited');assert.equal(limited.vendor,'unknown');assert.deepEqual(limited.playbooks,['honor_source_cooldown']);
  assert.equal(classify({status:401,headers}).kind,'authentication_required');
  assert.equal(classify({status:403,headers:{}}).vendor,'unknown');
