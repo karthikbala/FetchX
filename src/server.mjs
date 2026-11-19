@@ -19,6 +19,7 @@ import {registerApi, apiError} from './api/v1.mjs';
 import {ControlIdentity} from './control-identity.mjs';
 import {isControlRequest, registerControl} from './control.mjs';
 import {ControlStripe, isStripeWebhookRequest, registerStripeWebhook} from './control-stripe.mjs';
+import {loadBudgets} from './budgets.mjs';
 
 // Wires the services for one platform. Tests pass their own fakes in `deps`.
 export function createPlatform({store, config, deps = {}}) {
@@ -100,6 +101,8 @@ async function main() {
     process.exit(1);
   });
   await store.init();
+  const budgets = await loadBudgets(store.pool, config);
+  if (budgets.rejected.length) process.stderr.write(`budgets_rejected:${budgets.rejected.join(',')}\n`);
   const platform = createPlatform({store, config});
   if (!platform.engine.configured) process.stderr.write('engine_not_configured\n');
   const app = server(platform);
@@ -114,6 +117,10 @@ async function main() {
     try { await reconciling; } finally { reconciling = null; }
   }, 30_000);
   reconcile.unref();
+  // Budgets saved in the admin portal by another process.
+  const refresh = setInterval(() => loadBudgets(store.pool, config).catch(() => process.stderr.write('budgets_refresh_failed\n')),
+    30_000);
+  refresh.unref();
   const retention = setInterval(() => platform.front.prune().catch(() => process.stderr.write('retention_failed\n')), 3_600_000);
   retention.unref();
   const port = (name, fallback) => {
@@ -126,6 +133,7 @@ async function main() {
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, async () => {
       clearInterval(reconcile);
+      clearInterval(refresh);
       clearInterval(retention);
       await events.close();
       await app.close();

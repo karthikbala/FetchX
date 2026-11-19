@@ -162,11 +162,46 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
     job.deleted = true;
     return reply.code(204).send();
   });
-  app.get('/internal/v1/status', async () => ({service: 'FetchX engine', release: 'fake', contract: '1.0', browser: {}, captcha: {},
+  app.get('/internal/v1/status', async () => ({service: 'FetchX engine', release: 'fake', contract: '1.1', browser: {}, captcha: {},
     events: {undelivered: outbox.length, oldest_undelivered: null}}));
-  app.all('/internal/v1/admin/*', async (req, reply) => {
+  // Admin: every call is recorded. Budgets (one engine budget) and the audit
+  // trail are kept in memory, enough for the platform's merged list and log;
+  // anything else answers {ok, path}.
+  const record = req => {
     admin.push({method: req.method, path: req.url.slice('/internal/v1/admin'.length), body: req.body ?? null, actor: req.headers['x-fetchx-actor'] ?? null});
-    if (req.method !== 'GET' && !req.headers['x-fetchx-actor']) return refuse(reply, 400, 'actor_required');
+    return req.method === 'GET' || req.headers['x-fetchx-actor'];
+  };
+  const budgets = new Map([['captcha.maxDailyMicroUsd', {key: 'captcha.maxDailyMicroUsd', owner: 'engine', group: 'captcha',
+    unit: 'usd_micro', window: '24h', min: 0, max: 5_000_000, nullable: false, value: 2_000_000, default: 2_000_000, default_source: 'config',
+    source: 'config', valid: true, version: 0, reason: null, updated_by: null, updated_at: null, used: 0}]]);
+  const audit = [];
+  const changeBudget = (req, reply, overridden) => {
+    if (!record(req)) return refuse(reply, 400, 'actor_required');
+    const budget = budgets.get(req.params.key);
+    if (!budget) return refuse(reply, 404, 'budget_unknown');
+    const {value, version, reason} = req.body ?? {};
+    if (version !== budget.version) return refuse(reply, 409, 'budget_version_conflict');
+    if (typeof reason !== 'string' || !reason.trim()) return refuse(reply, 400, 'budget_reason_required');
+    if (overridden && !(Number.isSafeInteger(value) && value >= budget.min && value <= budget.max)) return refuse(reply, 400, 'budget_value_invalid');
+    if (!overridden && budget.source !== 'database') return refuse(reply, 409, 'budget_not_overridden');
+    const before = {value: budget.value, source: budget.source, version: budget.version};
+    Object.assign(budget, overridden ? {value, source: 'database'} : {value: budget.default, source: 'config'},
+      {version: budget.version + 1, reason, updated_by: req.headers['x-fetchx-actor'], updated_at: new Date().toISOString()});
+    audit.push({id: `budget-${audit.length + 1}`, rule_id: `budget:${budget.key}`, action: overridden ? 'set' : 'reset', before,
+      after: {value: budget.value, source: budget.source, version: budget.version}, note: reason, actor: budget.updated_by, at: budget.updated_at});
+    return {budget: {...budget}};
+  };
+  app.get('/internal/v1/admin/budgets', async req => { record(req); return {budgets: [...budgets.values()].map(b => ({...b})), autoscaler: null}; });
+  app.put('/internal/v1/admin/budgets/:key', async (req, reply) => changeBudget(req, reply, true));
+  app.post('/internal/v1/admin/budgets/:key/reset', async (req, reply) => changeBudget(req, reply, false));
+  app.get('/internal/v1/admin/budgets/:key/audit', async (req, reply) => {
+    record(req);
+    if (!budgets.has(req.params.key)) return refuse(reply, 404, 'budget_unknown');
+    return {entries: audit.filter(entry => entry.rule_id === `budget:${req.params.key}`).reverse()};
+  });
+  app.get('/internal/v1/admin/audit', async req => { record(req); return {entries: [...audit].reverse()}; });
+  app.all('/internal/v1/admin/*', async (req, reply) => {
+    if (!record(req)) return refuse(reply, 400, 'actor_required');
     if (req.url.endsWith('/rules/missing')) return refuse(reply, 404, 'rule_not_found');
     return {ok: true, path: req.url.slice('/internal/v1/admin'.length)};
   });

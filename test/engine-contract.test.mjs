@@ -8,7 +8,7 @@ import test from 'node:test';
 import Ajv2020 from 'ajv/dist/2020.js';
 import spec from '../docs/engine-api.json' with {type: 'json'};
 import {ENGINE_CONTRACT} from '../src/engine/client.mjs';
-import {ADMIN_ROUTES} from '../src/control-admin.mjs';
+import {ADMIN_ROUTES, MERGED_ADMIN_ROUTES} from '../src/control-admin.mjs';
 import {databaseUrl, html, openStore, platformFor} from './helpers.mjs';
 
 const ajv = new Ajv2020({allErrors: true, strict: false, validateFormats: false});
@@ -33,12 +33,13 @@ test('the pinned contract is the version the client speaks', () => {
   assert.equal(spec.info.version, ENGINE_CONTRACT);
 });
 
-test('the admin portal forwards exactly the documented admin operations', () => {
+test('the admin portal reaches exactly the documented admin operations', () => {
   const documented = Object.entries(spec.paths).filter(([path]) => path.startsWith('/internal/v1/admin/'))
     .flatMap(([path, methods]) => Object.keys(methods).map(method => `${method.toUpperCase()} ${path.slice('/internal/v1'.length)}`)).sort();
-  const forwarded = ADMIN_ROUTES.map(([method, path]) => `${method} ${path.replace(/:([a-z]+)/g, '{$1}')}`).sort();
+  const routes = [...ADMIN_ROUTES, ...MERGED_ADMIN_ROUTES];
+  const forwarded = routes.map(([method, path]) => `${method} ${path.replace(/:([a-z]+)/g, '{$1}')}`).sort();
   assert.deepEqual(forwarded, documented);
-  for (const [method, path, sendsBody] of ADMIN_ROUTES) {
+  for (const [method, path, sendsBody] of routes) {
     const operation = spec.paths[`/internal/v1${path.replace(/:([a-z]+)/g, '{$1}')}`][method.toLowerCase()];
     assert.equal(Boolean(operation.requestBody), sendsBody, `${method} ${path} body`);
   }

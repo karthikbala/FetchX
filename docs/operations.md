@@ -32,4 +32,5 @@ A release that changed no tables rolls back to the previous image. One that chan
 - **Every fetch answers 503 `unavailable`:** the engine is down, unreachable on `fetchx-internal`, or refuses the service token. `operator.mjs status` shows which; the platform logs `engine_unavailable` with the cause.
 - **Charges lag behind results:** events are not arriving. Check `overdue_settlements` in `operator.mjs status`, the engine's `events.undelivered`, and that both sides hold the same event key. The reconciler settles overdue jobs from the engine meanwhile.
 - **A site that suddenly fails, browser or captcha problems:** these are engine incidents; see the engine's operations guide and the admin portal's site and rule pages.
+- **Captcha, proxy or VM spend, or one customer using too much:** the admin portal's Budgets tab shows every budget, the engine's and the platform's, and how much of each is used. Changes apply at once, without a restart. See [budgets](budgets.md).
 - **A customer disputes a charge:** the request's `attempts` and `credits.charged` are in `GET /v1/fetch/{id}` for 90 days; correct the balance with `operator.mjs credits`.

@@ -19,9 +19,10 @@
 //      a rollback;
 //   4. copies the engine's tables: fetch_requests (project becomes tenant, the
 //      winning attempt becomes usage), fetch_content, fetch_attempts,
-//      routing_rules, routing_rule_audit, site_routes, captcha_solves and
-//      admin_probes. Stored requests and results stay sealed with the
-//      gateway's artifactKey, so the engine must keep that key.
+//      routing_rules, routing_rule_audit, site_routes, captcha_solves,
+//      admin_probes, and the engine's budget overrides and their audit rows
+//      (every key the platform does not own). Stored requests and results stay
+//      sealed with the gateway's artifactKey, so the engine must keep that key.
 // The gateway's copies of the engine tables are left in place; drop them once
 // the engine is verified (see the doc). Requests still pending are copied as
 // pending: the engine closes them as uncertain when it starts and reports
@@ -30,6 +31,7 @@ import {readFile} from 'node:fs/promises';
 import pg from 'pg';
 import {Store} from '../src/store.mjs';
 import {Sealer} from '../src/crypto.mjs';
+import {BUDGET_KEYS} from '../src/budgets.mjs';
 
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');
@@ -44,7 +46,10 @@ const oldSealer = new Sealer(oldConfig.artifactKey);
 const sealer = new Sealer(config.sealingKey);
 
 // The engine's tables, in foreign-key order, with how each row is read from the
-// gateway's table and the key used to page through it.
+// gateway's table and the key used to page through it. `where` keeps only some
+// rows; `optional` tables may be missing in a gateway older than them.
+if (!BUDGET_KEYS.every(key => /^[A-Za-z.]+$/.test(key))) throw new Error('split_budget_keys_invalid');
+const ENGINE_BUDGET = `t.key NOT IN (${BUDGET_KEYS.map(key => `'${key}'`).join(', ')})`;
 const STEP = `a.transport || CASE WHEN a.class = 'residential' THEN '_residential' ELSE '' END`;
 const ENGINE_TABLES = [
   {table: 'fetch_requests', key: ['id'], batch: 200,
@@ -63,6 +68,8 @@ const ENGINE_TABLES = [
   {table: 'site_routes', key: ['host', 'execution', 'proxy_class', 'provider', 'country'], batch: 500},
   {table: 'captcha_solves', key: ['id'], batch: 500},
   {table: 'admin_probes', key: ['id'], batch: 500},
+  {table: 'budget_overrides', key: ['key'], batch: 500, where: ENGINE_BUDGET, optional: true},
+  {table: 'budget_audit', key: ['id'], batch: 500, sequence: 'id', where: ENGINE_BUDGET, optional: true},
 ];
 
 const columnsOf = async (client, table) => (await client.query(`SELECT column_name FROM information_schema.columns
@@ -75,18 +82,21 @@ const count = async (client, sql, params = []) => Number((await client.query(sql
 async function copyTable(source, target, spec) {
   const engineColumns = await columnsOf(target, spec.table);
   if (!engineColumns.length) throw new Error(`split_engine_table_missing:${spec.table}`);
-  const columns = spec.columns ?? (await columnsOf(source, spec.table)).filter(name => engineColumns.includes(name));
+  const sourceColumns = await columnsOf(source, spec.table);
+  if (!sourceColumns.length && spec.optional) return {table: spec.table, source: 0, skipped: 'not_in_gateway'};
+  const columns = spec.columns ?? sourceColumns.filter(name => engineColumns.includes(name));
   const missing = (await requiredOf(target, spec.table)).filter(name => !columns.includes(name));
   if (missing.length) throw new Error(`split_engine_columns_unfilled:${spec.table}:${missing.join(',')}`);
   if (spec.columns && spec.columns.some(name => !engineColumns.includes(name))) throw new Error(`split_engine_columns_unknown:${spec.table}`);
   const select = spec.select ?? columns.map(name => `t.${name}`).join(', ');
   const keyList = spec.key.map(name => `t.${name}`).join(', ');
-  const total = await count(source, `SELECT count(*) FROM ${spec.table}`);
+  const total = await count(source, `SELECT count(*) FROM ${spec.table} t${spec.where ? ` WHERE ${spec.where}` : ''}`);
   if (!apply) return {table: spec.table, source: total};
   let last = null;
   let copied = 0;
   for (;;) {
-    const where = last ? `WHERE (${keyList}) > (${spec.key.map((_, i) => `$${i + 1}`).join(', ')})` : '';
+    const conditions = [...(last ? [`(${keyList}) > (${spec.key.map((_, i) => `$${i + 1}`).join(', ')})`] : []), ...(spec.where ? [spec.where] : [])];
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = (await source.query(`SELECT row_to_json(x) AS row, ${spec.key.map((name, i) => `x.k${i}`).join(', ')} FROM
       (SELECT ${select}, ${spec.key.map((name, i) => `t.${name} AS k${i}`).join(', ')} FROM ${spec.table} t ${where} ORDER BY ${keyList} LIMIT ${spec.batch}) x`,
     last ?? [])).rows;

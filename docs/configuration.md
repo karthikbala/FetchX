@@ -1,6 +1,6 @@
 # Configuration
 
-The platform reads one JSON file, `PLATFORM_CONFIG` (default `/run/secrets/platform.json`), at start. `scripts/init-config.mjs` writes a starting point. Keep it mode 0600, readable only by the service user (UID 10001), and out of Git. Environment: `DATABASE_URL`, `PLATFORM_PORT` (8788) and `PLATFORM_HOST` (0.0.0.0) for the public app, `PLATFORM_EVENTS_PORT` (8789) and `PLATFORM_EVENTS_HOST` (0.0.0.0) for the private engine-events listener.
+The platform reads one JSON file, `PLATFORM_CONFIG` (default `/run/secrets/platform.json`), at start. Limits marked as budgets below can also be changed in the admin portal without a restart; see [budgets](budgets.md). `scripts/init-config.mjs` writes a starting point. Keep it mode 0600, readable only by the service user (UID 10001), and out of Git. Environment: `DATABASE_URL`, `PLATFORM_PORT` (8788) and `PLATFORM_HOST` (0.0.0.0) for the public app, `PLATFORM_EVENTS_PORT` (8789) and `PLATFORM_EVENTS_HOST` (0.0.0.0) for the private engine-events listener.
 
 Fetching is configured in the engine's own `engine.json` (proxies, residential providers, browser, captcha, provider rules, site knowledge); see the engine repository.
 
@@ -21,7 +21,7 @@ Fetching is configured in the engine's own `engine.json` (proxies, residential p
 | `release` | Shown by `/healthz`. |
 | `sealingKey` | 64 hex characters. Seals webhook secrets and queued webhook URLs (AES-256-GCM). Changing it makes them unreadable. |
 | `projects` | Projects provisioned here instead of in the console: `{id: {tokenHash, maxConcurrentRequests?}}`. They are unmetered. |
-| `fetchLimits` | Overrides for `DEFAULT_LIMITS` in `src/fetch/front.mjs`: `maxCredits` (the largest `max_credits`, 100,000), `maxConcurrentPerProject` (10), `maxWireBytes` (the engine's response cap, used for the worst-case reservation), `settleGraceMs` (how long past its deadline a job without an event is looked up, 30 s), `metadataDays` (90). |
+| `fetchLimits` | Overrides for `DEFAULT_LIMITS` in `src/fetch/front.mjs`: `maxCredits` (the largest `max_credits`, 100,000), `maxWireBytes` (the engine's response cap, used for the worst-case reservation), `settleGraceMs` (how long past its deadline a job without an event is looked up, 30 s), `metadataDays` (90). Budgets: `maxCreditsPerRequest` (the most one metered request may reserve, 100,000) and `maxConcurrentPerProject` (10). |
 | `destinations.blockedHosts` | Extra host names customer webhooks are never sent to. `fetchx.ai` and the console origins are always blocked. |
 | `pricing` | Overrides for `DEFAULT_PRICES` in `src/billing/ledger.mjs`; see [billing](billing.md). |
 
@@ -50,8 +50,8 @@ Service token: add the new token's SHA-256 to the engine's `platform.tokenHashes
 | `enabled`, `origins`, `bridgeSecret` | The website origins and the shared secret its bridge sends (at least 32 characters). |
 | `apiBaseUrl` | The public API origin shown in the console and given to Connect clients. |
 | `sessionSecure` | `false` only for loopback development (with `allowLoopbackDevelopment`). |
-| `creditPolicy.trialCredits` | Trial credits per account (1,000, at most 1,000). |
+| `creditPolicy.trialCredits` | Trial credits per account (1,000, at most 1,000). A budget. |
 | `mail`, `google`, `github` | Sign-in methods; see [GitHub sign-in](github-sign-in.md) and [Google sign-in](google-sign-in.md). |
 | `agentConnectEnabled` | The Connect device flow for agents. |
 | `stripe` | Checkout; see [Stripe payments](stripe-payments.md) and [INR UPI](inr-upi-backend.md). |
-| `admin.enabled` | The operator portal at `/app/admin`. Its rules, probes and site pages are forwarded to the engine's admin API, with the operator's email as the actor. |
+| `admin.enabled` | The operator portal at `/app/admin`. Its rules, probes and site pages are forwarded to the engine's admin API, with the operator's email as the actor. Its Budgets tab lists the engine's budgets and the platform's together. |

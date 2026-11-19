@@ -17,10 +17,12 @@ import {randomBytes, randomUUID} from 'node:crypto';
 import {GatewayError, fail} from '../policy.mjs';
 import {Sealer} from '../crypto.mjs';
 import {STEPS, priceOf, worstCaseOf} from '../billing/ledger.mjs';
+import {budget} from '../budgets.mjs';
 
+// Credits one request may reserve and requests at once per project are
+// budgets (src/budgets.mjs), adjustable in the admin portal.
 export const DEFAULT_LIMITS = Object.freeze({
   maxCredits: 100_000,
-  maxConcurrentPerProject: 10,
   // The engine's response cap; the worst case of a residential step pays for it.
   maxWireBytes: 30_000_000,
   // A job's deadline before the engine answers (its longest timeout_ms, 180 s, plus slack).
@@ -99,7 +101,7 @@ export class FetchFront {
   #ceiling({maxCredits, method}) {
     const table = this.ledger.prices;
     const worst = Math.max(...STEPS.map(step => worstCaseOf(table, step, {captcha: method === 'GET', maxWireBytes: this.limits.maxWireBytes})));
-    return Math.min(maxCredits ?? Infinity, worst);
+    return Math.min(maxCredits ?? Infinity, worst, budget(this.config, 'fetch.maxCreditsPerRequest'));
   }
 
   async submit(project, raw, {keyId = null} = {}) {
@@ -118,7 +120,7 @@ export class FetchFront {
         [project])).rows[0].n;
       await client.query(`INSERT INTO fetch_settlements (request, project, key_id, deadline) VALUES ($1, $2, $3, clock_timestamp() + make_interval(secs => $4))`,
         [id, project, keyId, this.limits.provisionalDeadlineMs / 1000]);
-      const cap = this.config.projects?.[project]?.maxConcurrentRequests ?? this.limits.maxConcurrentPerProject;
+      const cap = this.config.projects?.[project]?.maxConcurrentRequests ?? budget(this.config, 'fetch.maxConcurrentPerProject');
       if (running >= cap) {
         admission.busy = running;
         allowed = [];
@@ -169,7 +171,8 @@ export class FetchFront {
     const table = this.ledger.prices;
     const planned = (error.details?.planned_steps ?? []).filter(step => STEPS.includes(step));
     const minimum = Math.min(...(planned.length ? planned : STEPS).map(step => table[step]));
-    if (maxCredits !== null && maxCredits < minimum) {
+    // The request's own max_credits, or the per-request budget, is below the cheapest planned step.
+    if (Math.min(maxCredits ?? Infinity, budget(this.config, 'fetch.maxCreditsPerRequest')) < minimum) {
       return Object.assign(new GatewayError('max_credits_too_low', 402), {details: {min_credits: minimum}});
     }
     return Object.assign(new GatewayError('insufficient_credits', 402), {details: {available: available ?? 0, needed: minimum}});

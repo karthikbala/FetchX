@@ -29,8 +29,13 @@ try {
   } else if (command === 'credits') {
     const credits = Number(arg);
     const note = rest.join(' ');
-    await store.tx(client => new Ledger({store, config: {}}).adjust(client, {project: action, credits, note, actor}));
-    print(await new Ledger({store, config: {}}).balance(action));
+    const ledger = new Ledger({store, config: {}});
+    await store.tx(async client => {
+      // A metered project with no credit account is refused before anything is recorded.
+      await ledger.balance(action, client);
+      await ledger.adjust(client, {project: action, credits, note, actor});
+    });
+    print(await ledger.balance(action));
   } else if (command === 'operators') {
     if (action === 'list') print(await listOperators(store.pool));
     else if (action === 'grant') print(await grantOperator(store, arg, actor));

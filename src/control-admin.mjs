@@ -1,11 +1,14 @@
 // The admin portal: an operator role on control-plane users, and the admin
 // API. Disabled unless controlPlane.admin.enabled is true. Operators are
 // granted out of band with the operator CLI; a project member cannot reach
-// these routes. Provider rules, reachability probes and site knowledge live in
-// the engine: these routes check the operator and forward to the engine's
-// /internal/v1/admin with the operator's email as the actor, and pass the
-// engine's answer (or refusal) back unchanged. Responses never contain secrets.
+// these routes. Provider rules, reachability probes, site knowledge and the
+// engine's spend budgets live in the engine: these routes check the operator
+// and forward to the engine's /internal/v1/admin with the operator's email as
+// the actor, and pass the engine's answer (or refusal) back unchanged. The
+// platform's own budgets (src/budgets.mjs) are kept here, and the budget list
+// and the audit log show both sides together. Responses never contain secrets.
 import {fail} from './policy.mjs';
+import {BUDGET_KEYS,budgetAudit,listBudgets,loadBudgets,resetBudget,setBudget} from './budgets.mjs';
 
 export async function initControlAdmin(pool){await pool.query(`
  CREATE TABLE IF NOT EXISTS control_operators(user_id uuid PRIMARY KEY REFERENCES control_users(id),granted_by text NOT NULL,granted_at timestamptz NOT NULL DEFAULT now());
@@ -44,11 +47,20 @@ export async function listOperators(pool){
 export const ADMIN_ROUTES = Object.freeze([
  ['GET','/admin/rules',false],['POST','/admin/rules',true],['POST','/admin/rules/test',true],['PUT','/admin/rules/:id',true],
  ['POST','/admin/rules/:id/enable',true],['POST','/admin/rules/:id/disable',true],['DELETE','/admin/rules/:id',false],
- ['GET','/admin/rules/:id/audit',false],['GET','/admin/audit',false],
+ ['GET','/admin/rules/:id/audit',false],
  ['GET','/admin/probes',false],['POST','/admin/probes',true],['GET','/admin/probes/:pid',false],['POST','/admin/probes/:pid/apply',true],
  ['GET','/admin/sites',false],['GET','/admin/sites/:host',false],['DELETE','/admin/sites/:host',false],
 ]);
+// Routes that also reach the engine, but merge in the platform's own budgets:
+// a key the platform owns is answered here, any other goes to the engine.
+export const MERGED_ADMIN_ROUTES = Object.freeze([
+ ['GET','/admin/audit',false],['GET','/admin/budgets',false],['PUT','/admin/budgets/:key',true],
+ ['POST','/admin/budgets/:key/reset',true],['GET','/admin/budgets/:key/audit',false],
+]);
 const PARAM=/^[A-Za-z0-9._-]{1,253}$/;
+// A budget change as an audit-log row, in the shape of the engine's rows.
+const budgetEntry=e=>({id:'budget-'+e.id,rule_id:'budget:'+e.key,action:e.action,before:e.before,after:e.after,note:e.reason,actor:e.actor,at:e.at});
+const newestFirst=(a,b)=>new Date(b.at)-new Date(a.at);
 
 export function registerAdminRoutes(route,{gateway,config,authenticated,body,noQuery}){
  const store=gateway.store;
@@ -68,5 +80,41 @@ export function registerAdminRoutes(route,{gateway,config,authenticated,body,noQ
   });
   const input=sendsBody?body(req,Object.keys(req.body??{})):undefined;
   return gateway.engine.admin(method,target,{body:input,actor:method==='GET'?undefined:auth.user.email});
+ });
+
+ // ---- One audit log and one budget list across the platform and the engine ----
+ route('GET','/admin/audit',async req=>{
+  noQuery(req);await operator(req);
+  const [engine,own]=await Promise.all([gateway.engine.admin('GET','/audit'),budgetAudit(store.pool,{limit:200})]);
+  return {entries:[...(engine.entries??[]),...own.map(budgetEntry)].sort(newestFirst).slice(0,200)};
+ });
+ const budgetKey=value=>{if(typeof value!=='string'||!PARAM.test(value))fail('budget_unknown',404);return value;};
+ const own=key=>BUDGET_KEYS.includes(key);
+ const ownView=key=>({budget:{...listBudgets(gateway.config).find(b=>b.key===key),used:null}});
+ route('GET','/admin/budgets',async req=>{
+  noQuery(req);await operator(req);
+  const engine=await gateway.engine.admin('GET','/budgets');
+  await loadBudgets(store.pool,gateway.config);
+  return {budgets:[...(engine.budgets??[]),...listBudgets(gateway.config).map(b=>({...b,used:null}))],autoscaler:engine.autoscaler??null};
+ });
+ route('PUT','/admin/budgets/:key',async req=>{
+  noQuery(req);const auth=await operator(req),key=budgetKey(req.params.key),input=body(req,Object.keys(req.body??{}));
+  if(!own(key))return gateway.engine.admin('PUT','/budgets/'+encodeURIComponent(key),{body:input,actor:auth.user.email});
+  body(req,['value','version','reason']);
+  if(!Object.hasOwn(input,'value'))fail('budget_value_invalid',400);
+  await setBudget(store,gateway.config,key,{value:input.value,expectedVersion:input.version,actor:auth.user.email,reason:input.reason});
+  return ownView(key);
+ });
+ route('POST','/admin/budgets/:key/reset',async req=>{
+  noQuery(req);const auth=await operator(req),key=budgetKey(req.params.key),input=body(req,Object.keys(req.body??{}));
+  if(!own(key))return gateway.engine.admin('POST','/budgets/'+encodeURIComponent(key)+'/reset',{body:input,actor:auth.user.email});
+  body(req,['version','reason']);
+  await resetBudget(store,gateway.config,key,{expectedVersion:input.version,actor:auth.user.email,reason:input.reason});
+  return ownView(key);
+ });
+ route('GET','/admin/budgets/:key/audit',async req=>{
+  noQuery(req);await operator(req);const key=budgetKey(req.params.key);
+  if(!own(key))return gateway.engine.admin('GET','/budgets/'+encodeURIComponent(key)+'/audit');
+  return {entries:(await budgetAudit(store.pool,{key,limit:200})).map(budgetEntry)};
  });
 }

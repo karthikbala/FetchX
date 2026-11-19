@@ -16,7 +16,7 @@ const opToken='fxs_'+'o'.repeat(43),userToken='fxs_'+'u'.repeat(43);
 test('admin portal: operator-only and CSRF-bound; rules, probes and sites are forwarded to the engine with the operator as actor',{skip:!process.env.TEST_DATABASE_URL},async t=>{
  assert.match(new URL(process.env.TEST_DATABASE_URL).pathname,/^\/gateway_test_[A-Za-z0-9_]+$/);
  const store=new Store(process.env.TEST_DATABASE_URL);await store.init();
- await store.pool.query('TRUNCATE control_operators,control_operator_audit RESTART IDENTITY');
+ await store.pool.query('TRUNCATE control_operators,control_operator_audit,budget_overrides,budget_audit RESTART IDENTITY');
  const op={id:randomUUID(),email:'ops@example.com'},member={id:randomUUID(),email:'member@example.com'};
  for(const u of [op,member])await store.pool.query('INSERT INTO control_users(id,email) VALUES($1,$2) ON CONFLICT(email) DO UPDATE SET id=control_users.id',[u.id,u.email]);
  for(const u of [op,member])u.id=(await store.pool.query('SELECT id FROM control_users WHERE email=$1',[u.email])).rows[0].id;

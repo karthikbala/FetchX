@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FetchX engine private API",
-    "version": "1.0",
+    "version": "1.1",
     "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). info.version is the contract version; GET /internal/v1/status and /healthz report it."
   },
   "security": [
@@ -1395,6 +1395,239 @@
             }
           }
         }
+      }
+    },
+    "/internal/v1/admin/budgets": {
+      "get": {
+        "operationId": "listBudgets",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, budget_unknown, budget_value_invalid, budget_version_required, budget_version_conflict, budget_reason_required, budget_actor_invalid, budget_not_overridden). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The engine's budgets, each with its value, bounds, source, version and what is used, and the autoscaler's last report."
+      }
+    },
+    "/internal/v1/admin/budgets/{key}": {
+      "put": {
+        "operationId": "setBudget",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-fetchx-actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The operator's email, recorded in the audit trail."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, budget_unknown, budget_value_invalid, budget_version_required, budget_version_conflict, budget_reason_required, budget_actor_invalid, budget_not_overridden). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "summary": "Override a budget. Body: {value, version, reason}; version is the one read (0 when never overridden)."
+      }
+    },
+    "/internal/v1/admin/budgets/{key}/reset": {
+      "post": {
+        "operationId": "resetBudget",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-fetchx-actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The operator's email, recorded in the audit trail."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, budget_unknown, budget_value_invalid, budget_version_required, budget_version_conflict, budget_reason_required, budget_actor_invalid, budget_not_overridden). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "summary": "Remove the override so config applies again. Body: {version, reason}."
+      }
+    },
+    "/internal/v1/admin/budgets/{key}/audit": {
+      "get": {
+        "operationId": "budgetAudit",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminObject"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused; error.code says why (for example request_invalid, actor_required, budget_unknown, budget_value_invalid, budget_version_required, budget_version_conflict, budget_reason_required, budget_actor_invalid, budget_not_overridden). The platform passes it to the portal unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One budget's changes, newest first, in the shape of rule audit rows."
       }
     }
   },

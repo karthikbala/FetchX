@@ -35,7 +35,7 @@ Projects provisioned in `config.projects` are unmetered: nothing is reserved or 
 
 ## Trial and purchases
 
-Every verified account gets `controlPlane.creditPolicy.trialCredits` (1,000) once, on its oldest active project (`src/billing/trial.mjs`); the receipt is per user, so deleting and recreating projects never grants twice.
+Every verified account gets `controlPlane.creditPolicy.trialCredits` (1,000, a [budget](budgets.md) operators can change in the admin portal) once, on its oldest active project (`src/billing/trial.mjs`); the receipt is per user, so deleting and recreating projects never grants twice.
 
 Credit packs are one-time Stripe Checkout payments: $2, $8, $20 and $100 (or the INR equivalents with UPI) for 10,000, 50,000, 150,000 and 1,000,000 credits. A verified live payment adds a grant (`Purchases.grantPaidCredits`); a refund or lost dispute revokes it; sandbox payments change nothing. See [Stripe payments](stripe-payments.md) and [INR UPI](inr-upi-backend.md).
 

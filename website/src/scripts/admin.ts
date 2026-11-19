@@ -114,16 +114,141 @@ async function showRuleAudit(id: string) {
   await run(async () => { const data = await api(`/admin/rules/${encodeURIComponent(id)}/audit`); renderAudit(data.entries); selectTab('audit'); });
 }
 
+// ---- Budgets ----
+const GROUPS: [string, string][] = [['captcha', 'Captcha solving (2Captcha)'], ['residential', 'Residential proxies'], ['autoscaler', 'Browser worker VMs'],
+  ['requests', 'Requests'], ['probes', 'Reachability probes'], ['accounts', 'Accounts']];
+const CURRENCY: Record<string, string> = { usd_micro: '$', eur_micro: '€' };
+const WINDOWS: Record<string, string> = { '24h': 'in 24 h', month: 'this month', total: 'in total' };
+let budgetIndex = new Map<string, Json>();
+// Money is held in millionths (micro-USD, micro-EUR); never through floats.
+function microText(micro: number, grouping = true) {
+  const whole = Math.floor(micro / 1_000_000);
+  let fraction = String(micro % 1_000_000).padStart(6, '0').replace(/0+$/, '');
+  if (fraction.length < 2) fraction = fraction.padEnd(2, '0');
+  return `${grouping ? whole.toLocaleString('en-US') : whole}.${fraction}`;
+}
+function budgetText(budget: Json, value: number | null | undefined) {
+  if (value === null || value === undefined) return budget.null_label ?? 'Not set';
+  if (CURRENCY[budget.unit]) return CURRENCY[budget.unit] + microText(value);
+  if (budget.unit === 'mb') return `${value.toLocaleString('en-US')} MB`;
+  if (budget.unit === 'credits') return `${value.toLocaleString('en-US')} credits`;
+  return value.toLocaleString('en-US');
+}
+function rangeText(budget: Json) {
+  const plain = budget.unit === 'mb' || budget.unit === 'credits';
+  const range = plain ? `${budget.min.toLocaleString('en-US')} to ${budgetText(budget, budget.max)}` : `${budgetText(budget, budget.min)} to ${budgetText(budget, budget.max)}`;
+  return `Allowed ${range}${budget.nullable ? ', or ' + String(budget.null_label ?? 'none').toLowerCase() : ''}`;
+}
+function parseBudget(budget: Json, raw: string): number | null {
+  const text = raw.trim().replace(/[$€,\s]/g, '');
+  if (CURRENCY[budget.unit]) {
+    const match = /^(\d{1,12})(?:\.(\d{1,6}))?$/.exec(text);
+    if (!match) return null;
+    const value = Number(match[1]) * 1_000_000 + Number((match[2] ?? '').padEnd(6, '0'));
+    return Number.isSafeInteger(value) ? value : null;
+  }
+  return /^\d{1,15}$/.test(text) ? Number(text) : null;
+}
+const sourceText = (source?: string) => source === 'database' ? 'set in portal' : source === 'config' ? 'config' : source === 'default' ? 'default' : source ?? '—';
+function usedCell(budget: Json) {
+  if (budget.used === null || budget.used === undefined) return cell('—');
+  const share = typeof budget.value === 'number' && budget.value > 0 ? Math.round((budget.used / budget.value) * 100) : null;
+  const label = budget.key === 'captcha.maxProjectDailyMicroUsd' ? 'busiest project, 24 h' : WINDOWS[budget.window] ?? '';
+  const over = budget.value === 0 || (share !== null && share >= 100);
+  return cell(el('span', { class: 'fx-admin-num', text: budgetText(budget, budget.used) }), el('small', { text: label }),
+    share !== null || over ? tag(over ? 'used up' : `${share}%`, over ? 'is-off' : share! >= 80 ? 'is-warn' : 'is-ok') : null);
+}
+async function loadBudgets() {
+  const data = await api('/admin/budgets');
+  const budgets = data.budgets as Json[];
+  budgetIndex = new Map(budgets.map(b => [b.key, b]));
+  const a: Json | null = data.autoscaler ?? null;
+  $('[data-autoscaler-status]')!.textContent = a
+    ? `Autoscaler, reported ${when(a.received_at)}: worker VM budget ${'€' + microText(a.monthly_budget_micro_eur)} of a ${'€' + microText(a.monthly_budget_ceiling_micro_eur)} host ceiling, ${'€' + microText(a.committed_micro_eur)} committed in ${a.month_utc}; ${a.workers} of ${a.max_additional_workers} extra workers (host ceiling ${a.max_additional_workers_ceiling})${a.enabled ? '' : '; the autoscaler is disabled'}.`
+    : 'The autoscaler has not reported to this gateway yet. It reports each time it reads the pool metrics, and never goes above the ceilings in its host config.';
+  $('[data-budget-groups]')!.replaceChildren(...GROUPS.filter(([group]) => budgets.some(b => b.group === group)).map(([group, title]) =>
+    el('div', { class: 'fx-admin-card' }, el('h2', { text: title }),
+      el('div', { class: 'fx-admin-table-wrap' }, el('table', { class: 'fx-admin-table' },
+        el('thead', {}, el('tr', {}, ...['Budget', 'Value', 'Used', 'Source', ''].map(h => el('th', { text: h })))),
+        el('tbody', {}, ...budgets.filter(b => b.group === group).map(budget => el('tr', {},
+          cell(el('strong', { text: budget.label }), el('small', { text: budget.description })),
+          cell(el('span', { class: 'fx-admin-num', text: budgetText(budget, budget.value) }),
+            budget.valid ? null : tag('not configured', 'is-off'),
+            el('small', { text: rangeText(budget) })),
+          usedCell(budget),
+          cell(tag(sourceText(budget.source), budget.source === 'database' ? 'is-warn' : ''),
+            budget.source === 'database' ? el('small', { text: `${budget.updated_by} · ${when(budget.updated_at)}${budget.reason ? ' · ' + budget.reason : ''}` }) : null,
+            budget.source === 'database' ? el('small', { text: `Configured: ${budgetText(budget, budget.default)}` }) : null),
+          cell(el('div', {},
+            el('button', { type: 'button', text: 'Change', onclick: () => editBudget(budget) }),
+            budget.source === 'database' ? el('button', { type: 'button', text: 'Reset', onclick: () => void resetBudget(budget) }) : null,
+            el('button', { type: 'button', text: 'History', onclick: () => void showBudgetAudit(budget.key) })))))))))));
+}
+function editBudget(budget: Json) {
+  const form = $<HTMLFormElement>('[data-budget-form]')!;
+  form.hidden = false;
+  (form.elements.namedItem('key') as HTMLInputElement).value = budget.key;
+  (form.elements.namedItem('version') as HTMLInputElement).value = String(budget.version ?? 0);
+  const input = form.elements.namedItem('value') as HTMLInputElement, none = form.elements.namedItem('none') as HTMLInputElement;
+  input.value = budget.value === null ? '' : CURRENCY[budget.unit] ? microText(budget.value, false) : String(budget.value);
+  none.checked = budget.value === null; input.disabled = none.checked;
+  (form.elements.namedItem('reason') as HTMLInputElement).value = '';
+  $('[data-budget-null]')!.hidden = !budget.nullable;
+  $('[data-budget-null-label]')!.textContent = budget.null_label ?? 'No cap';
+  $('[data-budget-value-label]')!.textContent = `New value${budget.unit === 'usd_micro' ? ' (USD)' : budget.unit === 'eur_micro' ? ' (EUR)' : budget.unit === 'mb' ? ' (MB)' : budget.unit === 'credits' ? ' (credits)' : ''}`;
+  $('[data-budget-form-title]')!.textContent = budget.label;
+  $('[data-budget-form-hint]')!.textContent = `Now ${budgetText(budget, budget.value)} (${sourceText(budget.source)}). ${rangeText(budget)}.`;
+  form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  input.focus();
+}
+async function submitBudget(event: SubmitEvent) {
+  event.preventDefault();
+  const form = event.currentTarget as HTMLFormElement, data = new FormData(form);
+  const key = String(data.get('key')), budget = budgetIndex.get(key);
+  if (!budget) return;
+  const value = data.get('none') === 'on' && budget.nullable ? null : parseBudget(budget, String(data.get('value') ?? ''));
+  if (value === null && !(data.get('none') === 'on' && budget.nullable)) {
+    showError(new ApiError(400, 'budget_value_invalid', `Enter ${CURRENCY[budget.unit] ? 'an amount with up to 6 decimals' : 'a whole number'}.`)); return;
+  }
+  if (value !== null && (value < budget.min || value > budget.max)) {
+    showError(new ApiError(400, 'budget_value_invalid', `${rangeText(budget)}.`)); return;
+  }
+  await run(async () => {
+    const result = await api(`/admin/budgets/${encodeURIComponent(key)}`, { method: 'PUT', body: { value, version: Number(data.get('version')), reason: String(data.get('reason')).trim() } });
+    toast(`${budget.label}: ${budgetText(result.budget, result.budget.value)}.`); form.hidden = true; await loadBudgets();
+  });
+}
+async function resetBudget(budget: Json) {
+  const reason = window.prompt(`Reset "${budget.label}" to its configured value (${budgetText(budget, budget.default)}). Reason (recorded in the audit log):`);
+  if (!reason) return;
+  await run(async () => {
+    await api(`/admin/budgets/${encodeURIComponent(budget.key)}/reset`, { method: 'POST', body: { version: budget.version, reason } });
+    toast(`${budget.label} reset.`); await loadBudgets();
+  });
+}
+async function showBudgetAudit(key: string) {
+  await run(async () => { const data = await api(`/admin/budgets/${encodeURIComponent(key)}/audit`); renderAudit(data.entries); selectTab('audit'); });
+}
+
 // ---- Audit ----
+function budgetChange(entry: Json) {
+  const key = String(entry.rule_id).slice('budget:'.length), budget = budgetIndex.get(key) ?? { unit: 'count' };
+  const side = (s: Json | null) => s ? `${budgetText(budget, s.value)} (${sourceText(s.source)})` : '—';
+  return `${budget.label ?? key}: ${side(entry.before)} → ${side(entry.after)}${entry.note ? ' · ' + entry.note : ''}`;
+}
 function renderAudit(entries: Json[]) {
   $('[data-audit-body]')!.replaceChildren(...entries.map(entry => {
     const after = entry.after ?? {}, before = entry.before ?? {};
-    const detail = entry.action === 'delete' ? `was ${matchText(before.match)} (${before.provider})` :
+    const detail = String(entry.rule_id).startsWith('budget:') ? budgetChange(entry) :
+      entry.action === 'delete' ? `was ${matchText(before.match)} (${before.provider})` :
       `${after.provider ?? ''} ${matchText(after.match)} ${after.enabled === false ? '· disabled' : ''}${after.note ? ' · ' + after.note : ''}`;
     return el('tr', {}, cell(when(entry.at)), cell(entry.rule_id), cell(tag(entry.action)), cell(entry.actor), cell(detail.trim()));
   }));
 }
-async function loadAudit() { const data = await api('/admin/audit'); renderAudit(data.entries); }
+async function loadAudit() {
+  if (!budgetIndex.size) await api('/admin/budgets').then(data => { budgetIndex = new Map((data.budgets as Json[]).map(b => [b.key, b])); }).catch(() => {});
+  const data = await api('/admin/audit'); renderAudit(data.entries);
+}
 
 // ---- Probes ----
 let pollTimer = 0;
@@ -204,7 +329,7 @@ async function forgetSite(host: string) {
 }
 
 // ---- Tabs and boot ----
-const loaders: Record<string, () => Promise<void>> = { rules: loadRules, probes: loadProbes, sites: loadSites, audit: loadAudit };
+const loaders: Record<string, () => Promise<void>> = { rules: loadRules, budgets: loadBudgets, probes: loadProbes, sites: loadSites, audit: loadAudit };
 function selectTab(name: string) {
   for (const tab of $$('[data-tab]')) tab.setAttribute('aria-selected', String(tab.dataset.tab === name));
   for (const panel of $$('[data-panel]')) panel.hidden = panel.dataset.panel !== name;
@@ -231,6 +356,10 @@ async function boot() {
   $('[data-test-form]')!.addEventListener('submit', event => void submitTest(event as SubmitEvent));
   $('[data-probe-form]')!.addEventListener('submit', event => void submitProbe(event as SubmitEvent));
   $('[data-apply-form]')!.addEventListener('submit', event => void submitApply(event as SubmitEvent));
+  $('[data-budget-form]')!.addEventListener('submit', event => void submitBudget(event as SubmitEvent));
+  $('[data-budget-cancel]')!.addEventListener('click', () => { $('[data-budget-form]')!.hidden = true; });
+  const none = $<HTMLInputElement>('[data-budget-form] input[name="none"]')!, value = $<HTMLInputElement>('[data-budget-form] input[name="value"]')!;
+  none.addEventListener('change', () => { value.disabled = none.checked; });
   await run(loadRules);
 }
 void boot();
