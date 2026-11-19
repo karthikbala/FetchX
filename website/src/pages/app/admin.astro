@@ -1,0 +1,142 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import Brand from '../../components/Brand.astro';
+import '../../styles/product-preview.css';
+---
+<Layout title="Admin — FetchX" description="Operator tools for FetchX routing rules, reachability probes and profile routing." appMode={true} noindex={true}>
+  <div class="product-preview fx-admin" data-admin>
+    <header class="fx-admin-top">
+      <a href="/app" class="pp-brand" aria-label="FetchX workspace"><Brand/></a>
+      <span class="fx-admin-who" data-admin-who>Checking operator access…</span>
+      <a href="/app" class="fx-admin-back">Back to workspace</a>
+    </header>
+    <main class="fx-admin-main">
+      <p class="pp-eyebrow">OPERATOR</p>
+      <h1>Routing administration</h1>
+      <p class="fx-admin-lede">Provider rules, reachability probes and profile routing. Every change is validated, versioned and recorded with your email.</p>
+      <p class="fx-admin-error" data-admin-error role="alert" hidden></p>
+      <section class="fx-admin-gate" data-admin-gate><p data-admin-gate-text>Checking your session…</p><a href="/login" class="pp-button pp-button-primary" data-admin-login hidden>Sign in</a></section>
+
+      <div data-admin-content hidden>
+        <nav class="fx-admin-tabs" role="tablist" aria-label="Admin sections">
+          <button type="button" role="tab" data-tab="rules" aria-selected="true">Provider rules</button>
+          <button type="button" role="tab" data-tab="probes" aria-selected="false">Reachability probes</button>
+          <button type="button" role="tab" data-tab="profiles" aria-selected="false">Profile routing</button>
+          <button type="button" role="tab" data-tab="audit" aria-selected="false">Audit log</button>
+        </nav>
+
+        <section data-panel="rules" class="fx-admin-panel">
+          <div class="fx-admin-card">
+            <h2>Rules in effect</h2>
+            <p class="fx-admin-hint">Rules only remove a provider for matching hosts. Shipped defaults and config rules can be disabled (with a reason) but not deleted.</p>
+            <div class="fx-admin-table-wrap"><table class="fx-admin-table"><thead><tr><th>ID</th><th>Provider</th><th>Match</th><th>Reason</th><th>Source</th><th>Status</th><th>Actions</th></tr></thead><tbody data-rules-body></tbody></table></div>
+          </div>
+          <div class="fx-admin-grid">
+            <form class="fx-admin-card" data-rule-form>
+              <h2 data-rule-form-title>Add a rule</h2>
+              <input type="hidden" name="version">
+              <label>ID <input name="id" required pattern="[a-z0-9][a-z0-9._\-]{0,63}" placeholder="evomi-shop-example-com"></label>
+              <label>Provider <select name="provider" data-provider-select required></select></label>
+              <label>Match <select name="matchType"><option value="host">Exact host</option><option value="hostSuffix">Host suffix (e.g. .gov)</option></select></label>
+              <label>Value <input name="matchValue" required placeholder="shop.example.com"></label>
+              <label>Reason <input name="reason" required maxlength="300" placeholder="Provider refuses this host (CONNECT 444)"></label>
+              <div class="fx-admin-actions"><button class="pp-button pp-button-primary" type="submit" data-rule-submit>Add rule</button><button class="pp-button pp-button-secondary" type="button" data-rule-cancel hidden>Cancel edit</button></div>
+            </form>
+            <form class="fx-admin-card" data-test-form>
+              <h2>Test a host</h2>
+              <p class="fx-admin-hint">Would this provider be used for this host? Read-only.</p>
+              <label>Provider <select name="provider" data-provider-select required></select></label>
+              <label>Host <input name="host" required placeholder="myplace.cuyahogacounty.gov"></label>
+              <div class="fx-admin-actions"><button class="pp-button pp-button-secondary" type="submit">Test</button></div>
+              <p class="fx-admin-result" data-test-result aria-live="polite"></p>
+            </form>
+          </div>
+        </section>
+
+        <section data-panel="probes" class="fx-admin-panel" hidden>
+          <form class="fx-admin-card" data-probe-form>
+            <h2>Run a reachability probe</h2>
+            <p class="fx-admin-hint">Per country: one datacenter proxy and each residential provider. CONNECT → TLS → one capped GET. No browser, no cookies, only metadata is kept. One probe at a time, with a daily cap.</p>
+            <label>Host <input name="host" required placeholder="www.example.com"></label>
+            <fieldset class="fx-admin-countries"><legend>Countries (up to 6)</legend>
+              <label><input type="checkbox" name="country" value="US" checked> US</label><label><input type="checkbox" name="country" value="CA" checked> CA</label>
+              <label><input type="checkbox" name="country" value="GB" checked> GB</label><label><input type="checkbox" name="country" value="DE"> DE</label>
+              <label><input type="checkbox" name="country" value="IN"> IN</label><label><input type="checkbox" name="country" value="AU"> AU</label>
+            </fieldset>
+            <label class="fx-admin-inline"><input type="checkbox" name="include_excluded"> Also probe providers excluded by a rule</label>
+            <div class="fx-admin-actions"><button class="pp-button pp-button-primary" type="submit">Start probe</button></div>
+          </form>
+          <div class="fx-admin-card">
+            <h2>Recent probes</h2>
+            <div class="fx-admin-table-wrap"><table class="fx-admin-table"><thead><tr><th>Host</th><th>Countries</th><th>State</th><th>Reachable</th><th>Recommended</th><th>Requested</th><th></th></tr></thead><tbody data-probes-body></tbody></table></div>
+          </div>
+          <div class="fx-admin-card" data-probe-detail hidden>
+            <h2 data-probe-title>Probe</h2>
+            <div class="fx-admin-table-wrap"><table class="fx-admin-table"><thead><tr><th>Country</th><th>Class</th><th>Provider</th><th>Result</th><th>CONNECT</th><th>TLS</th><th>HTTP</th><th>Bytes</th><th>ms</th></tr></thead><tbody data-cells-body></tbody></table></div>
+            <dl class="fx-admin-summary" data-probe-summary></dl>
+            <form data-apply-form>
+              <h3>Apply proposal</h3>
+              <div data-apply-rules></div>
+              <label>Apply proposed routing to profile <select name="profile" data-apply-profile><option value="">— none —</option></select></label>
+              <div class="fx-admin-actions"><button class="pp-button pp-button-primary" type="submit">Apply selected</button></div>
+            </form>
+          </div>
+        </section>
+
+        <section data-panel="profiles" class="fx-admin-panel" hidden>
+          <div class="fx-admin-card">
+            <h2>Source profile routing</h2>
+            <p class="fx-admin-hint">Overrides change only these routing fields and apply to new workflows; running workflows keep their settings.</p>
+            <div class="fx-admin-table-wrap"><table class="fx-admin-table"><thead><tr><th>Profile</th><th>Hosts</th><th>Effective routing</th><th>Override</th><th></th></tr></thead><tbody data-profiles-body></tbody></table></div>
+          </div>
+          <form class="fx-admin-card" data-profile-form hidden>
+            <h2 data-profile-form-title>Edit routing</h2>
+            <div class="fx-admin-fields" data-profile-fields></div>
+            <div class="fx-admin-actions"><button class="pp-button pp-button-primary" type="submit">Save override</button><button class="pp-button pp-button-secondary" type="button" data-profile-reset>Remove override</button><button class="pp-button pp-button-secondary" type="button" data-profile-cancel>Close</button></div>
+          </form>
+        </section>
+
+        <section data-panel="audit" class="fx-admin-panel" hidden>
+          <div class="fx-admin-card">
+            <h2>Rule changes</h2>
+            <div class="fx-admin-table-wrap"><table class="fx-admin-table"><thead><tr><th>When</th><th>Rule</th><th>Action</th><th>By</th><th>Details</th></tr></thead><tbody data-audit-body></tbody></table></div>
+          </div>
+        </section>
+      </div>
+    </main>
+    <div class="pp-toast" role="status" aria-live="polite" data-admin-toast hidden></div>
+  </div>
+  <style is:global>
+    .fx-admin{min-height:100dvh;background:#121a1b;color:#e8efe6}
+    .fx-admin-top{display:flex;align-items:center;gap:20px;padding:18px 32px;border-bottom:1px solid #2a3527}
+    .fx-admin .fx-admin-who{margin-left:auto;font-size:13px;color:#a9b6a4}.fx-admin a.fx-admin-back{font-size:13px;color:#c9f27a}
+    .fx-admin-main{max-width:1180px;margin:0 auto;padding:32px}
+    .fx-admin .fx-admin-main h1{font-size:34px;margin:6px 0 8px}.fx-admin p.fx-admin-lede{color:#a9b6a4;margin:0 0 24px}
+    .fx-admin-error{border:1px solid #7a3b32;background:#3a1d1a;color:#ffd3c9;padding:10px 14px;border-radius:8px}
+    .fx-admin-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px}
+    .fx-admin-tabs button{background:#1b2526;border:1px solid #2f3d2c;color:#cfdac9;padding:8px 14px;border-radius:999px;cursor:pointer}
+    .fx-admin-tabs button[aria-selected="true"]{background:#c9f27a;color:#142010;border-color:#c9f27a}
+    .fx-admin-card{background:#182223;border:1px solid #2a3527;border-radius:12px;padding:20px;margin-bottom:18px}
+    .fx-admin-card h2{font-size:18px;margin:0 0 6px}.fx-admin-card h3{font-size:15px;margin:16px 0 8px}
+    .fx-admin p.fx-admin-hint{color:#9fac9a;font-size:13px;margin:0 0 14px}
+    .fx-admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px}
+    .fx-admin-card label{display:flex;flex-direction:column;gap:4px;font-size:13px;margin-bottom:10px;color:#cfdac9}
+    .fx-admin-card input:not([type=checkbox]),.fx-admin-card select{background:#101718;border:1px solid #33402f;color:#e8efe6;border-radius:6px;padding:8px 10px;font:inherit}
+    .fx-admin-inline,.fx-admin-countries label{flex-direction:row!important;align-items:center;gap:6px!important}
+    .fx-admin-countries{border:1px solid #2f3d2c;border-radius:8px;display:flex;flex-wrap:wrap;gap:14px;padding:10px 12px;margin:0 0 10px}
+    .fx-admin-countries legend{font-size:12px;color:#9fac9a;padding:0 4px}
+    .fx-admin-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+    .fx-admin-table-wrap{overflow-x:auto}.fx-admin-table{width:100%;border-collapse:collapse;font-size:13px}
+    .fx-admin-table th{text-align:left;color:#9fac9a;font-weight:500;padding:8px;border-bottom:1px solid #2a3527;white-space:nowrap}
+    .fx-admin-table td{padding:8px;border-bottom:1px solid #222d22;vertical-align:top;word-break:break-word}
+    .fx-admin-table button{background:none;border:1px solid #3a4a36;color:#cfdac9;border-radius:6px;padding:3px 8px;margin:0 4px 4px 0;cursor:pointer;font-size:12px}
+    .fx-admin-tag{display:inline-block;border:1px solid #3a4a36;border-radius:999px;padding:1px 8px;font-size:11px;color:#cfdac9}
+    .fx-admin-tag.is-off{color:#e8b39f;border-color:#6a4334}.fx-admin-tag.is-ok{color:#c9f27a;border-color:#4f6a2c}
+    .fx-admin-result{font-size:13px;margin-top:10px}
+    .fx-admin-summary{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;font-size:13px;margin:14px 0}
+    .fx-admin-summary dt{color:#9fac9a}.fx-admin-summary dd{margin:0}
+    .fx-admin-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:4px 16px}
+    @media(max-width:640px){.fx-admin-main{padding:20px 16px}.fx-admin-top{padding:14px 16px;flex-wrap:wrap}.fx-admin-main h1{font-size:26px}}
+  </style>
+  <script>import '../../scripts/admin';</script>
+</Layout>

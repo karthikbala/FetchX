@@ -60,7 +60,7 @@ export class Gateway {
   validateRouteHealthConfig(config);
   validateProviderRules(config);
  }
- profile(project,id){if(typeof id!=='string'||!this.config.projects[project]?.profiles.includes(id)||!Object.hasOwn(this.profiles,id))fail('profile_forbidden',403);return residentialPolicy(this.profiles[id],this.config);}
+ profile(project,id){if(typeof id!=='string'||!this.config.projects[project]?.profiles.includes(id)||!Object.hasOwn(this.profiles,id))fail('profile_forbidden',403);const override=this.profileOverrides?.get(id);return residentialPolicy(override?{...this.profiles[id],...override.patch}:this.profiles[id],this.config);}
  async workflow(project,input){
   if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!['idempotency_key','profile','max_requests','max_bytes','ttl_seconds'].includes(k))||typeof input.idempotency_key!=='string'||typeof input.profile!=='string'||!ID.test(input.idempotency_key))fail('workflow_invalid');
   const p=this.profile(project,input.profile),maxRequests=input.max_requests??p.maxRequests,maxBytes=input.max_bytes??p.maxBytes,ttl=input.ttl_seconds??p.ttlSeconds;
