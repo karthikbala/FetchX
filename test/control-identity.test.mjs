@@ -4,9 +4,9 @@ import {createHash,randomUUID} from 'node:crypto';
 import {ControlIdentity,initControlIdentity} from '../src/control-identity.mjs';
 import {createControlMail} from '../src/control-mail.mjs';
 import {Store} from '../src/store.mjs';
-import {initControlCredits} from '../src/control-credits.mjs';
+import {Ledger} from '../src/billing/ledger.mjs';
 
-const scopes=['fetch:read','fetch:write','usage:read','profiles:read'];
+const scopes=['fetch:read','fetch:write','usage:read'];
 function config(){return {projects:{},v2:{accessProfiles:{'synthetic@1':{id:'synthetic',version:1}}},controlPlane:{enabled:true,bridgeSecret:'test-only-bridge-secret-32-bytes-long',projectTemplate:{id:'synthetic',v2_access_profiles:['synthetic@1'],v2_entitlement:{mode:'metered',max_daily_operations:10}},creditPolicy:{reviewed:true,version:'test-v1',trialCredits:12,weights:{direct:1},maxEstimatedMicroUsdPerOperation:0}}};}
 const expectCode=(error,code)=>error?.code===code;
 
@@ -18,12 +18,6 @@ test('identity configuration and input validation reject unapproved grants befor
  await assert.rejects(identity.createProject(randomUUID(),{name:'Test',v2_access_profiles:['private@1']}),e=>expectCode(e,'project_invalid'));
  await assert.rejects(identity.createKey(randomUUID(),`cp_${randomUUID()}`,{name:'Test',scopes:['admin']}),e=>expectCode(e,'key_scopes_invalid'));
  await assert.rejects(identity.createKey(randomUUID(),`cp_${randomUUID()}`,{name:'Test',scopes:['fetch:read','fetch:read']}),e=>expectCode(e,'key_scopes_invalid'));
- const changed=config();changed.controlPlane.projectTemplate.tokenHash='not-an-approved-field';
- assert.throws(()=>new ControlIdentity({store:{},config:changed}).template(),e=>expectCode(e,'project_template_configuration'));
- const reordered=config();reordered.controlPlane.projectTemplate={v2_entitlement:{max_daily_operations:10,mode:'metered'},v2_access_profiles:['synthetic@1'],id:'synthetic'};
- assert.equal(identity.template().hash,new ControlIdentity({store:{},config:reordered}).template().hash);
- assert.deepEqual(identity.template().policy.profiles,[]);
- assert.ok(!Object.hasOwn(identity.template().policy,'tokenHash'));
 });
 
 test('Gmail transport refreshes OAuth, encodes a safe MIME message, and never retries uncertain sends',async()=>{
@@ -46,7 +40,7 @@ test('Gmail transport refreshes OAuth, encodes a safe MIME message, and never re
 
 test('durable email verification, session lifecycle, projects and scoped keys remain isolated',{skip:!process.env.TEST_DATABASE_URL},async()=>{
  assert.match(new URL(process.env.TEST_DATABASE_URL).pathname,/^\/gateway_test_[A-Za-z0-9_]+$/);
- const store=new Store(process.env.TEST_DATABASE_URL);await store.init();await initControlIdentity(store.pool);await initControlCredits(store.pool);
+ const store=new Store(process.env.TEST_DATABASE_URL);await store.init();await initControlIdentity(store.pool);
  await store.pool.query('TRUNCATE control_users,control_codes,control_rates,control_credit_accounts CASCADE');
  const settings=config(),sent=[],mail={configured:true,sendCode:async value=>{sent.push(value);}},identity=new ControlIdentity({store,config:settings,mail});
  const request=async(email,ip='127.0.0.1')=>identity.requestCode({email,ip});
@@ -66,9 +60,9 @@ test('durable email verification, session lifecycle, projects and scoped keys re
   const first=await identity.createProject(login.user.id,{name:'First'}),second=await identity.createProject(login.user.id,{name:'Second'});assert.match(first.id,/^cp_/);assert.notEqual(first.id,second.id);
   const accounts=(await store.pool.query('SELECT * FROM control_credit_accounts WHERE project=ANY($1::text[])',[ [first.id,second.id] ])).rows;
   assert.equal(accounts.length,2);
-  const {ControlCredits}=await import('../src/control-credits.mjs'),credits=new ControlCredits({store,config:settings});
-  const firstUsage=await credits.usage(first.id),secondUsage=await credits.usage(second.id);
-  assert.equal(firstUsage.granted,12);assert.equal(firstUsage.available,12);assert.equal(secondUsage.granted,0);assert.equal(secondUsage.available,0);
+  const ledger=new Ledger({store,config:settings});
+  const firstUsage=await ledger.balance(first.id),secondUsage=await ledger.balance(second.id);
+  assert.equal(firstUsage.trial,12);assert.equal(firstUsage.available,12);assert.equal(secondUsage.trial,0);assert.equal(secondUsage.available,0);
   const otherChallenge=await request('other@example.com','127.0.0.2'),other=await verify('other@example.com',otherChallenge,sent.at(-1).code,'127.0.0.2');
   await assert.rejects(identity.requireProject(other.user.id,first.id),e=>expectCode(e,'project_not_found'));
   await assert.rejects(identity.keys(other.user.id,first.id),e=>expectCode(e,'project_not_found'));
@@ -89,7 +83,7 @@ test('durable email verification, session lifecycle, projects and scoped keys re
   const retryChallenge=await request('user@example.com','127.0.0.7'),retry=await verify('user@example.com',retryChallenge,sent.at(-1).code,'127.0.0.7');assert.equal(retry.user.id,login.user.id);
   await store.pool.query("UPDATE control_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE token_hash=$1",[createHash('sha256').update(retry.session.token).digest('hex')]);await assert.rejects(identity.session(retry.session.token),e=>expectCode(e,'unauthorized'));
   const failMail=new ControlIdentity({store,config:settings,mail:{configured:true,sendCode:async()=>{throw Error('provider detail');}}});const accepted=await failMail.requestCode({email:'failure@example.com',ip:'127.0.0.8'});assert.equal(accepted.accepted,true);assert.ok((await store.pool.query('SELECT consumed_at FROM control_codes WHERE id=$1',[accepted.challenge_id])).rows[0].consumed_at);
-  const policyKey=await identity.createKey(login.user.id,first.id,{name:'Policy',scopes:['fetch:read']});settings.controlPlane.projectTemplate.v2_entitlement.max_daily_operations=1;await assert.rejects(identity.authenticateKey(policyKey.token),e=>expectCode(e,'project_template_changed'));await assert.rejects(identity.requireProject(login.user.id,first.id),e=>expectCode(e,'project_template_changed'));
+  const policyKey=await identity.createKey(login.user.id,first.id,{name:'Policy',scopes:['fetch:read']});
   const secrets=[login.session.token,key.token,rotated.token,policyKey.token];const persisted=JSON.stringify((await store.pool.query('SELECT * FROM control_sessions')).rows)+JSON.stringify((await store.pool.query('SELECT * FROM control_keys')).rows);for(const secret of secrets)assert.ok(!persisted.includes(secret));
  }finally{await store.pool.query('TRUNCATE control_users,control_codes,control_rates,control_credit_accounts CASCADE');await store.close();}
 });

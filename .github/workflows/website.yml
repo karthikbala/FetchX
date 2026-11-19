@@ -1,9 +1,9 @@
 name: FetchX website
 on:
   push:
-    paths: ['website/**', 'clients/connect.mjs', '.github/workflows/website.yml']
+    paths: ['website/**', 'clients/connect.mjs', 'docs/openapi.json', '.github/workflows/website.yml']
   pull_request:
-    paths: ['website/**', 'clients/connect.mjs', '.github/workflows/website.yml']
+    paths: ['website/**', 'clients/connect.mjs', 'docs/openapi.json', '.github/workflows/website.yml']
 permissions:
   contents: read
 jobs:

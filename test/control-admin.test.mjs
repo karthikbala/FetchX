@@ -22,7 +22,7 @@ test('admin rules API: operator-only, CSRF-bound, validated, versioned, audited 
  const gateway={config:{controlPlane,providerRules:[]},store};
  const identity={session:async value=>{if(value===opToken)return {user:op};if(value===userToken)return {user:member};throw new GatewayError('unauthorized',401);}};
  const app=Fastify();app.decorate('v2',{store});app.decorate('publicFetch',{});
- registerControl(app,gateway,{identity,credits:{usage:async()=>({})}});await app.ready();
+ registerControl(app,gateway,{identity,ledger:{prices:{},metered:()=>true,balance:async()=>null,usage:async()=>({credits:0,by_step:[],daily:[]})},service:{}});await app.ready();
  t.after(async()=>{await app.close();await store.close();});
  const send=(method,path,payload,{token=opToken,csrf}={})=>app.inject({method,url:'/control'+path,
   headers:{origin,'x-fetchx-control-secret':secret,cookie:`${CONTROL_COOKIE}=${token}`,'x-csrf-token':csrf??controlCsrf(token,secret),...(payload===undefined?{}:{'content-type':'application/json'})},
@@ -86,11 +86,10 @@ test('admin rules API: operator-only, CSRF-bound, validated, versioned, audited 
  assert.deepEqual((await store.pool.query('SELECT action,actor FROM control_operator_audit ORDER BY id')).rows,[{action:'grant',actor:'cli-test'},{action:'revoke',actor:'cli-test'}]);
 });
 
-test('admin step 3: probe jobs, apply proposals, and versioned profile routing overrides',{skip:!process.env.TEST_DATABASE_URL},async t=>{
- const {Gateway}=await import('../src/gateway.mjs');
- const {interruptProbes,loadProfileOverrides}=await import('../src/admin-ops.mjs');
+test('admin: probe jobs and applying proposed provider rules',{skip:!process.env.TEST_DATABASE_URL},async t=>{
+ const {interruptProbes}=await import('../src/admin-ops.mjs');
  const store=new Store(process.env.TEST_DATABASE_URL);await store.init();
- await store.pool.query('TRUNCATE control_operators,control_operator_audit,routing_rules,routing_rule_audit,admin_probes,source_profile_overrides,source_profile_override_audit RESTART IDENTITY');
+ await store.pool.query('TRUNCATE control_operators,control_operator_audit,routing_rules,routing_rule_audit,admin_probes RESTART IDENTITY');
  const op={id:randomUUID(),email:'ops3@example.com'};
  await store.pool.query('INSERT INTO control_users(id,email) VALUES($1,$2) ON CONFLICT(email) DO NOTHING',[op.id,op.email]);
  op.id=(await store.pool.query('SELECT id FROM control_users WHERE email=$1',[op.email])).rows[0].id;await grantOperator(store,op.email,'cli-test');
@@ -98,28 +97,17 @@ test('admin step 3: probe jobs, apply proposals, and versioned profile routing o
  const controlPlane={enabled:true,origins:[origin],bridgeSecret:secret,creditPolicy:{weights:{direct:1}},admin:{enabled:true,maxProbesPerDay:2}};
  const config={controlPlane,providerRules:[],defaultRouting:'residential-v1',residential:{providers:{evomi:provider,dataimpulse:provider}},browser:{defaultEngine:'camoufox'},projects:{p:{profiles:['src.city']}}};
  const base={hosts:['records.city.example'],methods:['GET'],headers:[],country:'GB',maxConcurrent:1,maxRequests:4,maxInputBytes:1024,maxResponseBytes:1024,maxBytes:20000,ttlSeconds:120,minIntervalMs:0,maxFallbackCredits:0,maxAttemptBytes:1000,maxResidentialBytes:4000};
- let release;const gate=new Promise(r=>{release=r;});
+ let release;const gate=new Promise(r=>{release=r;});let r;
  const report={host:'records.city.example',summary:{reachable_countries:['US'],recommended_route:{country:'US',class:'residential',provider:'evomi',execution:'http'},
   proposed_profile:{v1:{country:'US',routingPolicy:'residential-v1',execution:'http'},v2:{countries:['US'],proxy_classes:['residential']}},
   proposed_provider_rules:[{id:'oxylabs-records-city-example',provider:'oxylabs',match:{host:'records.city.example'},action:'exclude',reason:'oxylabs refused CONNECT to records.city.example in every probed country'}]},cells:[]};
  const gateway={config,store,profiles:{'src.city':base},profileOverrides:new Map(),adminProbeRunner:async()=>{await gate;return report;}};
  const identity={session:async value=>{if(value===opToken)return {user:op};throw new GatewayError('unauthorized',401);}};
  const app=Fastify();app.decorate('v2',{store});app.decorate('publicFetch',{});
- registerControl(app,gateway,{identity,credits:{usage:async()=>({})}});await app.ready();
+ registerControl(app,gateway,{identity,ledger:{prices:{},metered:()=>true,balance:async()=>null,usage:async()=>({credits:0,by_step:[],daily:[]})},service:{}});await app.ready();
  t.after(async()=>{await app.close();await store.close();});
  const send=(method,path,payload)=>app.inject({method,url:'/control'+path,headers:{origin,'x-fetchx-control-secret':secret,cookie:`${CONTROL_COOKIE}=${opToken}`,'x-csrf-token':controlCsrf(opToken,secret),...(payload===undefined?{}:{'content-type':'application/json'})},...(payload===undefined?{}:{payload})});
  const code=r=>r.json().error?.code;
-
- // Profiles: list, validated override with optimistic version, applied to new workflows.
- let r=await send('GET','/admin/profiles');assert.equal(r.statusCode,200);
- assert.deepEqual(r.json().profiles.map(p=>[p.id,p.effective.country,p.override]),[['src.city','GB',null]]);assert.ok(r.json().fields.includes('maxSessionRenewals'));
- assert.equal(code(await send('PUT','/admin/profiles/src.city/routing',{patch:{hosts:['evil.example']}})),'profile_override_invalid');
- assert.equal(code(await send('PUT','/admin/profiles/src.city/routing',{patch:{maxSessionRenewals:99}})),'profile_override_invalid');
- assert.equal(code(await send('PUT','/admin/profiles/unknown/routing',{patch:{country:'US'}})),'profile_not_found');
- r=await send('PUT','/admin/profiles/src.city/routing',{patch:{maxSessionRenewals:2}});assert.equal(r.statusCode,200);assert.equal(r.json().profile.version,1);assert.equal(r.json().profile.effective.maxSessionRenewals,2);
- assert.equal(code(await send('PUT','/admin/profiles/src.city/routing',{patch:{maxSessionRenewals:3}})),'profile_override_version_conflict');
- const g={profile:(project,id)=>Gateway.prototype.profile.call(gateway,project,id)};
- assert.equal(g.profile('p','src.city').maxSessionRenewals,2,'Gateway.profile honours the override');
 
  // Probes: background job, one at a time, daily cap, stored report.
  assert.equal(code(await send('POST','/admin/probes',{host:'not a host',countries:['US']})),'probe_host_invalid');
@@ -132,24 +120,19 @@ test('admin step 3: probe jobs, apply proposals, and versioned profile routing o
  r=await send('GET',`/admin/probes/${pid}`);assert.equal(r.json().probe.state,'complete');assert.deepEqual(r.json().probe.report.summary.reachable_countries,['US']);
  assert.equal((await send('GET','/admin/probes')).json().probes[0].summary.recommended_route.country,'US');
 
- // Apply: proposed rule (with probe evidence) + proposed v1 routing merged onto the existing override.
+ // Apply: a proposed rule, recorded with the probe as evidence.
  assert.equal(code(await send('POST',`/admin/probes/${pid}/apply`,{rules:['made-up']})),'probe_rule_not_proposed');
  assert.equal(code(await send('POST',`/admin/probes/${pid}/apply`,{})),'probe_apply_empty');
- r=await send('POST',`/admin/probes/${pid}/apply`,{rules:['oxylabs-records-city-example'],profile:{id:'src.city',version:1}});assert.equal(r.statusCode,200);
- assert.equal(r.json().applied.rules[0].evidence.probe,pid);assert.deepEqual(r.json().applied.profile,{maxSessionRenewals:2,country:'US',routingPolicy:'residential-v1',execution:'http'});
+ r=await send('POST',`/admin/probes/${pid}/apply`,{rules:['oxylabs-records-city-example']});assert.equal(r.statusCode,200);
+ assert.equal(r.json().applied.rules[0].evidence.probe,pid);
  assert.equal((await send('POST','/admin/rules/test',{provider:'oxylabs',host:'records.city.example'})).json().rule,'oxylabs-records-city-example');
- assert.equal(g.profile('p','src.city').country,'US');
  assert.ok((await send('GET',`/admin/probes/${pid}`)).json().probe.applied_at);
  // Daily cap (2): the second probe is allowed, the third is not.
  r=await send('POST','/admin/probes',{host:'two.city.gov',countries:['US']});assert.equal(r.statusCode,200);
  for(let i=0;i<50&&(await send('GET',`/admin/probes/${r.json().probe.id}`)).json().probe.state!=='complete';i++)await new Promise(res=>setTimeout(res,20));
  assert.equal(code(await send('POST','/admin/probes',{host:'three.city.gov',countries:['US']})),'probe_daily_limit');
 
- // Delete override restores the base; audit trail; restart interrupts unfinished probes.
- r=await send('DELETE','/admin/profiles/src.city/routing');assert.equal(r.json().profile.override,null);assert.equal(g.profile('p','src.city').country,'GB');
- assert.deepEqual((await send('GET','/admin/profiles/src.city/audit')).json().entries.map(e=>e.action),['delete','update','create']);
+ // A restart interrupts unfinished probes.
  await store.pool.query("INSERT INTO admin_probes(id,host,countries,state,requested_by) VALUES($1,'x.gov','{US}','running','t')",[randomUUID()]);
  assert.equal(await interruptProbes(store.pool),1);
- await store.pool.query("INSERT INTO source_profile_overrides(profile,patch,updated_by) VALUES('src.city','{\"maxRouteAttempts\":99}','sql')");
- assert.deepEqual((await loadProfileOverrides(store.pool,gateway)).rejected,['src.city'],'invalid stored overrides are skipped, never applied');
 });

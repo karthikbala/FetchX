@@ -53,11 +53,14 @@ def validate_manifest(value):
     if not isinstance(image["rootfs_layers"], list) or not image["rootfs_layers"] or len(image["rootfs_layers"]) > 256 or any(not isinstance(v, str) or not DIGEST.fullmatch(v) for v in image["rootfs_layers"]):
         raise ValueError("invalid ordered image layer inventory")
     pin = value["runtime_pin"]
-    if not isinstance(pin, dict) or set(pin) != {"engine", "executablePath", "version", "sha256"} or pin["engine"] != "chromium" or not isinstance(pin["sha256"], str) or not HEX.fullmatch(pin["sha256"]) or not isinstance(pin["version"], str) or not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", pin["version"]):
+    if not isinstance(pin, dict) or set(pin) != {"engine", "executablePath", "modelDir", "version", "sha256"} or pin["engine"] != "camoufox" or not isinstance(pin["sha256"], str) or not HEX.fullmatch(pin["sha256"]) or not isinstance(pin["version"], str) or not re.fullmatch(r"\d+\.\d+\.\d+(?:-beta\.\d+)?", pin["version"]):
         raise ValueError("invalid runtime pin")
     executable = value["browser"]["executable"]
     if not isinstance(executable, str) or not executable.startswith("/opt/gateway-browser/") or ".." in PurePosixPath(executable).parts or pin["executablePath"] != executable:
         raise ValueError("invalid pinned browser executable")
+    model = pin["modelDir"]
+    if not isinstance(model, str) or not model.startswith("/opt/gateway-browser/") or ".." in PurePosixPath(model).parts:
+        raise ValueError("invalid pinned browser model directory")
     return value
 
 
@@ -345,22 +348,19 @@ def container_argv(manifest):
             "--mount=type=bind,src=" + str(HOME / "run/cb") + ",dst=/run/fx/cb,readonly",
             "--mount=type=bind,src=" + str(HOME / "run/worker") + ",dst=/run/fx/local",
             "--env=FETCHX_WORKER_RUNTIME=/run/fx/pin/runtime.json", "--env=FETCHX_WORKER_SOCKET=/run/fx/local/worker.sock",
-            "--env=FETCHX_WORKER_CALLBACK_SOCKET=/run/fx/cb/gw.sock", manifest["image"]["ref"], "node", "src/v2-browser-worker-service.mjs"]
+            "--env=FETCHX_WORKER_CALLBACK_SOCKET=/run/fx/cb/gw.sock", manifest["image"]["ref"], "node", "src/browser/worker-service.mjs"]
 
 
 SMOKE = r"""
 const {mkdtemp,readFile,rm}=await import('node:fs/promises');
 const {tmpdir}=await import('node:os');const {join}=await import('node:path');
-const {chromium}=await import('playwright-core');
-const {binarySha,browserProbeLaunchOptions}=await import('./src/v2-browser-policy.mjs');
+const {launchCamoufox}=await import('./src/browser/engine.mjs');
 const runtime=JSON.parse(await readFile(process.env.FETCHX_WORKER_RUNTIME,'utf8'));
-if(await binarySha(runtime.executablePath)!==runtime.sha256)throw Error('pin mismatch');
-const cacheDir=await mkdtemp(join(tmpdir(),'pool-sandbox-'));let browser,server;
-try{const options=await browserProbeLaunchOptions(runtime,{relay:'http://127.0.0.1:1',denyRelay:'http://127.0.0.1:2',cacheDir,deadline:Date.now()+15000});
-server=await chromium.launchServer(options);browser=await chromium.connect(server.wsEndpoint());
-const page=await browser.newPage({serviceWorkers:'block'});await page.setContent('<title>FetchX sandbox smoke</title>');
+const cacheDir=await mkdtemp(join(tmpdir(),'pool-sandbox-'));let launched;
+try{launched=await launchCamoufox(runtime,{relay:'http://127.0.0.1:1/',cacheDir});
+const page=await launched.browser.newPage();await page.setContent('<title>FetchX sandbox smoke</title>');
 if(await page.title()!=='FetchX sandbox smoke')throw Error('DOM mismatch');}
-finally{await browser?.close();await server?.close();await rm(cacheDir,{recursive:true,force:true});}
+finally{await launched?.browser.close().catch(()=>{});await launched?.server.close().catch(()=>{});await rm(cacheDir,{recursive:true,force:true});}
 """
 
 

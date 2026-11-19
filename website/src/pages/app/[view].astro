@@ -1,8 +1,8 @@
 ---
 import AppShell from '../../components/app/AppShell.astro';
 import AppContent from '../../components/app/AppContent.astro';
-import { previewViews } from '../../data/product-preview';
-export function getStaticPaths() { return previewViews.map(view => ({ params: { view }, props: { view } })); }
+import { consoleViews } from '../../data/console';
+export function getStaticPaths() { return consoleViews.map(view => ({ params: { view }, props: { view } })); }
 const { view } = Astro.props;
 ---
 <AppShell view={view}><AppContent view={view}/></AppShell>

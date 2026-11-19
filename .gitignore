@@ -11,7 +11,8 @@ outputs/
 .DS_Store
 
 local/
-browser/
+# Browser binaries at the repository root, not the src/browser code.
+/browser/
 *.token
 *.key
 *.pem

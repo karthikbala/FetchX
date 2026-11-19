@@ -13,36 +13,22 @@ let root,checkout;
 before(async()=>{
  root=await realpath(await mkdtemp(join(tmpdir(),'fetchx relocation space ')));checkout=join(root,'FetchX # percent%');await mkdir(checkout);
  await cp(join(repository,'src'),join(checkout,'src'),{recursive:true});await mkdir(join(checkout,'scripts'));
- for(const name of ['provision-v2-project.mjs','init-config.mjs'])await cp(join(repository,'scripts',name),join(checkout,'scripts',name));
+ for(const name of ['init-config.mjs'])await cp(join(repository,'scripts',name),join(checkout,'scripts',name));
  await symlink(join(repository,'node_modules'),join(checkout,'node_modules'),'dir');
 });
 after(async()=>{if(root)await rm(root,{recursive:true,force:true});});
 const environment=()=>({PATH:process.env.PATH??'/usr/bin:/bin',HOME:root,TMPDIR:root,GATEWAY_CONFIG:join(root,'owned-missing-config.json')});
 function run(script,args=[]){return spawnSync(process.execPath,[join(checkout,script),...args],{cwd:checkout,env:environment(),encoding:'utf8',timeout:10000});}
 
-test('relocated CLI entrypoints execute their guards before any config/database/provider work',()=>{
- const main=run('src/main.mjs');assert.notEqual(main.status,0,'main must enter startup instead of silently returning');assert.match(main.stderr,/ENOENT/);assert.ok(main.stderr.includes('owned-missing-config.json'));
- const compact=run('src/compact-artifacts.mjs');assert.notEqual(compact.status,0);assert.match(compact.stderr,/stop_gateway_before_compaction/);
- const provision=run('scripts/provision-v2-project.mjs',['--config']);assert.notEqual(provision.status,0);assert.match(provision.stderr,/usage: --config PATH/);
+test('relocated server entrypoint enters startup before any database or provider work',()=>{
+ const main=run('src/server.mjs');assert.notEqual(main.status,0,'the server must enter startup instead of silently returning');assert.match(main.stderr,/ENOENT/);assert.ok(main.stderr.includes('owned-missing-config.json'));
 });
 
-test('legacy and v2 launchers execute synthetic sibling workers from encoded directory names',async()=>{
- await writeFile(join(checkout,'src/browser-worker.mjs'),`let raw='';for await(const part of process.stdin)raw+=part;const input=JSON.parse(raw);process.stdout.write(JSON.stringify({status:200,headers:{'x-fixture':'synthetic-child'},cookies:[],body_base64:Buffer.from('synthetic legacy worker').toString('base64'),synthetic_url:input.url}));if(process.connected)process.disconnect();`);
- const {browserRequest}=await import(pathToFileURL(join(checkout,'src/browser.mjs')).href);
- const result=await browserRequest({url:'https://offline.invalid/synthetic',headers:{}},{maxResponseBytes:4096},{browser:{free:{executablePath:process.execPath,sha256:'synthetic-unused-pin',version:'synthetic',entitlement:'unlicensed'}}},'free','http://offline.invalid',null,null);
- assert.equal(result.status,200);assert.equal(result.body.toString(),'synthetic legacy worker');assert.equal(result.synthetic_url,'https://offline.invalid/synthetic');
- await writeFile(join(checkout,'src/v2-browser-worker.mjs'),`let raw='';for await(const part of process.stdin)raw+=part;const input=JSON.parse(raw);process.on('message',message=>{if(message.id!==7)return;process.stdout.write(JSON.stringify({status:200,error:null,capture_complete:true,counts_complete:true,synthetic_ack:message.result,synthetic_url:input.url}));if(process.connected)process.disconnect();});process.send({id:7,kind:'admit',data:{synthetic:true}});`);
- const {runBrowserProbe}=await import(pathToFileURL(join(checkout,'src/v2-browser-runner.mjs')).href);let admissions=0;
- const probe=await runBrowserProbe({url:'https://offline.invalid/synthetic',deadline:Date.now()+5000},{admit:async data=>{admissions++;assert.deepEqual(data,{synthetic:true});return{synthetic:true};},artifact:async()=>assert.fail('No artifacts expected')});
- assert.equal(admissions,1);assert.equal(probe.status,200);assert.equal(probe.error,null);assert.deepEqual(probe.synthetic_ack,{synthetic:true});
-});
-
-test('Python transport hands a decoded sibling filename and stdin to a synthetic interpreter',async()=>{
- const interpreter=join(root,'synthetic interpreter.mjs');
- await writeFile(interpreter,`#!/usr/bin/env node\nimport{readFile}from'node:fs/promises';try{const script=await readFile(process.argv[2],'utf8');if(!script.includes('Private child transport'))throw Error();let raw='';for await(const part of process.stdin)raw+=part;const input=JSON.parse(raw);if(input.url!=='https://offline.invalid/synthetic')throw Error();process.stdout.write(JSON.stringify({status:200,headers:[],body_base64:Buffer.from('synthetic transport').toString('base64'),received_bytes:19}));}catch{process.exitCode=2;}`);await chmod(interpreter,0o700);
- const old=process.env.GATEWAY_PYTHON;process.env.GATEWAY_PYTHON=interpreter;
- try{const{oxylabsRequest}=await import(pathToFileURL(join(checkout,'src/transport.mjs')).href);const result=await oxylabsRequest({url:'https://offline.invalid/synthetic',method:'GET',headers:{}},{url:'http://offline.invalid'},{maxResponseBytes:4096});assert.equal(result.status,200);assert.equal(result.body.toString(),'synthetic transport');assert.equal(result.error,null);}
- finally{old===undefined?delete process.env.GATEWAY_PYTHON:process.env.GATEWAY_PYTHON=old;}
+test('the capture runner executes its sibling worker from an encoded directory name',async()=>{
+ await writeFile(join(checkout,'src/browser/worker-process.mjs'),`let raw='';for await(const part of process.stdin)raw+=part;const input=JSON.parse(raw);process.on('message',message=>{if(message.id!==7)return;process.stdout.write(JSON.stringify({status:200,error:null,cookies:[],synthetic_ack:message.result,synthetic_url:input.url}),()=>process.disconnect());});process.send({id:7,kind:'admit',data:{synthetic:true}});`);
+ const {runCapture}=await import(pathToFileURL(join(checkout,'src/browser/runner.mjs')).href);let admissions=0;
+ const result=await runCapture({url:'https://offline.invalid/synthetic',deadline:Date.now()+5000},{admit:async data=>{admissions++;assert.deepEqual(data,{synthetic:true});return {synthetic:true};},artifact:async()=>assert.fail('no artifacts expected')});
+ assert.equal(admissions,1);assert.equal(result.status,200);assert.deepEqual(result.synthetic_ack,{synthetic:true});assert.equal(result.synthetic_url,'https://offline.invalid/synthetic');
 });
 
 test('quickstart accepts a literal space path, quotes it in dotenv, and rejects interpolation/control characters',async()=>{

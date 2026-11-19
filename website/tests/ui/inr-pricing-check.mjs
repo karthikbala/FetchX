@@ -32,13 +32,12 @@ await page.route('**/api/control/**', async route => {
   const send = (json, status = 200) => route.fulfill({ status, json });
   if (path === '/status') return send({ enabled: true, mail_configured: true });
   if (path === '/session') return send({ user: { email: 'inr-fixture@example.test' }, csrf_token: 'synthetic-csrf', projects: [project] });
-  if (path === '/projects/' + project.id) return send({ project, access_profiles: [], capabilities: { routes: [] } });
+  if (path === '/projects/' + project.id) return send({ project });
   if (path === '/projects/' + project.id + '/keys') return send({ keys: [] });
-  if (path === '/projects/' + project.id + '/requests') return send({ operations: [] });
-  const credits = { granted: 1000, available: 1000, settled: 0, held: 0, reserved: 0, released: 0 };
-  const paid_credits = { granted: available, available, used: 0, held: 0, reserved: 0, revoked_unused: 0, payment_hold: false };
-  if (path.endsWith('/usage')) return send({ credits, paid_credits });
-  if (path.endsWith('/billing')) return send({ credits, paid_credits, trial: { trial_target: 1000, grant_scope: 'account', grant_frequency: 'once', max_daily_operations: 25, eligible_routes: ['direct', 'datacenter'] }, stripe: {
+  if (path === '/projects/' + project.id + '/fetch') return send({ items: [], next_cursor: null });
+  const balance = { credits: 1000 + available, reserved: 0, available: 1000 + available, trial: 1000, purchased: available, held: false };
+  if (path.endsWith('/usage')) return send({ balance: { credits: balance.available, trial: 1000, purchased: available, reserved: 0, payment_hold: false }, used: { credits: 0, succeeded: 0, failed: 0, captcha_solved: 0 }, by_step: [], daily: [] });
+  if (path.endsWith('/billing')) return send({ balance, prices: { http: 1 }, stripe: {
     mode: 'live', currency: market, plans: missingCatalog ? [] : [...packs[market], ...(mixedCatalog ? [packs.usd[0]] : [])].map(plan => ({ ...plan, can_purchase: !pausedCatalog })), purchases,
     pending_checkout: pending && !['paid', 'failed', 'expired'].includes(pending.state) ? { ...pending, idempotency_key: pending.key, plan_id: pending.plan.id, currency: pending.plan.currency, amount_minor: pending.plan.amount_minor, credits: pending.plan.credits } : null,
     can_checkout: !pausedCatalog && (!pending || ['paid', 'failed', 'expired'].includes(pending.state)), can_resume_checkout: !!pending && ['awaiting_payment', 'creating'].includes(pending.state),
@@ -132,16 +131,16 @@ try {
   pending.state = 'failed';
   await stripe('check').click();
   await expect(stripe('status')).toContainText('Payment failed. No credits were added.');
-  await expect(page.locator('[data-paid-credits-available]')).toHaveText('0');
+  await expect(page.locator('[data-credit-purchased]').first()).toHaveText('0');
   await expect(page.locator('[data-stripe-plan="credits-10000-inr"]')).toBeEnabled();
   await openHostedCheckout(page.locator('[data-stripe-plan="credits-10000-inr"]'), 2);
   assert.notEqual(posts[2].idempotency_key, firstKey);
   pending.state = 'paid'; available = 10000;
   purchases.push({ ...pending.plan, plan_id: pending.plan.id, status: 'paid', paid_at: '2026-11-05T12:00:00Z' });
   await stripe('check').click();
-  await expect(stripe('status')).toContainText('Payment confirmed. Your paid credit balance has been updated.');
+  await expect(stripe('status')).toContainText('Payment confirmed. Your balance has been updated.');
   await expect(stripe('purchases')).toContainText('₹175 · Paid');
-  await expect(page.locator('[data-paid-credits-available]')).toHaveText('10,000');
+  await expect(page.locator('[data-credit-purchased]').first()).toHaveText('10,000');
   pausedCatalog = true;
   await page.locator('[data-refresh-workspace]').click();
   await expect(stripe('status')).toContainText('INR checkout is currently unavailable');

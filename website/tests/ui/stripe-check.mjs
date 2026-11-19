@@ -20,47 +20,14 @@ const extraPlans = [
 const { id: plan_id, ...planDetails } = plan;
 const purchase = status => ({ ...planDetails, plan_id, status, paid_at: '2026-12-15T12:00:00Z' });
 const csrf = 'synthetic-csrf';
-const previewText = 'Retained preview';
-const fullText = `${previewText} plus the full body with café and Montréal.`;
-const trialProfile = { id: 'trial', version: 1, origins: ['https://trial.example.com'], methods: ['GET'], proxy_classes: ['direct'], countries: [] };
-const publicRef = { id: 'public-url-http', version: 1 };
-const publicProfile = { ...publicRef, kind: 'public_url_http', origins: [], methods: ['GET', 'HEAD'], headers: ['accept'], proxy_classes: ['datacenter', 'residential'], countries: ['US'], max_daily_operations: 1000, route_reservations: [
-  { class: 'datacenter', country: 'US', paid_credit_reservation: { route_class: 'datacenter', block_bytes: 1_000_000, credits_per_block: 1, max_transfer_bytes: 1_000_000, reserved_credits: 1 } },
-  { class: 'residential', country: 'US', paid_credit_reservation: { route_class: 'residential', block_bytes: 250_000, credits_per_block: 5, max_transfer_bytes: 250_000, reserved_credits: 5 } },
-] };
-const publicRefV2 = { ...publicRef, version: 2 };
-const publicProfileV2 = { ...publicProfile, ...publicRefV2, countries: ['US', 'CA', 'AU'], route_reservations: [
-  { class: 'datacenter', country: 'CA', paid_credit_reservation: { route_class: 'datacenter', block_bytes: 1_000_000, credits_per_block: 2, max_transfer_bytes: 2_000_000, reserved_credits: 4 } },
-  { class: 'datacenter', country: 'US', paid_credit_reservation: { route_class: 'datacenter', block_bytes: 1_000_000, credits_per_block: 3, max_transfer_bytes: 1_000_000, reserved_credits: 3 } },
-] };
-const reviewedRef = execution => ({ id: `playground:fixture-${execution}`, version: 1 });
-function reviewedMatrix(url) {
-  const scoped = !url || url.hostname === 'reviewed.example';
-  return {
-    executions: [
-      { id: 'http', available: true, methods: ['GET', 'HEAD'], headers: ['accept', 'accept-language'] },
-      { id: 'browser', available: true, methods: ['GET'], max_wait_ms: 750 },
-    ],
-    routes: [
-      { class: 'direct', executions: { http: { available: true, countries: [] }, browser: { available: true, countries: [] } } },
-      { class: 'datacenter', executions: {
-        http: { available: true, countries: scoped ? ['GB', 'US'] : ['GB'] },
-        browser: { available: true, countries: ['US'] },
-      } },
-    ],
-  };
-}
 const checkoutUrl = mode => `https://checkout.stripe.com/c/pay/cs_${mode}_Synthetic#fixture`;
 const billing = [
-  { project: primary, mode: 'test', pending: null, available: 0, purchases: [] },
-  { project: secondary, mode: 'live', pending: null, trialAvailable: 998, available: 10_000, purchases: [], routeDown: true },
+  { project: primary, mode: 'test', pending: null, trial: 20, purchased: 0, purchases: [] },
+  { project: secondary, mode: 'live', pending: null, trial: 998, purchased: 10_000, purchases: [] },
 ];
-const writeKey = { id: '00000000-0000-4000-8000-000000000007', name: 'Fixture write key', scopes: ['fetch:read', 'fetch:write'] };
-const alternateKey = { ...writeKey, id: '00000000-0000-4000-8000-000000000008', name: 'Alternate key' };
-const paidFetches = [], countryFetches = [], reviewedFetches = [], publicOnlyFetches = [], preflightCalls = [], paidLookups = [], checkoutPosts = [], lookupKeys = [], unexpected = [], errors = [], consoleErrors = [], hostedVisits = [];
+const checkoutPosts = [], lookupKeys = [], unexpected = [], errors = [], consoleErrors = [], hostedVisits = [];
 let signedIn = false, failFirstCheckout = true, hideSavedCheckout = false, invalidCheckout = true;
 let delayedResponse, delayedLogout, delayedBalance;
-let unknownPaidFetch;
 const stripe = name => page.locator(`[data-stripe-${name}]`);
 const balance = name => page.locator(`[data-credit-${name}]`);
 const buy = () => page.locator(`[data-stripe-plan="${plan.id}"]`);
@@ -71,7 +38,7 @@ const assertStoredCheckout = async (mode, project, key) => {
   const saved = storage.session.find(([name]) => name === `fetchx-pending-checkout:${mode}:${project.id}`);
   assert.deepEqual(JSON.parse(saved?.[1] || 'null'), { idempotency_key: key, plan_id: plan.id });
   assert.deepEqual(storage.local, []);
-  assert.ok(storage.session.every(([name]) => /^(?:fetchx-selected-project|fetchx-pending-checkout:(?:live|test):cp_[a-f0-9-]{36}|fetchx-pending-operations:cp_[a-f0-9-]{36})$/.test(name)));
+  assert.ok(storage.session.every(([name]) => /^(?:fetchx-selected-project|fetchx-pending-checkout:(?:live|test):cp_[a-f0-9-]{36})$/.test(name)));
 };
 page.on('pageerror', error => errors.push(error.message));
 page.on('console', message => { if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:')) consoleErrors.push(message.text()); });
@@ -105,111 +72,26 @@ await page.route('**/api/control/**', async route => {
   const fixture = billing.find(value => value.project.id === match?.[1]);
   if (!fixture) return deny('project_not_found');
   const resource = match[2];
-  const trialAvailable = fixture.trialAvailable ?? 20;
-  const credits = { granted: 1000, available: fixture.merged ? 0 : trialAvailable, settled: 1000 - trialAvailable, held: 0, reserved: 0, released: 0 };
-  const trial = { trial_target: 1000, grant_scope: 'account', grant_frequency: 'once', max_daily_operations: 25, eligible_routes: ['direct', 'datacenter'] };
-  const paid_credits = { unit: 'credits', granted: fixture.available + (fixture.used || 0) + (fixture.held || 0), available: fixture.hold ? 0 : fixture.available, reserved: 0, used: fixture.used || 0, held: fixture.held || 0, revoked_unused: 0, payment_hold: !!fixture.hold };
-  const accounting = { credits, ...(fixture.omitPaidBalance ? {} : { paid_credits }),
-    ...(fixture.merged ? { credit_balance: { mode: 'unified', ...paid_credits } } : { trial }) };
-  if (fixture.project.id === secondary.id && delayedBalance && (resource === '/usage' || resource === '/billing')) await delayedBalance;
-  const paidReady = fixture.mode === 'live' && !fixture.routeDown;
-  if (resource === '') return send({ project: fixture.project, access_profiles: [...(fixture.publicOnly ? [] : [trialProfile]), ...(paidReady ? [publicProfileV2, publicProfile] : [])], capabilities: {
-    routes: paidReady ? ['direct', 'datacenter', 'residential'] : ['direct'],
-    ...(paidReady && !fixture.publicOnly ? { playground: reviewedMatrix() } : {}),
-    paid_http: { public_url_access_profile: paidReady ? publicRef : null, public_url_access_profiles: paidReady ? [publicRefV2, publicRef] : [],
-      proxy_classes: { datacenter: paidReady, residential: paidReady } },
-  } });
-  if (resource === '/keys') return send({ keys: paidReady ? fixture.publicOnly ? [writeKey] : [writeKey, alternateKey] : [] });
-  if (resource === '/playground/prepare' && method === 'POST') {
-    assert.ok(paidReady && !fixture.publicOnly);
-    const body = request.postDataJSON(), target = new URL(body.url);
-    preflightCalls.push(body);
-    if (target.pathname === '/failed-check') return deny('fixture_preflight_failed', 503);
-    const capabilities = reviewedMatrix(target);
-    const routeAvailability = capabilities.routes.find(route => route.class === body.proxy.class)?.executions[body.execution];
-    const routeAllowed = routeAvailability?.available &&
-      (body.proxy.class === 'direct' ? body.proxy.country === null : routeAvailability.countries.includes(body.proxy.country));
-    const key = [writeKey, alternateKey].find(item => item.id === body.key_id);
-    const invalidUrl = target.protocol !== 'https:' || target.hostname === '127.0.0.1';
-    const blocked = target.pathname === '/spending-limit';
-    const quote = routeAllowed && !blocked ? { credits: 2, max_estimated_micro_usd: 1500 } : null;
-    const errors = [
-      ...(invalidUrl ? [{ field: 'url', code: 'playground_destination_rejected', message: 'Use a public HTTPS hostname.' }] : []),
-      ...(!key ? [{ field: 'key_id', code: 'playground_key_selection_required', message: 'Choose an API key.' }] : []),
-      ...(!quote ? [{ field: 'proxy', code: blocked ? 'cost_ceiling_exceeded' : 'playground_route_unreviewed',
-        message: blocked ? 'The project spending limit prevents this request.' : 'This route and country are unavailable.' }] : []),
-    ];
-    return send({ ready: !errors.length, url: invalidUrl ? null : target.href, execution: body.execution,
-      access_profile: invalidUrl ? null : reviewedRef(body.execution), selected_key_id: key?.id ?? null,
-      keys: [writeKey, alternateKey], capabilities, quote, errors });
-  }
-  if (resource === '/requests') return send({ operations: [] });
-  if (resource === '/usage') return send(accounting);
+  if (delayedBalance && (resource === '/billing' || resource === '/usage')) await delayedBalance;
+  const trial = fixture.trial ?? 20;
+  const purchased = fixture.purchased ?? 0;
+  const balance = { credits: trial + purchased, reserved: 0, available: fixture.hold ? 0 : trial + purchased, trial, purchased, held: !!fixture.hold };
+  if (resource === '') return send({ project: fixture.project });
+  if (resource === '/keys') return send({ keys: [] });
+  if (resource === '/fetch') return send({ items: [], next_cursor: null });
+  if (resource === '/usage') return send({ balance: { credits: balance.available, trial, purchased, reserved: 0, payment_hold: !!fixture.hold },
+    period: { from: '2026-12-01T00:00:00Z', to: '2027-01-01T00:00:00Z' }, used: { credits: 0, succeeded: 0, failed: 0, captcha_solved: 0 }, by_step: [], daily: [] });
   if (resource === '/billing') {
     if (fixture.billingReadFails) return deny('fixture_billing_unavailable', 503);
     const { mode, purchases } = fixture;
     const pending = hideSavedCheckout ? null : fixture.pending;
-    const catalog = [extraPlans[0], { ...plan, can_purchase: true }, ...extraPlans.slice(1)].map(item => ({ ...item, can_purchase: item.can_purchase && !fixture.capacityDown }));
+    const catalog = [extraPlans[0], { ...plan, can_purchase: true }, ...extraPlans.slice(1)];
     const stripe = { mode, currency: 'usd', plans: fixture.salesPaused ? [] : catalog, purchases,
-      can_checkout: !fixture.salesPaused && !pending?.open && !fixture.hold && !fixture.routeDown && !fixture.capacityDown,
+      can_checkout: !fixture.salesPaused && !pending?.open && !fixture.hold,
       pending_checkout: pending?.open ? { plan_id: plan.id, idempotency_key: pending.key, state: pending.state } : null,
-      ...(pending?.open ? { can_resume_checkout: !fixture.hold && !fixture.routeDown && !fixture.capacityDown } : {}),
-      ...(fixture.routeDown ? { checkout_unavailable_reason: 'paid_credit_route_unavailable' } : fixture.capacityDown ? { checkout_unavailable_reason: 'paid_credit_capacity_unavailable' } : {}) };
-    return send({ status: fixture.merged ? 'active' : 'trial', ...accounting, commercial_enabled: mode === 'live' && !fixture.routeDown, stripe });
-  }
-  if (resource === '/fetch' && method === 'POST') {
-    assert.ok(paidReady);
-    const body = request.postDataJSON();
-    assert.equal(request.headers()['x-csrf-token'], csrf);
-    const { idempotency_key, ...actual } = body;
-    assert.match(idempotency_key, /^console_[a-f0-9-]{36}$/);
-    if (fixture.publicOnly) {
-      assert.deepEqual(actual, { access_profile: publicRef, url: 'https://example.com/', method: 'GET',
-        proxy: { class: 'residential', country: 'US' }, key_id: writeKey.id, automatic_transfer: true });
-      publicOnlyFetches.push(actual);
-      return send({ success: false, state: 'rejected', operation_id: null, error: { code: 'fixture_rejected', message: 'Fixture rejection.' } });
-    }
-    if (body.access_profile.id === reviewedRef('http').id) {
-      assert.deepEqual(actual, { access_profile: reviewedRef('http'), url: 'https://reviewed.example/', method: 'HEAD',
-        proxy: { class: 'datacenter', country: 'US' }, max_estimated_micro_usd: 1500, key_id: writeKey.id, headers: { 'accept-language': 'en-US' } });
-      reviewedFetches.push(actual);
-      return send({ success: false, state: 'rejected', operation_id: null,
-        error: { code: 'playground_route_unreviewed', message: 'The reviewed route changed before admission.' } });
-    }
-    if (body.proxy.class === 'datacenter') {
-      const canada = body.proxy.country === 'CA';
-      assert.deepEqual(actual, { access_profile: canada ? publicRefV2 : publicRef, url: 'https://example.com/', method: 'GET',
-        proxy: { class: 'datacenter', country: canada ? 'CA' : 'US' }, key_id: writeKey.id, automatic_transfer: true });
-      countryFetches.push(actual);
-      const paid = { basis: 'prepaid_http_wire_credits', state: canada ? 'settled' : 'released', reserved_credits: canada ? 40 : 20,
-        block_bytes: 1_000_000, credits_per_block: canada ? 2 : 1, billable_bytes: canada ? 18_452 : 0, used_credits: canada ? 2 : 0 };
-      fixture.available -= paid.used_credits;
-      fixture.used = (fixture.used || 0) + paid.used_credits;
-      return send({ success: canada, state: canada ? 'completed' : 'failed', operation_id: `fixture-country-${countryFetches.length}`, idempotency_key,
-        routing: actual.proxy, application_acceptance: 'not_evaluated', usage: { accounting: { paid_credits: paid } },
-        ...(canada ? { data: { status: 200, text: null, text_preview: previewText, text_is_preview: true, body_base64: Buffer.from(fullText).toString('base64') } } : {}) });
-    }
-    assert.deepEqual(actual, { access_profile: publicRef, url: 'https://example.com/', method: 'GET', proxy: { class: 'residential', country: 'US' }, key_id: writeKey.id, automatic_transfer: true });
-    assert.ok(await page.evaluate(key => Object.values(sessionStorage).some(value => value.includes(key)), idempotency_key));
-    paidFetches.push({ idempotency_key, ...actual });
-    const paid = { basis: 'prepaid_http_wire_credits', reserved_credits: 400, block_bytes: 250_000, credits_per_block: 5 };
-    const result = { operation_id: `fixture-transfer-${paidFetches.length}`, idempotency_key, routing: actual.proxy, application_acceptance: 'not_evaluated' };
-    if (paidFetches.length === 2) {
-      fixture.available -= paid.reserved_credits;
-      fixture.held = paid.reserved_credits;
-      unknownPaidFetch = { ...result, success: false, state: 'unknown', error: { code: 'max_transfer_bytes_exceeded', message: 'The operation reached its wire limit. max_transfer_mb sets the wire ceiling.' },
-        usage: { wire_bytes: null, accounting: { paid_credits: { ...paid, state: 'held', used_credits: null, billable_bytes: null, billable_blocks: null } } } };
-      return send(unknownPaidFetch);
-    }
-    fixture.available -= 20;
-    fixture.used += 20;
-    return send({ ...result, success: true, state: 'completed', data: { status: 200, text: 'Retained synthetic response.' },
-      usage: { wire_bytes: 810_000, accounting: { paid_credits: { ...paid, state: 'settled', billable_bytes: 810_000, billable_blocks: 4, used_credits: 20 } } } });
-  }
-  if (resource.startsWith('/fetch/') && method === 'GET') {
-    const key = resource.slice('/fetch/'.length);
-    paidLookups.push(key);
-    return key === unknownPaidFetch?.idempotency_key ? send(unknownPaidFetch) : deny('operation_not_found');
+      ...(pending?.open ? { can_resume_checkout: !fixture.hold } : {}),
+      ...(fixture.hold ? { checkout_unavailable_reason: 'paid_credit_payment_hold' } : {}) };
+    return send({ balance, prices: { http: 1, http_residential: 5, browser: 10, browser_residential: 25, captcha: 10, residential_overage_per_mb: 5, residential_included_mb: { http_residential: 1, browser_residential: 5 } }, stripe });
   }
   if (resource === '/billing/stripe/checkout' && method === 'POST') {
     const body = request.postDataJSON(), { mode, project } = fixture;
@@ -235,16 +117,11 @@ await page.route('**/api/control/**', async route => {
 });
 
 try {
-  await go('/docs/fetch#paid-public-urls');
-  const paidExample = page.locator('#paid-public-urls pre');
-  await expect(paidExample).toContainText('"access_profile": {"id": "public-url-http", "version": 1}');
-  await expect(paidExample).not.toContainText(/max_transfer_mb|max_credits|automatic_transfer/);
-  await expect(paidExample).not.toContainText('+  -H');
   await go('/pricing');
   const trialCard = page.locator('.mkt-plan').filter({ has: page.getByRole('heading', { name: 'Free trial', exact: true }) });
   await expect(trialCard.locator('.mkt-plan-price')).toHaveText('$0.00');
   await expect(trialCard).toContainText('1,000 trial credits');
-  await expect(trialCard).toContainText('One-time per eligible account');
+  await expect(trialCard).toContainText('Once per account');
   await expect(trialCard.getByRole('link', { name: 'Start free' })).toHaveAttribute('href', '/signup');
   for (const [name, price, rate] of [['10,000 credits', '$2.00', '$0.20 / 1,000 credits'], ['50,000 credits', '$8.00', '$0.16 / 1,000 credits'], ['150,000 credits', '$20.00', '$0.1333 / 1,000 credits'], ['1,000,000 credits', '$100.00', '$0.10 / 1,000 credits']]) {
     const card = page.locator('.mkt-plan').filter({ has: page.getByRole('heading', { name, exact: true }) });
@@ -252,9 +129,6 @@ try {
     await expect(card.locator('.mkt-plan-credits strong')).toHaveText(rate);
   }
   await page.screenshot({ path: `${out}/credit-pricing-desktop.png`, fullPage: true });
-  await page.setViewportSize({ width: 360, height: 850 });
-  await page.screenshot({ path: `${out}/credit-pricing-mobile.png`, fullPage: true });
-  await page.setViewportSize({ width: 1200, height: 900 });
   await page.getByRole('link', { name: 'Review package for 50,000 credits' }).click();
   await expect(page.locator('.pp-auth-switch')).toHaveAttribute('href', /\/login\?view=billing&plan=credits-50000$/);
   await page.locator('[data-signup-email] input').fill('billing-fixture@example.test');
@@ -265,14 +139,12 @@ try {
   await expect(stripe('mode')).toHaveText('STRIPE SANDBOX');
   await expect(balance('total')).toHaveText(['20', '20']);
   await expect(balance('trial')).toHaveText(['20', '20']);
-  await expect(balance('paid')).toHaveText(['0', '0']);
-  await expect(page.locator('[data-billing-policy]')).toContainText('1,000 trial credits once');
-  await expect(page.locator('[data-trial-daily-limit]')).toHaveText('Project limit for scoped routes: 25 requests per day.');
+  await expect(balance('purchased')).toHaveText(['0', '0']);
   await expect(page.locator('.pp-stripe-plan-preferred')).toContainText('50,000 credits');
   await expect(stripe('plans')).toContainText('$0.16 / 1,000 credits');
   await expect(page.locator('[data-stripe-plan="credits-1000000"]')).toBeHidden();
   await expect(stripe('plans')).toContainText('Currently unavailable for this project.');
-  assert.equal(checkoutPosts.length, 0, 'A plan hint must not initiate checkout');
+  assert.equal(checkoutPosts.length, 0, 'A plan hint must not start a checkout');
   for (const width of [320, 1200]) {
     await page.setViewportSize({ width, height: 900 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -280,8 +152,8 @@ try {
     assert.deepEqual(audit.violations, [], `Billing accessibility at ${width}px`);
   }
   await expect(stripe('plans')).toHaveCSS('display', 'grid');
-  await page.screenshot({ path: `${out}/credit-billing-sandbox.png`, fullPage: true });
 
+  // A lost checkout response keeps its key; the saved checkout resumes with the same key.
   await buy().click();
   await expect(stripe('error')).toContainText('Checkout could not be confirmed');
   await expect(buy()).toBeHidden();
@@ -289,11 +161,9 @@ try {
   await go('/app/billing?checkout=success');
   await expect(stripe('status')).toContainText('saved checkout is still unconfirmed');
   await expect(stripe('resume')).toBeVisible();
-  await expect(buy()).toBeHidden();
   hideSavedCheckout = false;
   await go('/app/billing?checkout=success');
   await expect(stripe('status')).toContainText('Payment confirmation is processing');
-  await expect(page.locator('[data-credits-available]')).toHaveText('20');
   assert.equal(checkoutPosts.length, 1);
   assert.equal(lookupKeys.at(-1).key, checkoutPosts[0].key);
   await page.evaluate(() => { for (const key of Object.keys(sessionStorage)) if (key.startsWith('fetchx-pending-checkout:')) sessionStorage.removeItem(key); });
@@ -311,51 +181,28 @@ try {
   billing[0].pending = { ...billing[0].pending, state: 'test_paid_unapplied', open: false };
   billing[0].purchases.push(purchase('test_paid_unapplied'));
   await expect(stripe('status')).toContainText('Test payment confirmed');
-  await expect(page.locator('[data-paid-credits-available]')).toHaveText('0');
-  await expect(page.locator('[data-credits-available]')).toHaveText('20');
+  await expect(balance('total')).toHaveText(['20', '20']);
   await expect(stripe('purchases')).toContainText('50,000 credits · $8.00 · Test payment');
   await expect(buy()).toBeEnabled();
   billing[0].salesPaused = true;
   await page.locator('[data-refresh-workspace]').click();
-  await expect(stripe('status')).toContainText('Paid credit checkout is currently unavailable');
-  await expect(stripe('purchases')).toContainText('50,000 credits · $8.00 · Test payment');
+  await expect(stripe('status')).toContainText('Buying credits is currently unavailable');
   await expect(buy()).toHaveCount(0);
 
+  // Switching projects mid-load shows loading, then the other project's live billing.
   const select = page.locator('[data-project-select]');
   let releaseBalance;
   delayedBalance = new Promise(resolve => { releaseBalance = resolve; });
   await select.selectOption(secondary.id);
   await expect(balance('total')).toHaveText(['Loading…', 'Loading…']);
-  await expect(page.locator('.pp-sidebar-credits [data-credit-breakdown]')).toBeHidden();
   releaseBalance();
   delayedBalance = null;
   await expect(stripe('mode')).toHaveText('LIVE BILLING');
   await expect(balance('total')).toHaveText(['10,998', '10,998']);
   await expect(balance('trial')).toHaveText(['998', '998']);
-  await expect(balance('paid')).toHaveText(['10,000', '10,000']);
-  billing[1].omitPaidBalance = true;
-  await page.locator('[data-refresh-workspace]').click();
-  await expect(balance('total')).toHaveText(['Unavailable', 'Unavailable']);
-  await expect(balance('trial')).toHaveText(['998', '998']);
-  await expect(balance('paid')).toHaveText(['Unavailable', 'Unavailable']);
-  billing[1].omitPaidBalance = false;
-  await expect(stripe('status')).toContainText('Checkout will open when a paid route is ready');
-  await expect(buy()).toBeHidden();
-  await expect(page.locator('[data-paid-credits-use]')).toBeHidden();
-  await page.screenshot({ path: `${out}/credit-billing-route-unavailable.png`, fullPage: true });
-  await go('/app/playground');
-  await expect(page.locator('[data-request-profile]')).toHaveValue('trial@1');
-  await expect(page.locator('[data-request-profile] option[value="public-url-http@1"]')).toHaveCount(0);
-  await expect(page.locator('[data-credit-usage]')).toBeHidden();
-  await go('/app/billing');
-  await expect(stripe('mode')).toHaveText('LIVE BILLING');
-  billing[1].routeDown = false;
-  billing[1].capacityDown = true;
-  await page.locator('[data-refresh-workspace]').click();
-  await expect(stripe('status')).toContainText('Paid route capacity is currently unavailable');
-  await expect(buy()).toBeHidden();
-  billing[1].capacityDown = false;
-  await page.locator('[data-refresh-workspace]').click();
+  await expect(balance('purchased')).toHaveText(['10,000', '10,000']);
+
+  // A checkout answered after switching away is picked up when switching back.
   let release;
   delayedResponse = new Promise(resolve => { release = resolve; });
   await buy().click();
@@ -368,224 +215,35 @@ try {
   assert.equal(lookupKeys.at(-1).key, checkoutPosts[3].key);
   billing[1].pending = { ...billing[1].pending, state: 'paid', open: false };
   billing[1].purchases.push(purchase('paid'));
-  billing[1].available += plan.credits + billing[1].trialAvailable;
-  billing[1].merged = true;
+  billing[1].purchased += plan.credits;
   await stripe('check').click();
   await expect(stripe('status')).toContainText('Payment confirmed');
   await expect(balance('total')).toHaveText(['60,998', '60,998']);
-  for (const breakdown of await balance('breakdown').all()) await expect(breakdown).toBeHidden();
-  await expect(page.locator('[data-credits-available-label]')).toHaveText('Credits allocated');
-  await expect(page.locator('[data-credits-granted]')).toHaveText('Added to this balance');
-  await expect(page.locator('[data-trial-daily-limit]')).toBeHidden();
   await expect(stripe('purchases')).toContainText('50,000 credits · $8.00 · Paid');
-  await expect(page.locator('[data-paid-credits-use] a[href="/docs/fetch#paid-public-urls"]')).toBeVisible();
   billing[1].billingReadFails = true;
   await page.locator('[data-refresh-workspace]').click();
-  await expect(page.locator('[data-page-error]')).toContainText('Some project data could not be loaded.');
-  await expect(balance('total')).toHaveText(['60,998', '60,998']);
+  await expect(page.locator('[data-page-error]')).toContainText('could not be loaded');
   billing[1].billingReadFails = false;
   await page.locator('[data-refresh-workspace]').click();
-  await expect(stripe('purchases')).toContainText('50,000 credits · $8.00 · Paid');
+  await expect(balance('total')).toHaveText(['60,998', '60,998']);
   await page.screenshot({ path: `${out}/credit-billing-populated.png`, fullPage: true });
-  await page.setViewportSize({ width: 360, height: 850 });
-  await page.screenshot({ path: `${out}/credit-billing-mobile.png`, fullPage: true });
-  await page.locator('[data-paid-credits-use] a[href="/app/playground"]').click();
-  const creditUsage = page.getByRole('region', { name: 'Credit usage' });
-  const usageSummary = page.locator('[data-credit-usage-summary]');
-  const requestStatus = page.locator('[data-request-status]');
-  const http = page.locator('input[name="mode"][value="http"]');
-  const browserMode = page.locator('input[name="mode"][value="browser"]');
-  const paidRoute = page.locator('[data-request-route]');
-  const proxyCountry = page.getByRole('combobox', { name: 'Proxy country' });
-  const runRequest = page.locator('[data-run-request]');
-  const destination = page.locator('[data-request-url]');
-  const requestKey = page.locator('[data-request-key]');
-  const requestMethod = page.locator('[data-request-method]');
-  const generatedCode = page.locator('[data-generated-code]');
-  const chooseExecution = mode => page.locator('.pp-mode-options label').filter({ has: mode }).click();
-  await expect(creditUsage).toBeHidden();
-  await expect(page.getByLabel('Access mode')).toHaveCount(0);
-  await expect(http).toBeChecked();
-  await expect(browserMode).toBeEnabled();
-  await expect(paidRoute).toHaveValue('direct');
-  await expect(proxyCountry).toBeHidden();
 
-  // A project with only public profiles has no reviewed check to wait for.
-  billing[1].publicOnly = true;
-  await page.reload();
-  await expect(browserMode).toBeDisabled();
-  await paidRoute.selectOption('residential');
-  await expect(proxyCountry).toHaveValue('United States (US)');
-  await destination.fill('https://example.com/');
-  await expect(page.locator('[data-selected-key]')).toContainText('Fixture write key');
-  await expect(runRequest).toBeEnabled();
-  await expect(generatedCode).toContainText('"id":"public-url-http","version":1');
-  await runRequest.click();
-  await expect(page.locator('[data-response-state]')).toHaveText('Rejected');
-  assert.equal(publicOnlyFetches.length, 1);
-  assert.equal(preflightCalls.length, 0);
-  billing[1].publicOnly = false;
-  await page.reload();
-  await expect(browserMode).toBeEnabled();
-  await paidRoute.selectOption('datacenter');
-  await proxyCountry.click();
-  await expect(page.getByRole('listbox', { name: 'Proxy country' }).getByRole('option')).toHaveText(['Canada (CA)', 'United Kingdom (GB)', 'United States (US)']);
-  await proxyCountry.press('Escape');
-  await chooseExecution(browserMode);
-  await expect(proxyCountry).toHaveValue('United States (US)');
-  await expect(paidRoute.locator('option[value="residential"]')).toHaveAttribute('disabled', '');
-  await proxyCountry.click();
-  await expect(page.getByRole('listbox', { name: 'Proxy country' }).getByRole('option')).toHaveText(['United States (US)']);
-  await proxyCountry.press('Escape');
-  await chooseExecution(http);
-  await proxyCountry.fill('US');
-  await proxyCountry.press('Enter');
-  await destination.fill('https://reviewed.example/');
-  await requestKey.selectOption(writeKey.id);
-  await page.locator('[data-request-advanced] summary').click();
-  await requestMethod.selectOption('HEAD');
-  await page.locator('[data-request-header="accept-language"]').fill('en-US');
-  await expect(runRequest).toBeEnabled();
-  await expect(generatedCode).toContainText('"id":"playground:fixture-http"');
-  await runRequest.click();
-  await expect(page.locator('[data-response-state]')).toHaveText('Rejected');
-  assert.equal(reviewedFetches.length, 1);
-  assert.equal(paidFetches.length + countryFetches.length, 0, 'A rejected dispatch must not trigger public routing');
-  await page.locator('[data-new-request]').click();
-  await requestMethod.selectOption('GET');
-
-  await paidRoute.selectOption('datacenter');
-  await proxyCountry.fill('AU');
-  await expect(page.getByText('No matching proxy countries.')).toBeVisible();
-  await proxyCountry.press('Escape');
-  await proxyCountry.press('ArrowDown');
-  await expect(page.getByRole('option', { name: 'Canada (CA)' })).toBeVisible();
-  await proxyCountry.press('Enter');
-  await expect(proxyCountry).toHaveValue('Canada (CA)');
-  await destination.fill('https://example.com/spending-limit');
-  await expect(requestStatus).toContainText('The project spending limit prevents this request.');
-  await expect(runRequest).toBeDisabled();
-  await destination.fill('https://example.com/failed-check');
-  await expect(requestStatus).toContainText('Fixture error');
-  await expect(runRequest).toBeDisabled();
-  await destination.fill('https://example.com/');
-  await expect(runRequest).toBeEnabled();
-  await expect(requestStatus).toHaveText('Ready to send.');
-  await expect(generatedCode).toContainText('"id":"public-url-http","version":2');
-  await expect(page.locator('[data-request-header="accept-language"]')).toBeHidden();
-  assert.deepEqual(preflightCalls.at(-1), { url: 'https://example.com/', execution: 'http', method: 'GET',
-    proxy: { class: 'datacenter', country: 'CA' }, key_id: writeKey.id });
-  await expect(page.getByLabel('Max transfer in MB')).toHaveCount(0);
-  await expect(page.getByLabel('Credit cap')).toHaveCount(0);
-  await proxyCountry.press('Enter');
-  await proxyCountry.press('Escape');
-  assert.equal(countryFetches.length, 0);
-  await runRequest.click();
-  await expect(page.locator('[data-response-state]')).toHaveText('Completed');
-  await expect(page.locator('[data-result-country]')).toHaveText('Canada (CA)');
-  await expect(usageSummary).toHaveText('2 credits used.');
-  await expect(page.locator('[data-credit-usage-transfer]')).toHaveText('18,452 bytes');
-  await expect(page.locator('[data-credit-usage-block-size]')).toHaveText('1 MB');
-  await expect(page.locator('[data-credit-usage-calculation]')).toHaveText('1 block × 2 credits per block = 2 credits');
-  await expect(page.locator('[data-response-output]')).toContainText(previewText);
-  await expect(page.locator('[data-response-output]')).toContainText('Download for the full retained body.');
-  await expect(page.locator('[data-copy-body]')).toBeHidden();
-  const textDownload = page.waitForEvent('download');
-  await page.locator('[data-download-body]').click();
-  const retainedText = await textDownload;
-  assert.equal(retainedText.suggestedFilename(), 'fetchx-body.txt');
-  assert.equal(await fs.readFile(await retainedText.path(), 'utf8'), fullText);
-  assert.equal(countryFetches.length, 1);
-  await page.locator('[data-new-request]').click();
-  await paidRoute.selectOption('residential');
-  await expect(proxyCountry).toHaveValue('United States (US)');
-  await paidRoute.selectOption('datacenter');
-  await expect(proxyCountry).toHaveValue('Canada (CA)');
-  await proxyCountry.click();
-  await page.getByRole('option', { name: 'United States (US)' }).click();
-  await runRequest.click();
-  await expect(page.locator('[data-response-state]')).toHaveText('Failed');
-  await expect(usageSummary).toHaveText('0 credits used. Reservation released.');
-  await expect(page.locator('[data-credit-usage-meter]')).toBeHidden();
-  assert.equal(countryFetches.length, 2);
-  await page.locator('[data-new-request]').click();
-  await paidRoute.selectOption('residential');
-  await expect(proxyCountry).toHaveValue('United States (US)');
-  await page.locator('[data-request-key]').selectOption(writeKey.id);
-  await page.locator('[data-request-url]').fill('https://example.com/');
-  await page.locator('[data-inspector-tab="code"]').click();
-  await expect(page.locator('[data-generated-code]')).toContainText('"class":"residential"');
-  await expect(page.locator('[data-generated-code]')).not.toContainText(/max_transfer_mb|max_credits|automatic_transfer/);
-  await page.locator('[data-inspector-tab="output"]').click();
-  await page.locator('[data-request-url]').fill('http://example.com/');
-  await expect(page.locator('[data-run-request]')).toBeDisabled();
-  await expect(requestStatus).toContainText('Use a public HTTPS hostname');
-  assert.equal(paidFetches.length, 0);
-  await page.locator('[data-request-url]').fill('https://example.com/');
-  await page.locator('[data-run-request]').click();
-  await expect(page.locator('[data-response-state]')).toHaveText('Completed');
-  await expect(creditUsage).toBeVisible();
-  await expect(usageSummary).toHaveText('20 credits used.');
-  await expect(page.locator('[data-credit-usage-transfer]')).toHaveText('810,000 bytes');
-  await expect(page.locator('[data-credit-usage-block-size]')).toHaveText('250 KB');
-  await expect(page.locator('[data-credit-usage-blocks]')).toHaveText('4');
-  await expect(page.locator('[data-credit-usage-rate]')).toHaveText('5 credits per block');
-  await expect(page.locator('[data-credit-usage-calculation]')).toHaveText('4 blocks × 5 credits per block = 20 credits');
-  const usageAudit = await new AxeBuilder({ page }).include('[data-credit-usage]').withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
-  assert.deepEqual(usageAudit.violations, []);
-  assert.equal(paidFetches.length, 1);
-  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-  await page.evaluate(() => { document.activeElement.blur(); window.scrollTo({ top: 0, behavior: 'instant' }); });
-  await page.screenshot({ path: `${out}/credit-playground-metered.png`, fullPage: true });
-  await page.setViewportSize({ width: 1200, height: 900 });
-  await page.screenshot({ path: `${out}/credit-playground-metered-desktop.png`, fullPage: true });
-  await page.locator('[data-new-request]').click();
-  await expect(creditUsage).toBeHidden();
-  await page.locator('[data-run-request]').click();
-  await expect(page.locator('[data-response-state]')).toHaveText('Unknown');
-  await expect(page.locator('[data-response-error]')).toContainText('Recover the saved operation using its original key.');
-  await expect(page.locator('[data-response-error]')).not.toContainText('max_transfer_mb');
-  await expect(page.locator('[data-credit-usage-meter]')).toBeHidden();
-  await expect(usageSummary).toHaveText('400 credits held. The final charge is pending.');
-  assert.notEqual(paidFetches[0].idempotency_key, paidFetches[1].idempotency_key);
-  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
-  await expect(page.locator('[data-request-url]')).toHaveValue('');
-  await expect(creditUsage).toBeHidden();
-  await expect(page.locator('[data-generated-code]')).toBeEmpty();
-  await page.reload();
-  await expect(page.locator('[data-response-state]')).toHaveText('Pending recovery');
-  await expect(http).toBeChecked();
-  await page.locator('[data-recover-result]').click();
-  await expect.poll(() => paidLookups).toEqual([paidFetches[1].idempotency_key]);
-  await expect(page.locator('[data-response-state]')).toHaveText('Unknown');
-  await expect(usageSummary).toHaveText('400 credits held. The final charge is pending.');
-  await expect(page.locator('[data-credit-usage-meter]')).toBeHidden();
-  assert.equal(paidFetches.length, 2);
-  await go('/app/billing');
-  await expect(balance('total')).toHaveText(['60,576', '60,576']);
-  await expect(page.locator('[data-paid-credits-held]')).toHaveText('400');
+  // A payment hold stops checkout and spending.
   billing[1].hold = true;
   await page.locator('[data-refresh-workspace]').click();
-  await expect(page.locator('[data-paid-credits-hold]')).toBeVisible();
+  await expect(page.locator('[data-credit-hold]')).toBeVisible();
   await expect(balance('total')).toHaveText(['On hold', 'On hold']);
+  await expect(stripe('status')).toContainText('Billing is on hold');
   await expect(buy()).toBeHidden();
   await go('/app/playground');
-  await expect(balance('total')).toHaveText('On hold');
-  await page.locator('[data-new-request]').click();
-  await page.locator('[data-confirm-action]').click();
-  await expect(requestStatus).toContainText('credits are on hold');
-  await expect(page.locator('[data-run-request]')).toBeDisabled();
-  await chooseExecution(browserMode);
-  await page.locator('[data-request-url]').fill('https://trial.example.com/');
-  await expect(requestStatus).toContainText('credits are on hold');
-  await expect(page.locator('[data-run-request]')).toBeDisabled();
-  await chooseExecution(http);
-  await paidRoute.selectOption('residential');
+  await page.locator('[data-playground-form] input[name="url"]').fill('https://shop.example.com/');
   await expect(page.locator('[data-run-request]')).toBeDisabled();
   await go('/app/billing');
   billing[1].hold = false;
   await page.locator('[data-refresh-workspace]').click();
-  await expect(balance('total')).toHaveText(['60,576', '60,576']);
+  await expect(balance('total')).toHaveText(['60,998', '60,998']);
+
+  // Signing out during a checkout never navigates to Stripe afterwards.
   delayedResponse = new Promise(resolve => { release = resolve; });
   let releaseLogout;
   delayedLogout = new Promise(resolve => { releaseLogout = resolve; });
@@ -602,7 +260,7 @@ try {
   assert.deepEqual(unexpected, []);
   assert.deepEqual(errors, []);
   assert.deepEqual(consoleErrors, []);
-  console.log('Stripe fixture passed: checkout, credit balances, public URL country and profile selection, automatic transfer limits, metered usage, release and held recovery');
+  console.log('Stripe fixture passed: pricing, checkout recovery, project switching, confirmed purchase, payment hold and sign-out during checkout');
 } finally {
   await browser.close();
 }

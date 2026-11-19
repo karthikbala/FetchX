@@ -107,28 +107,31 @@ describe('same-origin control bridge',()=>{
  it('restricts paths, methods and bounded query parameters before contacting the gateway',async()=>{
   for(const path of ['/anything','/projects/a/keys','/status/extra','/projects/'+project+'/fetch/key%2Fextra','/status?upstream=https://attacker.example'])expect((await send(path)).status).toBeGreaterThanOrEqual(400);
   const method=await send('/status',{method:'POST',body:'{}'});expect(method.status).toBe(405);expect(method.headers.get('Allow')).toBe('GET');
-  expect((await send(`/projects/${project}/requests?limit=51`)).status).toBe(400);expect((await send(`/projects/${project}/requests?limit=2&limit=3`)).status).toBe(400);expect(calls).toHaveLength(0);
-  expect((await send(`/projects/${project}/requests?limit=50`)).status).toBe(200);expect(calls[0].url).toContain('?limit=50');
+  for(const query of ['limit=101','limit=2&limit=3','status=done','tag=a%20b','cursor=x&extra=1'])expect((await send(`/projects/${project}/fetch?${query}`)).status).toBe(400);
+  expect((await send(`/projects/${project}/usage?period=year`)).status).toBe(400);expect(calls).toHaveLength(0);
+  expect((await send(`/projects/${project}/fetch?limit=25&status=failed&tag=console&cursor=abc_-1`)).status).toBe(200);expect(calls[0].url).toContain('?limit=25&status=failed&tag=console&cursor=abc_-1');
+  expect((await send(`/projects/${project}/usage?period=day`)).status).toBe(200);
  });
- it('forwards only the bounded playground preparation, render submission and recovery routes',async()=>{
-  const base=`/projects/${project}`,body=JSON.stringify({url:'https://source.example/path?x=1'});
-  expect((await send(`${base}/playground/prepare`,{method:'POST',body})).status).toBe(200);
-  expect((await send(`${base}/render`,{method:'POST',body})).status).toBe(200);
-  expect((await send(`${base}/render/${encodeURIComponent('render-key:1')}`)).status).toBe(200);
+ it('forwards only the console fetch routes: submit, list, read and delete one result',async()=>{
+  const base=`/projects/${project}`,id='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',body=JSON.stringify({url:'https://source.example/path?x=1'});
+  expect((await send(`${base}/fetch`,{method:'POST',body})).status).toBe(200);
+  expect((await send(`${base}/fetch/${id}?include_body=false`)).status).toBe(200);
+  expect((await send(`${base}/fetch/${id}`,{method:'DELETE'})).status).toBe(200);
+  expect((await send(`${base}/webhook-secret/rotate`,{method:'POST',body:'{}'})).status).toBe(200);
   expect(calls.map(({url,init})=>[url,init.method,init.body])).toEqual([
-   [`https://gateway.example/control${base}/playground/prepare`,'POST',body],
-   [`https://gateway.example/control${base}/render`,'POST',body],
-   [`https://gateway.example/control${base}/render/render-key%3A1`,'GET',undefined]
+   [`https://gateway.example/control${base}/fetch`,'POST',body],
+   [`https://gateway.example/control${base}/fetch/${id}?include_body=false`,'GET',undefined],
+   [`https://gateway.example/control${base}/fetch/${id}`,'DELETE','{}'],
+   [`https://gateway.example/control${base}/webhook-secret/rotate`,'POST','{}'],
   ]);
-  expect((await send(`${base}/playground/prepare`)).status).toBe(405);
-  expect((await send(`${base}/render/saved`,{method:'POST',body})).status).toBe(405);
-  expect((await send(`${base}/render/key%2Fextra`)).status).toBe(404);
-  expect((await send(`${base}/render/saved?url=other`)).status).toBe(400);
-  expect((await send(`${base}/render`,{method:'POST',body,headers:{'X-CSRF-Token':'invalid'}})).status).toBe(403);
-  expect((await send(`${base}/playground/prepare`,{method:'POST',body,headers:{Origin:'https://other.example'}})).status).toBe(403);
-  upstream=()=>{throw new Error('uncertain render submission');};
-  expect((await send(`${base}/render`,{method:'POST',body})).status).toBe(502);
-  expect(calls).toHaveLength(4);
+  for(const path of [`${base}/render`,`${base}/playground/prepare`,`${base}/requests`,`${base}/fetch/not-a-uuid`,`${base}/fetch/${id}/content`])expect((await send(path)).status).toBe(404);
+  expect((await send(`${base}/fetch/${id}`,{method:'POST',body})).status).toBe(405);
+  expect((await send(`${base}/fetch/${id}?url=other`)).status).toBe(400);
+  expect((await send(`${base}/fetch`,{method:'POST',body,headers:{'X-CSRF-Token':'invalid'}})).status).toBe(403);
+  expect((await send(`${base}/fetch`,{method:'POST',body,headers:{Origin:'https://other.example'}})).status).toBe(403);
+  upstream=()=>{throw new Error('lost submission');};
+  expect((await send(`${base}/fetch`,{method:'POST',body})).status).toBe(502);
+  expect(calls).toHaveLength(5);
  });
  it('forwards only the admin portal routes and methods, without query strings',async()=>{
   const rule=JSON.stringify({rule:{id:'evomi-x',provider:'evomi',match:{host:'a.example.com'},action:'exclude',reason:'r'}});
@@ -147,15 +150,14 @@ describe('same-origin control bridge',()=>{
   for(const [path,method,body] of ok)expect((await send(path,{method,body})).status).toBe(200);
   expect(calls.map(({url,init})=>[url.replace('https://gateway.example/control',''),init.method])).toEqual(ok.map(([path,method])=>[path,method]));
  });
- it('forwards only the admin probe and profile routes',async()=>{
+ it('forwards only the admin probe and site knowledge routes',async()=>{
   const probe='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
-  for(const path of [`/admin/probes/${probe}/extra`,'/admin/probes/not-a-uuid','/admin/profiles/a/b/routing','/admin/profiles/-bad/routing',`/admin/profiles/${'x'.repeat(129)}/routing`])expect((await send(path)).status).toBe(404);
-  expect((await send('/admin/profiles',{method:'POST',body:'{}'})).status).toBe(405);
+  for(const path of [`/admin/probes/${probe}/extra`,'/admin/probes/not-a-uuid','/admin/profiles','/admin/profiles/src.city/routing','/admin/sites/Bad_Host','/admin/sites/a.com/extra'])expect((await send(path)).status).toBe(404);
+  expect((await send('/admin/sites',{method:'DELETE'})).status).toBe(405);
   expect((await send(`/admin/probes/${probe}`,{method:'POST',body:'{}'})).status).toBe(405);
-  expect((await send('/admin/profiles/src.city/routing')).status).toBe(405);
   expect(calls).toHaveLength(0);
   const ok:[string,string,string?][]=[['/admin/probes','GET'],['/admin/probes','POST','{"host":"a.example","countries":["US"]}'],[`/admin/probes/${probe}`,'GET'],[`/admin/probes/${probe}/apply`,'POST','{"rules":[]}'],
-   ['/admin/profiles','GET'],['/admin/profiles/fetchx.qualification.expedia/routing','PUT','{"patch":{"country":"US"}}'],['/admin/profiles/fetchx.qualification.expedia/routing','DELETE'],['/admin/profiles/fetchx.qualification.expedia/audit','GET']];
+   ['/admin/sites','GET'],['/admin/sites/shop.example.com','GET'],['/admin/sites/shop.example.com','DELETE']];
   for(const [path,method,body] of ok)expect((await send(path,{method,body})).status).toBe(200);
   expect(calls.map(({url,init})=>[url.replace('https://gateway.example/control',''),init.method])).toEqual(ok.map(([path,method])=>[path,method]));
  });
@@ -272,8 +274,8 @@ describe('same-origin control bridge',()=>{
   upstream=()=>new Response('{}',{headers:{'Content-Type':'application/json','Content-Length':String(CONTROL_RESPONSE_LIMIT+1)}});expect((await send()).status).toBe(502);
   upstream=()=>new Response(new ReadableStream({start(controller){controller.enqueue(new Uint8Array(CONTROL_RESPONSE_LIMIT+1));controller.close();}}),{headers:{'Content-Type':'application/json'}});expect((await send()).status).toBe(502);
  });
- it('passes a full 20 MB base64 fetch result within its scoped response budget',async()=>{
-  const encodedLength=4*Math.ceil(20_000_000/3);
+ it('passes a full 10 MB base64 fetch result within its scoped response budget',async()=>{
+  const encodedLength=4*Math.ceil(10_000_000/3);
   upstream=()=>new Response(new ReadableStream({start(controller){
    const encoder=new TextEncoder(),chunk=encoder.encode('A'.repeat(1024*1024));
    controller.enqueue(encoder.encode('{"data":{"body_base64":"'));
@@ -286,7 +288,7 @@ describe('same-origin control bridge',()=>{
   expect(result.status).toBe(200);
   expect(result.headers.get('Cache-Control')).toBe('no-store');
   expect((await result.json() as {data:{body_base64:string}}).data.body_base64.length).toBe(encodedLength);
-  expect((await send(`${path}/saved`)).status).toBe(200);
+  expect((await send(`${path}/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee`)).status).toBe(200);
   expect((await send('/session')).status).toBe(502);
  });
  it('times out a slow response body without replaying a submission',async()=>{

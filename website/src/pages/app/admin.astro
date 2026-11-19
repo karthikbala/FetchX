@@ -3,7 +3,7 @@ import Layout from '../../layouts/Layout.astro';
 import Brand from '../../components/Brand.astro';
 import '../../styles/product-preview.css';
 ---
-<Layout title="Admin — FetchX" description="Operator tools for FetchX routing rules, reachability probes and profile routing." appMode={true} noindex={true}>
+<Layout title="Admin — FetchX" description="Operator tools for FetchX provider rules, reachability probes and site knowledge." appMode={true} noindex={true}>
   <div class="product-preview fx-admin" data-admin>
     <header class="fx-admin-top">
       <a href="/app" class="pp-brand" aria-label="FetchX workspace"><Brand/></a>
@@ -13,7 +13,7 @@ import '../../styles/product-preview.css';
     <main class="fx-admin-main">
       <p class="pp-eyebrow">OPERATOR</p>
       <h1>Routing administration</h1>
-      <p class="fx-admin-lede">Provider rules, reachability probes and profile routing. Every change is validated, versioned and recorded with your email.</p>
+      <p class="fx-admin-lede">Provider rules, reachability probes and what FetchX has learned per site. Every change is validated, versioned and recorded with your email.</p>
       <p class="fx-admin-error" data-admin-error role="alert" hidden></p>
       <section class="fx-admin-gate" data-admin-gate><p data-admin-gate-text>Checking your session…</p><a href="/login" class="pp-button pp-button-primary" data-admin-login hidden>Sign in</a></section>
 
@@ -21,7 +21,7 @@ import '../../styles/product-preview.css';
         <nav class="fx-admin-tabs" role="tablist" aria-label="Admin sections">
           <button type="button" role="tab" data-tab="rules" aria-selected="true">Provider rules</button>
           <button type="button" role="tab" data-tab="probes" aria-selected="false">Reachability probes</button>
-          <button type="button" role="tab" data-tab="profiles" aria-selected="false">Profile routing</button>
+          <button type="button" role="tab" data-tab="sites" aria-selected="false">Site knowledge</button>
           <button type="button" role="tab" data-tab="audit" aria-selected="false">Audit log</button>
         </nav>
 
@@ -77,23 +77,21 @@ import '../../styles/product-preview.css';
             <form data-apply-form>
               <h3>Apply proposal</h3>
               <div data-apply-rules></div>
-              <label>Apply proposed routing to profile <select name="profile" data-apply-profile><option value="">— none —</option></select></label>
               <div class="fx-admin-actions"><button class="pp-button pp-button-primary" type="submit">Apply selected</button></div>
             </form>
           </div>
         </section>
 
-        <section data-panel="profiles" class="fx-admin-panel" hidden>
+        <section data-panel="sites" class="fx-admin-panel" hidden>
           <div class="fx-admin-card">
-            <h2>Source profile routing</h2>
-            <p class="fx-admin-hint">Overrides change only these routing fields and apply to new workflows; running workflows keep their settings.</p>
-            <div class="fx-admin-table-wrap"><table class="fx-admin-table"><thead><tr><th>Profile</th><th>Hosts</th><th>Effective routing</th><th>Override</th><th></th></tr></thead><tbody data-profiles-body></tbody></table></div>
+            <h2>Site knowledge</h2>
+            <p class="fx-admin-hint">What auto mode learned per host: proven routes go first, cooling routes are skipped until they rest. Forget a host to make FetchX relearn it.</p>
+            <div class="fx-admin-table-wrap"><table class="fx-admin-table"><thead><tr><th>Host</th><th>Routes</th><th>Proven</th><th>Cooling</th><th>Failing</th><th>Updated</th><th></th></tr></thead><tbody data-sites-body></tbody></table></div>
           </div>
-          <form class="fx-admin-card" data-profile-form hidden>
-            <h2 data-profile-form-title>Edit routing</h2>
-            <div class="fx-admin-fields" data-profile-fields></div>
-            <div class="fx-admin-actions"><button class="pp-button pp-button-primary" type="submit">Save override</button><button class="pp-button pp-button-secondary" type="button" data-profile-reset>Remove override</button><button class="pp-button pp-button-secondary" type="button" data-profile-cancel>Close</button></div>
-          </form>
+          <div class="fx-admin-card" data-site-detail hidden>
+            <h2 data-site-title>Site</h2>
+            <div class="fx-admin-table-wrap"><table class="fx-admin-table"><thead><tr><th>Execution</th><th>Class</th><th>Country</th><th>Provider</th><th>State</th><th>Successes</th><th>Failures</th><th>Last outcome</th><th>Rest until</th></tr></thead><tbody data-site-routes></tbody></table></div>
+          </div>
         </section>
 
         <section data-panel="audit" class="fx-admin-panel" hidden>
@@ -135,7 +133,6 @@ import '../../styles/product-preview.css';
     .fx-admin-result{font-size:13px;margin-top:10px}
     .fx-admin-summary{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;font-size:13px;margin:14px 0}
     .fx-admin-summary dt{color:#9fac9a}.fx-admin-summary dd{margin:0}
-    .fx-admin-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:4px 16px}
     @media(max-width:640px){.fx-admin-main{padding:20px 16px}.fx-admin-top{padding:14px 16px;flex-wrap:wrap}.fx-admin-main h1{font-size:26px}}
   </style>
   <script>import '../../scripts/admin';</script>

@@ -3,7 +3,7 @@ import { marketingPages } from './marketing-content';
 
 export const publicPages = [
   { path: '/', title: 'FetchX', description: 'Web Scraping API & Web Unblocker for developers, data teams and AI builders.' },
-  { path: '/developers', title: 'Developers', description: 'API examples, native HTTP access and reviewed browser workflows.' },
+  { path: '/developers', title: 'Developers', description: 'API examples in cURL, JavaScript and Python, and the coding agent guide.' },
   { path: '/pricing', title: 'Pricing', description: 'A one-time free trial for eligible accounts and prepaid credit packs with local checkout pricing.' },
   { path: '/samples', title: 'Sample data', description: 'Fictional commerce, property and logistics datasets.' },
   { path: '/pilot', title: 'Technical evaluation', description: 'Discuss your source access and integration requirements.' },

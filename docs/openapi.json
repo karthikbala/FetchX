@@ -1,0 +1,2298 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "FetchX API",
+  "version": "1.0.0",
+  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work; the other endpoints read results, download files, list, delete and report credits.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data. Failed, uncertain and refused requests cost nothing."
+ },
+ "servers": [
+  {
+   "url": "https://{apiHost}",
+   "description": "Your API host, shown in the console and returned by the Connect flow as api_base_url.",
+   "variables": {
+    "apiHost": {
+     "default": "app.fetchx.ai"
+    }
+   }
+  }
+ ],
+ "security": [
+  {
+   "ApiKey": []
+  }
+ ],
+ "tags": [
+  {
+   "name": "Fetch",
+   "description": "Get URLs and read the results."
+  },
+  {
+   "name": "Usage",
+   "description": "Credits and usage."
+  }
+ ],
+ "paths": {
+  "/v1/fetch": {
+   "post": {
+    "operationId": "createFetch",
+    "tags": [
+     "Fetch"
+    ],
+    "summary": "Get a URL",
+    "description": "Gets a URL and returns its data. With only `url`, FetchX climbs from the cheapest route (HTTP direct, datacenter, residential with fresh IPs on a 429, then a browser) until the site gives its real answer, starting at the step that worked for this site before. Only the step that worked is charged. GET and HEAD may use up to `max_attempts` attempts; any other method gets exactly one attempt and never a browser.",
+    "x-scope": "fetch:write",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FetchRequest"
+       },
+       "examples": {
+        "minimal": {
+         "summary": "Only the URL",
+         "value": {
+          "url": "https://shop.example.com/p/42"
+         }
+        },
+        "markdown": {
+         "summary": "Markdown from a page that needs a browser",
+         "value": {
+          "url": "https://shop.example.com/p/42",
+          "render": "always",
+          "wait_for": {
+           "selector": ".price"
+          },
+          "formats": [
+           "markdown",
+           "metadata"
+          ],
+          "include_body": false,
+          "country": "US",
+          "max_credits": 60
+         }
+        },
+        "post": {
+         "summary": "A form POST, sent once",
+         "value": {
+          "url": "https://api.example.com/search",
+          "method": "POST",
+          "headers": {
+           "content-type": "application/json"
+          },
+          "body": "{\"q\":\"laptops\"}",
+          "idempotency_key": "search-laptops-1"
+         }
+        },
+        "route": {
+         "summary": "One fixed route (auto mode off)",
+         "value": {
+          "url": "https://shop.example.com/",
+          "route": {
+           "class": "residential",
+           "country": "IN"
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "The fetch finished: `status` is `succeeded` or `failed`.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FetchResult"
+        },
+        "examples": {
+         "succeeded": {
+          "value": {
+           "id": "3f7c1d2e-8a4b-4c6d-9e0f-1a2b3c4d5e6f",
+           "status": "succeeded",
+           "idempotency_key": "order-42",
+           "url": "https://shop.example.com/p/42",
+           "created_at": "2026-11-19T10:00:00.000Z",
+           "finished_at": "2026-11-19T10:00:04.100Z",
+           "tags": [
+            "catalog"
+           ],
+           "data": {
+            "status_code": 200,
+            "final_url": "https://shop.example.com/p/42",
+            "content_type": "text/html; charset=utf-8",
+            "rendered": true,
+            "body_bytes": 184213,
+            "headers": {
+             "content-type": "text/html; charset=utf-8"
+            },
+            "cookies": [
+             {
+              "name": "session",
+              "value": "abc",
+              "domain": "shop.example.com",
+              "path": "/"
+             }
+            ],
+            "markdown": "# Product 42\n\nIn stock.",
+            "body": "<html>…</html>",
+            "body_encoding": "utf-8"
+           },
+           "credits": {
+            "charged": 25,
+            "max": 160
+           },
+           "attempts": [
+            {
+             "transport": "http",
+             "class": "direct",
+             "country": null,
+             "result": "blocked",
+             "status_code": 403,
+             "ms": 410
+            },
+            {
+             "transport": "http",
+             "class": "datacenter",
+             "country": "US",
+             "result": "blocked",
+             "status_code": 403,
+             "ms": 640
+            },
+            {
+             "transport": "browser",
+             "class": "residential",
+             "country": "US",
+             "result": "success",
+             "status_code": 200,
+             "ms": 3300,
+             "captcha": [
+              "turnstile:passed"
+             ]
+            }
+           ],
+           "skipped": [],
+           "fixes": [
+            "user-agent"
+           ],
+           "error": null
+          }
+         },
+         "failed": {
+          "value": {
+           "id": "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+           "status": "failed",
+           "idempotency_key": "auto_6a1c…",
+           "url": "https://walled.example.com/",
+           "created_at": "2026-11-19T10:01:00.000Z",
+           "finished_at": "2026-11-19T10:01:09.000Z",
+           "tags": [],
+           "data": {
+            "status_code": 403,
+            "final_url": "https://walled.example.com/",
+            "content_type": "text/html",
+            "rendered": true,
+            "body_bytes": 5120,
+            "headers": {
+             "content-type": "text/html"
+            },
+            "cookies": [],
+            "body": "<html>Access denied</html>",
+            "body_encoding": "utf-8"
+           },
+           "credits": {
+            "charged": 0,
+            "max": 160
+           },
+           "attempts": [
+            {
+             "transport": "http",
+             "class": "direct",
+             "country": null,
+             "result": "blocked",
+             "status_code": 403,
+             "ms": 300
+            },
+            {
+             "transport": "browser",
+             "class": "residential",
+             "country": "US",
+             "result": "blocked",
+             "status_code": 403,
+             "ms": 5200
+            }
+           ],
+           "skipped": [
+            {
+             "transport": "http",
+             "class": "datacenter",
+             "country": "US",
+             "reason": "cooling"
+            }
+           ],
+           "fixes": [],
+           "error": {
+            "code": "blocked",
+            "message": "The site refused every route FetchX was allowed to try.",
+            "next": {
+             "action": "retry_later",
+             "retry_after_seconds": 900,
+             "detail": "The site refused every route FetchX was allowed to try. Retry later, or allow more with max_attempts or max_credits."
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "202": {
+      "description": "Still running: `async` was true, or the result took longer than 60 seconds. Poll GET /v1/fetch/{id} or wait for the webhook.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FetchResult"
+        },
+        "examples": {
+         "pending": {
+          "value": {
+           "id": "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+           "status": "pending",
+           "idempotency_key": "big-crawl-1",
+           "url": "https://slow.example.com/",
+           "created_at": "2026-11-19T10:02:00.000Z",
+           "finished_at": null,
+           "tags": [],
+           "data": null,
+           "credits": {
+            "charged": 0,
+            "max": 160
+           },
+           "attempts": [
+            {
+             "transport": "http",
+             "class": "direct",
+             "country": null,
+             "result": "needs_browser",
+             "status_code": 200
+            }
+           ],
+           "skipped": [],
+           "fixes": [],
+           "error": null
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "A field is missing or wrong, or the URL is not public. Nothing was sent.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "max_attempts",
+             "reason": "1 to 5"
+            }
+           }
+          }
+         },
+         "url_not_allowed": {
+          "value": {
+           "error": {
+            "code": "url_not_allowed",
+            "message": "The URL must be public http or https and must not resolve to a private address.",
+            "details": {
+             "field": "url"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "402": {
+      "description": "Not enough credits for the cheapest step, max_credits below it, or spending paused by a payment issue. Nothing was sent.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "insufficient_credits": {
+          "value": {
+           "error": {
+            "code": "insufficient_credits",
+            "message": "The balance is below the cheapest step this request could take.",
+            "details": {
+             "available": 0,
+             "needed": 1
+            }
+           }
+          }
+         },
+         "max_credits_too_low": {
+          "value": {
+           "error": {
+            "code": "max_credits_too_low",
+            "message": "max_credits is below the cheapest step; see error.details.min_credits.",
+            "details": {
+             "min_credits": 10
+            }
+           }
+          }
+         },
+         "payment_hold": {
+          "value": {
+           "error": {
+            "code": "payment_hold",
+            "message": "Spending is paused while a payment issue is resolved."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "The idempotency_key was used before with a different request.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "idempotency_conflict": {
+          "value": {
+           "error": {
+            "code": "idempotency_conflict",
+            "message": "This idempotency_key was used before with a different request."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "413": {
+      "description": "The request body is over 1 MB.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "request_too_large": {
+          "value": {
+           "error": {
+            "code": "request_too_large",
+            "message": "The request body is over 1 MB.",
+            "details": {
+             "field": "body",
+             "max_bytes": 1000000
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "429": {
+      "description": "The project has too many requests running. Wait `retry_after_seconds`.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "too_many_requests": {
+          "value": {
+           "error": {
+            "code": "too_many_requests",
+            "message": "The project has too many requests running; wait and retry."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "FetchX cannot take work right now. Nothing was charged.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unavailable": {
+          "value": {
+           "error": {
+            "code": "unavailable",
+            "message": "FetchX cannot take work right now; wait and retry."
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "get": {
+    "operationId": "listFetches",
+    "tags": [
+     "Fetch"
+    ],
+    "summary": "List recent requests",
+    "description": "The project's requests, newest first, without bodies.",
+    "x-scope": "fetch:read",
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "pending",
+        "succeeded",
+        "failed"
+       ]
+      }
+     },
+     {
+      "name": "tag",
+      "in": "query",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "idempotency_key",
+      "in": "query",
+      "description": "Find the request made with this key.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "since",
+      "in": "query",
+      "description": "Only requests created after this time.",
+      "schema": {
+       "type": "string",
+       "format": "date-time"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "schema": {
+       "type": "integer",
+       "minimum": 1,
+       "maximum": 100,
+       "default": 25
+      }
+     },
+     {
+      "name": "cursor",
+      "in": "query",
+      "description": "`next_cursor` from the previous page.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "One page of requests.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FetchList"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "A query parameter is wrong.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "limit"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/fetch/{id}": {
+   "get": {
+    "operationId": "getFetch",
+    "tags": [
+     "Fetch"
+    ],
+    "summary": "Read a request's result",
+    "description": "The same object POST /v1/fetch returned. Use it to poll a pending request. After 7 days, or after DELETE, everything the site sent is gone and `data.content_expired` is true; the summary, attempts and credits stay for 90 days.",
+    "x-scope": "fetch:read",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The request id returned by POST /v1/fetch.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "include_body",
+      "in": "query",
+      "description": "false leaves out the body, for cheap polling.",
+      "schema": {
+       "type": "boolean",
+       "default": true
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The request has finished.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FetchResult"
+        },
+        "examples": {
+         "succeeded": {
+          "value": {
+           "id": "3f7c1d2e-8a4b-4c6d-9e0f-1a2b3c4d5e6f",
+           "status": "succeeded",
+           "idempotency_key": "order-42",
+           "url": "https://shop.example.com/p/42",
+           "created_at": "2026-11-19T10:00:00.000Z",
+           "finished_at": "2026-11-19T10:00:04.100Z",
+           "tags": [
+            "catalog"
+           ],
+           "data": {
+            "status_code": 200,
+            "final_url": "https://shop.example.com/p/42",
+            "content_type": "text/html; charset=utf-8",
+            "rendered": true,
+            "body_bytes": 184213,
+            "headers": {
+             "content-type": "text/html; charset=utf-8"
+            },
+            "cookies": [
+             {
+              "name": "session",
+              "value": "abc",
+              "domain": "shop.example.com",
+              "path": "/"
+             }
+            ],
+            "markdown": "# Product 42\n\nIn stock.",
+            "body": "<html>…</html>",
+            "body_encoding": "utf-8"
+           },
+           "credits": {
+            "charged": 25,
+            "max": 160
+           },
+           "attempts": [
+            {
+             "transport": "http",
+             "class": "direct",
+             "country": null,
+             "result": "blocked",
+             "status_code": 403,
+             "ms": 410
+            },
+            {
+             "transport": "http",
+             "class": "datacenter",
+             "country": "US",
+             "result": "blocked",
+             "status_code": 403,
+             "ms": 640
+            },
+            {
+             "transport": "browser",
+             "class": "residential",
+             "country": "US",
+             "result": "success",
+             "status_code": 200,
+             "ms": 3300,
+             "captcha": [
+              "turnstile:passed"
+             ]
+            }
+           ],
+           "skipped": [],
+           "fixes": [
+            "user-agent"
+           ],
+           "error": null
+          }
+         }
+        }
+       }
+      }
+     },
+     "202": {
+      "description": "The request is still running.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FetchResult"
+        },
+        "examples": {
+         "pending": {
+          "value": {
+           "id": "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+           "status": "pending",
+           "idempotency_key": "big-crawl-1",
+           "url": "https://slow.example.com/",
+           "created_at": "2026-11-19T10:02:00.000Z",
+           "finished_at": null,
+           "tags": [],
+           "data": null,
+           "credits": {
+            "charged": 0,
+            "max": 160
+           },
+           "attempts": [
+            {
+             "transport": "http",
+             "class": "direct",
+             "country": null,
+             "result": "needs_browser",
+             "status_code": 200
+            }
+           ],
+           "skipped": [],
+           "fixes": [],
+           "error": null
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No request with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "error": {
+            "code": "not_found",
+            "message": "No request with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "deleteFetch",
+    "tags": [
+     "Fetch"
+    ],
+    "summary": "Delete stored content now",
+    "description": "Deletes everything the site sent (body, headers, cookies, formats, screenshot) instead of after 7 days. The id, status, attempts and credits stay, for billing.",
+    "x-scope": "fetch:read",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The request id returned by POST /v1/fetch.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Deleted."
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No request with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "error": {
+            "code": "not_found",
+            "message": "No request with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "The request is still running.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "pending": {
+          "value": {
+           "error": {
+            "code": "pending",
+            "message": "The request is still running."
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/fetch/{id}/content": {
+   "get": {
+    "operationId": "getFetchContent",
+    "tags": [
+     "Fetch"
+    ],
+    "summary": "Download the body",
+    "description": "The response body exactly as the site sent it (or the rendered HTML from a browser), with the site's Content-Type. Use it for PDFs, images and anything too large to inline.",
+    "x-scope": "fetch:read",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The request id returned by POST /v1/fetch.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The body.",
+      "content": {
+       "*/*": {
+        "schema": {
+         "type": "string",
+         "format": "binary"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No request with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "error": {
+            "code": "not_found",
+            "message": "No request with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "The request is still running.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "pending": {
+          "value": {
+           "error": {
+            "code": "pending",
+            "message": "The request is still running."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "410": {
+      "description": "The content expired or was deleted.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "content_expired": {
+          "value": {
+           "error": {
+            "code": "content_expired",
+            "message": "The stored content has expired or was deleted."
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/fetch/{id}/screenshot": {
+   "get": {
+    "operationId": "getFetchScreenshot",
+    "tags": [
+     "Fetch"
+    ],
+    "summary": "Download the screenshot",
+    "description": "The JPEG screenshot, when `formats` included `screenshot`.",
+    "x-scope": "fetch:read",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The request id returned by POST /v1/fetch.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The screenshot.",
+      "content": {
+       "image/jpeg": {
+        "schema": {
+         "type": "string",
+         "format": "binary"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No request with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "error": {
+            "code": "not_found",
+            "message": "No request with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "The request is still running.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "pending": {
+          "value": {
+           "error": {
+            "code": "pending",
+            "message": "The request is still running."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "410": {
+      "description": "The content expired or was deleted.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "content_expired": {
+          "value": {
+           "error": {
+            "code": "content_expired",
+            "message": "The stored content has expired or was deleted."
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/usage": {
+   "get": {
+    "operationId": "getUsage",
+    "tags": [
+     "Usage"
+    ],
+    "summary": "Credits and usage",
+    "description": "The balance and where credits went in a period (UTC).",
+    "x-scope": "usage:read",
+    "parameters": [
+     {
+      "name": "period",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "day",
+        "month"
+       ],
+       "default": "month"
+      }
+     },
+     {
+      "name": "since",
+      "in": "query",
+      "description": "A custom range instead of period, up to 92 days.",
+      "schema": {
+       "type": "string",
+       "format": "date-time"
+      }
+     },
+     {
+      "name": "until",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "format": "date-time"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Balance and usage.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Usage"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "A query parameter is wrong.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "period"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "webhooks": {
+  "fetchFinished": {
+   "post": {
+    "summary": "A request with webhook_url finished",
+    "description": "FetchX POSTs the finished result (without the body) to webhook_url. Verify `X-FetchX-Signature: sha256=<hex>`, an HMAC-SHA256 with the project's webhook secret over `<X-FetchX-Timestamp>.<raw body>`. Delivery is tried 3 times.",
+    "parameters": [
+     {
+      "name": "X-FetchX-Signature",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^sha256=[a-f0-9]{64}$"
+      }
+     },
+     {
+      "name": "X-FetchX-Timestamp",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[0-9]{10}$"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FetchResult"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Any 2xx acknowledges the delivery."
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "securitySchemes": {
+   "ApiKey": {
+    "type": "http",
+    "scheme": "bearer",
+    "description": "A project API key (fxk_...), made in the console or by the Connect flow. Each operation lists the scope it needs in x-scope: fetch:write, fetch:read or usage:read."
+   }
+  },
+  "schemas": {
+   "FetchRequest": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "url"
+    ],
+    "properties": {
+     "url": {
+      "type": "string",
+      "description": "The page, API or file to get. Public http or https only: private, local and metadata addresses are refused, checked after DNS and on every redirect.",
+      "maxLength": 12000
+     },
+     "method": {
+      "type": "string",
+      "enum": [
+       "GET",
+       "HEAD",
+       "POST",
+       "PUT",
+       "PATCH",
+       "DELETE"
+      ],
+      "default": "GET",
+      "description": "Only GET and HEAD escalate. Other methods get one attempt, never a browser, and are never retried."
+     },
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Headers for the site, cookies and Authorization included (stored encrypted, never logged). Up to 64 headers and 16 KB. Host, hop-by-hop, Forwarded and X-Forwarded-* are refused."
+     },
+     "body": {
+      "type": "string",
+      "description": "A text request body, up to 1 MB. Only with POST, PUT, PATCH or DELETE."
+     },
+     "body_base64": {
+      "type": "string",
+      "description": "A binary request body in base64, instead of body.",
+      "contentEncoding": "base64"
+     },
+     "render": {
+      "type": "string",
+      "enum": [
+       "auto",
+       "always",
+       "never"
+      ],
+      "default": "auto",
+      "description": "auto tries HTTP first and moves to a browser when HTTP is blocked or the page is an empty JavaScript shell; always starts in a browser; never stays on HTTP."
+     },
+     "wait_for": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "In a browser, wait for a CSS selector or a fixed time. Implies a browser.",
+      "properties": {
+       "selector": {
+        "type": "string",
+        "description": "A CSS selector.",
+        "maxLength": 512
+       },
+       "ms": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 10000
+       }
+      }
+     },
+     "country": {
+      "type": "string",
+      "description": "The exit country for proxy routes (ISO 3166-1 alpha-2). Defaults to the country that worked for this site before, else US.",
+      "pattern": "^[A-Z]{2}$"
+     },
+     "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "class"
+      ],
+      "description": "One fixed route; turns auto mode off: one attempt, with a precise error.",
+      "properties": {
+       "class": {
+        "type": "string",
+        "enum": [
+         "direct",
+         "datacenter",
+         "residential"
+        ]
+       },
+       "country": {
+        "type": [
+         "string",
+         "null"
+        ],
+        "pattern": "^[A-Z]{2}$",
+        "description": "Required for datacenter and residential; null for direct."
+       },
+       "render": {
+        "type": "boolean",
+        "description": "true uses a browser on this route."
+       }
+      }
+     },
+     "formats": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+       "type": "string",
+       "enum": [
+        "markdown",
+        "text",
+        "links",
+        "metadata",
+        "json",
+        "screenshot"
+       ]
+      },
+      "description": "Extra outputs. screenshot needs a browser."
+     },
+     "include_body": {
+      "type": "boolean",
+      "default": true,
+      "description": "Return the body. Set false when only formats are needed."
+     },
+     "max_attempts": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "default": 5,
+      "description": "The most attempts that may reach the site. Steps refused before anything is sent do not count."
+     },
+     "fix_headers": {
+      "type": "boolean",
+      "default": true,
+      "description": "Replace automation User-Agents (curl, python-requests…) with a browser one and add a missing Accept and Accept-Language."
+     },
+     "max_credits": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000,
+      "description": "The most this request may cost. Steps that would cost more are skipped."
+     },
+     "timeout_ms": {
+      "type": "integer",
+      "minimum": 5000,
+      "maximum": 120000,
+      "default": 60000,
+      "description": "Total time for all attempts."
+     },
+     "async": {
+      "type": "boolean",
+      "default": false,
+      "description": "true answers 202 at once; false waits up to 60 seconds, then answers 202."
+     },
+     "webhook_url": {
+      "type": "string",
+      "description": "A public https URL that receives the result when the request finishes.",
+      "format": "uri"
+     },
+     "idempotency_key": {
+      "type": "string",
+      "description": "The same key with the same body returns the same result and is charged once. Generated when absent.",
+      "pattern": "^[A-Za-z0-9_.:-]{1,160}$"
+     },
+     "tags": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+       "type": "string",
+       "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
+      },
+      "description": "Your labels, to filter the list."
+     }
+    }
+   },
+   "FetchResult": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "status",
+     "idempotency_key",
+     "url",
+     "created_at",
+     "finished_at",
+     "tags",
+     "data",
+     "credits",
+     "attempts",
+     "skipped",
+     "fixes",
+     "error"
+    ],
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "pending",
+       "succeeded",
+       "failed"
+      ]
+     },
+     "idempotency_key": {
+      "type": "string"
+     },
+     "url": {
+      "type": "string"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "finished_at": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time"
+     },
+     "tags": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "data": {
+      "oneOf": [
+       {
+        "$ref": "#/components/schemas/FetchData"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "What the site answered: on success the real answer, on failure the last response. Null only when nothing reached the site."
+     },
+     "credits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "charged",
+       "max"
+      ],
+      "properties": {
+       "charged": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "0 unless the request succeeded."
+       },
+       "max": {
+        "type": [
+         "integer",
+         "null"
+        ],
+        "description": "The most this request could have cost (null for unmetered projects)."
+       }
+      }
+     },
+     "attempts": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/Attempt"
+      },
+      "description": "One entry per step tried, in order. Providers are never named."
+     },
+     "skipped": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/SkippedStep"
+      },
+      "description": "Steps that were not tried, and why."
+     },
+     "fixes": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "enum": [
+        "user-agent",
+        "accept",
+        "accept-language"
+       ]
+      },
+      "description": "Headers FetchX corrected."
+     },
+     "error": {
+      "oneOf": [
+       {
+        "$ref": "#/components/schemas/FetchError"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    }
+   },
+   "FetchData": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "status_code",
+     "final_url",
+     "content_type",
+     "rendered",
+     "body_bytes"
+    ],
+    "properties": {
+     "status_code": {
+      "type": "integer",
+      "description": "The site's HTTP status."
+     },
+     "final_url": {
+      "type": "string",
+      "description": "The URL after redirects."
+     },
+     "content_type": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "rendered": {
+      "type": "boolean",
+      "description": "True when a browser produced the result."
+     },
+     "body_bytes": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "content_expired": {
+      "type": "boolean",
+      "description": "True after 7 days or DELETE: everything below is gone."
+     },
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Selected response headers."
+     },
+     "cookies": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/Cookie"
+      },
+      "description": "Cookies the site set, for multi-step flows."
+     },
+     "body": {
+      "type": "string",
+      "description": "The body: utf-8 text, or base64 for binary. Left out when include_body is false or when it is too large to inline (see body_url)."
+     },
+     "body_encoding": {
+      "type": "string",
+      "enum": [
+       "utf-8",
+       "base64"
+      ]
+     },
+     "body_url": {
+      "type": "string",
+      "description": "Where to download a body too large to inline."
+     },
+     "markdown": {
+      "type": "string",
+      "description": "formats: markdown."
+     },
+     "text": {
+      "type": "string",
+      "description": "formats: text."
+     },
+     "links": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "url",
+        "text"
+       ],
+       "properties": {
+        "url": {
+         "type": "string"
+        },
+        "text": {
+         "type": "string"
+        }
+       }
+      },
+      "description": "formats: links."
+     },
+     "metadata": {
+      "$ref": "#/components/schemas/PageMetadata"
+     },
+     "json": {
+      "description": "formats: json, the body parsed as JSON (null when it is not JSON)."
+     },
+     "screenshot": {
+      "type": "string",
+      "description": "formats: screenshot, base64 JPEG. Also at /v1/fetch/{id}/screenshot.",
+      "contentEncoding": "base64"
+     }
+    }
+   },
+   "Cookie": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "name",
+     "value",
+     "domain",
+     "path"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "value": {
+      "type": "string"
+     },
+     "domain": {
+      "type": "string"
+     },
+     "path": {
+      "type": "string"
+     },
+     "expires": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "PageMetadata": {
+    "type": "object",
+    "description": "formats: metadata.",
+    "properties": {
+     "title": {
+      "type": "string"
+     },
+     "description": {
+      "type": "string"
+     },
+     "canonical_url": {
+      "type": "string"
+     },
+     "language": {
+      "type": "string"
+     },
+     "open_graph": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      }
+     }
+    }
+   },
+   "Attempt": {
+    "type": "object",
+    "required": [
+     "transport",
+     "class",
+     "country",
+     "result",
+     "status_code"
+    ],
+    "properties": {
+     "transport": {
+      "type": "string",
+      "enum": [
+       "http",
+       "browser"
+      ]
+     },
+     "class": {
+      "type": "string",
+      "enum": [
+       "direct",
+       "datacenter",
+       "residential"
+      ]
+     },
+     "country": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "rotation": {
+      "type": "integer",
+      "description": "A fresh residential IP for the same step."
+     },
+     "result": {
+      "type": "string",
+      "enum": [
+       "success",
+       "answered",
+       "blocked",
+       "rate_limited",
+       "login_required",
+       "site_error",
+       "needs_browser",
+       "unreachable",
+       "failed",
+       "too_large",
+       "uncertain",
+       "not_admitted",
+       "url_not_allowed"
+      ],
+      "description": "not_admitted means nothing reached the site on this step (for example the provider refused the host); it does not count as an attempt."
+     },
+     "code": {
+      "type": "string",
+      "description": "The underlying error, when result is not_admitted or failed."
+     },
+     "status_code": {
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "ms": {
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "captcha": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Captchas met on this step, as type:outcome."
+     }
+    }
+   },
+   "SkippedStep": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "transport",
+     "class",
+     "country",
+     "reason"
+    ],
+    "properties": {
+     "transport": {
+      "type": "string",
+      "enum": [
+       "http",
+       "browser"
+      ]
+     },
+     "class": {
+      "type": "string",
+      "enum": [
+       "direct",
+       "datacenter",
+       "residential"
+      ]
+     },
+     "country": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "reason": {
+      "type": "string",
+      "description": "For example excluded_by_provider_rule, over_max_credits or cooling."
+     }
+    }
+   },
+   "FetchError": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "code",
+     "message",
+     "next"
+    ],
+    "properties": {
+     "code": {
+      "type": "string",
+      "enum": [
+       "blocked",
+       "rate_limited",
+       "login_required",
+       "site_error",
+       "unreachable",
+       "cooling_down",
+       "timeout",
+       "too_large",
+       "uncertain",
+       "route_unavailable",
+       "url_not_allowed"
+      ]
+     },
+     "message": {
+      "type": "string"
+     },
+     "retry_after_seconds": {
+      "type": "integer"
+     },
+     "next": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "action",
+       "detail"
+      ],
+      "description": "What to do next.",
+      "properties": {
+       "action": {
+        "type": "string",
+        "enum": [
+         "retry_after",
+         "retry_later",
+         "use_auto",
+         "provide_credentials",
+         "check_url",
+         "raise_timeout",
+         "render_never",
+         "recover"
+        ]
+       },
+       "retry_after_seconds": {
+        "type": "integer"
+       },
+       "detail": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   "FetchList": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "items",
+     "next_cursor"
+    ],
+    "properties": {
+     "items": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "id",
+        "status",
+        "url",
+        "created_at",
+        "credits",
+        "error_code",
+        "tags",
+        "idempotency_key"
+       ],
+       "properties": {
+        "id": {
+         "type": "string",
+         "format": "uuid"
+        },
+        "status": {
+         "type": "string",
+         "enum": [
+          "pending",
+          "succeeded",
+          "failed"
+         ]
+        },
+        "url": {
+         "type": "string"
+        },
+        "created_at": {
+         "type": "string",
+         "format": "date-time"
+        },
+        "credits": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "charged"
+         ],
+         "properties": {
+          "charged": {
+           "type": "integer"
+          }
+         }
+        },
+        "error_code": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "tags": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        },
+        "idempotency_key": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "next_cursor": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   },
+   "Usage": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "balance",
+     "period",
+     "used",
+     "by_step",
+     "daily"
+    ],
+    "properties": {
+     "balance": {
+      "oneOf": [
+       {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "credits",
+         "trial",
+         "purchased",
+         "reserved",
+         "payment_hold"
+        ],
+        "properties": {
+         "credits": {
+          "type": "integer",
+          "description": "Available now."
+         },
+         "trial": {
+          "type": "integer"
+         },
+         "purchased": {
+          "type": "integer"
+         },
+         "reserved": {
+          "type": "integer",
+          "description": "Held by running requests."
+         },
+         "payment_hold": {
+          "type": "boolean"
+         }
+        }
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "period": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "from",
+       "to"
+      ],
+      "properties": {
+       "from": {
+        "type": "string",
+        "format": "date-time"
+       },
+       "to": {
+        "type": "string",
+        "format": "date-time"
+       }
+      }
+     },
+     "used": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "credits",
+       "succeeded",
+       "failed",
+       "captcha_solved"
+      ],
+      "properties": {
+       "credits": {
+        "type": "integer"
+       },
+       "succeeded": {
+        "type": "integer"
+       },
+       "failed": {
+        "type": "integer"
+       },
+       "captcha_solved": {
+        "type": "integer"
+       }
+      }
+     },
+     "by_step": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "step",
+        "requests",
+        "credits"
+       ],
+       "properties": {
+        "step": {
+         "type": "string",
+         "enum": [
+          "http",
+          "http_residential",
+          "browser",
+          "browser_residential"
+         ]
+        },
+        "requests": {
+         "type": "integer"
+        },
+        "credits": {
+         "type": "integer"
+        }
+       }
+      }
+     },
+     "daily": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "date",
+        "requests",
+        "credits"
+       ],
+       "properties": {
+        "date": {
+         "type": "string",
+         "format": "date"
+        },
+        "requests": {
+         "type": "integer"
+        },
+        "credits": {
+         "type": "integer"
+        }
+       }
+      }
+     }
+    }
+   },
+   "Error": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "error"
+    ],
+    "properties": {
+     "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "code",
+       "message"
+      ],
+      "properties": {
+       "code": {
+        "type": "string"
+       },
+       "message": {
+        "type": "string"
+       },
+       "details": {
+        "type": "object"
+       },
+       "retry_after_seconds": {
+        "type": "integer"
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

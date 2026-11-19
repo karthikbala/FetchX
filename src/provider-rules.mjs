@@ -2,11 +2,11 @@
 // for which destination hosts. Reviewed defaults ship in
 // provider-rules-defaults.mjs; operators add or override rules through
 // config.providerRules (and later the admin portal). Rules only ever remove a
-// provider from consideration; they never add routes or bypass profiles.
+// provider from consideration; they never add routes or bypass budgets.
 import defaults from './provider-rules-defaults.mjs';
-import {fail,GatewayError} from './policy.mjs';
+import {fail} from './policy.mjs';
 
-export const RULE_PROVIDERS=Object.freeze(['oxylabs','scrapedo','evomi','dataimpulse']);
+export const RULE_PROVIDERS=Object.freeze(['oxylabs','evomi','dataimpulse']);
 const ID=/^[a-z0-9][a-z0-9._-]{0,63}$/,HOST=/^(?=.{1,253}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+$/,SUFFIX=/^\.[a-z0-9-]+(?:\.[a-z0-9-]+)*$/;
 const cache=new WeakMap();
 
@@ -113,7 +113,6 @@ export async function deleteProviderRule(store,id,{actor}){
 export async function providerRuleAudit(pool,{ruleId=null,limit=100}={}){
  return (await pool.query('SELECT id,rule_id,action,before,after,actor,at FROM routing_rule_audit WHERE ($1::text IS NULL OR rule_id=$1) ORDER BY id DESC LIMIT $2',[ruleId,Math.min(Math.max(1,limit),500)])).rows;
 }
-export const validateProviderRules=config=>{providerRules(config);};
 export function hostMatches(match,host){
  const h=String(host).toLowerCase().replace(/\.$/,'');
  return match.host!==undefined?h===match.host:h.endsWith(match.hostSuffix)||h===match.hostSuffix.slice(1);
@@ -121,8 +120,4 @@ export function hostMatches(match,host){
 // The first enabled rule that excludes this provider for this host, or null.
 export function providerRule(config,provider,host){
  return providerRules(config).find(r=>r.enabled!==false&&r.provider===provider&&hostMatches(r.match,host))??null;
-}
-export function assertProviderAllowed(config,provider,host){
- const rule=providerRule(config,provider,host);if(!rule)return;
- const e=new GatewayError('provider_host_excluded',409);e.details={provider,rule:rule.id,host:String(host).toLowerCase()};throw e;
 }

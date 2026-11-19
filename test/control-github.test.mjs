@@ -87,7 +87,7 @@ async function fixture(t){
  const settings=config(),sent=[],calls=[],proofs=new Map();
  const github={verify:async(code,options)=>{calls.push({code,options});const value=proofs.get(code);if(value instanceof Error)throw value;return value??{subject:'101',email:'builder@example.com'};}};
  const identity=new ControlIdentity({store,config:settings,github,mail:{configured:true,sendCode:async value=>sent.push(value)}});
- const app=Fastify();app.decorate('v2',{});app.decorate('publicFetch',{});registerControl(app,{config:settings},{identity,credits:{usage:async()=>({})}});await app.ready();
+ const app=Fastify();registerControl(app,{config:settings},{identity,ledger:{prices:{},metered:()=>true,balance:async()=>null,usage:async()=>({credits:0,by_step:[],daily:[]})},service:{}});await app.ready();
  t.after(async()=>{await app.close();await cleanup();await store.close();});
  let address=1;
  const send=(method,path,payload,cookie='',extra={})=>app.inject({method,url:'/control'+path,headers:{origin,'x-fetchx-control-secret':secret,cookie,'x-fetchx-client-ip':'127.0.0.'+(address++),...extra},...(payload===undefined?{}:{payload})});

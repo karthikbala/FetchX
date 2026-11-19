@@ -1,30 +1,30 @@
-# Central CAPTCHA solving
+# Captcha solving
 
-FetchX 0.3 supports reviewed reCAPTCHA v2 forms and standalone Turnstile forms through 2Captcha. Browser clients use `POST /v1/jobs` and poll the returned job ID. The gateway detects the configured visible challenge, verifies the exact page and public site key, obtains one token, rechecks the same browser form, submits once, and waits for the reviewed source success selector. A solver token is not source acceptance. Application parsing and record acceptance remain with the crawler.
+Browser steps solve the captchas they meet, through [2Captcha](https://2captcha.com/api-docs), without any per-site setup. HTTP steps never solve; a challenge on HTTP moves auto mode to a browser.
 
-A CAPTCHA profile requires `execution: "browser"` and a server-owned `captcha` object:
+| Captcha | How it is solved | 2Captcha task |
+| --- | --- | --- |
+| Cloudflare Turnstile | The token goes into the widget's response field, then the widget's callback or form | `TurnstileTaskProxyless` |
+| reCAPTCHA v2 | The same, through `g-recaptcha-response` | `RecaptchaV2TaskProxyless` |
+| hCaptcha | The challenge's image grid is screenshotted, the worker's clicks are applied, round by round, then the checkbox | `GridTask` |
+| DataDome slider | The returned `datadome` cookie is set and the page reloaded (with `captcha.datadome: true`, residential browser steps only) | `DataDomeSliderTask` |
 
-```json
-{
-  "type": "recaptcha_v2",
-  "websiteURL": "https://source.example/check",
-  "siteKey": "PUBLIC_SITE_KEY",
-  "triggerSelector": "#challenge",
-  "widgetSelector": "#challenge",
-  "responseSelector": "textarea[name=\"g-recaptcha-response\"]",
-  "submitSelector": "#form button[type=submit]",
-  "successSelector": "#fresh-result"
-}
-```
+2Captcha no longer offers a dedicated hCaptcha token task, so hCaptcha is solved as image grids. DataDome requires solving from the same IP as the page, so the task carries the login of the attempt's residential proxy session (one exit IP, 30-minute lifetime) to 2Captcha. That is why it needs `captcha.datadome: true` (approved for production on 2026-11-19), and why it never runs on a datacenter step: datacenter credentials are never sent, and auto mode moves on instead. A DataDome captcha URL with `t=bv` means the IP is banned: the step fails with `captcha_ip_banned` without a task, and auto mode moves on.
 
-Use `type: "turnstile"` and `input[name="cf-turnstile-response"]` for a standalone Turnstile form. The widget must expose the matching `data-sitekey`. The success selector must be absent before solving and become visible after submission. Configure allowed hosts, methods, endpoint patterns, browser request limits, residential byte budgets, and the form recipe together. Caller-supplied scripts, selectors, solver options and credentials are rejected. Existing profiles without `captcha` only report passive challenge observations and never incur solver charges.
+## Where it happens
 
-Private gateway configuration holds `captcha.enabled`, `captcha.apiKey`, `maxTaskMicroUsd`, `maxDailyMicroUsd`, `maxTotalMicroUsd`, `maxTotalTasks` and optional `timeoutMs` (at most 120000). Amounts are integer millionths of USD. Each project's `maxDailyCaptchaMicroUsd` can further constrain admission. Solving is disabled without an enabled account and explicit positive limits. These limits cover FetchX usage only, not other applications sharing the vendor account. The maximum task amount is a pre-dispatch reservation, not a vendor-enforced price ceiling: a reported overrun is recorded and holds further solves.
+Detection and the page work run in the browser (`src/browser/page-captcha.mjs`), reading only public widget attributes. Solving runs in the gateway (`src/captcha/solver.mjs`), so the 2Captcha key never reaches a worker or a page. A capture asks the gateway for each solve through the `captcha` callback.
 
-The gateway reserves cost transactionally before creating a task. It permits one task per workflow and does not recreate a task after timeout, disconnect, restart or ambiguous vendor response. Known costs settle from the vendor receipt; uncertain charges retain the reservation. `node src/operator.mjs reconcile-captcha TASK_UUID` polls an existing unknown task without submitting another task or applying an old token. A ready token is kept only in memory, removed from the response field, and redacted from text captures and extracted output. The API key stays in the parent gateway process. Solver state and verification outcomes appear in project-scoped `/v1/status`.
+## Budgets and records
 
-The browser stays on the existing proxy, cookies and user agent throughout solving. 401/429 responses, invalid widget configuration, site-key mismatch and repeated challenges do not start another solve. A solve or form action makes the workflow non-replayable across providers. Sync fetch/operation calls for CAPTCHA profiles return `captcha_async_required` before dispatch; queue jobs allow the browser and solver time to finish. Drain shutdown uses a 240-second grace period.
+`config.captcha` sets the limits: `maxTaskMicroUsd` (per task), `maxDailyMicroUsd`, `maxTotalMicroUsd`, `maxTotalTasks`, and `maxTasksPerRequest` (4). A task's cost is reserved before it is created; a budget that would be exceeded fails the solve with `captcha_budget_exhausted` and the step continues without it. `captcha_solves` records each task with the host only, never the URL path or the token. An uncertain task creation is never retried.
 
-Unsupported flows fail without paid guessing: hCaptcha, DataDome, reCAPTCHA v3/Enterprise-specific tasks, managed Cloudflare challenge pages requiring challenge data or user-agent replacement, callback-only widgets, and external login/MFA. This release does not claim universal site unblocking. Public tests use synthetic fixtures and a real local Chromium process; live source qualification is separate.
+`node src/operator.mjs status` shows today's and total spend.
 
-Provider contracts: [reCAPTCHA v2](https://2captcha.com/api-docs/recaptcha-v2), [Turnstile](https://2captcha.com/api-docs/cloudflare-turnstile), [task creation](https://2captcha.com/api-docs/create-task), [result polling](https://2captcha.com/api-docs/get-task-result).
+## Billing
+
+A solve is FetchX's cost. The customer pays only if the request succeeds, and then 10 credits more for the step that solved one.
+
+## Tests
+
+`test/billing.test.mjs` covers the solver against a fake 2Captcha (budgets, DataDome's proxy, the banned case). `test/browser.test.mjs` runs Turnstile, reCAPTCHA and DataDome pages in a real browser when `BROWSER_TEST_EXECUTABLE` is set.

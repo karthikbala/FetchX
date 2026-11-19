@@ -12,7 +12,7 @@ const { compact = false } = Astro.props;
     <article class="mkt-plan mkt-plan-trial">
       <div class="mkt-plan-top"><h3>Free trial</h3></div>
       <div class="mkt-plan-price"><strong data-pricing-trial>Free</strong></div>
-      <div class="mkt-plan-credits"><strong>1,000 trial credits</strong><span>One-time per eligible account</span></div>
+      <div class="mkt-plan-credits"><strong>1,000 trial credits</strong><span>Once per account</span></div>
       <a class="mkt-button mkt-button-secondary" href="/signup">Start free <Icon name="arrow" size={15}/></a>
     </article>
     {creditPackages.map(pack => <article class:list={['mkt-plan', { 'mkt-plan-featured': pack.credits === 1_000_000 }]} data-pricing-credits={pack.credits}>
@@ -22,7 +22,7 @@ const { compact = false } = Astro.props;
       <a class:list={['mkt-button', pack.credits === 1_000_000 ? 'mkt-button-primary' : 'mkt-button-secondary']} href="/signup" data-pricing-link aria-label={`Review package for ${pack.name}`}>Review package <Icon name="arrow" size={15}/></a>
     </article>)}
   </div>
-  <p class="mkt-pricing-note"><span data-pricing-note>Sign in to see prices and checkout availability for your location.</span> During trial access, trial credits apply to eligible routes. Sign in to see eligibility and limits. <a href="/pricing#credits">How credits work <Icon name="arrow" size={12}/></a></p>
+  <p class="mkt-pricing-note"><span data-pricing-note>Sign in to see prices and checkout availability for your location.</span> Trial and purchased credits share one balance; only successful requests are charged. <a href="/pricing#credits">How credits work <Icon name="arrow" size={12}/></a></p>
   <noscript><p class="mkt-pricing-note">Enable JavaScript to load local prices and continue to checkout.</p></noscript>
 </div>
 <script>import '../scripts/pricing';</script>

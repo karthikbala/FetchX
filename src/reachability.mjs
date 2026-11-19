@@ -6,16 +6,15 @@
 // The summary turns the matrix into generic routing facts: which countries can
 // reach the host, which providers refuse it, whether datacenter IPs are
 // blocked, and the cheapest route that worked. Its output is a proposal for an
-// operator to review (profile fields and provider rules); nothing is applied.
+// operator to review (provider rules); nothing is applied.
 import net from 'node:net';
 import tls from 'node:tls';
 import {randomBytes} from 'node:crypto';
-import {providerProxy} from './residential.mjs';
+import {residentialProxy} from './fetch/routes.mjs';
 import {providerRule} from './provider-rules.mjs';
-import {hasHtmlChallenge} from './source-challenge.mjs';
+import {detectChallenge} from './fetch/outcome.mjs';
 
 const HOST=/^(?=.{1,253}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
-export const PROBE_RESULTS=Object.freeze(['ok','challenge','denied','rate_limited','upstream_error','provider_refused','account_rejected','unreachable','proxy_failed','excluded_by_rule']);
 const UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 
 // One cell: CONNECT through `proxyUrl` to host:443, then TLS, then GET /.
@@ -52,7 +51,7 @@ export async function probeCell({proxyUrl,host,path='/',timeoutMs=20000,maxBytes
   const headers=Object.fromEntries(text.slice(0,end<0?text.length:end).split('\r\n').slice(1).map(l=>[l.split(':',1)[0].trim().toLowerCase(),l.slice(l.indexOf(':')+1).trim()]));
   const body=end<0?'':text.slice(end+4);
   if(http===429)return done('rate_limited');
-  if(hasHtmlChallenge({headers,body})||/<title[^>]*>\s*(bot or not|access denied|just a moment|attention required)/i.test(body))return done('challenge');
+  if(detectChallenge({status:http,headers,body}))return done('challenge');
   if(http===401||http===403)return done('denied');
   if(http>=500)return done('upstream_error');
   return done('ok');
@@ -76,7 +75,7 @@ export function probePlan(config,host,countries,{includeExcluded=false}={}){
   if(dc){const provider=dc.provider??'oxylabs';cells.push({provider,class:'datacenter',country,proxy:()=>dc.url,excluded:!includeExcluded&&providerRule(config,provider,host)?.id||null});}
   for(const provider of ['evomi','dataimpulse']){
    const c=config.residential?.providers?.[provider];if(!c?.enabled||!c.username||!c.password||c.countries&&!c.countries.includes(country))continue;
-   cells.push({provider,class:'residential',country,proxy:()=>providerProxy(config,{country,residentialSession:randomBytes(5).toString('hex')},provider).url,excluded:!includeExcluded&&providerRule(config,provider,host)?.id||null});
+   cells.push({provider,class:'residential',country,proxy:()=>residentialProxy(config,provider,country,randomBytes(5).toString('hex')).url,excluded:!includeExcluded&&providerRule(config,provider,host)?.id||null});
   }
  }
  return cells;
@@ -109,7 +108,5 @@ export function summarizeProbe(host,countries,cells){
  if(!recommended){const hit=cells.find(x=>x.class==='residential'&&['challenge','denied','rate_limited'].includes(x.result));if(hit)recommended={country:hit.country,class:'residential',provider:hit.provider,execution:'browser',verified:false};}
  const geoRestricted=reachable.length>0&&unreachable.length>0;
  const proposedRules=refusing.map(provider=>({id:`${provider}-${host.replace(/[^a-z0-9]+/g,'-')}`.slice(0,64),provider,match:{host},action:'exclude',reason:`${provider} refused CONNECT to ${host} in every probed country`}));
- // v1 profiles carry one country and route; v2 access profiles list countries and classes.
- const proposedProfile=recommended?{v1:{country:recommended.country,...(recommended.class==='residential'?{routingPolicy:'residential-v1',execution:recommended.execution}:{})},v2:{countries:reachable,proxy_classes:[...new Set(cells.filter(x=>x.result==='ok').map(x=>x.class))]}}:null;
- return {reachable_countries:reachable,unreachable_countries:unreachable,geo_restricted:geoRestricted,provider_refused:refusing,datacenter_blocked_countries:datacenterBlocked,recommended_route:recommended,proposed_profile:proposedProfile,proposed_provider_rules:proposedRules};
+ return {reachable_countries:reachable,unreachable_countries:unreachable,geo_restricted:geoRestricted,provider_refused:refusing,datacenter_blocked_countries:datacenterBlocked,recommended_route:recommended,proposed_provider_rules:proposedRules};
 }

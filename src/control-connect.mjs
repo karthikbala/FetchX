@@ -3,7 +3,7 @@ import {GatewayError,fail} from './policy.mjs';
 
 const TTL=600;
 export const CONNECT_INTERVAL=5;
-const SCOPES=Object.freeze(['fetch:read','fetch:write','profiles:read']);
+const SCOPES=Object.freeze(['fetch:read','fetch:write','usage:read']);
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const DEVICE_CODE=/^[A-Za-z0-9_-]{43}$/;
 const USER_CODE=/^[A-Z0-9]{4}-[A-Z0-9]{4}$/;

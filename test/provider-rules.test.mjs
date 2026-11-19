@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
-import {providerRule,providerRules,assertProviderAllowed,hostMatches} from '../src/provider-rules.mjs';
+import {providerRule,providerRules,hostMatches} from '../src/provider-rules.mjs';
 import {probeCell,probePlan,runProbe,summarizeProbe} from '../src/reachability.mjs';
-import {connectRelay} from '../src/connect-relay.mjs';
-import {classifyOutcome} from '../src/diagnostics.mjs';
+import {exchange} from '../src/fetch/transport.mjs';
+import {startRelay} from '../src/browser/relay.mjs';
+import {databaseUrl,gatewayFor,html,openStore,testConfig} from './helpers.mjs';
 
 test('default rule excludes Oxylabs for .gov hosts only',()=>{
  assert.equal(providerRule({},'oxylabs','myplace.cuyahogacounty.gov')?.id,'oxylabs-gov');
@@ -13,8 +14,6 @@ test('default rule excludes Oxylabs for .gov hosts only',()=>{
  for(const host of ['example.com','gov.example.com','notgov','govt.nz'])assert.equal(providerRule({},'oxylabs',host),null);
  assert.equal(providerRule({},'evomi','ohio.gov'),null);
  assert.equal(hostMatches({hostSuffix:'.gov'},'gov'),true);
- assert.throws(()=>assertProviderAllowed({},'oxylabs','irs.gov'),e=>e.code==='provider_host_excluded'&&e.status===409&&e.details.rule==='oxylabs-gov');
- assert.doesNotThrow(()=>assertProviderAllowed({},'dataimpulse','irs.gov'));
 });
 test('config rules add, replace or disable defaults and are validated',()=>{
  const config={providerRules:[{id:'oxylabs-gov',provider:'oxylabs',match:{hostSuffix:'.gov'},action:'exclude',reason:'disabled for test',enabled:false},{id:'evomi-shop',provider:'evomi',match:{host:'shop.example.com'},action:'exclude',reason:'test'}]};
@@ -54,22 +53,21 @@ test('probe cell classifies provider refusal, account rejection, unreachable TLS
   assert.equal((await probeCell({proxyUrl:'http://127.0.0.1:1',host:'ok.example.com',timeoutMs:2000})).result,'proxy_failed');
  }finally{proxy.close();source.close();}
 });
-test('CONNECT relay reports a provider 4xx refusal as provider_target_refused',async()=>{
- const proxy=await fakeProxy(()=>444,{port:1});
- const relay=await connectRelay({proxy:{url:`http://u:p@127.0.0.1:${proxy.address().port}`},profile:{hosts:['refused.gov']},maxBytes:4096,resolve:async()=>[{address:'93.184.216.34'}]});
+test('a refused CONNECT is the provider\'s answer, and a 502-504 means the exit could not reach the site',async()=>{
+ const proxy=await fakeProxy(h=>h==='127.0.0.2'?444:502,{port:1});
+ const url=`http://u:p@127.0.0.1:${proxy.address().port}`,limits={timeoutMs:3000,maxBodyBytes:1000,maxWireBytes:10000};
+ const fetchVia=address=>exchange({method:'GET',headers:{}},{url:new URL('http://site.example.com/'),address,family:4},limits,{proxy:{url}});
  try{
-  await new Promise((resolve,reject)=>{const q=http.request(relay.url,{method:'CONNECT',path:'refused.gov:443'});q.on('connect',(r,s)=>{s.destroy();resolve(r.statusCode);});q.on('error',reject);q.end();});
-  assert.equal(relay.error,'provider_target_refused');
-  assert.equal(classifyOutcome({status:null,error:'provider_target_refused'}),'provider_refused');
- }finally{await relay.close();proxy.close();}
-});
-test('CONNECT relay reports a proxy 502-504 as source_unreachable',async()=>{
- const proxy=await fakeProxy(()=>502,{port:1});
- const relay=await connectRelay({proxy:{url:`http://u:p@127.0.0.1:${proxy.address().port}`},profile:{hosts:['geo.example.com']},maxBytes:4096,resolve:async()=>[{address:'93.184.216.34'}]});
- try{
-  await new Promise((resolve,reject)=>{const q=http.request(relay.url,{method:'CONNECT',path:'geo.example.com:443'});q.on('connect',(r,s)=>{s.destroy();resolve(r.statusCode);});q.on('error',reject);q.end();});
-  assert.equal(relay.error,'source_unreachable');assert.equal(classifyOutcome({status:null,error:'source_unreachable'}),'source_unreachable');
- }finally{await relay.close();proxy.close();}
+  await assert.rejects(fetchVia('127.0.0.2'),e=>e.code==='provider_target_refused'&&e.provider_status===444&&e.dispatched===false);
+  await assert.rejects(fetchVia('127.0.0.3'),e=>e.code==='source_unreachable'&&e.provider_status===502&&e.dispatched===false);
+  // The browser relay reports the same codes instead of a generic browser failure.
+  const pin={destination:{url:new URL('https://site.example.com/'),address:'127.0.0.2',family:4},permits:1};
+  const relay=await startRelay({pins:new Map([['site.example.com',pin]]),proxy:{url},maxBytes:4096,deadline:Date.now()+3000});
+  try{
+   await new Promise((resolve,reject)=>{const q=http.request(relay.url,{method:'CONNECT',path:'site.example.com:443'});q.on('connect',(r,socket)=>{socket.destroy();resolve(r.statusCode);});q.on('error',reject);q.end();});
+   assert.equal(relay.error,'provider_target_refused');
+  }finally{await relay.close();}
+ }finally{proxy.close();}
 });
 test('probe plan skips rule-excluded providers and the summary infers country, provider and datacenter limits',async()=>{
  const config={proxies:[{id:'us-1',country:'US',url:'http://u:p@dc.invalid:1'},{id:'gb-1',country:'GB',url:'http://u:p@dc.invalid:2'}],residential:{providers:{evomi:{enabled:true,username:'u',password:'p'},dataimpulse:{enabled:false}}}};
@@ -82,7 +80,6 @@ test('probe plan skips rule-excluded providers and the summary infers country, p
  assert.deepEqual(s.reachable_countries,['US']);assert.deepEqual(s.unreachable_countries,['GB']);assert.equal(s.geo_restricted,true);
  assert.deepEqual(s.provider_refused,['oxylabs']);assert.deepEqual(s.datacenter_blocked_countries,[]);
  assert.deepEqual(s.recommended_route,{country:'US',class:'residential',provider:'evomi',execution:'http'});
- assert.deepEqual(s.proposed_profile,{v1:{country:'US',routingPolicy:'residential-v1',execution:'http'},v2:{countries:['US'],proxy_classes:['residential']}});
  assert.equal(s.proposed_provider_rules[0].provider,'oxylabs');assert.deepEqual(s.proposed_provider_rules[0].match,{host:'myplace.cuyahogacounty.gov'});
  assert.equal(JSON.stringify(report).includes('u:p'),false);
  // Datacenter blocked by the source; a challenge-only source needs a browser.
@@ -91,52 +88,40 @@ test('probe plan skips rule-excluded providers and the summary infers country, p
  const walled=summarizeProbe('walled.example.com',['US'],[{provider:'oxylabs',class:'datacenter',country:'US',result:'challenge'},{provider:'evomi',class:'residential',country:'US',result:'challenge'}]);
  assert.deepEqual(walled.recommended_route,{country:'US',class:'residential',provider:'evomi',execution:'browser',verified:false});
  const cheap=summarizeProbe('example.com',['US'],[{provider:'oxylabs',class:'datacenter',country:'US',result:'ok'},{provider:'evomi',class:'residential',country:'US',result:'ok'}]);
- assert.equal(cheap.recommended_route.class,'datacenter');assert.deepEqual(cheap.proposed_profile.v1,{country:'US'});
+ assert.equal(cheap.recommended_route.class,'datacenter');
 });
 
-test('gateway never dispatches an excluded provider and starts residential on the next allowed route',{skip:!process.env.TEST_DATABASE_URL},async()=>{
- const {Store}=await import('../src/store.mjs'),{Gateway}=await import('../src/gateway.mjs'),{sha}=await import('../src/crypto.mjs');
- const {mkdtemp,rm}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path');
- assert.match(new URL(process.env.TEST_DATABASE_URL).pathname,/^\/gateway_test_[A-Za-z0-9]+$/);
- const root=await mkdtemp(join(tmpdir(),'rules-test-')),store=new Store(process.env.TEST_DATABASE_URL);await store.init();
- await store.pool.query('TRUNCATE ledger,attempts,operations,workflows,source_limits RESTART IDENTITY CASCADE');
- const base={methods:['GET'],headers:[],country:'US',maxConcurrent:1,maxRequests:4,maxInputBytes:1024,maxResponseBytes:1024,maxBytes:20000,ttlSeconds:120,minIntervalMs:0,maxFallbackCredits:0};
- const provider={enabled:true,username:'u',password:'p',maxTotalBytes:100000,microUsdPerGB:1000000};
- const config={release:'test',artifactDir:root,artifactKey:'33'.repeat(32),maxDailyFallbackCredits:0,proxies:[{id:'us-1',country:'US',url:'http://u:p@127.0.0.1:9'}],
-  residential:{maxDailyBytes:100000,maxTotalBytes:100000,providers:{evomi:{...provider},dataimpulse:{...provider}}},
-  providerRules:[{id:'evomi-source',provider:'evomi',match:{host:'source.example'},action:'exclude',reason:'test'}],
-  projects:{a:{profiles:['dc','res'],tokenHash:sha('a')}}};
- const calls=[];
- const g=new Gateway({store,config,profiles:{dc:{...base,hosts:['records.county.gov']},res:{...base,hosts:['source.example'],routingPolicy:'residential-v1',maxAttemptBytes:1000,maxResidentialBytes:4000}},resolve:async()=>[{address:'93.184.216.34'}],
-  transport:{oxylabs:async()=>{calls.push('oxylabs');return {status:200,headers:{},body:Buffer.from('x')};},residential:async(input,w)=>{calls.push(w.route);return {status:200,headers:{},body:Buffer.from('ok'),wireBytes:10,proxyTraffic:{status:'measured',bytes:10}};}}});
- try{
-  const dc=await g.workflow('a',{profile:'dc',idempotency_key:'dc'});
-  await assert.rejects(g.operation('a',dc.id,{idempotency_key:'o1',url:'https://records.county.gov/'}),e=>e.code==='provider_host_excluded');
-  assert.deepEqual(calls,[]);assert.equal((await store.pool.query('SELECT count(*)::int n FROM attempts')).rows[0].n,0);
-  const res=await g.workflow('a',{profile:'res',idempotency_key:'res'});assert.equal(res.route,'evomi');
-  const r=await g.operation('a',res.id,{idempotency_key:'o2',url:'https://source.example/'});
-  assert.equal(r.status,200);assert.equal(r.provider,'dataimpulse');assert.deepEqual(calls,['dataimpulse']);assert.equal((await g.read('a',res.id)).route,'dataimpulse');
- }finally{await store.close();await rm(root,{recursive:true,force:true});}
+test('an excluded residential provider is never used; its partner carries the request',{skip:!databaseUrl},async t=>{
+ const store=await openStore();t.after(()=>store.close());
+ const config=testConfig({routes:{direct:false},proxies:[],providerRules:[{id:'evomi-source',provider:'evomi',match:{host:'source.example.com'},action:'exclude',reason:'test'}]});
+ const {call,calls}=await gatewayFor(store,{config,site:()=>({body:html('ok')})});
+ const result=await call('POST','/v1/fetch',{body:{url:'https://source.example.com/'}});
+ assert.equal(result.body.status,'succeeded');
+ assert.deepEqual(calls.map(c=>c.provider),['dataimpulse']);
 });
 
-test('v2 routes refuse an excluded provider for the destination and redirect hosts',async()=>{
- const {V2Gateway}=await import('../src/v2.mjs');
- const v=Object.create(V2Gateway.prototype);v.config={proxies:[{id:'us-1',country:'US',url:'http://u:p@127.0.0.1:9'},{id:'us-x',country:'US',provider:'otherdc',url:'http://u:p@127.0.0.1:9'}]};
- assert.throws(()=>v.assertRouteProvider({class:'datacenter',country:'US',proxy_id:'us-1'},'www.irs.gov'),e=>e.code==='provider_host_excluded'&&e.details.provider==='oxylabs');
- assert.doesNotThrow(()=>v.assertRouteProvider({class:'datacenter',country:'US',proxy_id:'us-1'},'example.com'));
- assert.doesNotThrow(()=>v.assertRouteProvider({class:'residential',country:'US',provider:'evomi'},'www.irs.gov'));
- assert.doesNotThrow(()=>v.assertRouteProvider({class:'direct',country:null},'www.irs.gov'));
+test('a provider refusing the host costs no attempt and the ladder moves on',{skip:!databaseUrl},async t=>{
+ const store=await openStore();t.after(()=>store.close());
+ const {GatewayError}=await import('../src/policy.mjs');
+ const {call,calls}=await gatewayFor(store,{config:testConfig({routes:{direct:false}}),site:c=>{
+  if(c.provider==='oxylabs'){const e=new GatewayError('provider_target_refused',502);e.dispatched=false;e.provider_status=444;return e;}
+  return {body:html('ok')};
+ }});
+ const result=await call('POST','/v1/fetch',{body:{url:'https://shop.example.com/',max_attempts:1}});
+ assert.equal(result.body.status,'succeeded',JSON.stringify(result.body));
+ assert.deepEqual(calls.map(c=>c.provider),['oxylabs','evomi']);
+ assert.deepEqual(result.body.attempts.map(a=>a.result),['not_admitted','success']);
 });
 
 test('database rules: precedence, versioned saves, default override, delete and audit',{skip:!process.env.TEST_DATABASE_URL},async()=>{
  const {Store}=await import('../src/store.mjs'),m=await import('../src/provider-rules.mjs');
  assert.match(new URL(process.env.TEST_DATABASE_URL).pathname,/^\/gateway_test_[A-Za-z0-9]+$/);
  const store=new Store(process.env.TEST_DATABASE_URL);await store.init();await store.pool.query('TRUNCATE routing_rules,routing_rule_audit RESTART IDENTITY');
- const config={providerRules:[{id:'scrapedo-shop',provider:'scrapedo',match:{host:'shop.example.com'},action:'exclude',reason:'config rule'}]};
+ const config={providerRules:[{id:'dataimpulse-shop',provider:'dataimpulse',match:{host:'shop.example.com'},action:'exclude',reason:'config rule'}]};
  const actor='ops@example.com';
  try{
   assert.deepEqual(await m.loadProviderRules(store.pool,config),{loaded:0,rejected:[]});
-  assert.deepEqual(m.providerRuleSources(config).map(r=>`${r.id}:${r.source}`),['oxylabs-gov:default','scrapedo-shop:config']);
+  assert.deepEqual(m.providerRuleSources(config).map(r=>`${r.id}:${r.source}`),['oxylabs-gov:default','dataimpulse-shop:config']);
   // Create, then a stale or missing version conflicts; the right version updates.
   const rule={id:'evomi-records',provider:'evomi',match:{hostSuffix:'.records.example'},action:'exclude',reason:'portal rule',evidence:{probe:'p1'}};
   const created=await m.saveProviderRule(store,rule,{actor});assert.equal(created.version,1);

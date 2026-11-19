@@ -1,6 +1,5 @@
 import {randomUUID} from 'node:crypto';
 import {fail} from './policy.mjs';
-import {PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES,outstandingPaidCreditLiabilitySql,unifiedCreditsEnabled} from './control-paid-credits.mjs';
 import {
  STRIPE_BODY_LIMIT,STRIPE_CREATE_WINDOW_MS,STRIPE_UUID,STRIPE_VERSION,StripeProvider,lockStripeSales,stripeHash,stripeHostedUrl,
  stripeId,stripeObject,stripeProjectAllowed,stripeSettings,verifiedStripeEvent,verifiedStripeRelay,
@@ -81,11 +80,12 @@ function savedCheckoutState(row){
 }
 
 export class ControlStripe {
- constructor({store,config,paidCredits,paidCreditReady,hydrateProject,fetchStripe}){
-  this.store=store;this.config=config;this.paidCredits=paidCredits;this.paidCreditReady=paidCreditReady;this.hydrateProject=hydrateProject;
+ // purchases: billing/purchases.mjs (grants, revocations, payment holds).
+ constructor({store,config,purchases,fetchStripe}){
+  this.store=store;this.config=config;this.purchases=purchases;
   this.allowDirect=typeof fetchStripe==='function';
   this.provider=new StripeProvider(fetchStripe);
-  this.events=new StripeEvents({store,provider:this.provider,paidCredits});
+  this.events=new StripeEvents({store,provider:this.provider,purchases});
  }
  settings(){return stripeSettings(this.config,{allowDirect:this.allowDirect});}
  configuration(project){
@@ -107,84 +107,23 @@ export class ControlStripe {
     WHERE p.mode=$1 AND p.account_id=$2 AND p.project=$3 ORDER BY p.paid_at DESC,p.session_id LIMIT 50`,scope),
   ]);
   if(!sales&&!drafts.rowCount&&!history.rowCount)return null;
-  const held=sales&&config.mode==='live'&&await this.paidCredits.paymentHeld(project);
-  const baseReady=sales&&!held&&await this.paidCreditReady(project,{publicOnly:true}),ready=baseReady&&currencySales;
+  const held=sales&&config.mode==='live'&&await this.purchases.paymentHeld(project);
+  const baseReady=sales&&!held,ready=baseReady&&currencySales;
   const row=drafts.rows[0];
   const pending=row?{plan_id:row.plan.id,currency:row.plan.currency,amount_minor:row.plan.amountMinor,credits:row.plan.credits,idempotency_key:row.operation_key,state:savedCheckoutState(row)}:null;
-  const {plans,canResume}=await this.withSalesCapacity(config,async client=>{
-   const obligations=ready&&config.mode==='live'?await this.salesObligations(client):{};
-   const plans=[];
-   for(const plan of sales?catalog:[]){
-    plans.push({...planView(plan),can_purchase:ready&&await this.packageFits(project,config,plan,obligations,client)});
-   }
-   const canResume=!!pending&&baseReady&&pending.state!=='reconciliation_required'&&await this.packageFits(
-    project,config,row.plan,config.mode==='live'?await this.salesObligations(client,row.id):{},client);
-   return {plans,canResume};
-  });
+  const plans=(sales?catalog:[]).map(plan=>({...planView(plan),can_purchase:ready}));
+  const canResume=!!pending&&baseReady&&pending.state!=='reconciliation_required';
   const eligible=plans.some(plan=>plan.can_purchase);
   const purchases=history.rows.map(({plan,state,paid_at})=>({
    plan_id:plan.id,name:plan.name,amount_minor:plan.amountMinor,currency:plan.currency,credits:plan.credits,status:state,paid_at,
   }));
   return {mode:config.mode,currency,plans,pending_checkout:pending,can_checkout:eligible&&!pending,can_manage:false,purchases,
    ...(pending?{can_resume_checkout:canResume}:{}),
-   ...(sales&&!eligible&&!canResume?{checkout_unavailable_reason:held?'paid_credit_payment_hold':!currencySales||!catalog.length?'stripe_currency_unavailable':ready?'paid_credit_capacity_unavailable':'paid_credit_route_unavailable'}:{})};
+   ...(sales&&!eligible&&!canResume?{checkout_unavailable_reason:held?'paid_credit_payment_hold':'stripe_currency_unavailable'}:{})};
  }
- async withSalesCapacity(config,fn){
-  if(config.mode!=='live')return fn(this.store.pool);
-  return this.store.tx(async c=>{
-   await lockStripeSales(c,config.mode);
-   return fn(c);
-  });
- }
- async salesObligations(client,except=null){
-  const {rows:[row]}=await client.query(`SELECT COALESCE(sum(((o.plan->>'credits')::bigint+
-   CASE WHEN $3 AND u.project IS NULL THEN COALESCE(a.granted_credits,0) ELSE 0 END)*$2::bigint),0) AS pending_bytes,
-   (${outstandingPaidCreditLiabilitySql}) AS outstanding_bytes FROM control_stripe_orders o
-   LEFT JOIN control_credit_accounts a ON a.project=o.project LEFT JOIN control_credit_upgrades u ON u.project=o.project
-   WHERE o.mode='live' AND o.state IN ('creating','awaiting_payment') AND ($1::uuid IS NULL OR o.id<>$1)`,
-  [except,PAID_CREDIT_RESIDENTIAL_LIABILITY_BYTES,unifiedCreditsEnabled(this.config)]);
-  const pendingLiabilityBytes=BigInt(row.pending_bytes),outstandingLiabilityBytes=BigInt(row.outstanding_bytes);
-  if(pendingLiabilityBytes<0n||outstandingLiabilityBytes<0n)fail('paid_credit_capacity_unavailable',409);
-  return {pendingLiabilityBytes,outstandingLiabilityBytes};
- }
- async packageFits(project,config,plan,obligations,client){
-  if(config.mode==='test')return true;
-  const signupCredits=unifiedCreditsEnabled(this.config)?await this.unconvertedSignupCredits(client,project):0;
-  return this.paidCreditReady(project,{publicOnly:true,purchaseCredits:plan.credits+signupCredits,...obligations,client});
- }
- async unconvertedSignupCredits(client,project){
-  // Reserve against the full grant so concurrent signup settlement can only
-  // reduce the obligation before a Checkout opens or completes.
-  const row=(await client.query(`SELECT a.granted_credits FROM control_credit_accounts a WHERE a.project=$1
-   AND NOT EXISTS(SELECT 1 FROM control_credit_upgrades u WHERE u.project=a.project)`,[project])).rows[0];
-  return Number(row?.granted_credits??0);
- }
- async upgradeExistingProjects(){
-  if(!unifiedCreditsEnabled(this.config))return 0;
-  return this.withSalesCapacity({mode:'live'},async c=>{
-   const {rows}=await c.query(`SELECT DISTINCT p.project FROM control_stripe_purchases p
-    JOIN control_projects cp ON cp.id=p.project AND cp.status='active'
-    JOIN paid_credit_grants g ON g.project=p.project AND g.account_id=p.account_id AND g.mode=p.mode
-     AND g.checkout_session_id=p.session_id AND g.payment_intent_id=p.payment_intent_id
-    WHERE p.mode='live' AND p.state='paid' AND g.revoked_at IS NULL AND g.credits IS NOT NULL
-    AND NOT EXISTS(SELECT 1 FROM control_credit_upgrades u WHERE u.project=p.project) ORDER BY p.project`);
-   let upgraded=0;
-   for(const {project} of rows){
-    // Managed project policies are loaded from PostgreSQL, not the static
-    // gateway config. Startup has no incoming request to hydrate them.
-    if(!this.config.projects?.[project])await this.hydrateProject?.(project);
-    const signupCredits=await this.unconvertedSignupCredits(c,project);
-    if(signupCredits>0&&!await this.paidCreditReady(project,{publicOnly:true,purchaseCredits:signupCredits,...await this.salesObligations(c),client:c}))
-     fail('unified_credit_activation_capacity_unavailable',503);
-    if(await this.paidCredits.upgradeEligibleProject(c,project))upgraded++;
-   }
-   return upgraded;
-  });
- }
- async assertCapacity(project,config,plan,client=this.store.pool,except=null){
+ async assertNotHeld(project,config,client=this.store.pool){
   if(config.mode!=='live')return;
-  if(await this.paidCredits.paymentHeld(project,client))fail('paid_credit_payment_hold',409);
-  if(!await this.packageFits(project,config,plan,await this.salesObligations(client,except),client))fail('paid_credit_capacity_unavailable',409);
+  if(await this.purchases.paymentHeld(project,client))fail('paid_credit_payment_hold',409);
  }
  async find(project,config,key,db=this.store.pool){
   return (await db.query(`SELECT o.*,p.state AS purchase_state FROM control_stripe_orders o
@@ -215,7 +154,7 @@ export class ControlStripe {
    const open=await c.query(`SELECT 1 FROM control_stripe_orders WHERE mode=$1 AND project=$2
     AND state IN ('creating','awaiting_payment') LIMIT 1`,[config.mode,project]);
    if(open.rowCount)fail('stripe_checkout_already_open',409);
-   await this.assertCapacity(project,config,plan,c);
+   await this.assertNotHeld(project,config,c);
    return (await c.query(`INSERT INTO control_stripe_orders(id,mode,account_id,project,operation_key,plan,return_origin,api_version)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,[randomUUID(),config.mode,config.accountId,project,key,plan,origin,STRIPE_VERSION])).rows[0];
   });
@@ -239,12 +178,11 @@ export class ControlStripe {
   let row=await this.find(project,config,key);
   if(row&&(row.plan.id!==planId||row.return_origin!==origin))fail('stripe_checkout_conflict',409);
   if(row&&(row.state==='complete'||row.state==='expired'||row.state==='failed'))return checkoutView(row,savedCheckoutState(row));
-  if(!await this.paidCreditReady(project,{publicOnly:true}))fail('paid_credit_route_unavailable',409);
   if(!row){
    const plan=config.catalog.find(item=>item.id===planId);
    if(!plan||plan.currency!==billingCurrency(country))fail('stripe_plan_invalid',400);
    if(plan.currency==='inr'&&config.inrSalesEnabled!==true)fail('stripe_checkout_disabled',404);
-   await this.withSalesCapacity(config,c=>this.assertCapacity(project,config,plan,c));
+   await this.assertNotHeld(project,config);
    await this.provider.assertAccount(config);
    await this.provider.assertPrice(config,plan);
    row=await this.prepareOrder(project,config,plan,key,origin);
@@ -252,7 +190,7 @@ export class ControlStripe {
   if(row.plan.id!==planId||row.return_origin!==origin)fail('stripe_checkout_conflict',409);
   if(row.state==='complete'||row.state==='expired'||row.state==='failed')return checkoutView(row,savedCheckoutState(row));
   if(!row.session_id)resumeBefore(row,STRIPE_CREATE_WINDOW_MS);
-  await this.withSalesCapacity(config,c=>this.assertCapacity(project,config,row.plan,c,row.id));
+  await this.assertNotHeld(project,config);
   row=await this.find(project,config,key);
   if(row.state==='complete'||row.state==='expired'||row.state==='failed')return checkoutView(row,savedCheckoutState(row));
   await this.provider.assertAccount(config);

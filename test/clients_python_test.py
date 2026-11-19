@@ -1,71 +1,90 @@
-"""Offline client recovery checks. Run with a Python environment containing httpx."""
-import importlib.util,json,unittest
+"""Offline checks for clients/python.py. Run with a Python environment that has httpx."""
+import importlib.util
+import json
+import unittest
 from pathlib import Path
+
 import httpx
 
-spec=importlib.util.spec_from_file_location('gateway_client',Path(__file__).resolve().parents[1]/'clients/python.py')
-module=importlib.util.module_from_spec(spec)
+spec = importlib.util.spec_from_file_location('fetchx_client', Path(__file__).resolve().parents[1] / 'clients/python.py')
+module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-GatewayClient,GatewayError=module.GatewayClient,module.GatewayError
+FetchXClient, FetchXError = module.FetchXClient, module.FetchXError
 
-class ClientRecoveryTests(unittest.TestCase):
-    def test_lost_response_exposes_generated_key_and_lookup_is_get(self):
-        calls=[]
+RESULT = {'id': '3f7c1d2e-8a4b-4c6d-9e0f-1a2b3c4d5e6f', 'status': 'succeeded', 'credits': {'charged': 1, 'max': 60}}
+
+
+def client_for(handler, **options):
+    return FetchXClient('https://api.fetchx.test/', 'fxk_fixture', client=httpx.Client(transport=httpx.MockTransport(handler)), **options)
+
+
+class ClientTests(unittest.TestCase):
+    def test_endpoints_use_the_documented_methods_and_paths(self):
+        calls = []
+
         def handler(request):
-            calls.append(request)
-            if request.method=='POST':raise httpx.ReadTimeout('private fixture-token',request=request)
-            return httpx.Response(200,json={'id':'stored-capture'})
-        with httpx.Client(transport=httpx.MockTransport(handler),auth=('unrelated','auth')) as http:
-            client=GatewayClient('http://gateway.invalid/','fixture-token',client=http)
-            with self.assertRaises(GatewayError) as caught:client.request('workflow-id',url='https://source.example/item')
-            error=caught.exception
-            self.assertEqual(error.idempotency_key,json.loads(calls[0].content)['idempotency_key'])
-            self.assertEqual(error.workflow,'workflow-id')
-            self.assertEqual(error.code,'gateway_unavailable')
-            self.assertIsNone(error.status)
-            self.assertNotIn('fixture-token',str(error))
-            self.assertEqual(client.lookup(error.workflow,error.idempotency_key),{'id':'stored-capture'})
-        self.assertEqual(len(calls),2)
-        self.assertEqual(calls[1].method,'GET')
-        self.assertEqual(calls[0].headers['authorization'],'Bearer fixture-token')
-        self.assertEqual(calls[0].url.host,'gateway.invalid')
+            calls.append((request.method, str(request.url), request.headers['authorization']))
+            if request.url.path.endswith('/content'):
+                return httpx.Response(200, content=b'%PDF', headers={'content-type': 'application/pdf'})
+            if request.method == 'DELETE':
+                return httpx.Response(204)
+            return httpx.Response(200, json=RESULT)
 
-    def test_http_error_keeps_recorded_key_and_details(self):
-        calls=[]
+        client = client_for(handler)
+        self.assertEqual(client.fetch(url='https://shop.example.com/', formats=['markdown'])['status'], 'succeeded')
+        client.get(RESULT['id'], include_body=False)
+        client.list(status='failed', limit=5)
+        self.assertEqual(client.content(RESULT['id']), {'body': b'%PDF', 'content_type': 'application/pdf'})
+        self.assertIsNone(client.delete(RESULT['id']))
+        client.usage(period='day')
+        base = 'https://api.fetchx.test'
+        self.assertEqual([(m, u) for m, u, _ in calls], [
+            ('POST', base + '/v1/fetch'), ('GET', base + '/v1/fetch/' + RESULT['id'] + '?include_body=false'),
+            ('GET', base + '/v1/fetch?status=failed&limit=5'), ('GET', base + '/v1/fetch/' + RESULT['id'] + '/content'),
+            ('DELETE', base + '/v1/fetch/' + RESULT['id']), ('GET', base + '/v1/usage?period=day')])
+        self.assertTrue(all(auth == 'Bearer fxk_fixture' for _, _, auth in calls))
+
+    def test_a_lost_reply_is_resent_with_the_same_key(self):
+        keys = []
+
         def handler(request):
-            calls.append(request)
-            return httpx.Response(409,json={'error':'operation_in_progress','details':{'retry_after_seconds':1}})
-        with httpx.Client(transport=httpx.MockTransport(handler)) as http:
-            client=GatewayClient('http://gateway.invalid','fixture-token',client=http)
-            with self.assertRaises(RuntimeError) as caught:
-                client.request('workflow-id',idempotency_key='recorded-key',url='https://source.example/item')
-            error=caught.exception
-            self.assertEqual(error.idempotency_key,'recorded-key')
-            self.assertEqual(error.status,409)
-            self.assertEqual(error.details,{'retry_after_seconds':1})
-        self.assertEqual(len(calls),1)
+            keys.append(json.loads(request.content)['idempotency_key'])
+            if len(keys) == 1:
+                raise httpx.ReadTimeout('lost fxk_fixture', request=request)
+            return httpx.Response(200, json=RESULT)
 
-    def test_invalid_json_keeps_recovery_context_without_body(self):
-        for content in [b'private proxy HTML',b'null',b'[]']:
-            with httpx.Client(transport=httpx.MockTransport(lambda _:httpx.Response(502,content=content))) as http:
-                client=GatewayClient('http://gateway.invalid','fixture-token',client=http)
-                with self.assertRaises(GatewayError) as caught:
-                    client.request('workflow-id',idempotency_key='recorded-key',url='https://source.example/item')
-                self.assertEqual(caught.exception.code,'gateway_invalid_response')
-                self.assertEqual(caught.exception.idempotency_key,'recorded-key')
-                self.assertNotIn('private proxy HTML',str(caught.exception))
+        module.time.sleep = lambda _seconds: None
+        self.assertEqual(client_for(handler).fetch(url='https://shop.example.com/')['id'], RESULT['id'])
+        self.assertEqual(len(keys), 2)
+        self.assertEqual(keys[0], keys[1])
 
-    def test_workflow_creation_key_can_be_reused_after_a_lost_response(self):
-        bodies=[]
-        def handler(request):
-            bodies.append(json.loads(request.content))
-            if len(bodies)==1:raise httpx.ReadTimeout('lost response',request=request)
-            return httpx.Response(200,json={'id':'existing-workflow'})
-        with httpx.Client(transport=httpx.MockTransport(handler)) as http:
-            client=GatewayClient('http://gateway.invalid','fixture-token',client=http)
-            with self.assertRaises(GatewayError) as caught:client.workflow('reviewed.profile',max_requests=2)
-            self.assertIsNone(caught.exception.workflow)
-            self.assertEqual(client.workflow('reviewed.profile',caught.exception.idempotency_key,max_requests=2),{'id':'existing-workflow'})
-        self.assertEqual(bodies[0],bodies[1])
+    def test_errors_carry_code_status_details_and_never_the_body_or_token(self):
+        def refused(_request):
+            return httpx.Response(400, json={'error': {'code': 'invalid_request', 'message': 'bad', 'details': {'field': 'url'}}})
 
-if __name__=='__main__':unittest.main()
+        with self.assertRaises(FetchXError) as caught:
+            client_for(refused).fetch(url='https://shop.example.com/', idempotency_key='k1')
+        error = caught.exception
+        self.assertEqual((error.code, error.status, error.details, error.idempotency_key), ('invalid_request', 400, {'field': 'url'}, 'k1'))
+
+        def broken(_request):
+            return httpx.Response(502, content=b'<html>private proxy page</html>')
+
+        with self.assertRaises(FetchXError) as caught:
+            client_for(broken, retries=0).fetch(url='https://shop.example.com/')
+        self.assertEqual(caught.exception.code, 'invalid_response')
+        self.assertNotIn('private proxy page', str(caught.exception))
+        self.assertNotIn('fxk_fixture', str(caught.exception))
+
+    def test_wait_polls_until_finished(self):
+        states = ['pending', 'pending', 'succeeded', 'succeeded']
+
+        def handler(_request):
+            return httpx.Response(200, json={**RESULT, 'status': states.pop(0)})
+
+        module.time.sleep = lambda _seconds: None
+        self.assertEqual(client_for(handler).wait(RESULT['id'], interval=0.01)['status'], 'succeeded')
+
+
+if __name__ == '__main__':
+    unittest.main()
