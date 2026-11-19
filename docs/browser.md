@@ -22,7 +22,7 @@ Before every launch `verifyCamoufox` checks the executable's SHA-256, the versio
 
 Launch options (`camoufoxOptions`) turn off Camoufox's own GeoIP, WebRTC, DNS prefetch, DNS-over-HTTPS, HTTP/3, updates and telemetry, and allow no direct connection around the relay. The timezone, position and locale are the exit IP's: before the step the gateway asks `browser.exitGeo` (ipinfo.io by default) through the step's own proxy where that IP is, cached per proxy session; if the lookup fails, the route country's timezone is used. There is no viewport override, so the window has the size the device identity claims. Service workers are disabled by private browsing.
 
-The persona is Windows. Its fonts come from the Camoufox bundle, which ships each persona's fonts and points fontconfig at that persona's set only, so the fonts a page can measure match the claimed device; nothing has to be copied onto workers (copying real fonts is a Chromium-stealth step).
+The persona is Windows. Its fonts come from the Camoufox bundle, which ships each persona's fonts and points fontconfig at that persona's set only, so the fonts a page can measure match the claimed device; nothing has to be copied onto workers (copying real fonts is a Chromium-stealth step). Measured on production on 2026-11-19 with `scripts/browser-live-check.mjs --fonts`: a page detects the Windows fonts, and none of the gateway image's own fonts (FreeSans, WenQuanYi, Unifont) or the bundle's macOS and Linux fonts. Repeat that check after changing the image or the bundle.
 
 ## Sessions, warm-up and walls
 

@@ -20,7 +20,7 @@ Deploy only from a tag on `main`, after the full test suite passes.
 
 ## Checking the browser path against a live site
 
-`scripts/browser-live-check.mjs` runs the real browser path (pinned Camoufox, capture, warm-up, self-clear wait, exit-IP placement, kept identity) through one residential session against live URLs, without the gateway, and prints one JSON line per page. Use it to qualify a release's browser and to see how a protected site answers before and after a change; the header of the script has the `docker run` line. It spends residential bandwidth but no customer credits, and does not touch site knowledge or cooldowns.
+`scripts/browser-live-check.mjs` runs the real browser path (pinned Camoufox, capture, warm-up, self-clear wait, exit-IP placement, kept identity) through one residential session against live URLs, without the gateway, and prints one JSON line per page. Use it to qualify a release's browser and to see how a protected site answers before and after a change; the header of the script has the `docker run` line. It spends residential bandwidth but no customer credits, and does not touch site knowledge or cooldowns. `--fonts` adds one line per draw listing the fonts a page can detect: only the `windows` list may be non-empty. Each page has a hard limit of 150 s; still run it under `timeout` with a named container, and remove the container afterwards, because a timeout stops only the docker client.
 
 ## Rollback
 
