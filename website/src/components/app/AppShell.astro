@@ -34,6 +34,7 @@ const links = [
             </dl>
           </div>
           <a href="/app/billing" class="pp-upgrade">View balance <Icon name="arrow" size={15}/></a>
+          <a href="/app/admin" class="pp-doc-link" data-admin-link hidden><Icon name="lock" size={17}/> Admin <Icon name="arrow" size={14}/></a>
           <a href="/docs" class="pp-doc-link"><Icon name="file" size={17}/> API documentation <Icon name="diagonal" size={14}/></a>
         </div>
       </aside>
@@ -50,5 +51,5 @@ const links = [
     <dialog class="pp-dialog" data-key-dialog aria-labelledby="key-title"><h2 id="key-title">Save your API key.</h2><p>This secret is shown once. Keep it in your server environment.</p><code class="pp-key-secret" data-key-secret>Concealed</code><div class="pp-dialog-actions"><button type="button" class="pp-button pp-button-secondary" data-copy-key>Copy key</button><button type="button" class="pp-button pp-button-primary" data-close-key>I saved it · conceal</button></div></dialog>
     <dialog class="pp-dialog pp-request-dialog" data-request-dialog aria-labelledby="request-title"><h2 id="request-title">Retained request.</h2><p data-request-detail-status></p><pre class="pp-code pp-live-output" tabindex="0" role="region" aria-label="Retained response text" data-request-detail></pre><button type="button" class="pp-button pp-button-secondary" data-close-request>Close</button></dialog>
     <dialog class="pp-dialog" data-confirm-dialog aria-labelledby="confirm-title"><form method="dialog"><h2 id="confirm-title">Confirm action</h2><p data-confirm-description></p><div class="pp-dialog-actions"><button class="pp-button pp-button-secondary" value="cancel">Cancel</button><button class="pp-button pp-button-primary" value="confirm" data-confirm-action>Continue</button></div></form></dialog>
-  </div><script>import '../../scripts/product-preview';</script>
+  </div><script>import '../../scripts/product-preview';</script><script>import '../../scripts/admin-link';</script>
 </Layout>

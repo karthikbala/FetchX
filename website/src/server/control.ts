@@ -33,7 +33,7 @@ export const CONTROL_REQUEST_LIMIT=96*1024;
 export const CONTROL_RESPONSE_LIMIT=24*1024*1024;
 // A 20 MB fetch can carry 26.7 MB of base64 plus a text preview and metadata.
 const CONTROL_FETCH_RESPONSE_LIMIT=28*1024*1024;
-const ADMIN_RULE='[a-z0-9][a-z0-9._-]{0,63}';
+const ADMIN_RULE='[a-z0-9][a-z0-9._-]{0,63}',ADMIN_PROFILE='[A-Za-z0-9][A-Za-z0-9._-]{0,127}';
 const fetchResultPath=new RegExp(`^/projects/${PROJECT}/(?:fetch(?:/|$)|requests/${UUID}$)`);
 export const CONTROL_TIMEOUT_MS=85_000;
 const headers={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Pragma':'no-cache','X-Content-Type-Options':'nosniff','X-Robots-Tag':'noindex, nofollow'};
@@ -74,6 +74,12 @@ function allowedMethods(path:string):string[]|null {
  if(new RegExp(`^/admin/rules/${ADMIN_RULE}$`).test(path))return ['PUT','DELETE'];
  if(new RegExp(`^/admin/rules/${ADMIN_RULE}/(?:enable|disable)$`).test(path))return ['POST'];
  if(new RegExp(`^/admin/rules/${ADMIN_RULE}/audit$`).test(path))return ['GET'];
+ if(path==='/admin/probes')return ['GET','POST'];
+ if(new RegExp(`^/admin/probes/${UUID}$`).test(path))return ['GET'];
+ if(new RegExp(`^/admin/probes/${UUID}/apply$`).test(path))return ['POST'];
+ if(path==='/admin/profiles')return ['GET'];
+ if(new RegExp(`^/admin/profiles/${ADMIN_PROFILE}/routing$`).test(path))return ['PUT','DELETE'];
+ if(new RegExp(`^/admin/profiles/${ADMIN_PROFILE}/audit$`).test(path))return ['GET'];
  return null;
 }
 class ProxyFailure extends Error {constructor(readonly code:string){super(code);}}

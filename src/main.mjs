@@ -29,6 +29,7 @@ import {ControlStripe,isStripeWebhookRequest,registerStripeWebhook} from './cont
 const isRenderOperationRequest=req=>isPublicRenderRequest(req)&&
  !(req.method==='POST'&&req.url.split('?')[0]===RENDER_PREPARATION_PATH);
 import {loadProviderRules} from './provider-rules.mjs';
+import {interruptProbes,loadProfileOverrides} from './admin-ops.mjs';
 
 // New self-service credentials have an explicit endpoint allowlist. Existing
 // provisioned project tokens retain their established v1/v2 contract.
@@ -124,9 +125,13 @@ if(process.argv[1]===fileURLToPath(import.meta.url)){
  const ruleLoad=await loadProviderRules(store.pool,config);
  if(ruleLoad.rejected.length)process.stderr.write('provider_rules_rejected:'+ruleLoad.rejected.length+'\n');
  const gateway=new Gateway({store,config,profiles:{...profiles,...config.sourceProfiles}});
+ // Admin portal: abandon in-process probes from a previous run; load profile routing overrides.
+ await interruptProbes(store.pool);
+ const overrideLoad=await loadProfileOverrides(store.pool,gateway);
+ if(overrideLoad.rejected.length)process.stderr.write('profile_overrides_rejected:'+overrideLoad.rejected.length+'\n');
  const refreshMs=config.providerRulesRefreshMs??30000;
  if(!Number.isInteger(refreshMs)||refreshMs<1000||refreshMs>3600000)throw Error('provider_rules_refresh_invalid');
- const rulesRefresh=setInterval(()=>loadProviderRules(store.pool,config).catch(()=>process.stderr.write('provider_rules_refresh_failed\n')),refreshMs);rulesRefresh.unref();
+ const rulesRefresh=setInterval(()=>Promise.all([loadProviderRules(store.pool,config),loadProfileOverrides(store.pool,gateway)]).catch(()=>process.stderr.write('provider_rules_refresh_failed\n')),refreshMs);rulesRefresh.unref();
  const recovery=await gateway.recoverCaptures();
  if(recovery.invalid)process.stderr.write('capture_recovery_invalid\n');
  const app=server(gateway);

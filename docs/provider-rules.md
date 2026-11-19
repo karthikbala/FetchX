@@ -106,3 +106,26 @@ Grants and revocations are recorded in `control_operator_audit`. Revocation take
 | DELETE | `/admin/rules/:id` | — | Removes a database rule (restores the default/config rule it overrode) |
 | POST | `/admin/rules/test` | `{provider, host}` | `{excluded, rule, reason}`: would this provider be used for this host? (read-only) |
 | GET | `/admin/rules/:id/audit`, `/admin/audit` | — | Audit entries (actor = operator email, before, after, time) |
+
+## Probe jobs, applying proposals and profile routing (admin portal step 3)
+
+Probes run in the background on the gateway. `POST /admin/probes` returns at once with a probe id. Only one probe runs at a time (`probe_busy`, 409), and at most `controlPlane.admin.maxProbesPerDay` start in 24 hours (default 20, `probe_daily_limit`, 429). Each probe takes a public hostname and 1–6 country codes. A gateway restart marks unfinished probes `interrupted`; they never resume on their own. Reports are stored in `admin_probes` and hold metadata only (see "Reachability probe" above).
+
+Profile routing overrides change only `country`, `routingPolicy`, `execution`, `browserEngine`, `browserEngineFallback`, `maxRouteAttempts` and `maxSessionRenewals`. Hosts, methods, headers, byte, request and credit limits cannot be changed here. Each override is merged onto the profile and checked by `residentialPolicy` against the live config before it is saved, and again when it is loaded. An invalid stored override is skipped and logged as `profile_overrides_rejected`. Overrides apply to workflows created afterwards; running workflows keep the policy they started with. Every create, update and delete is recorded in `source_profile_override_audit`.
+
+| Method | Path | Body | Result |
+| --- | --- | --- | --- |
+| GET | `/admin/probes` | — | The last 50 probes with state and a short summary |
+| POST | `/admin/probes` | `{host, countries, include_excluded?}` | Starts a probe: `{probe: {id, state: "queued", …}}` |
+| GET | `/admin/probes/:id` | — | The probe with its full stored report |
+| POST | `/admin/probes/:id/apply` | `{rules?: [id…], profile?: {id, version?}}` | Saves the chosen *proposed* rules, with the probe as evidence, and/or merges the proposed v1 routing into the profile's override (`probe_not_complete`, `probe_rule_not_proposed`, `probe_profile_not_proposed`) |
+| GET | `/admin/profiles` | — | Every source profile: base, override, version, effective and resolved routing, plus the editable `fields` |
+| PUT | `/admin/profiles/:id/routing` | `{patch, version?}` | Creates (no `version`) or replaces (matching `version`) the override (`profile_override_invalid`, `profile_override_version_conflict`) |
+| DELETE | `/admin/profiles/:id/routing` | — | Removes the override; new workflows use the base profile |
+| GET | `/admin/profiles/:id/audit` | — | Override history |
+
+## Admin page (admin portal step 4)
+
+Operators manage all of this at `https://fetchx.ai/app/admin`. It has four tabs: provider rules (list, add/edit, enable/disable with a reason, delete, host test), reachability probes (start, watch, per-cell results, apply), profile routing and the audit log. The workspace sidebar shows an Admin link only when `/admin/session` succeeds. Everything on the page is rendered as text, and every write sends the session's CSRF token.
+
+Existing `config.providerRules` need no migration. They keep working and appear with source `config`. See the migration note in `docs/plans/admin-portal.md`.

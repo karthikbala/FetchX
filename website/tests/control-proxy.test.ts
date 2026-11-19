@@ -147,6 +147,18 @@ describe('same-origin control bridge',()=>{
   for(const [path,method,body] of ok)expect((await send(path,{method,body})).status).toBe(200);
   expect(calls.map(({url,init})=>[url.replace('https://gateway.example/control',''),init.method])).toEqual(ok.map(([path,method])=>[path,method]));
  });
+ it('forwards only the admin probe and profile routes',async()=>{
+  const probe='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  for(const path of [`/admin/probes/${probe}/extra`,'/admin/probes/not-a-uuid','/admin/profiles/a/b/routing','/admin/profiles/-bad/routing',`/admin/profiles/${'x'.repeat(129)}/routing`])expect((await send(path)).status).toBe(404);
+  expect((await send('/admin/profiles',{method:'POST',body:'{}'})).status).toBe(405);
+  expect((await send(`/admin/probes/${probe}`,{method:'POST',body:'{}'})).status).toBe(405);
+  expect((await send('/admin/profiles/src.city/routing')).status).toBe(405);
+  expect(calls).toHaveLength(0);
+  const ok:[string,string,string?][]=[['/admin/probes','GET'],['/admin/probes','POST','{"host":"a.example","countries":["US"]}'],[`/admin/probes/${probe}`,'GET'],[`/admin/probes/${probe}/apply`,'POST','{"rules":[]}'],
+   ['/admin/profiles','GET'],['/admin/profiles/fetchx.qualification.expedia/routing','PUT','{"patch":{"country":"US"}}'],['/admin/profiles/fetchx.qualification.expedia/routing','DELETE'],['/admin/profiles/fetchx.qualification.expedia/audit','GET']];
+  for(const [path,method,body] of ok)expect((await send(path,{method,body})).status).toBe(200);
+  expect(calls.map(({url,init})=>[url.replace('https://gateway.example/control',''),init.method])).toEqual(ok.map(([path,method])=>[path,method]));
+ });
  it('allows only the project-scoped Stripe checkout methods',async()=>{
   const stripe=`/projects/${project}/billing/stripe`,key='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const checkout=JSON.stringify({plan_id:'developer',idempotency_key:key});

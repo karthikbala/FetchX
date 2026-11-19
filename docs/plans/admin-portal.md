@@ -75,6 +75,10 @@ CREATE TABLE reachability_probes(id uuid PRIMARY KEY, host text NOT NULL, countr
 
 1. **Done:** database tables plus a loader with the precedence rules; the gateway reads rules from the database and refreshes them (config and defaults still work); audited, versioned save/enable/disable/delete; operator CLI (`node src/operator.mjs rules …`). Tests.
 2. **Done:** operator role (`control_operators` + `control_operator_audit`, granted with `node src/operator.mjs operators grant <email>`) and the admin API (rules list/create/edit/enable/disable/delete, host test, audit), gated by `controlPlane.admin.enabled`, plus the website bridge allowlist. No query strings: the host test is `POST /admin/rules/test`, and per-rule audit is `GET /admin/rules/:id/audit`. Profile routing-field edits move to step 3 with the probe. Tests.
-3. Probe as an async job with stored reports, and the apply endpoint.
-4. Console UI pages (rules, editor, probe, audit), then profiles editing.
-5. Docs and a migration note: existing `config.providerRules` keep working and show up as source "config".
+3. **Done:** probe as a background job (`admin_probes`: one at a time, `controlPlane.admin.maxProbesPerDay` per 24 h, default 20; interrupted on restart) with stored reports; apply endpoint (chosen proposed rules, with the probe as evidence, and/or the proposed v1 routing onto a profile); audited, versioned per-profile routing overrides (`source_profile_overrides` + audit) limited to routing fields, validated by `residentialPolicy`, applied to new workflows only.
+4. **Done:** operator page at `/app/admin` (rules + editor + host test, probes + results + apply, profile routing, audit). The workspace sidebar shows an Admin link only when `/admin/session` succeeds.
+5. **Done:** docs (`docs/provider-rules.md`) and the migration note below.
+
+### Migration note
+
+No data migration is needed. Tables are created on gateway start (`CREATE TABLE IF NOT EXISTS`). Existing `config.providerRules` and the shipped defaults keep working and appear in the portal with source `config` / `default`; they can be disabled (a database override) but not deleted. Profiles without an override behave exactly as before. To roll back, deploy the previous gateway image: the new tables are ignored, and profile overrides stop applying.
