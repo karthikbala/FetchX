@@ -137,7 +137,7 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
      for(const p of Object.values(v2.config.projects))if(sha(value.trim().replace(/^Bearer\s+/i,''))===p.tokenHash)fail('credential_scope_rejected');
     }
     await v2.rejectControlCredentials(request.headers);
-    await v2.pace(destination.url,crossOrigin?{...profile.limits,...NO_PACING}:profile.limits,deadline);
+    await v2.pace(destination.url,crossOrigin?{...profile.limits,...NO_PACING}:profile.limits,deadline,{rotating:route.class==='residential'});
     if(signal?.aborted||Date.now()>=deadline)fail('browser_probe_deadline_unknown',504);
     await v2.dispatchable(project,id,session.id,destination.url,pricingContext);
     if(signal?.aborted||Date.now()>=deadline)fail('browser_probe_deadline_unknown',504);

@@ -636,13 +636,17 @@ export class V2Gateway{
   await this.execute(project,id,session,p,route,input,recipe,pricingDecision,retryPlan?{...retryPlan,request_limit:reservationRequests}:null,paidQuote,publicBodyLimit,unified&&!paidQuote);
   return this.readOperation(project,id);
  }
- async pace(url,limits,deadline){
+ // rotating: a residential session (fresh IP). A site cooldown set by another
+ // egress does not hold it back; the profile's own pacing interval still applies.
+ async pace(url,limits,deadline,{rotating=false}={}){
   const delay=await this.store.tx(async c=>{
    const source='origin:'+url.hostname;await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[source]);
    await c.query('INSERT INTO source_limits(source) VALUES($1) ON CONFLICT DO NOTHING',[source]);
    const row=(await c.query('SELECT * FROM source_limits WHERE source=$1 FOR UPDATE',[source])).rows[0];
-   if(new Date(row.cooldown_until)>new Date())cooldownFailure(url.hostname,row.cooldown_until);
-   const at=Math.max(Date.now(),new Date(row.next_at).getTime());if(at>=deadline)fail('source_pacing_deadline',429);
+   const cooling=new Date(row.cooldown_until)>new Date();
+   if(cooling&&!rotating)cooldownFailure(url.hostname,row.cooldown_until);
+   // A cooldown also pushes next_at to its end; a rotating session ignores that part.
+   const at=cooling?Date.now():Math.max(Date.now(),new Date(row.next_at).getTime());if(at>=deadline)fail('source_pacing_deadline',429);
    await c.query('UPDATE source_limits SET next_at=$2 WHERE source=$1',[source,new Date(at+limits.min_interval_ms)]);return Math.max(0,at-Date.now());
   });
   if(delay)await new Promise(r=>setTimeout(r,delay));
@@ -661,8 +665,12 @@ export class V2Gateway{
    const row=(await c.query('SELECT s.state,s.expires_at,o.state AS operation_state FROM v2_sessions s JOIN v2_operations o ON o.session_id=s.id WHERE s.id=$1 AND s.project=$2 AND o.id=$3',[session,project,id])).rows[0];
    if(!row||!['reserved','running'].includes(row.operation_state))fail('operation_not_dispatchable',409);
    if(row.state!=='open'||new Date(row.expires_at)<=new Date())fail('session_expired',409);
-   const cooling=(await c.query('SELECT cooldown_until FROM source_limits WHERE source=$1 AND cooldown_until>now()',['origin:'+url.hostname])).rows[0];
-   if(cooling)cooldownFailure(url.hostname,cooling.cooldown_until);
+   // A residential session is a fresh rotating IP, so a site's rate limit on
+   // another egress does not apply to it (Karthik, 2026-11-19: rotate and retry).
+   if(pricingContext?.route?.class!=='residential'){
+    const cooling=(await c.query('SELECT cooldown_until FROM source_limits WHERE source=$1 AND cooldown_until>now()',['origin:'+url.hostname])).rows[0];
+    if(cooling)cooldownFailure(url.hostname,cooling.cooldown_until);
+   }
    if(pricingContext?.paidQuote&&!this.approvedPaidRoute(project,pricingContext.profile,pricingContext.route))fail('paid_credit_route_forbidden',403);
    if(pricingContext?.paidQuote||pricingContext?.fixedCredits)await this.controlPaidCredits.assertDispatch(c,{project,operation:id});
    this.assertPricingDispatch(project,pricingContext);
@@ -808,7 +816,7 @@ export class V2Gateway{
      const headers=this.headers(current,p,destination.url),cookies=publicUrl?null:await jar.getCookieString(destination.url.href);if(cookies)headers.cookie=cookies;
      await this.rejectControlCredentials(headers);
      stage='pacing';
-     await this.pace(destination.url,p.limits,deadline);
+     await this.pace(destination.url,p.limits,deadline,{rotating:route.class==='residential'});
      if(deadline<=Date.now())fail('source_deadline',504);
      stage='dispatch_admission';
      if(paidQuote)requireWire();

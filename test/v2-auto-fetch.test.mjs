@@ -67,8 +67,18 @@ test('auto mode climbs cheapest first, learns, reuses knowledge, bills only the 
   // Rate limit on every route: data is not returned, next step says wait.
   calls.length=0;site={direct:429,datacenter:429,residential:429};
   const limited=await post(payload('limited',{url:'https://other.example/a'}));
-  assert.equal(calls.length,1,'a rate limit stops the ladder');assert.equal(limited.body.success,false);assert.equal(limited.body.auto.next.action,'retry_after');assert.equal(limited.body.auto.next.retry_after_seconds,120);
+  // A rate limit rotates to fresh residential IPs (HTTP first). This profile cannot render and the
+  // datacenter route is held by the site cooldown, so four attempts reach the site.
+  assert.deepEqual(calls,['direct','residential','residential','residential']);
+  assert.deepEqual(limited.body.auto.routes_tried.filter(r=>r.result!=='not_admitted').map(r=>[r.class,r.rotation??0,r.result]),[['direct',0,'rate_limited'],['residential',0,'rate_limited'],['residential',1,'rate_limited'],['residential',2,'rate_limited']]);
+  assert.equal(limited.body.success,false);assert.equal(limited.body.auto.next.action,'retry_after');assert.equal(limited.body.auto.next.retry_after_seconds,120);
   assert.equal(limited.body.auto.billed_attempt,null);
+  // A per-IP limit: the first residential IP is limited, a fresh one gets the data.
+  calls.length=0;let residentialSeen=0;const plain=site;
+  site=new Proxy({},{get:(_,cls)=>cls==='residential'?(residentialSeen++?200:429):429});
+  const rotated=await post(payload('rotated',{url:'https://third.example/rotate'}));
+  assert.equal(rotated.body.success,true);assert.deepEqual(calls,['direct','residential','residential']);assert.equal(rotated.body.auto.billed_attempt,3);
+  site=plain;
   // max_attempts caps the ladder.
   calls.length=0;site={direct:403,datacenter:403,residential:403};
   const capped=await post(payload('capped',{url:'https://third.example/b',max_attempts:1}));

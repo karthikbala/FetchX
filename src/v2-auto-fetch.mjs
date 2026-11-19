@@ -14,8 +14,8 @@
 //
 // Safety: only GET and HEAD escalate (browser rungs are GET only). An uncertain
 // attempt stops the ladder, because uncertain source work is never retried. A
-// genuine rate limit (429 with Retry-After) is honoured, not routed around; a
-// challenge page served with 429 counts as a block and escalates.
+// rate limit (429) rotates to a fresh residential IP within the attempt cap;
+// residential routes are not held back by another egress's site cooldown.
 import {sha} from './crypto.mjs';
 import {GatewayError,ID,fail} from './policy.mjs';
 import {isPlaygroundRef,playgroundPolicy} from './control-playground.mjs';
@@ -108,7 +108,9 @@ export async function autoLadder(v2,project,input,host,{now=Date.now()}={}){
  const candidates=[];
  if(allowed.direct)candidates.push({transport:'http',class:'direct',country:null});
  if(country&&allowed.datacenter.includes(country))candidates.push({transport:'http',class:'datacenter',country});
- if(country&&allowed.residential.includes(country))candidates.push({transport:'http',class:'residential',country});
+ if(country&&allowed.residential.includes(country))candidates.push({transport:'http',class:'residential',country},
+  // Used only right after a rate limit: the same request on a fresh residential IP.
+  {transport:'http',class:'residential',country,rotation:1,afterRateLimit:true},{transport:'http',class:'residential',country,rotation:2,afterRateLimit:true});
  if(input.method==='GET'){
   if(country&&allowed.residential.includes(country))candidates.push({transport:'browser',class:'residential',country},{transport:'browser',class:'residential',country,rotation:1});
   if(country&&allowed.datacenter.includes(country))candidates.push({transport:'browser',class:'datacenter',country});
@@ -116,7 +118,8 @@ export async function autoLadder(v2,project,input,host,{now=Date.now()}={}){
  const stateOf=route=>{
   const rows=knowledge.filter(r=>r.execution===route.transport&&r.proxy_class===route.class&&(route.class==='direct'||r.country===route.country));
   if(rows.some(r=>r.state==='proven'))return 'proven';
-  if(rows.length&&rows.every(r=>r.state==='cooling'))return 'cooling';
+  // A residential rate limit is per IP; a fresh session gets a new one.
+  if(rows.length&&rows.every(r=>r.state==='cooling'&&!(r.proxy_class==='residential'&&r.last_outcome==='rate_limited')))return 'cooling';
   return 'unknown';
  };
  const routes=[],skipped=[];
@@ -192,13 +195,16 @@ export async function autoFetch(gw,project,raw,identity,options={}){
  const fixed=browserHeaders(input.headers,(await ensureLadder()).headers);base.headers=fixed.headers;
  const {PublicRenderGateway}=await import('./v2-public-render.mjs');
  const render=new PublicRenderGateway(v2);
- let dispatched=0;const waited=new Set();
+ let dispatched=0,cooldownResponse=null;const waited=new Set();
  // Slots are recorded routes; a slot refused at admission costs nothing and
  // does not count toward max_attempts.
  for(let slot=0;slot<AUTO_MAX_SLOTS&&dispatched<maxAttempts;slot++){
   const route=await recordedRoute(v2.store.pool,project,key,slot,async()=>{
    const l=await ensureLadder();
-   return l.routes.find(r=>!tried.some(t=>sameRoute(t,r)))??null;
+   const rateLimited=result==='rate_limited',open=l.routes.filter(r=>!tried.some(t=>sameRoute(t,r)));
+   // After a rate limit, go straight to a fresh residential IP (HTTP first).
+   if(rateLimited){const fresh=open.find(r=>r.class==='residential');if(fresh)return fresh;}
+   return open.find(r=>!r.afterRateLimit)??null;
   });
   if(!route)break;
   const attemptKey=autoAttemptKey(key,slot),proxy={class:route.class,country:route.country};
@@ -221,11 +227,16 @@ export async function autoFetch(gw,project,raw,identity,options={}){
    // browser for this profile, ...): nothing was dispatched or billed.
    tried.push({...route,result:'not_admitted',code:error.code});continue;
   }
+  // A site cooldown refused before anything was sent: not an attempt.
+  if(response.error?.code==='source_cooldown'&&!response.usage?.native_requests&&!response.usage?.browser_requests){
+   const wait=cooldownSeconds({code:'source_cooldown',details:response.error.details});
+   if(wait!==null&&wait<=AUTO_MAX_INLINE_WAIT_S&&!waited.has(slot)){await new Promise(r=>setTimeout(r,wait*1000));waited.add(slot);slot--;tried.push({...route,result:'waited',code:'source_cooldown'});continue;}
+   tried.push({...route,result:'not_admitted',code:'source_cooldown'});cooldownResponse??=response;continue;
+  }
   dispatched++;last=response;result=attemptResult(response);finalSlot=slot;finalTransport=route.transport;tried.push({...route,result});
   // Data, a real 404, or an uncertain outcome ends the ladder. Uncertain source
-  // work is never retried. A genuine rate limit (429 with Retry-After, not a
-  // challenge page) is honoured: every route reaches the same site limit.
-  if(['success','answered','uncertain','rate_limited'].includes(result))break;
+  // work is never retried. A rate limit moves on to a fresh residential IP.
+  if(['success','answered','uncertain'].includes(result))break;
  }
  const skipped=ladder?.skipped??[];
  if(last){
@@ -234,7 +245,7 @@ export async function autoFetch(gw,project,raw,identity,options={}){
  }
  if(!last){
   // Nothing reached the site: every route is cooling, excluded or unavailable.
-  const retryAfter=ladder?.retry_after_seconds??null;
+  const retryAfter=(cooldownResponse?cooldownSeconds({code:'source_cooldown',details:cooldownResponse.error.details}):null)??ladder?.retry_after_seconds??null;
   const error=new GatewayError(retryAfter?'source_cooldown':'auto_routes_unavailable',retryAfter?429:409);
   error.details={auto:{mode:'auto',attempts:0,max_attempts:maxAttempts,routes_tried:tried.map(publicRoute),routes_skipped:skipped.map(s=>({transport:s.transport??'http',class:s.class,country:s.country,reason:s.reason})),
    next:retryAfter?{action:'retry_after',retry_after_seconds:retryAfter,detail:'Every allowed route for this site is cooling down after recent failures. Retry after the wait with a new idempotency key.'}
