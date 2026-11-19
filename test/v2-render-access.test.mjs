@@ -9,8 +9,7 @@ import {browserProbePolicy} from '../src/v2-browser-policy.mjs';
 import {browserRelay} from '../src/v2-browser-relay.mjs';
 import {classifyProtection} from '../src/protection.mjs';
 import {hasHtmlChallenge,sourceChallenge} from '../src/source-challenge.mjs';
-import {cooldownView,publicFetchFailure,retryLaterSeconds,RETRY_LATER_DEFAULT_SECONDS} from '../src/v2-public-fetch.mjs';
-import {publicScrapeFailure} from '../src/v2-public-scrape.mjs';
+import {cooldownView} from '../src/v2-public-fetch.mjs';
 import {cooldownFailure} from '../src/v2.mjs';
 import {Store} from '../src/store.mjs';
 import {Gateway} from '../src/gateway.mjs';
@@ -44,18 +43,6 @@ test('cooldown failures name origin scope, expiry and remaining seconds',()=>{
  assert.equal(view.scope,'origin');assert.equal(view.origin,'source.example');assert.equal(view.cooldown_until,until.toISOString());
  assert.ok(view.retry_after_seconds>=89&&view.retry_after_seconds<=90);
  assert.equal(cooldownView({scope:'route',origin:'x'}),null);assert.equal(cooldownView(null),null);
-});
-
-test('source refusals reach callers only as retry_later with a wait',()=>{
- assert.equal(retryLaterSeconds(),RETRY_LATER_DEFAULT_SECONDS);
- assert.equal(retryLaterSeconds({retryAfter:'120'}),120);
- assert.equal(retryLaterSeconds({retryAfter:'120',cooldown:{scope:'origin',origin:'x',cooldown_until:new Date(Date.now()+300_000).toISOString()}}),300);
- let cooling;try{cooldownFailure('source.example',new Date(Date.now()+42_000));}catch(e){cooling=e;}
- const fetchBody=publicFetchFailure(cooling,{key:'k1'});
- assert.equal(fetchBody.error.code,'retry_later');assert.equal(fetchBody.retry.next_action,'retry_after');assert.ok(Number(fetchBody.retry.retry_after)>=41);
- assert.equal(fetchBody.error.details,undefined);assert.ok(!JSON.stringify(fetchBody).includes('source.example'));
- const scrape=publicScrapeFailure(cooling);
- assert.equal(scrape.code,'retry_later');assert.ok(scrape.retry_after>=41);assert.ok(!/cooldown|source\.example/.test(JSON.stringify(scrape)));
 });
 
 test('browser policy keeps same-origin by default and bounds wait ceilings and request caps',()=>{

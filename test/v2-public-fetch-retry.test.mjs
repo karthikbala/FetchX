@@ -78,9 +78,7 @@ test('public retry opt-in executes once as a durable bounded native operation an
   });
   await t.test('state, challenge, denial, cooldown and uncertain outcomes never trigger another source call',async()=>{
    for(const [name,changes,expected]of [['stateful',{method:'POST',body_base64:Buffer.from('stateful').toString('base64')},'retry_ineligible'],['direct',{proxy:{class:'direct',country:null}},'retry_route_unavailable'],['forbidden',{},'retry_not_transient'],['challenge',{},'retry_not_transient'],['cookie',{},'retry_not_transient'],['cooldown',{},'retry_not_transient'],['unknown',{},'retry_not_transient']]){
-    select(['stateful','direct'].includes(name)?'always503':name);const before=calls.length,result=await post({...payload('no-retry-'+name),retry:true,...changes});assert.equal(calls.length,before+1,name);assert.equal(result.body.retry.requested,true,name);assert.equal(result.body.retry.attempts,1,name);assert.equal(result.body.retry.route_changed,false,name);assert.equal(result.body.retry.stop_reason,expected,name);
-    if(['forbidden','challenge'].includes(name)){assert.equal(result.body.error.code,'retry_later',name);assert.equal(result.body.diagnostics,null,name);assert.equal(result.body.data,null,name);assert.ok(Number(result.body.retry.retry_after)>=1,name);}
-    else assert.equal(result.body.diagnostics.attempts.length,1,name);
+    select(['stateful','direct'].includes(name)?'always503':name);const before=calls.length,result=await post({...payload('no-retry-'+name),retry:true,...changes});assert.equal(calls.length,before+1,name);assert.equal(result.body.retry.requested,true,name);assert.equal(result.body.retry.attempts,1,name);assert.equal(result.body.retry.route_changed,false,name);assert.equal(result.body.retry.stop_reason,expected,name);assert.equal(result.body.diagnostics.attempts.length,1,name);
     if(name==='unknown'){assert.equal(result.body.state,'unknown');assert.equal(result.body.retry.next_action,'recover_first');assert.equal(result.body.retry.new_request_allowed,false);assert.equal(result.body.usage.accounting.invoice_micro_usd,null);}
     await store.pool.query('DELETE FROM source_limits');
    }

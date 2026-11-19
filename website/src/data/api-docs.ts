@@ -785,13 +785,12 @@ console.log('Gateway HTTP', response.status);` }] },
   "success": false,
   "state": "completed",
   "gateway_http_status": 200,
-  "data": null,
+  "data": { "status": 403 },
   "error": {
-    "code": "retry_later",
-    "message": "Send this request again with a new idempotency key after retry_after seconds.",
+    "code": "source_forbidden",
+    "message": "The source returned HTTP 403.",
     "stage": "source_response"
-  },
-  "retry": { "next_action": "retry_after", "retry_after": "15", "requires_new_idempotency_key": true }
+  }
 }` }] },
           { kind: 'text', text: 'This excerpt omits the remaining envelope fields. Admission failures can return HTTP 400, 401, 403, 409 or 429 with `state: "rejected"`. An unclassified error after possible dispatch can report `state: "unknown"` and recovery guidance.' },
         ],
@@ -823,8 +822,10 @@ console.log('Gateway HTTP', response.status);` }] },
         title: 'Source and transport outcomes',
         blocks: [
           { kind: 'table', headers: ['Code', 'Meaning and next step'], rows: [
-            ['`retry_later`', 'The page could not be returned yet. Send the request again with a new idempotency key after `retry.retry_after` seconds.'],
+            ['`source_forbidden`', 'Source returned 403. Follow saved guidance and approved source access.'],
             ['`source_not_found`', 'Source returned 404. Check the URL.'],
+            ['`source_rate_limited`', 'Source returned 429. Respect `data.retry_after` and the saved wait guidance.'],
+            ['`source_challenge`', 'A recognized HTML challenge was retained, including challenges served as HTTP 200.'],
             ['`source_http_error`', 'A retained source status falls outside the successful range.'],
             ['`proxy_connect_rejected`', 'The proxy rejected the tunnel. Inspect safe provider status and stage.'],
             ['`source_timeout_unknown`, `source_transport_unknown`', 'Transport outcome may be uncertain. Recover before new source work.'],

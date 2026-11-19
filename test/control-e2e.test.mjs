@@ -193,7 +193,7 @@ test('self-service: verified identity, tenant isolation, native fetch and conser
   });
 
   await t.test('HTTP 403 is retained as source failure and unknown results retain a hold through read/restart recovery',async()=>{
-   mode='forbidden';const forbidden=await request('POST',`/projects/${projectA.id}/fetch`,payload('source-forbidden'),a);assert.equal(forbidden.status,200);assert.equal(forbidden.body.success,false);assert.equal(forbidden.body.data,null);assert.equal(forbidden.body.error.code,'retry_later');assert.equal(forbidden.body.retry.retry_after,'15');assert.equal(forbidden.body.retry.next_action,'retry_after');assert.equal(forbidden.body.state,'completed');
+   mode='forbidden';const forbidden=await request('POST',`/projects/${projectA.id}/fetch`,payload('source-forbidden'),a);assert.equal(forbidden.status,200);assert.equal(forbidden.body.success,false);assert.equal(forbidden.body.data.status,403);assert.equal(forbidden.body.error.code,'source_forbidden');assert.equal(forbidden.body.state,'completed');
    await store.pool.query('DELETE FROM source_limits');mode='unknown';const before=dispatches.length;
    unknown=await request('POST',`/projects/${projectA.id}/fetch`,payload('unknown'),a);assert.equal(unknown.body.state,'unknown');assert.equal(unknown.body.error.code,'source_timeout_unknown');assert.equal(unknown.body.retry.next_action,'recover_first');assert.equal(unknown.body.retry.new_request_allowed,false);assert.equal(unknown.body.usage.accounting.request_credits.state,'held');assert.equal(dispatches.length,before+1);
    assert.equal((await gateway.controlCredits.usage(projectA.id)).held,1);mode='success';

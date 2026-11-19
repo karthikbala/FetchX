@@ -76,8 +76,11 @@ headers excluded. `artifacts` lists the retained browser responses and generated
 DOM. When retained, the generated `browser_screenshot` entry also includes
 `content_type: "image/jpeg"` and `body_base64`. Treat returned HTML as inert text.
 
-`usage` records browser requests, blocked requests, bytes, duration and
-accounting as available. For managed keys, `usage.accounting.request_credits` shows the original attribution
+`usage` records browser requests, blocked requests and their reasons
+(`blocked_reasons`), the number of other public origins that served
+subresources (`subresource_origins`), bytes, duration and accounting as
+available. `browser` names the engine and version that rendered the page. For
+managed keys, `usage.accounting.request_credits` shows the original attribution
 and reservation state. The result always reports
 `application_acceptance: "not_evaluated"`.
 
@@ -104,15 +107,32 @@ navigation stays on the prepared origin. Cookies from all origins work during
 the render; only the prepared origin's cookies are kept on the session.
 Popups, downloads, WebSockets and workers stay blocked.
 
-### When the source refuses
+### Challenges, rate limits and cooldowns
 
-If the source refuses the render (HTTP 403 or 429, a recognized challenge page
-whatever its status, or an origin cooldown), the response does not say why. It
-returns `error.code: "retry_later"`, `data: null`, no artifacts or diagnostics,
-and `retry.next_action: "retry_after"` with `retry.retry_after` seconds. Send a
-new request with a new idempotency key after that wait. The classified reason
-stays in FetchX's stored diagnostics.
+A recognised bot-manager interstitial is `source_challenge` whatever its HTTP
+status, including 200, 202, 403 and 429. `error.details.vendor` names the
+vendor when it can be attributed (`datadome`, `cloudflare`, `aws_waf`, `human`,
+`amazon`, otherwise `unknown`) and `error.details.http_status` keeps the source
+status. On a datacenter or direct route, `retry.next_action` is
+`consider_residential_new_request` with a `suggested_proxy`: prepare again for
+that route, then send a new request with a new idempotency key after any
+`retry_after`. A plain 429 stays `source_rate_limited`.
 
 A 429 puts the source origin on a cooldown shared by all callers: the
 `Retry-After` value when present, otherwise 60 seconds, or 15 seconds when the
-429 body is a challenge page. `retry.retry_after` covers the remaining cooldown.
+429 body is a challenge page. While it lasts, requests fail with
+`source_cooldown`, and `error.details` carries `scope: "origin"`, `origin`,
+`cooldown_until` and `retry_after_seconds` (also in `retry.retry_after`). Wait
+until then; repeating the request earlier only fails again.
+
+Datacenter estimates for browser traffic require explicit operator review. A
+scoped `datacenterPricingAttestations` entry uses `schema_version: 2` and
+`transport: "browser"`. A service-wide `datacenterFixedFeePool` uses
+`schema_version: 2` and an explicit `transports` list containing `"browser"`.
+Include `"http"` in that list to cover native HTTP as well. Version 1 pricing
+remains HTTP-scoped. Managed browser credits require reviewed browser mode
+weights in addition to available route pricing.
+
+## Optional capacity queue
+
+An enabled [browser admission queue](hetzner-autoscaling.md) waits for a qualified worker before source dispatch or credit reservation. Queue wait is bounded separately from browser execution. On queue-full, timeout or pre-dispatch cancellation, repeat the exact request with its original idempotency key. Running or uncertain source work is never redispatched automatically.

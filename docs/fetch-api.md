@@ -227,19 +227,10 @@ valid UTF-8; binary or undecodable bodies remain base64.
 `gateway_http_status` matches the gateway response status. Once an operation is
 available, the facade returns HTTP 200 and places the independent source HTTP
 status in `data.status`. Thus a completed operation can have `success: false`,
-`state: "completed"` and `error.code: "retry_later"`.
+`state: "completed"`, `data.status: 403` and `error.code: "source_forbidden"`.
 `success` requires a completed operation, a native 2xx status, and no recognized
 HTML challenge or gateway error. HTTP 200 challenge pages are not reported as
-successful merely because their transport completed.
-
-When a source refuses the request (HTTP 403 or 429, a recognized challenge page,
-or an origin cooldown), the response never states the reason. It returns
-`error.code: "retry_later"` with `data: null`, no artifacts or diagnostics, and
-`retry.next_action: "retry_after"` with `retry.retry_after` (seconds, as a
-string; also `retry_after_seconds`). Send the request again with a new
-idempotency key after that wait. `retry.safe_to_retry` is `false` for non-GET
-requests. FetchX keeps the classified reason in its stored diagnostics for
-routing and operators. Detection reuses FetchX's
+successful merely because their transport completed. Detection reuses FetchX's
 bounded known-marker classifier; it does not establish generic page semantics,
 extraction accuracy or application acceptance.
 
