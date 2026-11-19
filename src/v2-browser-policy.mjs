@@ -11,9 +11,12 @@ export const BROWSER_PROBE_QUALIFICATION_KIND='pinned-relay-egress-v2';
 export const BROWSER_MAX_WAIT_MS=15000;
 export function browserProbePolicy(raw){
  if(raw===undefined)return null;
- if(!raw||typeof raw!=='object'||Array.isArray(raw)||Object.keys(raw).some(k=>!['enabled','max_requests','max_network_bytes','max_decoded_bytes','max_dom_bytes','settle_ms','max_wait_ms','subresources'].includes(k))||typeof raw.enabled!=='boolean')fail('browser_probe_configuration',503);
+ if(!raw||typeof raw!=='object'||Array.isArray(raw)||Object.keys(raw).some(k=>!['enabled','max_requests','max_network_bytes','max_decoded_bytes','max_dom_bytes','settle_ms','max_wait_ms','subresources','frames','page_post'].includes(k))||typeof raw.enabled!=='boolean')fail('browser_probe_configuration',503);
  if(!raw.enabled)return null;
- const policy={enabled:true,max_requests:8,max_network_bytes:4194304,max_decoded_bytes:4194304,max_dom_bytes:524288,settle_ms:750,subresources:'same_origin',...raw};
+ const policy={enabled:true,max_requests:8,max_network_bytes:4194304,max_decoded_bytes:4194304,max_dom_bytes:524288,settle_ms:750,subresources:'same_origin',frames:false,page_post:false,...raw};
+ // frames: child frames (challenge widgets, embedded content) load like the
+ // page. page_post: the page's own XHR/fetch POSTs (bounded body) are admitted.
+ if(typeof policy.frames!=='boolean'||typeof policy.page_post!=='boolean')fail('browser_probe_configuration',503);
  // settle_ms is the default wait; max_wait_ms is the ceiling a caller may ask
  // for. subresources:'public' admits GET scripts, styles and data requests to
  // other public HTTPS origins (DNS and private-address checks still apply).
@@ -88,7 +91,10 @@ export async function browserProbeRuntime(config){
  return reason?{available:false,reason}:result;
 }
 
-export const BROWSER_PROBE_ARGS=Object.freeze(['--proxy-bypass-list=<-loopback>','--disable-quic','--disable-http2','--dns-prefetch-disable','--disable-background-networking','--disable-component-update','--disable-sync','--disable-default-apps','--no-first-run','--no-default-browser-check','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1']);
+export const BROWSER_PROBE_ARGS=Object.freeze(['--proxy-bypass-list=<-loopback>','--disable-quic','--disable-http2','--dns-prefetch-disable','--disable-background-networking','--disable-component-update','--disable-sync','--disable-default-apps','--no-first-run','--no-default-browser-check','--force-webrtc-ip-handling-policy=disable_non_proxied_udp','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1',
+ // Keep cross-site iframes in the page's renderer so the page's request
+ // interception admits (or blocks) their requests under the same policy.
+ '--disable-site-isolation-trials','--disable-features=IsolateOrigins,site-per-process']);
 
 // Chromium sends ws/wss to the "other" proxy list (socks=), ahead of
 // either HTTP list. Only HTTPS has a route to the metered CONNECT listener.

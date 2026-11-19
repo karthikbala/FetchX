@@ -81,15 +81,28 @@ accounting as available. For managed keys, `usage.accounting.request_credits` sh
 and reservation state. The result always reports
 `application_acceptance: "not_evaluated"`.
 
-### Subresources on other origins
+### What a rendered page may load
 
-A browser profile's `subresources` policy decides whether the page may load
-scripts, stylesheets and `fetch`/XHR GET requests from other origins.
-`same_origin` (the default for operator profiles) blocks them. `public` (the
-Managed render default) admits them when the origin is public HTTPS on port 443
-and every DNS answer is a public address. They count against the same request,
-byte and provider rules as first-party requests. Cookies, credentials, frames,
-documents, images, fonts and non-GET methods on other origins stay blocked.
+A browser profile decides how much of the page's own traffic is admitted:
+
+- `subresources`: `same_origin` (default for operator profiles) or `public`.
+  With `public`, the page's scripts, stylesheets, images, fonts and fetch/XHR
+  requests to other origins load when the origin is public HTTPS on port 443
+  and every DNS answer is a public address. Subresource redirects may cross
+  origins; each hop is admitted the same way. Site-set API headers (for example
+  `x-api-key`) are allowed; proxy credentials, gateway headers and FetchX keys
+  are always blocked.
+- `frames`: child frames (challenge widgets, embedded content) and their
+  requests load under the same rules.
+- `page_post`: the page's own XHR/fetch POST requests (body up to 64 KiB) are
+  admitted, for search and GraphQL data calls. Render callers still cannot send
+  a body or headers themselves.
+
+Managed (Playground) render enables all three. Every admitted request counts
+against the same request, byte, provider-rule and cooldown limits. The main
+navigation stays on the prepared origin. Cookies from all origins work during
+the render; only the prepared origin's cookies are kept on the session.
+Popups, downloads, WebSockets and workers stay blocked.
 
 ### When the source refuses
 

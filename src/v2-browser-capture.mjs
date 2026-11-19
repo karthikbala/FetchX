@@ -3,6 +3,13 @@ import {GatewayError} from './policy.mjs';
 import {BROWSER_SCREENSHOT_MAX_BYTES} from './v2-browser-policy.mjs';
 
 const REQUEST_TYPES=new Set(['document','script','stylesheet','image','font','xhr','fetch']);
+// Page-initiated writes a profile may allow (search/GraphQL data calls). The
+// caller never supplies these bodies; they come from the page's own scripts.
+export const PAGE_POST_TYPES=new Set(['xhr','fetch']);
+export const PAGE_POST_MAX_BYTES=65536;
+// CDP omits postData for large bodies; an unmeasurable body is over the limit.
+const postBytes=request=>request.postDataEntries?.length?request.postDataEntries.reduce((n,e)=>n+(typeof e.bytes==='string'?Buffer.from(e.bytes,'base64').length:Infinity),0):
+ typeof request.postData==='string'?Buffer.byteLength(request.postData):request.hasPostData?Infinity:0;
 const NETWORK_HOP_LIMIT=128,NETWORK_HOP_WAIT_MS=250;
 const BLOCK_REASONS=new Set(['method_rejected','resource_type_blocked','browser_request_limit','frame_blocked','capture_window_closed','destination_rejected','endpoint_rejected','endpoint_method_rejected','headers_rejected','credential_scope_rejected','source_cooldown','source_pacing_deadline','session_expired','redirect_limit','redirect_origin_rejected','dns_deadline']);
 const safeBrowserError=error=>/net::(ERR_[A-Z_]+)/.exec(error?.message??'')?.[1]??(error?.name==='TimeoutError'?'browser_probe_deadline':'browser_probe_capture_failed');
@@ -83,7 +90,7 @@ export async function captureBrowserProbe(browser,input,policy,hooks){
   // redirect without a redirectedRequestId. Network preserves the request
   // id and previous response across that boundary.
   cdp.on('Network.requestWillBeSent',({requestId,request,frameId,redirectResponse})=>{
-   if(frameId!==mainFrameId||!/^https?:/.test(request.url))return;
+   if(frameId!==mainFrameId&&!policy.frames||!/^https?:/.test(request.url))return;
    networkHops.delete(requestId);
    networkHops.set(requestId,{url:request.url,method:request.method,from:redirectResponse?.url??null});
    if(networkHops.size>NETWORK_HOP_LIMIT)networkHops.delete(networkHops.keys().next().value);
@@ -101,8 +108,10 @@ export async function captureBrowserProbe(browser,input,policy,hooks){
      return;
     }
     if(stopped||Date.now()>=input.deadline)throw new GatewayError('capture_window_closed');
-    if(frameId!==mainFrameId)throw new GatewayError('frame_blocked');
-    if(!['GET','HEAD'].includes(request.method)||request.hasPostData||request.postData)throw new GatewayError('method_rejected');
+    if(frameId!==mainFrameId&&!policy.frames)throw new GatewayError('frame_blocked');
+    const pagePost=policy.page_post===true&&request.method==='POST'&&PAGE_POST_TYPES.has(resourceType);
+    const bodyBytes=pagePost?postBytes(request):0;
+    if(pagePost?bodyBytes>PAGE_POST_MAX_BYTES:!['GET','HEAD'].includes(request.method)||request.hasPostData||request.postData)throw new GatewayError('method_rejected');
     if(!REQUEST_TYPES.has(resourceType))throw new GatewayError('resource_type_blocked');
     if(admitted+admitting>=policy.max_requests)throw new GatewayError('browser_request_limit');
     const hop=await takeNetworkHop(networkId);
@@ -112,7 +121,7 @@ export async function captureBrowserProbe(browser,input,policy,hooks){
     const prior=networkParents.get(networkId);
     if((hop.from??null)!==(prior?.url??null)||(redirectedRequestId&&redirects.get(redirectedRequestId)!==prior))throw new GatewayError('redirect_limit');
     const depth=prior?prior.depth+1:0;
-    const requestMetadata={url:request.url,method:request.method,headers:request.headers,body_base64:null,resource_type:resourceType};
+    const requestMetadata={url:request.url,method:request.method,headers:request.headers,body_base64:null,resource_type:resourceType,frame:frameId===mainFrameId?'main':'child',...(pagePost?{body_bytes:bodyBytes}:{})};
     admitting++;
     try{await hooks.admit({...requestMetadata,redirect_depth:depth,redirected_from:prior?.url??null});admitted++;}finally{admitting--;}
     if(stopped||Date.now()>=input.deadline)throw new GatewayError('capture_window_closed');

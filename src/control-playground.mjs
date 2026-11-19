@@ -11,10 +11,11 @@ const ROUTES=['direct','datacenter','residential'];
 const METHODS={http:['GET','HEAD'],browser:['GET']};
 const HTTP_HEADERS=['accept','accept-language','user-agent'];
 const LIMITS={max_requests:32,max_encoded_bytes:2097152,max_decoded_bytes:8388608,max_session_encoded_bytes:16777216,max_input_bytes:1,max_tunnel_bytes:4194304,max_redirects:2,max_expansion_ratio:100,timeout_ms:30000,min_interval_ms:250,ttl_seconds:900};
-// Managed render runs modern pages: their scripts, styles and data calls on
-// other public origins load (images and fonts on those origins stay blocked),
-// and callers may wait up to max_wait_ms for client-side rendering to settle.
-const BROWSER={enabled:true,max_requests:96,max_network_bytes:8388608,max_decoded_bytes:8388608,max_dom_bytes:1048576,settle_ms:750,max_wait_ms:10000,subresources:'public'};
+// Managed render runs modern pages the way a browser would: what the page
+// loads from other public origins (scripts, styles, images, fonts, frames and
+// data calls, including its own POSTs) is admitted within the caps, and
+// callers may wait up to max_wait_ms for client-side rendering to settle.
+const BROWSER={enabled:true,max_requests:96,max_network_bytes:8388608,max_decoded_bytes:8388608,max_dom_bytes:1048576,settle_ms:750,max_wait_ms:10000,subresources:'public',frames:true,page_post:true};
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const COUNTRY=/^[A-Z]{2}$/;
 const plain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);

@@ -13,8 +13,9 @@ const plain=v=>v&&typeof v==='object'&&!Array.isArray(v);
 const sorted=v=>Array.isArray(v)?v.map(sorted):plain(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;
 const canonical=v=>JSON.stringify(sorted(v));
 // Cross-origin requests a page may make when its profile allows public
-// subresources. Documents, frames, images, fonts and media stay first-party.
-const SUBRESOURCE_TYPES=new Set(['script','stylesheet','xhr','fetch']);
+// subresources; child-frame documents need frames:true as well.
+const SUBRESOURCE_TYPES=new Set(['script','stylesheet','image','font','xhr','fetch']);
+const PAGE_POST_TYPES=new Set(['xhr','fetch']),PAGE_POST_MAX_BYTES=65536;
 const NO_PACING={min_interval_ms:0};
 const matchingDomain=(domain,origins)=>origins.some(origin=>{const host=new URL(origin).hostname;return host===domain||host.endsWith('.'+domain);});
 function browserCookies(jar,origins){return jar.serializeSync().cookies.filter(c=>matchingDomain(c.domain,origins)).map(c=>({name:c.key,value:c.value,domain:(c.hostOnly?'':'.')+c.domain,path:c.path??'/',httpOnly:!!c.httpOnly,secure:!!c.secure,sameSite:c.sameSite==='strict'?'Strict':c.sameSite==='none'?'None':'Lax',expires:Number.isFinite(Date.parse(c.expires))?Math.floor(Date.parse(c.expires)/1000):-1}));}
@@ -95,7 +96,7 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
  const pricingContext={profile,route,decision:pricingDecision,transport:'browser',fixedCredits},pinnedDestinations=new Map(),subresourceOrigins=new Set();
  // A one-origin view of the profile for a public subresource: same limits and
  // header rules, GET only, no credentials, cookies stay first-party.
- const subresourceScope=origin=>({...profile,origins:[origin],paths:['^/'],methods:['GET'],method_paths:{GET:['^/']},credential_headers:[],guestAuth:[]});
+ const subresourceScope=(origin,post=false)=>({...profile,origins:[origin],paths:['^/'],methods:post?['GET','POST']:['GET'],method_paths:post?{GET:['^/'],POST:['^/']}:{GET:['^/']},credential_headers:[],guestAuth:[]});
  let relay=null,requests=0,dispatched=false,error=null,stage='dns',failure=null,cookieState=null,encodedSum=0,decodedSum=0,domSum=0,screenshotBytes=0,domArtifact=null,screenshotArtifact=null;
  const artifacts=[],seenKinds=new Set(),mainArtifacts=new Map();let admission=Promise.resolve(),callbackFailed=false,parentBlocked=0,runnerStarted=false,outputReceived=false,relayCloseUnknown=false,workerUnknown=false;
  try{
@@ -107,21 +108,31 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
   runnerStarted=true;const output=await (worker?.run??v2.browserRunner)({url:raw.url,timeout_ms:Math.max(1,deadline-Date.now()),deadline,policy,runtime:runtime.runtime,relay:relay.url,deny_relay:relay.deny_url,screenshot:raw.screenshot===true,cookies:browserCookies(jar,profile.origins)},{
    admit:(request,{signal}={})=>{const task=admission.then(async()=>{
     if(signal?.aborted||Date.now()>=deadline)fail('browser_probe_deadline_unknown',504);
-    if(!request||!['GET','HEAD'].includes(request.method)||typeof request.url!=='string'||!plain(request.headers)||request.body_base64!==null)fail('method_rejected');
+    // The page's own XHR/fetch POSTs are allowed only by policy; the gateway
+    // sees their size, never their body.
+    const pagePost=policy.page_post===true&&request?.method==='POST'&&PAGE_POST_TYPES.has(request.resource_type)&&Number.isSafeInteger(request.body_bytes)&&request.body_bytes>=0&&request.body_bytes<=PAGE_POST_MAX_BYTES;
+    if(!request||!(['GET','HEAD'].includes(request.method)||pagePost)||typeof request.url!=='string'||!plain(request.headers)||request.body_base64!==null)fail('method_rejected');
     if(requests>=maximum)fail('browser_request_limit',429);
     if(request.url.length>12000)fail('destination_rejected');
     if(!Number.isSafeInteger(request.redirect_depth)||request.redirect_depth<0||request.redirect_depth>profile.limits.max_redirects)fail('redirect_limit');
     let target;try{target=new URL(request.url);}catch{fail('destination_rejected');}
     const crossOrigin=!profile.origins.includes(target.origin);
-    if(crossOrigin&&(policy.subresources!=='public'||request.method!=='GET'||!SUBRESOURCE_TYPES.has(request.resource_type)))fail('destination_rejected');
-    const scope=crossOrigin?subresourceScope(target.origin):profile;
+    const childFrame=policy.frames===true&&request.resource_type==='document'&&request.frame==='child';
+    if(request.resource_type==='document'&&request.frame==='child'&&!policy.frames)fail('frame_blocked');
+    if(crossOrigin&&(policy.subresources!=='public'||!(request.method==='GET'||pagePost)||!(SUBRESOURCE_TYPES.has(request.resource_type)||childFrame)))fail('destination_rejected');
+    const scope=crossOrigin?subresourceScope(target.origin,pagePost):pagePost?{...profile,methods:[...new Set([...profile.methods,'POST'])],method_paths:{...profile.method_paths,POST:['^/']}}:profile;
     const destination=await v2.destination(request.url,scope,deadline);
     if(crossOrigin)v2.assertRouteProvider(route,destination.url.hostname);
     v2.headers({method:request.method,headers:{}},scope,destination.url);
-    if(request.redirected_from&&new URL(request.redirected_from).origin!==destination.url.origin&&!(profile.kind==='discovery'&&profile.id.startsWith('discovery:')))fail('redirect_origin_rejected');
+    // Subresources and child frames may follow redirects to other public origins
+    // (each hop is admitted above); the main navigation keeps its origin.
+    const pageAsset=policy.subresources==='public'&&!(request.resource_type==='document'&&request.frame!=='child');
+    if(request.redirected_from&&new URL(request.redirected_from).origin!==destination.url.origin&&!pageAsset&&!(profile.kind==='discovery'&&profile.id.startsWith('discovery:')))fail('redirect_origin_rejected');
     if(Buffer.byteLength(JSON.stringify(request.headers))>32768)fail('headers_rejected');
     for(const [name,value]of Object.entries(request.headers)){
-     if(typeof value!=='string'||/^(?:authorization|proxy-authorization|x-api-key|api-key|x-auth-|x-gateway|upgrade$)/i.test(name))fail('credential_scope_rejected');
+     // Render callers cannot set headers, so page-set API keys are the site's own;
+     // proxy credentials, gateway headers and FetchX keys stay blocked everywhere.
+     if(typeof value!=='string'||(policy.subresources==='public'?/^(?:proxy-authorization|x-gateway|upgrade$)/i:/^(?:authorization|proxy-authorization|x-api-key|api-key|x-auth-|x-gateway|upgrade$)/i).test(name))fail('credential_scope_rejected');
      for(const p of Object.values(v2.config.projects))if(sha(value.trim().replace(/^Bearer\s+/i,''))===p.tokenHash)fail('credential_scope_rejected');
     }
     await v2.rejectControlCredentials(request.headers);
@@ -147,7 +158,8 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
     if(!artifact||!['browser_response','rendered_dom','browser_screenshot'].includes(artifact.kind)||artifact.original_encoded_available!==false||artifact.encoded_body_base64!==null||artifact.encoded_sha256!==null||typeof artifact.url!=='string'||artifact.decoded_body_base64!==null&&typeof artifact.decoded_body_base64!=='string')fail('browser_probe_artifact_invalid',502);
     const artifactUrl=new URL(artifact.url),firstParty=profile.origins.includes(artifactUrl.origin);
     if(!firstParty&&(artifact.kind!=='browser_response'||artifact.main_document===true||!subresourceOrigins.has(artifactUrl.origin)))fail('browser_probe_artifact_invalid',502);
-    v2.headers({method:artifact.method,headers:{}},firstParty?profile:subresourceScope(artifactUrl.origin),artifactUrl);
+    const posted=policy.page_post===true&&artifact.kind==='browser_response'&&artifact.method==='POST'&&artifact.request?.method==='POST';
+    v2.headers({method:artifact.method,headers:{}},firstParty?(posted?{...profile,methods:[...new Set([...profile.methods,'POST'])],method_paths:{...profile.method_paths,POST:['^/']}}:profile):subresourceScope(artifactUrl.origin,posted),artifactUrl);
     const body=artifact.decoded_body_base64===null?null:Buffer.from(artifact.decoded_body_base64,'base64');
     if(body&&(body.toString('base64')!==artifact.decoded_body_base64||sha(body)!==artifact.decoded_sha256||body.length!==artifact.decoded_bytes))fail('browser_probe_artifact_invalid',502);
     if(!body&&(artifact.decoded_sha256!==null||artifact.decoded_bytes!==null)||artifact.encoded_bytes===null&&artifact.encoded_size_basis!==null||artifact.encoded_bytes!==null&&(!Number.isSafeInteger(artifact.encoded_bytes)||artifact.encoded_bytes<0||artifact.encoded_size_basis!=='playwright_request_sizes'))fail('browser_probe_artifact_invalid',502);
@@ -155,7 +167,7 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
      if(!raw.screenshot||seenKinds.has(artifact.kind)||artifact.generated!==true||!body||body.length>BROWSER_SCREENSHOT_MAX_BYTES||artifact.headers?.['content-type']!=='image/jpeg'||body[0]!==0xff||body[1]!==0xd8)fail('browser_probe_artifact_invalid',502);
      seenKinds.add(artifact.kind);screenshotBytes=body.length;
     }else if(artifact.kind==='rendered_dom'){if(seenKinds.has('rendered_dom')||artifact.generated!==true||!body||body.length>policy.max_dom_bytes)fail('browser_probe_artifact_invalid',502);seenKinds.add('rendered_dom');domSum=body.length;}
-    else{if(artifacts.filter(a=>a.kind==='browser_response').length>=requests||decodedSum+(body?.length??0)>policy.max_decoded_bytes||!artifact.request||artifact.request.url!==artifact.url||!['GET','HEAD'].includes(artifact.request.method))fail('browser_probe_artifact_invalid',502);decodedSum+=body?.length??0;if(Number.isSafeInteger(artifact.encoded_bytes)&&artifact.encoded_bytes>=0)encodedSum+=artifact.encoded_bytes;}
+    else{if(artifacts.filter(a=>a.kind==='browser_response').length>=requests||decodedSum+(body?.length??0)>policy.max_decoded_bytes||!artifact.request||artifact.request.url!==artifact.url||!(['GET','HEAD'].includes(artifact.request.method)||posted))fail('browser_probe_artifact_invalid',502);decodedSum+=body?.length??0;if(Number.isSafeInteger(artifact.encoded_bytes)&&artifact.encoded_bytes>=0)encodedSum+=artifact.encoded_bytes;}
     if(Buffer.byteLength(JSON.stringify([artifact.headers,artifact.raw_headers,artifact.request?.headers]))>131072)fail('browser_probe_artifact_invalid',502);
     v2.rejectSecrets(artifact);const record={...artifact,id:randomUUID(),operation_id:id};
     await v2.store.pool.query('INSERT INTO v2_artifacts(id,operation,project,body) VALUES($1,$2,$3,$4)',[record.id,id,project,v2.sealer.seal(record,{compress:true})]);
