@@ -31,6 +31,8 @@ The controller bakes the snapshot itself whenever the worker bundle (`asset_mani
 
 Older worker snapshots are then deleted. Until the new snapshot is ready, and whenever it doesn't match the current bundle, workers boot stock Ubuntu. The same fallback applies when a server type's disk is smaller than the snapshot's source disk, or when Hetzner refuses the snapshot. A refused snapshot also clears it, so a new bake starts.
 
+A snapshot can only boot servers whose disk is at least its source disk, so a bake uses the available option with the smallest disk (then the cheapest). If that type was out of stock and the snapshot came from a bigger disk, workers on the smaller type boot stock Ubuntu meanwhile; the controller checks every `bake_check_seconds` (900) and bakes again once the smaller type is available, then retires the bigger snapshot.
+
 `bake_timeout_seconds` (1800) bounds install and sealing. `bake_retry_seconds` (3600) spaces out attempts after a failure. A bake costs one VM-hour, and the snapshot is billed as Hetzner image storage.
 
 ## Deployment and operation
