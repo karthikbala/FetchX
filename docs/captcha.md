@@ -7,9 +7,9 @@ Browser steps solve the captchas they meet, through [2Captcha](https://2captcha.
 | Cloudflare Turnstile | The token goes into the widget's response field, then the widget's callback or form | `TurnstileTaskProxyless` |
 | reCAPTCHA v2 | The same, through `g-recaptcha-response` | `RecaptchaV2TaskProxyless` |
 | hCaptcha | The challenge's image grid is screenshotted, the worker's clicks are applied, round by round, then the checkbox | `GridTask` |
-| DataDome slider | The returned `datadome` cookie is set and the page reloaded (only with `captcha.datadome: true`) | `DataDomeSliderTask` |
+| DataDome slider | The returned `datadome` cookie is set and the page reloaded (with `captcha.datadome: true`, residential browser steps only) | `DataDomeSliderTask` |
 
-2Captcha no longer offers a dedicated hCaptcha token task, so hCaptcha is solved as image grids. DataDome requires solving from the same IP as the page, so the task carries the attempt's residential proxy credentials (a short-lived session) to 2Captcha; that is why it is off unless `captcha.datadome` is `true`. A DataDome captcha URL with `t=bv` means the IP is banned: the step fails with `captcha_ip_banned` without a task, and auto mode moves on.
+2Captcha no longer offers a dedicated hCaptcha token task, so hCaptcha is solved as image grids. DataDome requires solving from the same IP as the page, so the task carries the login of the attempt's residential proxy session (one exit IP, 30-minute lifetime) to 2Captcha. That is why it needs `captcha.datadome: true` (approved for production on 2026-11-19), and why it never runs on a datacenter step: datacenter credentials are never sent, and auto mode moves on instead. A DataDome captcha URL with `t=bv` means the IP is banned: the step fails with `captcha_ip_banned` without a task, and auto mode moves on.
 
 ## Where it happens
 

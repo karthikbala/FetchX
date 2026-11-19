@@ -90,7 +90,8 @@ export async function browserAttempt(request, context, options) {
     if (!pins.has(page.hostname.toLowerCase())) fail('captcha_request_invalid', 400);
     const common = {request: ids.request, project: ids.project, websiteURL: page.href, userAgent: data.user_agent};
     if (data.type === 'datadome') {
-      if (!proxy) fail('captcha_requires_proxy', 409);
+      // Only a residential session (short-lived, one exit IP) is ever shared with the solver.
+      if (!proxy || route.class !== 'residential') fail('captcha_requires_residential', 409);
       const answer = await solver.solve('datadome', {...common, captchaUrl: data.captcha_url, proxyUrl: proxy.url}, {signal});
       return {ok: true, cookie: answer.cookie};
     }
