@@ -192,16 +192,16 @@ test('self-service: verified identity, tenant isolation, native fetch and conser
    });
   });
 
-  await t.test('HTTP 403 is retained as source failure and unknown results retain a hold through read/restart recovery',async()=>{
+  await t.test('HTTP 403 is retained as source failure and an uncertain GET with zero bytes is released (never billed) through read/restart recovery',async()=>{
    mode='forbidden';const forbidden=await request('POST',`/projects/${projectA.id}/fetch`,payload('source-forbidden'),a);assert.equal(forbidden.status,200);assert.equal(forbidden.body.success,false);assert.equal(forbidden.body.data.status,403);assert.equal(forbidden.body.error.code,'source_forbidden');assert.equal(forbidden.body.state,'completed');
    await store.pool.query('DELETE FROM source_limits');mode='unknown';const before=dispatches.length;
-   unknown=await request('POST',`/projects/${projectA.id}/fetch`,payload('unknown'),a);assert.equal(unknown.body.state,'unknown');assert.equal(unknown.body.error.code,'source_timeout_unknown');assert.equal(unknown.body.retry.next_action,'recover_first');assert.equal(unknown.body.retry.new_request_allowed,false);assert.equal(unknown.body.usage.accounting.request_credits.state,'held');assert.equal(dispatches.length,before+1);
-   assert.equal((await gateway.controlCredits.usage(projectA.id)).held,1);mode='success';
+   unknown=await request('POST',`/projects/${projectA.id}/fetch`,payload('unknown'),a);assert.equal(unknown.body.state,'unknown');assert.equal(unknown.body.error.code,'source_timeout_unknown');assert.equal(unknown.body.retry.next_action,'recover_first');assert.equal(unknown.body.retry.new_request_allowed,false);assert.equal(unknown.body.usage.accounting.request_credits.state,'released');assert.equal(dispatches.length,before+1);
+   assert.equal((await gateway.controlCredits.usage(projectA.id)).held,0);mode='success';
    await noDispatch(async()=>{
-    for(const [method,path,body]of [['GET',`/projects/${projectA.id}/fetch/unknown`],['GET',`/projects/${projectA.id}/requests/${unknown.body.operation_id}`],['POST',`/projects/${projectA.id}/fetch`,payload('unknown')]]){const recovered=await request(method,path,body,a);assert.equal(recovered.body.state,'unknown');assert.equal(recovered.body.operation_id,unknown.body.operation_id);assert.equal(recovered.body.usage.accounting.request_credits.state,'held');}
+    for(const [method,path,body]of [['GET',`/projects/${projectA.id}/fetch/unknown`],['GET',`/projects/${projectA.id}/requests/${unknown.body.operation_id}`],['POST',`/projects/${projectA.id}/fetch`,payload('unknown')]]){const recovered=await request(method,path,body,a);assert.equal(recovered.body.state,'unknown');assert.equal(recovered.body.operation_id,unknown.body.operation_id);assert.equal(recovered.body.usage.accounting.request_credits.state,'released');}
     await store.recover();
     const restarted=server({...gateway,v2:new V2Gateway(gateway,{http:async()=>{assert.fail('restart lookup dispatched');},browserRuntime:async()=>({available:false})})});
-    try{const result=await restarted.inject({url:`/control/projects/${projectA.id}/fetch/unknown`,headers:{...bridge,cookie:a.cookie}});assert.equal(result.statusCode,200);assert.equal(result.json().state,'unknown');assert.equal(result.json().usage.accounting.request_credits.state,'held');}finally{await restarted.close();}
+    try{const result=await restarted.inject({url:`/control/projects/${projectA.id}/fetch/unknown`,headers:{...bridge,cookie:a.cookie}});assert.equal(result.statusCode,200);assert.equal(result.json().state,'unknown');assert.equal(result.json().usage.accounting.request_credits.state,'released');}finally{await restarted.close();}
    });
   });
 
@@ -212,7 +212,7 @@ test('self-service: verified identity, tenant isolation, native fetch and conser
    const before=dispatches.length;
    const pair=await Promise.all(['last-a','last-b'].map(key=>request('POST',`/projects/${projectA.id}/fetch`,payload(key),a)));
    assert.equal(pair.filter(r=>r.body.success).length,1);const denied=pair.find(r=>!r.body.success);assert.equal(denied.status,429);assert.equal(denied.body.error.code,'credit_balance_exhausted');assert.equal(dispatches.length,before+1);
-   const usage=await request('GET',`/projects/${projectA.id}/usage`,undefined,a);assert.equal(usage.body.credits.available,0);assert.equal(usage.body.credits.held,1);assert.equal(usage.body.credits.settled+usage.body.credits.held,usage.body.credits.granted);
+   const usage=await request('GET',`/projects/${projectA.id}/usage`,undefined,a);assert.equal(usage.body.credits.available,0);assert.equal(usage.body.credits.held,0);assert.equal(usage.body.credits.settled+usage.body.credits.held,usage.body.credits.granted);
    await noDispatch(async()=>{const exhausted=await request('POST',`/projects/${projectA.id}/fetch`,payload('overdraft'),a);assert.equal(exhausted.body.error.code,'credit_balance_exhausted');const replay=await request('GET',`/projects/${projectA.id}/fetch/first`,undefined,a);assert.equal(replay.body.success,true);});
    assert.equal((await request('GET',`/projects/${projectA.id}/billing`,undefined,a)).body.status,'approval_required');
   });

@@ -3,6 +3,7 @@ import {GatewayError,ID,fail} from './policy.mjs';
 import {sourceChallenge} from './source-challenge.mjs';
 import {ensurePlaygroundProfile,isPlaygroundRef,playgroundMessage} from './control-playground.mjs';
 import {PUBLIC_URL_REF,PUBLIC_URL_TRANSFER_LIMITS,isPublicUrlProfile} from './v2-public-url.mjs';
+import {autoFetch,autoLookup,isAutoRequest} from './v2-auto-fetch.mjs';
 
 const KIND='public_fetch_request_v1';
 const failureContexts=new WeakMap();
@@ -64,7 +65,10 @@ function message(code){
  const messages={
   unauthorized:'A valid project Bearer token is required.',
   capability_unsupported:'This endpoint supports native HTTP only. Rendering, browser actions and extraction options are unsupported.',
-  proxy_required:'Select proxy.class explicitly: direct, datacenter or residential.',
+  proxy_required:'Select proxy.class explicitly: auto, direct, datacenter or residential.',
+  source_cooldown:'This site is cooling down after recent failures. Retry after the wait given in error.details and retry.retry_after, with a new idempotency key.',
+  auto_routes_unavailable:'Auto mode found no route this access profile allows for this site. See error.details.auto.next.',
+  max_attempts_invalid:'max_attempts must be an integer from 1 to 5.',
   country_required:'Supply an explicit uppercase two-letter country for a proxied route, or null for direct.',
   direct_country_unverified:'Direct requests cannot verify a source country; use country: null.',
   idempotency_key_required:'Supply an idempotency key of 1–160 letters, digits, underscores, periods, colons or hyphens.',
@@ -145,7 +149,8 @@ function publicLimitFailure(code,operation,profile){
  const current=paid.max_transfer_bytes/1_000_000;
  const details={max_transfer_mb:current,max_allowed_transfer_mb:maximum,reserved_credits:paid.reserved_credits};
  const summary=message(code)+` This operation reserved a ${current} MB transfer ceiling.`;
- if(operation.state!=='failed'||operation.result?.partial||paid.state!=='settled')
+ // A failed attempt is released rather than settled (never billed); the advice is the same.
+ if(operation.state!=='failed'||operation.result?.partial||!['settled','released'].includes(paid.state))
   return {details,message:summary+' Recover the saved operation using its original key before considering new source work.'};
  if(current>=maximum)return {details,message:summary};
  const next=current+step;
@@ -191,7 +196,9 @@ export function publicFetchFailure(error,{key=null,status,stage}={}){
  const state=context?.state??(code==='internal_error'?'unknown':'rejected');
  key=context?.key??key;
  const cooldown=error instanceof GatewayError&&code==='source_cooldown'?cooldownView(error.details):null;
- return {success:false,state,gateway_http_status:gatewayStatus,operation_id:context?.operation_id??null,session_id:context?.session_id??null,idempotency_key:validKey(key)?key:null,...(context?.key_scope?{idempotency_key_scope:context.key_scope}:{}),routing:context?.routing??null,data:null,artifacts:[],diagnostics:null,error:{code,message:message(code),stage:context?.stage??stage??(code==='internal_error'?'unknown':'request_admission'),...(cooldown?{details:cooldown}:{})},retry:{...retryGuidance({key,code,state,admission:state==='rejected',result:cooldown?{retry_after:String(cooldown.retry_after_seconds)}:undefined}),same_key_replay_safe:context?.same_key_replay_safe??true,...(context?.lookup_url?{lookup_url:context.lookup_url}:{})},usage:null,application_acceptance:'not_evaluated',supported:{transport:'http',render:false}};
+ // Auto mode's own refusals carry an auto summary with the next step.
+ const autoDetails=error instanceof GatewayError&&plain(error.details?.auto)?{auto:error.details.auto}:null,autoWait=autoDetails?.auto.next?.retry_after_seconds;
+ return {success:false,state,gateway_http_status:gatewayStatus,operation_id:context?.operation_id??null,session_id:context?.session_id??null,idempotency_key:validKey(key)?key:null,...(context?.key_scope?{idempotency_key_scope:context.key_scope}:{}),routing:context?.routing??null,data:null,artifacts:[],diagnostics:null,error:{code,message:message(code),stage:context?.stage??stage??(code==='internal_error'?'unknown':'request_admission'),...(cooldown?{details:cooldown}:autoDetails?{details:autoDetails}:{})},retry:{...retryGuidance({key,code,state,admission:state==='rejected',result:cooldown?{retry_after:String(cooldown.retry_after_seconds)}:autoWait?{retry_after:String(autoWait)}:undefined}),same_key_replay_safe:context?.same_key_replay_safe??true,...(context?.lookup_url?{lookup_url:context.lookup_url}:{})},usage:null,application_acceptance:'not_evaluated',supported:{transport:'http',render:false}};
 }
 
 // Reconstruct from durable encrypted evidence only. No policy lookup, destination
@@ -252,6 +259,7 @@ export class PublicFetchGateway{
  }
  async fetch(project,raw,identity,{automaticTransfer=true}={}){
   this.v2.controlCredits.keyId(project,identity);
+  if(isAutoRequest(raw))return autoFetch(this,project,raw,identity,{automaticTransfer});
   // Transfer mode is a control-client preference for new admissions, outside the replay fingerprint.
   const input=normalize(raw,{implicitPublic:this.v2.controlCredits.managed(project)}),hash=sha(canonical(input)),names=keys(input.idempotency_key);
   const prior=await this.fingerprint(project,input.idempotency_key,hash);
@@ -285,6 +293,7 @@ export class PublicFetchGateway{
  }
  async lookup(project,key){
   if(!validKey(key))fail('idempotency_key_required');
+  const auto=await autoLookup(this,project,key);if(auto)return auto;
   if(!await this.fingerprint(project,key))fail('operation_not_found',404);
   return this.respond(project,key,await this.v2.lookup(project,keys(key).operation));
  }

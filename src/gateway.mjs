@@ -1,4 +1,5 @@
 import {isResidential,residentialPolicy,selectedRoute,routePlan,routeConfig,providerProxy,reserveResidential,settleResidential,operationResidentialTraffic} from './residential.mjs';
+import {observeSiteOutcome,siteOutcome} from './site-knowledge.mjs';
 import {residentialTrafficCharge} from './customer-traffic.mjs';
 import {estimateRoutePricing} from './v2-pricing.mjs';
 import {residentialRequest} from './residential-transport.mjs';
@@ -293,6 +294,12 @@ export class Gateway {
   });
   // Passive fingerprints are independent of health/fallback and settlement.
   await observeProtection(this.store,{attemptId:aid,response:r,input});
+  // Site knowledge learns from main documents only; a page's many subresources
+  // are not independent evidence about reaching the site.
+  const siteClass=isResidential(p)?'residential':provider==='oxylabs'?'datacenter':null;
+  if(siteClass&&(input.main_document===true||!input.resource_type))await observeSiteOutcome(this.store,{host:input.url,execution:isResidential(p)&&p.execution==='browser'?'browser':'http',
+   route:{class:siteClass,provider,country:p.country},engine:p.browserEngine,config:this.config,
+   outcome:siteOutcome({state:unknown?'unknown':r.error?'failed':'completed',error:r.error,status:r.status,headers:r.headers,body:r.body}),retryAfterSeconds:Number(r.headers?.['retry-after'])});
   // Observational health must never roll back a settled receipt or prevent
   // publication of a response that was already fetched. It cannot dispatch.
   if(provider==='oxylabs')try{

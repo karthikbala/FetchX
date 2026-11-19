@@ -347,7 +347,7 @@ test('paid public fetch reserves the shared wire ceiling and separates customer 
   assert.equal(decoded.error.code,'decoded_body_limit');
   assert.equal(decoded.error.details.next.max_transfer_mb,1.25);
   assert.equal(decoded.data.body_base64,null);
-  assert.equal(decoded.usage.accounting.paid_credits.used_credits,1);
+  assert.equal(decoded.usage.accounting.paid_credits.used_credits,0,'a failed attempt is never billed');
   const aggregate=await request('aggregate-decoded',{url:'https://public.sample.net/compressed-redirect',max_transfer_mb:1});
   assert.equal(aggregate.error.code,'decoded_body_limit');
   assert.deepEqual(aggregate.artifacts.map(artifact=>artifact.decoded_bytes),[600_000,null]);

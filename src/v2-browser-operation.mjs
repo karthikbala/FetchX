@@ -1,3 +1,4 @@
+import {observeSiteOutcome,siteOutcome,unbilledAttempt} from './site-knowledge.mjs';
 import {randomUUID} from 'node:crypto';
 import {Cookie,CookieJar} from 'tough-cookie';
 import {ID,GatewayError,fail,CHALLENGE_COOLDOWN_SECONDS} from './policy.mjs';
@@ -196,15 +197,18 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
   const usedRequests=unknown?maximum:requests,usedEncoded=unknown||result.encoded_bytes===null&&networkDispatched?reservedBytes:result.encoded_bytes??0;
   const heldTunnel=networkDispatched?Math.max(reservedTunnel,route.class==='direct'?0:observed??0):0;
   if(route.class!=='direct'&&observed!==null&&observed>reservedTunnel)error='cost_overrun';
-  const customerTraffic=finishResidentialTrafficCharge(ledger.customer_traffic,{dispatched:networkDispatched,unknown,partial:meterIncomplete,bytes:observed,maxBillableBytes:Number(ledger.customer_traffic_reservation?.reserved_bytes??ledger.reserved_tunnel_bytes)});
+  const failedAttempt=unbilledAttempt({state:unknown?'unknown':error?'failed':'completed',error,status:result.status,method:'GET',responseBytes:networkDispatched?(observed??null):0});
+  const customerTraffic=finishResidentialTrafficCharge(ledger.customer_traffic,{failedAttempt,dispatched:networkDispatched,unknown,partial:meterIncomplete,bytes:observed,maxBillableBytes:Number(ledger.customer_traffic_reservation?.reserved_bytes??ledger.reserved_tunnel_bytes)});
   const state=unknown?'unknown':error?'failed':'completed';
   await c.query('UPDATE v2_operations SET state=$2,error=$3,result=$4,summary=$5,finished_at=clock_timestamp() WHERE id=$1',[id,state,error,v2.sealer.seal(result,{compress:true}),{kind:'browser_network_probe',source_http_status:result.status,physical_requests:requests,encoded_bytes:result.encoded_bytes,decoded_bytes:result.decoded_bytes,tunnel_bytes:observed,diagnostics:result.diagnostics}]);
   await c.query('UPDATE v2_ledger SET state=$2,accounted_requests=$3,accounted_encoded_bytes=$4,observed_tunnel_bytes=$5,accounted_tunnel_bytes=$6,estimated_micro_usd=CASE WHEN $7 THEN estimated_micro_usd ELSE 0 END,customer_traffic=$8 WHERE operation=$1',[id,unknown?'unknown':networkDispatched?'unreconciled':'cancelled_before_dispatch',usedRequests,usedEncoded,observed,heldTunnel,networkDispatched,customerTraffic]);
   await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'finish',$2)",[id,{kind:'browser_network_probe',state,error,physical_requests:requests,network_dispatched:networkDispatched,observed_network_bytes:observed,...(customerTraffic?{customer_traffic:customerTraffic}:{})}]);
   await c.query('UPDATE v2_sessions SET requests=requests-$2+$3,encoded_bytes=encoded_bytes-$4+$5 WHERE id=$1',[session.id,ledger.reserved_requests,usedRequests,ledger.reserved_encoded_bytes,usedEncoded]);
   const credits=fixedCredits?v2.controlPaidCredits:v2.controlCredits;
-  await credits.finish(c,{project,operation:id,dispatched:networkDispatched,unknown});
+  await credits.finish(c,{project,operation:id,dispatched:networkDispatched&&!failedAttempt,unknown:unknown&&!failedAttempt,failedAttempt});
   if(cookieState&&!unknown)await c.query('UPDATE v2_sessions SET cookie_jar=$2 WHERE id=$1',[session.id,v2.sealer.seal(cookieState)]);
  });
+ await observeSiteOutcome(v2.store,{host:raw.url,execution:'browser',route,engine:runtime?.runtime?.engine,config:v2.config,
+  outcome:siteOutcome({state:unknown?'unknown':error?'failed':'completed',error,status:result.status})});
  return v2.readOperation(project,id);
 }

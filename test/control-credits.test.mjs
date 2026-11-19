@@ -43,7 +43,8 @@ test('credit reservations follow real v2 admission, concurrency, replay, isolati
  gateway.v2=new V2Gateway(gateway,{http:async()=>{
   calls++;
   if(mode==='block'){entered();await new Promise(resolve=>{unblock=resolve;});}
-  if(mode==='unknown')throw new GatewayError('source_timeout_unknown',504);
+  // An uncertain GET that received no response bytes.
+  if(mode==='unknown')throw Object.assign(new GatewayError('source_timeout_unknown',504),{observed_tunnel_bytes:0});
   return {status:200,headers:{'content-type':'text/plain'},raw_headers:['content-type','text/plain'],encoded:Buffer.from('synthetic'),tunnel_bytes:null,provider_status:null};
  }});
  const v2=gateway.v2,fetch=new PublicFetchGateway(v2),credits=v2.controlCredits;
@@ -80,12 +81,12 @@ test('credit reservations follow real v2 admission, concurrency, replay, isolati
    finally{unblock();}
    assert.equal((await first).operation_id,replay.operation_id);mode='success';assert.equal((await credits.usage(a.project)).settled,1);assert.equal((await credits.usage(a.project)).available,0);
   });
-  await t.test('uncertain transport retains its hold and same-key recovery never redispatches',async()=>{
+  await t.test('uncertain GET with no response bytes is released (never billed) and same-key recovery never redispatches',async()=>{
    const a=await makeProject(2);mode='unknown';const first=await submit(a,'unknown'),before=calls;
-   assert.equal(first.state,'unknown');assert.equal(first.usage.accounting.request_credits.state,'held');
+   assert.equal(first.state,'unknown');assert.equal(first.usage.accounting.request_credits.state,'released');
    assert.equal((await submit(a,'unknown')).operation_id,first.operation_id);assert.equal(calls,before);
-   await store.tx(c=>credits.finish(c,{project:a.project,operation:first.operation_id,dispatched:false,unknown:false}));assert.equal((await credits.operation(a.project,first.operation_id)).state,'held');
-   const restarted=new ControlCredits({store,config});assert.equal((await restarted.usage(a.project)).held,1);assert.equal((await restarted.usage(a.project)).available,1);mode='success';
+   await store.tx(c=>credits.finish(c,{project:a.project,operation:first.operation_id,dispatched:true,unknown:true}));assert.equal((await credits.operation(a.project,first.operation_id)).state,'released','a finished reservation is never re-finalized');
+   const restarted=new ControlCredits({store,config});assert.equal((await restarted.usage(a.project)).held,0);assert.equal((await restarted.usage(a.project)).available,2);mode='success';
   });
   await t.test('known predispatch rejection releases credits and leaves a retained operation',async()=>{
    const a=await makeProject(1),before=calls;

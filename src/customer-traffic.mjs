@@ -13,7 +13,7 @@ function formatUsd(nanodollars) {
 }
 
 function charge({status, bytes, maxBillableBytes}, rateUsdPerGb) {
- if (!['measured', 'no_traffic', 'unknown', 'pending'].includes(status)) {
+ if (!['measured', 'no_traffic', 'unknown', 'pending', 'not_billed_failed_attempt'].includes(status)) {
   throw new TypeError('customer_traffic_status_invalid');
  }
  if (maxBillableBytes !== undefined && !validBytes(maxBillableBytes)) {
@@ -26,6 +26,11 @@ function charge({status, bytes, maxBillableBytes}, rateUsdPerGb) {
  let meteredBytes = null;
  let billableBytes = null;
  let costUsd = null;
+ if (status === 'not_billed_failed_attempt') {
+  // A failed attempt is never billed. Keep the measured bytes for operators.
+  return {currency: 'USD', rate_usd_per_gb: rateUsdPerGb, bytes_per_gb: BYTES_PER_GB, basis: 'bidirectional_proxy_bytes', status,
+   metered_bytes: validBytes(bytes) ? bytes : null, billable_bytes: 0, cost_usd: formatUsd(0n)};
+ }
  if (status === 'no_traffic') {
   meteredBytes = 0;
  } else if (status === 'measured') {
@@ -74,7 +79,7 @@ export function residentialTrafficReservation(bytes) {
 // Historical rows have no admission snapshot and remain unpriced. Completion
 // uses the saved rate, never a current configuration lookup.
 export function finishResidentialTrafficCharge(admitted, {
- dispatched, unknown = false, partial = false, bytes, maxBillableBytes
+ dispatched, unknown = false, partial = false, bytes, maxBillableBytes, failedAttempt = false
 }) {
  if (!admitted) return null;
  if (admitted.currency !== 'USD' || admitted.bytes_per_gb !== BYTES_PER_GB ||
@@ -83,7 +88,9 @@ export function finishResidentialTrafficCharge(admitted, {
  }
 
  let status = 'measured';
- if (!dispatched) {
+ if (failedAttempt && dispatched) {
+  status = 'not_billed_failed_attempt';
+ } else if (!dispatched) {
   status = 'no_traffic';
  } else if (unknown || partial || !validBytes(bytes)) {
   status = 'unknown';
