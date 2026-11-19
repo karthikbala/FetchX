@@ -109,6 +109,10 @@ Popups, downloads, WebSockets and workers stay blocked.
 
 ### Challenges, rate limits and cooldowns
 
+A request that FetchX does not escalate on its own gets the source's outcome
+back clearly, so the caller can decide what to do next. (Automatic escalation
+across routes and engines is a separate, opt-in mode.)
+
 A recognised bot-manager interstitial is `source_challenge` whatever its HTTP
 status, including 200, 202, 403 and 429. `error.details.vendor` names the
 vendor when it can be attributed (`datadome`, `cloudflare`, `aws_waf`, `human`,
