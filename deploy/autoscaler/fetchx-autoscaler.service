@@ -3,13 +3,15 @@ Description=FetchX private Hetzner browser worker autoscaler (opt-in)
 After=network-online.target docker.service
 Wants=network-online.target
 ConditionPathExists=/etc/fetchx-autoscaler/config.json
+ConditionPathExists=/etc/fetchx-autoscaler/authorized-to-run
 
 [Service]
 Type=simple
 User=root
 Group=root
-WorkingDirectory=/opt/fetchx-autoscaler/release
-ExecStart=/usr/bin/python3 -m ops.autoscaler.controller run --config /etc/fetchx-autoscaler/config.json
+WorkingDirectory=/opt/crawling-platform/controllers/current
+ExecStart=/usr/bin/python3 -m ops.autoscaler.controller --config /etc/fetchx-autoscaler/config.json run
+Environment=PYTHONDONTWRITEBYTECODE=1
 Restart=on-failure
 RestartSec=10
 UMask=0077

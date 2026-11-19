@@ -357,6 +357,8 @@ const {tmpdir}=await import('node:os');const {join}=await import('node:path');
 const {launchCamoufox}=await import('./src/browser/engine.mjs');
 const runtime=JSON.parse(await readFile(process.env.FETCHX_WORKER_RUNTIME,'utf8'));
 const cacheDir=await mkdtemp(join(tmpdir(),'pool-sandbox-'));let launched;
+// The image's home is read-only; Camoufox keeps its font cache under HOME, as in a capture.
+process.env.HOME=cacheDir;
 try{launched=await launchCamoufox(runtime,{relay:'http://127.0.0.1:1/',cacheDir});
 const page=await launched.browser.newPage();await page.setContent('<title>FetchX sandbox smoke</title>');
 if(await page.title()!=='FetchX sandbox smoke')throw Error('DOM mismatch');}

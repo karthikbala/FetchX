@@ -33,8 +33,11 @@ separate allowances for each machine type. This generic example retains
 No top-level `server_type`, `location` or hourly price ceiling selects an implicit
 single machine; those values belong to each `machine_options` entry.
 
-Install the reviewed checkout under `/opt/fetchx-autoscaler/release`, retaining
-`ops/autoscaler` and `deploy/autoscaler`. The systemd unit uses that layout.
+Install `ops/autoscaler` and `deploy/autoscaler` from the release tag under
+`/opt/crawling-platform/controllers/<release>` and point the
+`/opt/crawling-platform/controllers/current` symlink at it. The systemd unit runs
+from `current` and starts only while `/etc/fetchx-autoscaler/authorized-to-run`
+exists.
 The controller host needs Python 3.10 or later, OpenSSH, systemd and the already installed
 Docker CLI/daemon for **asset preparation only**. Worker VMs require Python 3.12 for safe archive extraction and use Ubuntu 24.04
 and install `docker.io`, `nftables`, Python and CA certificates via cloud-init.
@@ -50,13 +53,14 @@ separate host and restricted forwarding keys per VM. It refuses an administrator
 private key outside this dedicated state directory.
 
 Prepare assets on the production host from the complete reviewed immutable image
-ID/digest and the existing qualified browser bundle and four-field runtime pin:
+ID/digest (the same image the pool workers run) and the existing qualified browser
+bundle and five-field Camoufox runtime pin:
 
 ```sh
-sudo /usr/bin/python3 /opt/fetchx-autoscaler/release/deploy/autoscaler/prepare_assets.py \
+sudo /usr/bin/python3 /opt/crawling-platform/controllers/current/deploy/autoscaler/prepare_assets.py \
   --image sha256:REPLACE_WITH_COMPLETE_REVIEWED_IMAGE_ID \
-  --seccomp /opt/fetchx-autoscaler/release/deploy/chromium-seccomp.json \
-  --output /var/lib/fetchx-autoscaler/assets
+  --seccomp /opt/crawling-platform/current/deploy/chromium-seccomp.json \
+  --output /var/lib/fetchx-autoscaler/assets-<release>
 ```
 
 The output directory must be new. Preparation does not pull images, download
@@ -68,7 +72,7 @@ Docker tag and archives the browser-directory **contents**, without an outer
 {
   "version": 1,
   "image": {"archive": "/private/assets/image.tar", "sha256": "64 hex", "ref": "fetchx-autoscaler-pinned:64hex", "rootfs_layers": ["sha256:64hex"]},
-  "browser": {"archive": "/private/assets/browser.tar", "sha256": "64 hex", "executable": "/opt/gateway-browser/PINNED/PATH/chrome"},
+  "browser": {"archive": "/private/assets/browser.tar", "sha256": "64 hex", "executable": "/opt/gateway-browser/camoufox/camoufox-bin"},
   "runtime_pin": {"engine": "camoufox", "executablePath": "/opt/gateway-browser/camoufox/camoufox-bin", "modelDir": "/opt/gateway-browser/camoufox-model", "version": "158.0.1-beta.41", "sha256": "64 hex"},
   "seccomp": {"path": "/private/assets/seccomp.json", "sha256": "64 hex"}
 }
@@ -86,7 +90,7 @@ by the gateway. Bootstrap also runs a synthetic Camoufox sandbox smoke test.
 Initialize the durable ledger explicitly with the disabled configuration:
 
 ```sh
-cd /opt/fetchx-autoscaler/release
+cd /opt/crawling-platform/controllers/current
 sudo /usr/bin/python3 -m ops.autoscaler.controller --config /etc/fetchx-autoscaler/config.json init
 sudo /usr/bin/python3 -m ops.autoscaler.controller --config /etc/fetchx-autoscaler/config.json status
 ```
