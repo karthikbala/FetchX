@@ -25,7 +25,7 @@ The gateway reads one JSON file, `GATEWAY_CONFIG` (default `/run/secrets/gateway
 | `release` | Shown by `/healthz`. |
 | `artifactKey` | 64 hex characters. Seals stored requests and results (AES-256-GCM). Changing it makes stored results unreadable. |
 | `projects` | Projects provisioned here instead of in the console: `{id: {tokenHash, maxConcurrentRequests?}}`. They are unmetered. |
-| `fetchLimits` | Overrides for `DEFAULT_LIMITS` in `src/fetch/service.mjs`: body and wire caps, `contentDays` (7), `metadataDays` (90), `syncWaitMs` (60 s), `maxConcurrentPerProject` (10). |
+| `fetchLimits` | Overrides for `DEFAULT_LIMITS` in `src/fetch/service.mjs`: body and wire caps, `contentDays` (7), `metadataDays` (90), `syncWaitMs` (60 s), `maxConcurrentPerProject` (10), `selfClearMs` (45 s: how long a bot check on a browser page may take to clear by itself before a captcha is solved). |
 | `destinations.blockedHosts` | Extra host names never fetched. `fetchx.ai` and the console origins are always blocked. |
 
 ## Routes
@@ -47,6 +47,8 @@ The gateway reads one JSON file, `GATEWAY_CONFIG` (default `/run/secrets/gateway
 | `browser.maxConcurrent` | Browsers run on the gateway host at once when there is no pool (1). |
 | `browser.pool` | `{registry_path, callback_socket}`: run captures on the worker pool instead. |
 | `browser.maxConcurrentRequests` | Reported to the autoscaler as the gateway's browser concurrency (64). |
+| `browser.sessions` | Kept residential sessions and pacing (`src/fetch/sessions.mjs`): `sessionGapMs` (4,000: pages on one kept session), `hostGapMs` (1,000: browser steps on a host that has refused FetchX), `rotateAfter` (40 pages), `maxAgeMs` (25 min), `maxPerHost` (8), `maxHosts` (5,000). See [browser](browser.md#sessions-warm-up-and-walls). |
+| `browser.exitGeo` | `{endpoint}`: an ipinfo.io-style JSON lookup (default `https://ipinfo.io/json`) asked through each browser step's proxy for the exit IP's timezone and position; `false` turns it off and the route country's timezone is used. |
 
 ## Captchas and prices
 

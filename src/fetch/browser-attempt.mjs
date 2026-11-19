@@ -29,11 +29,21 @@ function cookiesFrom(header, url) {
   }).filter(cookie => cookie.name);
 }
 
+// The browser's locale and timezone: the exit IP's when known (geo, from
+// exit-geo.mjs), else the route country's.
+export function browserPlace(route, geo) {
+  const [countryLocale, countryZone] = LOCALES[geo?.country] ?? LOCALES[route.country] ?? LOCALES.US;
+  return {locale: countryLocale, timezone: geo?.timezone ?? countryZone, geolocation: geo?.geolocation ?? null};
+}
+
 // request: {url (URL), headers}
-// context: {config, route, proxy, resolve, blocked, slots, runtime, solver, ids: {request, project}}
-// options: {deadline, waitFor, screenshot, captcha, settleMs, limits}
+// context: {config, route, proxy, resolve, blocked, slots, runtime, solver, ids: {request, project},
+//           geo (the exit's place, or null), fingerprint (a kept device identity, or null)}
+// options: {deadline, waitFor, screenshot, captcha, settleMs, limits, warmup, selfClearMs}
 export async function browserAttempt(request, context, options) {
-  const {config, route, proxy, resolve, blocked, slots, runtime, solver, ids} = context;
+  const {config, route, proxy, resolve, blocked, slots, runtime, solver, ids, geo = null, fingerprint = null} = context;
+  // A warm-up visit loads a second page, so it gets a second page's requests.
+  const maxRequests = options.warmup ? Math.min(500, options.limits.max_requests * 2) : options.limits.max_requests;
   if (request.url.protocol !== 'https:') fail('browser_requires_https', 409);
   if (!runtime) fail('browser_unavailable', 503);
   const pins = new Map();
@@ -43,7 +53,7 @@ export async function browserAttempt(request, context, options) {
   // Every host the browser reaches is checked and pinned to one public address.
   const pinHost = async url => {
     if (Date.now() >= options.deadline) fail('browser_deadline', 504);
-    if (++admitted > options.limits.max_requests) fail('browser_request_limit', 429);
+    if (++admitted > maxRequests) fail('browser_request_limit', 429);
     if (proxy && route.provider && providerRule(config, route.provider, url.hostname)) fail('provider_excluded');
     const host = url.hostname.toLowerCase();
     let pin = pins.get(host);
@@ -113,7 +123,7 @@ export async function browserAttempt(request, context, options) {
     await relay.close();
     throw error;
   });
-  const [locale, timezone] = LOCALES[route.country] ?? LOCALES.US;
+  const {locale, timezone, geolocation} = browserPlace(route, geo);
   const headers = Object.fromEntries(Object.entries(request.headers ?? {}).filter(([name]) => !BROWSER_OWNED.has(name)));
   let output;
   try {
@@ -122,7 +132,7 @@ export async function browserAttempt(request, context, options) {
       deadline: options.deadline,
       runtime,
       relay: relay.url,
-      limits: {max_requests: options.limits.max_requests, max_dom_bytes: options.limits.max_dom_bytes,
+      limits: {max_requests: maxRequests, max_dom_bytes: options.limits.max_dom_bytes,
         max_body_bytes: options.limits.max_body_bytes},
       settle_ms: options.settleMs,
       wait_for: options.waitFor,
@@ -132,6 +142,10 @@ export async function browserAttempt(request, context, options) {
       cookies: cookiesFrom(request.headers?.cookie, request.url),
       locale,
       timezone,
+      ...(geolocation ? {geolocation} : {}),
+      ...(fingerprint ? {fingerprint} : {}),
+      ...(options.warmup ? {warmup: true} : {}),
+      ...(options.selfClearMs ? {self_clear_ms: options.selfClearMs} : {}),
     }, {admit, artifact, captcha});
   } finally {
     slot.release();
@@ -145,6 +159,7 @@ export async function browserAttempt(request, context, options) {
     error.dispatched = dispatched;
     error.wire_bytes = wireBytes;
     error.captcha = output?.captcha ?? [];
+    error.warmup = output?.warmup ?? null;
     throw error;
   }
   const document = artifacts.dom ?? artifacts.document ?? null;
@@ -162,5 +177,9 @@ export async function browserAttempt(request, context, options) {
     requests: output.requests ?? 0,
     blocked: output.blocked ?? 0,
     error: output.error ?? null,
+    warmup: output.warmup ?? null,
+    wall: output.wall ?? null,
+    // The device identity the browser used, when it drew a fresh one.
+    fingerprint: output.fingerprint && typeof output.fingerprint === 'object' ? output.fingerprint : null,
   };
 }

@@ -21,6 +21,62 @@ export async function looksChallenged(page, status) {
   try { return CHALLENGE_TITLE.test((await page.title()).trim()); } catch { return false; }
 }
 
+// Is the page still a wall? A block status or challenge title, or a challenge
+// frame. `hard` is a refusal no wait can clear (DataDome's blocked-visitor
+// frame); `interactive` is a captcha that waits for a person (DataDome's
+// captcha frame), as opposed to a device check that runs by itself.
+export async function wallState(page, status) {
+  if (page.isClosed()) return {wall: false, hard: false, interactive: false};
+  const frame = await page.evaluate(() => {
+    for (const element of document.querySelectorAll('iframe[src]')) {
+      try {
+        const url = new URL(element.src);
+        if (url.hostname === 'captcha-delivery.com' || url.hostname.endsWith('.captcha-delivery.com')) {
+          return {vendor: 'datadome', kind: url.searchParams.get('t'), path: url.pathname};
+        }
+      } catch { /* not a URL */ }
+    }
+    return null;
+  }).catch(() => null);
+  const wall = !!frame || await looksChallenged(page, status);
+  const hard = frame?.kind === 'bv';
+  return {wall, hard, interactive: !hard && !!frame?.path?.startsWith('/captcha')};
+}
+
+// A captcha frame does not go away by itself; it is given this long only in
+// case the page is still settling.
+const INTERACTIVE_WALL_MS = 8000;
+
+// Lets a wall clear itself: interstitial device checks (DataDome, Cloudflare)
+// pass on their own in a real browser on a clean IP, usually within seconds,
+// and then reload into the page. Waits up to `ms`, moving the pointer now and
+// then like a person reading. Returns {cleared, after_ms}; never throws.
+export async function waitForSelfClear(page, status, ms) {
+  const started = Date.now();
+  let state = await wallState(page, status());
+  if (!state.wall) return {cleared: true, after_ms: 0};
+  const limit = () => (state.interactive ? Math.min(ms, INTERACTIVE_WALL_MS) : ms);
+  while (!state.hard && Date.now() - started < limit() && !page.isClosed()) {
+    await nudgePointer(page);
+    await page.waitForTimeout(Math.min(2500, Math.max(1, limit() - (Date.now() - started)))).catch(() => {});
+    await page.waitForLoadState('domcontentloaded', {timeout: 5000}).catch(() => {});
+    state = await wallState(page, status());
+    if (!state.wall) return {cleared: true, after_ms: Date.now() - started};
+  }
+  return {cleared: false, after_ms: Date.now() - started, ...(state.hard ? {hard: true} : {}),
+    ...(state.interactive ? {interactive: true} : {})};
+}
+
+// A few small pointer moves (Camoufox's humanize draws the path).
+export async function nudgePointer(page) {
+  try {
+    const size = page.viewportSize() ?? await page.evaluate(() => ({width: innerWidth, height: innerHeight}));
+    const x = Math.round(size.width * (0.2 + Math.random() * 0.6));
+    const y = Math.round(size.height * (0.2 + Math.random() * 0.6));
+    await page.mouse.move(x, y, {steps: 4});
+  } catch { /* closed or no pointer */ }
+}
+
 async function waitForWidget(page, remaining) {
   const until = Date.now() + Math.min(CHALLENGE_WIDGET_WAIT_MS, Math.max(0, remaining() - MIN_SOLVE_MS));
   while (Date.now() < until) {

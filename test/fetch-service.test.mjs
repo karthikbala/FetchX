@@ -369,3 +369,40 @@ test('deleting a request removes everything the site sent; the summary and charg
   assert.equal((await call('GET', `/v1/fetch/${old.body.id}`)).body.data.content_expired, true);
   assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM fetch_content WHERE request = $1', [old.body.id])).rows[0].n, 0);
 });
+
+test('a residential browser session that passed is reused with its device identity, placed where its IP is', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const identity = {navigator: {userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0'}};
+  const browser = fakeBrowser(async (input, hooks) => {
+    await hooks.artifact({kind: 'dom', content_type: 'text/html', body_base64: Buffer.from(html('hotel')).toString('base64')});
+    return {status: 200, final_url: input.url, headers: {'content-type': 'text/html'}, cookies: [], captcha: [],
+      warmup: input.warmup ? 'passed' : null, ...(input.fingerprint ? {} : {fingerprint: identity})};
+  });
+  const challenge = '<html><head><title>Bot or Not?</title><script src="/app.js"></script></head><body></body></html>';
+  const site = ({url}) => (url === 'https://ipinfo.io/json'
+    ? {headers: {'content-type': 'application/json'}, body: JSON.stringify({ip: '203.0.113.9', country: 'US',
+      timezone: 'America/Los_Angeles', loc: '34.05,-118.24'})}
+    : {status: 429, body: challenge});
+  const config = testConfig({browser: {sessions: {sessionGapMs: 0, hostGapMs: 0}}});
+  const {call, calls} = await gatewayFor(store, {config, site, browser});
+  const first = await call('POST', '/v1/fetch', {body: {url: 'https://hotels.example.com/h/1'}});
+  assert.equal(first.body.status, 'succeeded', JSON.stringify(first.body));
+  assert.deepEqual(first.body.attempts.map(a => [a.transport, a.result, a.warmup ?? null]),
+    [['http', 'blocked', null], ['browser', 'success', 'passed']]);
+  const [run] = browser.runs;
+  assert.equal(run.timezone, 'America/Los_Angeles', 'the timezone of the exit IP, not of the route country');
+  assert.deepEqual(run.geolocation, {latitude: 34.05, longitude: -118.24});
+  assert.equal(run.warmup, true, 'a site that just showed a bot check is visited from its home page');
+  assert.equal(run.self_clear_ms, 45_000);
+  assert.equal(run.fingerprint, undefined, 'a fresh session draws a fresh identity');
+  assert.equal(calls.filter(c => c.url === 'https://ipinfo.io/json').length, 1);
+
+  const second = await call('POST', '/v1/fetch', {body: {url: 'https://hotels.example.com/h/2'}});
+  assert.equal(second.body.status, 'succeeded', JSON.stringify(second.body));
+  assert.deepEqual(second.body.attempts.map(a => [a.transport, a.class, a.result]), [['browser', 'residential', 'success']],
+    'the browser route that worked comes first');
+  assert.deepEqual(browser.runs[1].fingerprint, identity, 'the kept session brings its identity');
+  assert.equal(browser.runs[1].warmup, true, 'the host has refused FetchX before');
+  assert.equal(calls.filter(c => c.url === 'https://ipinfo.io/json').length, 1, 'same session: its exit was already looked up');
+});

@@ -4,10 +4,17 @@
 // gateway (hooks.admit: URL policy, DNS pinning, provider rules, request cap);
 // a refused request is aborted before it leaves the browser. Large outputs go
 // to the gateway through hooks.artifact; the returned summary stays small.
-import {looksChallenged, solvePageCaptchas} from './page-captcha.mjs';
+import {looksChallenged, nudgePointer, solvePageCaptchas, waitForSelfClear, wallState} from './page-captcha.mjs';
 
 export const SCREENSHOT_MAX_BYTES = 2_000_000;
 const NAVIGATION_TIMEOUT_MS = 30_000;
+// A wall on the warm-up visit gets this long to clear itself. Longer means the
+// exit IP is burned for the site, and a fresh one is the better use of time.
+const WARMUP_WALL_MS = 20_000;
+// Time kept back for reading the page after a self-clear wait.
+const AFTER_WALL_RESERVE_MS = 15_000;
+const pause = (page, input, min, spread) => page.waitForTimeout(Math.min(min + Math.floor(Math.random() * spread), remainingMs(input)))
+  .catch(() => {});
 
 const remainingMs = input => Math.max(1, input.deadline - Date.now());
 const safeCode = error => {
@@ -45,10 +52,17 @@ function parseSetCookie({value, url}) {
 }
 
 // input: {url, deadline, headers, cookies, wait_for, settle_ms, screenshot, captcha,
-//         limits: {max_requests, max_dom_bytes, max_body_bytes}, locale, timezone}
+//         limits: {max_requests, max_dom_bytes, max_body_bytes}, locale, timezone,
+//         warmup, self_clear_ms}
+// warmup: visit the site's home page first and arrive at the URL from it, as a
+//   visitor does (a cold landing on a deep URL is what bots do). A wall there
+//   that does not clear itself ends the capture with that wall.
+// self_clear_ms: how long a wall on the page may take to clear by itself before
+//   any captcha is solved.
 export async function capturePage(browser, input, hooks) {
   const result = {status: null, final_url: null, headers: null, requests: 0, blocked: 0, blocked_reasons: {},
-    dom_bytes: 0, body_bytes: 0, screenshot_bytes: 0, captcha: [], wait_for: null, cookies: [], error: null};
+    dom_bytes: 0, body_bytes: 0, screenshot_bytes: 0, captcha: [], wait_for: null, cookies: [], error: null,
+    warmup: null, wall: null};
   let context;
   let page;
   let mainDocument = null;
@@ -58,10 +72,12 @@ export async function capturePage(browser, input, hooks) {
     result.blocked_reasons[reason] = (result.blocked_reasons[reason] ?? 0) + 1;
   };
   try {
+    // No viewport override: the window keeps the size the device identity
+    // claims, so inner and outer sizes agree with the screen.
     context = await browser.newContext({
       serviceWorkers: 'block', acceptDownloads: false, ignoreHTTPSErrors: false,
       locale: input.locale ?? 'en-US', timezoneId: input.timezone ?? 'America/New_York',
-      viewport: {width: 1366, height: 768},
+      viewport: null,
     });
     if (input.cookies?.length) await context.addCookies(input.cookies).catch(() => {});
     await context.routeWebSocket?.('**/*', ws => ws.close());
@@ -107,20 +123,48 @@ export async function capturePage(browser, input, hooks) {
         }
       } catch { /* closed */ }
     });
-    try {
-      // The browser follows redirects itself; a hop to a new host is checked by
-      // the relay before it is tunnelled (see relay.mjs admitHost).
-      await page.goto(input.url, {waitUntil: 'domcontentloaded', timeout: Math.min(NAVIGATION_TIMEOUT_MS, remainingMs(input))});
-    } catch (error) {
-      result.error = safeCode(error);
+    const status = () => mainDocument?.status ?? null;
+    const target = new URL(input.url);
+    const home = new URL('/', target).href;
+    let referer;
+    if (input.warmup && (target.pathname !== '/' || target.search)) {
+      result.warmup = 'failed';
+      try {
+        await page.goto(home, {waitUntil: 'domcontentloaded', timeout: Math.min(NAVIGATION_TIMEOUT_MS, remainingMs(input))});
+        await pause(page, input, 2000, 2000);
+        const wall = await waitForSelfClear(page, status, Math.min(WARMUP_WALL_MS, Math.max(0, remainingMs(input) - 30_000)));
+        result.warmup = !wall.cleared ? 'challenged' : wall.after_ms ? 'cleared' : 'passed';
+        if (wall.cleared) {
+          await nudgePointer(page);
+          await pause(page, input, 1000, 2000);
+          referer = page.url();
+        }
+      } catch { /* a home page that fails to load does not stop the visit */ }
     }
-    if (!page.isClosed() && input.settle_ms) await page.waitForTimeout(Math.min(input.settle_ms, remainingMs(input)));
-    if (input.captcha && hooks.captcha && !page.isClosed()) {
+    if (result.warmup !== 'challenged') {
+      // The page's own answer, never the home page's, is the result.
+      mainDocument = null;
+      try {
+        // The browser follows redirects itself; a hop to a new host is checked by
+        // the relay before it is tunnelled (see relay.mjs admitHost).
+        await page.goto(input.url, {waitUntil: 'domcontentloaded', timeout: Math.min(NAVIGATION_TIMEOUT_MS, remainingMs(input)),
+          ...(referer ? {referer} : {})});
+      } catch (error) {
+        result.error = safeCode(error);
+      }
+      if (!page.isClosed() && input.settle_ms) await page.waitForTimeout(Math.min(input.settle_ms, remainingMs(input)));
+      if (!page.isClosed() && input.self_clear_ms && (await wallState(page, status())).wall) {
+        result.wall = await waitForSelfClear(page, status,
+          Math.min(input.self_clear_ms, Math.max(0, remainingMs(input) - AFTER_WALL_RESERVE_MS)));
+        if (result.wall.cleared) result.error = null;
+      }
+    }
+    if (input.captcha && hooks.captcha && !page.isClosed() && result.warmup !== 'challenged') {
       const challenged = await looksChallenged(page, mainDocument?.status);
       result.captcha = await solvePageCaptchas(page, context, hooks, {deadline: input.deadline, settleMs: input.settle_ms ?? 0, challenged});
       if (result.captcha.some(solve => solve.outcome === 'passed')) result.error = null;
     }
-    if (input.wait_for && !page.isClosed()) {
+    if (input.wait_for && !page.isClosed() && result.warmup !== 'challenged') {
       const timeout = Math.min(input.wait_for.ms, remainingMs(input));
       if (input.wait_for.selector) {
         result.wait_for = await page.waitForSelector(input.wait_for.selector, {state: 'attached', timeout})

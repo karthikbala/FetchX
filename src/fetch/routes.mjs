@@ -2,7 +2,8 @@
 // plus the concrete proxy used for one attempt:
 //   direct       - from FetchX's own servers, no proxy
 //   datacenter   - Oxylabs datacenter IPs, one per country pool
-//   residential  - Evomi or DataImpulse, a fresh session (new IP) per attempt
+//   residential  - Evomi or DataImpulse, a fresh session (new IP) per attempt,
+//                  or a kept one that worked for the host (fetch/sessions.mjs)
 // Provider rules (provider-rules.mjs) remove a provider for a host, e.g. Oxylabs
 // is never used for .gov.
 import {randomBytes} from 'node:crypto';
@@ -64,8 +65,9 @@ export function pickResidentialProvider(config, country, host, {prefer = null} =
 }
 
 // Resolves the concrete proxy for one attempt on a route. Throws a refusal
-// (nothing sent) when the route cannot be used for this host.
-export function proxyFor(config, route, host, {preferProvider = null, pickDatacenter} = {}) {
+// (nothing sent) when the route cannot be used for this host. `session` reuses
+// a kept residential session (its provider must be `preferProvider`).
+export function proxyFor(config, route, host, {preferProvider = null, pickDatacenter, session} = {}) {
   if (route.class === 'direct') return {route: {...route, provider: 'direct'}, proxy: null};
   if (route.class === 'datacenter') {
     const provider = datacenterProvider(config, route.country);
@@ -78,7 +80,7 @@ export function proxyFor(config, route, host, {preferProvider = null, pickDatace
   if (route.class === 'residential') {
     const provider = pickResidentialProvider(config, route.country, host, {prefer: preferProvider});
     if (!provider) fail('route_unavailable', 503);
-    const proxy = residentialProxy(config, provider, route.country);
+    const proxy = residentialProxy(config, provider, route.country, session && provider === preferProvider ? session : undefined);
     return {route: {...route, provider}, proxy};
   }
   fail('route_unavailable', 503);
