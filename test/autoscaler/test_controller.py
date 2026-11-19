@@ -10,7 +10,7 @@ import stat
 import tempfile
 import unittest
 
-from ops.autoscaler.controller import Controller, metrics_snapshot
+from ops.autoscaler.controller import Controller, UnixMetrics, metrics_snapshot
 from ops.autoscaler.core import InstanceLock, Ledger, Registry, SafetyError, monthly_costs, validate_config
 from ops.autoscaler.hetzner import CloudError, UncertainCreate, approved_prices, micro_eur, select_machine
 
@@ -191,6 +191,7 @@ class ControllerTests(unittest.TestCase):
         self.cloud, self.driver = FakeCloud(), FakeDriver()
         self.pressure, self.stale = True, False
         self.global_limit = 10
+        self.gateway_limits = None
         self.busy = {}
         self.worker_ready = {}
         self.controller = self.make_controller()
@@ -205,7 +206,8 @@ class ControllerTests(unittest.TestCase):
                     queue=dict(pending=1 if self.pressure else 0, active=len(rows) if self.pressure else 0,
                                oldest_wait_ms=100000, recent_timeouts=0), max_concurrent_requests=self.global_limit,
                     workers=[dict(id=r["id"], state=r["state"], ready=self.worker_ready.get(r["id"], True),
-                                  busy=self.busy.get(r["id"], self.pressure)) for r in rows])
+                                  busy=self.busy.get(r["id"], self.pressure)) for r in rows],
+                    **({} if self.gateway_limits is None else {"limits": self.gateway_limits}))
 
     def tick(self, seconds=1):
         self.now += seconds
@@ -1053,6 +1055,103 @@ class ControllerTests(unittest.TestCase):
         ledger.chmod(0o600)
         with self.assertRaisesRegex(SafetyError, "ledger_corrupt"):
             self.make_controller()
+
+    # ---------- limits from the admin portal (through the gateway) ----------
+
+    def test_gateway_limits_lower_the_budget_and_worker_cap(self):
+        self.gateway_limits = {"monthly_budget_micro_eur": 28799}
+        result = self.tick()
+        self.assertNotIn("create", self.cloud.calls)
+        self.assertEqual(result["last_decision"]["code"], "budget_cap")
+        self.assertEqual(result["monthly_budget_micro_eur"], 28799)
+        self.gateway_limits = {"max_additional_workers": 0}
+        self.assertEqual(self.tick()["last_decision"]["code"], "resource_cap")
+        self.assertNotIn("create", self.cloud.calls)
+
+    def test_gateway_limits_never_exceed_host_ceilings(self):
+        base = {k: v for k, v in self.config.items() if not k.endswith("_ceiling") and k != "monthly_budget_ceiling_micro_eur"}
+        self.config = validate_config(dict(base, monthly_budget_micro_eur=28799))
+        self.controller.close()
+        self.controller = self.make_controller()
+        self.gateway_limits = {"monthly_budget_micro_eur": 10_000_000, "max_additional_workers": 64}
+        result = self.tick()
+        self.assertEqual(result["last_decision"]["code"], "budget_cap")
+        self.assertEqual((result["monthly_budget_micro_eur"], result["monthly_budget_ceiling_micro_eur"]), (28799, 28799))
+        self.assertEqual(result["max_additional_workers"], 2)
+
+    def test_gateway_limits_raise_up_to_the_ceiling_and_reset_to_host_config(self):
+        self.config = validate_config(dict(self.config, monthly_budget_micro_eur=28799, monthly_budget_ceiling_micro_eur=1_000_000))
+        self.controller.close()
+        self.controller = self.make_controller()
+        self.assertEqual(self.tick()["last_decision"]["code"], "budget_cap")
+        self.gateway_limits = {"monthly_budget_micro_eur": 1_000_000}
+        self.tick()
+        self.assertEqual(self.cloud.calls.count("create"), 1)
+        self.gateway_limits = {}
+        self.assertEqual(self.tick()["monthly_budget_micro_eur"], 28799)
+
+    def test_gateway_limits_survive_missed_reads_and_restarts(self):
+        self.gateway_limits = {"monthly_budget_micro_eur": 28799}
+        self.tick()
+        self.stale = True
+        self.gateway_limits = None
+        self.assertEqual(self.tick()["monthly_budget_micro_eur"], 28799)
+        self.controller.close()
+        self.controller = self.make_controller()
+        self.stale = False
+        self.gateway_limits = {"monthly_budget_micro_eur": 28799}
+        self.assertEqual(self.controller.limits()["monthly_budget_micro_eur"], 28799)
+        self.assertEqual(self.tick()["last_decision"]["code"], "budget_cap")
+
+    def test_invalid_gateway_limits_fail_closed(self):
+        for limits in ({"monthly_budget_micro_eur": -1}, {"monthly_budget_micro_eur": 1.5}, {"surprise": 1}, [1]):
+            self.gateway_limits = limits
+            result = self.tick()
+            self.assertEqual(result["last_decision"]["code"], "metrics_invalid")
+            self.assertNotIn("create", self.cloud.calls)
+
+    def test_ceilings_are_validated(self):
+        with self.assertRaisesRegex(SafetyError, "invalid_monthly_budget_ceiling_micro_eur"):
+            validate_config(dict(self.config, monthly_budget_ceiling_micro_eur=1))
+        with self.assertRaisesRegex(SafetyError, "invalid_max_additional_workers_ceiling"):
+            validate_config(dict(self.config, max_additional_workers_ceiling=1))
+        with self.assertRaisesRegex(SafetyError, "invalid_max_additional_workers"):
+            validate_config(dict(self.config, max_additional_workers_ceiling=65))
+        defaults = validate_config(dict(self.config))
+        self.assertEqual((defaults["monthly_budget_ceiling_micro_eur"], defaults["max_additional_workers_ceiling"]), (1000000, 2))
+
+    def test_reports_limits_and_spend_to_the_gateway(self):
+        import socket
+        import threading
+        self.gateway_limits = {"monthly_budget_micro_eur": 500000}
+        self.tick()
+        path = str(self.path / "metrics.sock")
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(path)
+        server.listen(1)
+        self.addCleanup(server.close)
+        seen = {}
+
+        def serve():
+            connection, _ = server.accept()
+            with connection:
+                data = b""
+                while b"\r\n\r\n" not in data:
+                    data += connection.recv(4096)
+                seen["request"] = data.decode()
+                body = json.dumps(self.metrics()).encode()
+                connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
+                                   str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
+        thread = threading.Thread(target=serve)
+        thread.start()
+        value = UnixMetrics(path, report=self.controller.report)()
+        thread.join(5)
+        self.assertEqual(value["limits"], {"monthly_budget_micro_eur": 500000})
+        header = next(line for line in seen["request"].split("\r\n") if line.lower().startswith("x-fetchx-autoscaler:"))
+        report = json.loads(header.split(":", 1)[1])
+        self.assertEqual(report, {"v": 1, "enabled": True, "month_utc": "2026-11", "committed_micro_eur": 28800,
+                                  "monthly_budget_micro_eur": 500000, "monthly_budget_ceiling_micro_eur": 1000000,
+                                  "max_additional_workers": 2, "max_additional_workers_ceiling": 2, "workers": 1})
 
     def test_monthly_cost_rounds_each_utc_month_without_float_money(self):
         costs = monthly_costs(epoch("2026-12-31T23:59:59Z"), epoch("2027-01-01T00:00:01Z"), 9600)

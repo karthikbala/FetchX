@@ -16,6 +16,7 @@ import {browserAttempt} from './browser-attempt.mjs';
 import {classifyResponse, retryAfterSeconds} from './outcome.mjs';
 import {deriveOutputs} from './outputs.mjs';
 import {exchange} from './transport.mjs';
+import {budget, refreshResidentialUsage} from '../budgets.mjs';
 
 export const DEFAULT_LIMITS = Object.freeze({
   maxBodyBytes: 10_000_000,
@@ -27,7 +28,6 @@ export const DEFAULT_LIMITS = Object.freeze({
   contentDays: 7,
   metadataDays: 90,
   inlineBodyBytes: 10_000_000,
-  maxConcurrentPerProject: 10,
 });
 const OTHER_PROVIDER = {evomi: 'dataimpulse', dataimpulse: 'evomi'};
 const TEXTUAL = /^(?:text\/|application\/(?:json|[a-z0-9.+-]+\+json|xml|[a-z0-9.+-]+\+xml|javascript|x-javascript|x-www-form-urlencoded))/i;
@@ -131,7 +131,7 @@ function bodyFields(body, contentType) {
 }
 
 // What a failed request's caller should do next.
-export function nextAction(code, {retryAfter = null, explicit = false} = {}) {
+export function nextAction(code, {retryAfter = null, explicit = false, capped = false} = {}) {
   const wait = seconds => ({retry_after_seconds: seconds});
   switch (code) {
     case 'rate_limited': return {action: 'retry_after', ...wait(retryAfter ?? 60), detail: 'The site is limiting requests. Retry with a new idempotency key after the wait.'};
@@ -146,7 +146,9 @@ export function nextAction(code, {retryAfter = null, explicit = false} = {}) {
     case 'too_large': return {action: 'render_never', detail: 'The response is larger than the size cap. For large files, fetch without a browser (render: never).'};
     case 'uncertain': return {action: 'recover', detail: 'The outcome is unknown. Read this request again before sending new work; FetchX never resends it.'};
     case 'url_not_allowed': return {action: 'check_url', detail: 'The site resolves, or redirects, to a private or reserved address. FetchX only fetches public sites.'};
-    case 'route_unavailable': return {action: 'use_auto', detail: 'No allowed route can be used for this site. Remove `route` or `country`, or allow a browser.'};
+    case 'route_unavailable': return capped
+      ? {action: 'retry_later', ...wait(retryAfter ?? 3600), detail: 'FetchX has used its own traffic allowance for this route for now. Retry later, or remove `route` to let auto mode use other routes.'}
+      : {action: 'use_auto', detail: 'No allowed route can be used for this site. Remove `route` or `country`, or allow a browser.'};
     default: return {action: 'retry_later', ...wait(retryAfter ?? 300), detail: 'Retry later with a new idempotency key.'};
   }
 }
@@ -189,7 +191,7 @@ export class FetchService {
     const {request} = parsed;
     const running = (await this.store.pool.query(`SELECT count(*)::int AS n FROM fetch_requests WHERE project = $1 AND status = 'pending'`,
       [project])).rows[0].n;
-    if (running >= (this.config.projects?.[project]?.maxConcurrentRequests ?? this.limits.maxConcurrentPerProject)) {
+    if (running >= (this.config.projects?.[project]?.maxConcurrentRequests ?? budget(this.config, 'fetch.maxConcurrentPerProject'))) {
       const error = new GatewayError('too_many_requests', 429);
       error.details = {retry_after_seconds: 5, running};
       throw error;
@@ -208,7 +210,7 @@ export class FetchService {
       const minimum = Math.min(...costs.map(step => table[step]));
       const worst = Math.max(...costs.map(step => worstCaseOf(table, step, {captcha: request.method === 'GET',
         maxWireBytes: this.limits.maxWireBytes})));
-      reservation = {minimum, ceiling: Math.min(request.max_credits ?? Infinity, worst)};
+      reservation = {minimum, ceiling: Math.min(request.max_credits ?? Infinity, worst, budget(this.config, 'fetch.maxCreditsPerRequest'))};
       if (reservation.ceiling < minimum) {
         const error = new GatewayError('max_credits_too_low', 402);
         error.details = {min_credits: minimum};
@@ -258,7 +260,8 @@ export class FetchService {
     const table = priceTable(this.config);
     const reservation = row.credits_max === null ? null : Number(row.credits_max);
     const readOnly = request.method === 'GET' || request.method === 'HEAD';
-    const maxAttempts = plan.explicit || !readOnly ? 1 : request.max_attempts;
+    const maxAttempts = plan.explicit || !readOnly ? 1 : Math.min(request.max_attempts, budget(this.config, 'fetch.maxAttempts'));
+    await refreshResidentialUsage(this.store.pool, this.config);
     const fixed = request.fix_headers ? fixHeaders(request.headers) : {headers: request.headers, fixed: []};
     const tried = [];
     let dispatchedAttempts = 0;
@@ -408,7 +411,7 @@ export class FetchService {
       ? {status: 'succeeded', data: summary, attempts, skipped, fixes, error: null}
       : {status: 'failed', data: summary, attempts, skipped, fixes,
         error: {code: failure, message: MESSAGES[failure] ?? 'The request failed.', ...(retryAfter ? {retry_after_seconds: retryAfter} : {}),
-          next: nextAction(failure, {retryAfter, explicit: plan.explicit})}};
+          next: nextAction(failure, {retryAfter, explicit: plan.explicit, capped: tried.some(t => t.code === 'residential_budget_exhausted')})}};
     let charged = 0;
     if (success) {
       const price = priceOf(table, {step: stepFor(success.step), captchaSolved: success.captchaSolved, wireBytes: success.response.wire_bytes ?? 0});

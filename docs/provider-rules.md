@@ -119,4 +119,4 @@ Probes run in the background on the gateway. `POST /admin/probes` returns at onc
 
 ## Admin page
 
-Operators manage all of this at `https://fetchx.ai/app/admin`: provider rules (list, add, edit, enable or disable with a reason, delete, host test), reachability probes (start, watch, per-cell results, apply proposed rules), site knowledge (hosts, their routes, forget a host) and the audit log.
+Operators manage all of this at `https://fetchx.ai/app/admin`: provider rules (list, add, edit, enable or disable with a reason, delete, host test), reachability probes (start, watch, per-cell results, apply proposed rules), site knowledge (hosts, their routes, forget a host), [budgets](budgets.md) and the audit log.

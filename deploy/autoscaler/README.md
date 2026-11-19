@@ -30,6 +30,9 @@ ceiling. The approved rollout's EUR 40 monthly budget (`40000000` micro-EUR) and
 8-worker ceiling belong in the private deployment configuration; they are not
 separate allowances for each machine type. This generic example retains
 `enabled: false`, `monthly_budget_micro_eur: 0` and `max_additional_workers: 0`.
+Optional `monthly_budget_ceiling_micro_eur` and `max_additional_workers_ceiling`
+let operators raise these two limits from the admin portal up to the ceilings;
+without them the portal can only lower them (see `docs/budgets.md`).
 No top-level `server_type`, `location` or hourly price ceiling selects an implicit
 single machine; those values belong to each `machine_options` entry.
 

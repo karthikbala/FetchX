@@ -229,7 +229,9 @@ class WorkerDriverTests(unittest.TestCase):
         self.worker.config["porttrack_public_key"] = "ssh-ed25519 cHVibGlj " + "x" * (32 * 1024)
         control = controller.Controller.__new__(controller.Controller)
         control.config = {"enabled": True, "scale_up_delay_seconds": 0, "cooldown_seconds": 0,
-                          "drain_before_expiry_seconds": 60, "metrics_max_age_seconds": 15}
+                          "drain_before_expiry_seconds": 60, "metrics_max_age_seconds": 15,
+                          "monthly_budget_micro_eur": 100000, "monthly_budget_ceiling_micro_eur": 100000,
+                          "max_additional_workers": 1, "max_additional_workers_ceiling": 1}
         control.registry = Mock()
         control.registry.read.return_value = [{"id": "base", "state": "active"}]
         control.ledger = Mock()

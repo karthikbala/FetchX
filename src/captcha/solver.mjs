@@ -11,6 +11,7 @@
 import {randomUUID} from 'node:crypto';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {GatewayError, fail} from '../policy.mjs';
+import {budget} from '../budgets.mjs';
 
 export const CAPTCHA_KINDS = Object.freeze(['turnstile', 'recaptcha_v2', 'datadome', 'grid']);
 const SITE_KEY = /^[A-Za-z0-9_-]{10,200}$/;
@@ -49,16 +50,19 @@ const bounded = (value, max) => {
   return value;
 };
 
+// The spending limits are budgets (src/budgets.mjs): set in config, adjustable
+// from the admin portal within their hard bounds, and read on every task.
 export function captchaSettings(config) {
   const settings = config.captcha;
   if (!settings?.enabled || !settings.apiKey) return null;
   return {
     apiKey: settings.apiKey,
-    maxTaskMicroUsd: bounded(settings.maxTaskMicroUsd, 20_000),
-    maxDailyMicroUsd: bounded(settings.maxDailyMicroUsd, 5_000_000),
-    maxTotalMicroUsd: bounded(settings.maxTotalMicroUsd, 50_000_000),
-    maxTotalTasks: bounded(settings.maxTotalTasks, 100_000),
-    maxTasksPerRequest: bounded(settings.maxTasksPerRequest ?? 4, 10),
+    maxTaskMicroUsd: budget(config, 'captcha.maxTaskMicroUsd'),
+    maxDailyMicroUsd: budget(config, 'captcha.maxDailyMicroUsd'),
+    maxTotalMicroUsd: budget(config, 'captcha.maxTotalMicroUsd'),
+    maxProjectDailyMicroUsd: budget(config, 'captcha.maxProjectDailyMicroUsd'),
+    maxTotalTasks: budget(config, 'captcha.maxTotalTasks'),
+    maxTasksPerRequest: budget(config, 'captcha.maxTasksPerRequest'),
     timeoutMs: bounded(settings.timeoutMs ?? 120_000, 180_000),
     // DataDome needs our proxy passed to 2captcha; opt-in.
     datadome: settings.datadome === true,
@@ -117,7 +121,8 @@ export class CaptchaSolver {
           COALESCE(sum(COALESCE(actual_micro_usd, reserved_micro_usd)) FILTER (WHERE created_at > now() - interval '24 hours'), 0)::bigint AS daily,
           COALESCE(sum(COALESCE(actual_micro_usd, reserved_micro_usd)) FILTER (WHERE project = $1 AND created_at > now() - interval '24 hours'), 0)::bigint AS project
         FROM captcha_solves`, [project, request])).rows[0];
-      const projectDaily = this.config.projects?.[project]?.maxDailyCaptchaMicroUsd ?? settings.maxDailyMicroUsd;
+      const projectDaily = this.config.projects?.[project]?.maxDailyCaptchaMicroUsd ?? settings.maxProjectDailyMicroUsd
+        ?? settings.maxDailyMicroUsd;
       const maximum = settings.maxTaskMicroUsd;
       if (used.request_tasks >= settings.maxTasksPerRequest || used.tasks >= settings.maxTotalTasks
         || Number(used.total) + maximum > settings.maxTotalMicroUsd || Number(used.daily) + maximum > settings.maxDailyMicroUsd
