@@ -1,3 +1,4 @@
+import {observeSiteOutcome,siteOutcome} from './site-knowledge.mjs';
 import {randomUUID} from 'node:crypto';
 import {Cookie,CookieJar} from 'tough-cookie';
 import {ID,GatewayError,fail} from './policy.mjs';
@@ -175,5 +176,7 @@ async function executeBrowserProbe(v2,{project,raw,keyId,hash,session,route,mana
   await credits.finish(c,{project,operation:id,dispatched:networkDispatched,unknown});
   if(cookieState&&!unknown)await c.query('UPDATE v2_sessions SET cookie_jar=$2 WHERE id=$1',[session.id,v2.sealer.seal(cookieState)]);
  });
+ await observeSiteOutcome(v2.store,{host:raw.url,execution:'browser',route,engine:runtime?.runtime?.engine,config:v2.config,
+  outcome:siteOutcome({state:unknown?'unknown':error?'failed':'completed',error,status:result.status})});
  return v2.readOperation(project,id);
 }

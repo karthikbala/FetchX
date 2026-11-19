@@ -7,6 +7,7 @@ import {randomUUID} from 'node:crypto';
 import {fail,GatewayError} from './policy.mjs';
 import {residentialPolicy} from './residential.mjs';
 import {runProbe} from './reachability.mjs';
+import {seedFromProbe} from './site-knowledge.mjs';
 import {saveProviderRule} from './provider-rules.mjs';
 
 export const OVERRIDE_FIELDS=Object.freeze(['country','routingPolicy','execution','browserEngine','browserEngineFallback','maxRouteAttempts','maxSessionRenewals']);
@@ -98,6 +99,8 @@ export async function startProbe(store,gateway,input,{actor,run=runProbe,limits=
   try{
    const report=await run(gateway.config,host,countries,{includeExcluded:input.include_excluded===true});
    await store.pool.query("UPDATE admin_probes SET state='complete',report=$2,finished_at=now() WHERE id=$1 AND state='running'",[id,report]);
+   // Probe cells also teach site knowledge (plain HTTP routes only).
+   await seedFromProbe(store.pool,report,{config:gateway.config}).catch(()=>{});
   }catch(e){
    await store.pool.query("UPDATE admin_probes SET state='failed',error=$2,finished_at=now() WHERE id=$1 AND state='running'",[id,/^[a-z_]{1,60}$/.test(e?.code??e?.message??'')?(e.code??e.message):'probe_failed']).catch(()=>{});
   }

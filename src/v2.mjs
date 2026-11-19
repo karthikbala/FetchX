@@ -1,3 +1,4 @@
+import {observeSiteOutcome,siteOutcome} from './site-knowledge.mjs';
 import {randomUUID,randomBytes} from 'node:crypto';
 import {CookieJar} from 'tough-cookie';
 import {sha} from './crypto.mjs';
@@ -900,6 +901,11 @@ export class V2Gateway{
    await c.query("INSERT INTO v2_ledger_events(operation,event,detail) VALUES($1,'finish',$2)",[id,{state,error,physical_requests:requests,dns_requests:dnsRequests,encoded_bytes:encoded,observed_tunnel_bytes:tunnel,...(retryPlan?{retry:result.retry,attempts}:{}),...(customerTraffic?{customer_traffic:customerTraffic}:{})}]);
    await c.query('UPDATE v2_sessions SET requests=requests-$2+$3,encoded_bytes=encoded_bytes-$4+$5 WHERE id=$1',[session.id,ledger.reserved_requests,requestsAccounted,ledger.reserved_encoded_bytes,encodedAccounted]);
   });
+  // Learn which route reaches this host. Observational only: after settlement,
+  // bounded, never throws, and records the host name alone.
+  await observeSiteOutcome(this.store,{host:input.url,execution:'http',route,config:this.config,
+   outcome:siteOutcome({state:unknown?'unknown':error?'failed':'completed',error,status:last?.response.status,headers:last?.response.headers,body:last?.body}),
+   retryAfterSeconds:Number(last?.response.headers?.['retry-after'])});
  }
 
  rejectSecrets(artifact){

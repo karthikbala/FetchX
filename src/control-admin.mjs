@@ -6,6 +6,7 @@
 // the running gateway immediately. Responses never contain secrets.
 import {fail} from './policy.mjs';
 import {startProbe,listProbes,readProbe,applyProbe,loadProfileOverrides,profileView,saveProfileOverride,deleteProfileOverride,PROFILE_ID} from './admin-ops.mjs';
+import {siteKnowledgeOverview,siteRoutes,forgetSite,siteHost} from './site-knowledge.mjs';
 import {RULE_PROVIDERS,loadProviderRules,providerRule,providerRuleSources,saveProviderRule,setProviderRuleEnabled,deleteProviderRule,providerRuleAudit} from './provider-rules.mjs';
 
 import {OVERRIDE_FIELDS as OVERRIDE_FIELDS_PUBLIC} from './admin-ops.mjs';
@@ -107,6 +108,17 @@ export function registerAdminRoutes(route,{gateway,config,authenticated,body,noQ
   noQuery(req);const auth=await operator(req),input=body(req,['rules','profile']);
   const applied=await applyProbe(store,gateway,req.params.pid,input,{actor:actorOf(auth)});
   await Promise.all([refresh(),loadProfileOverrides(store.pool,gateway)]);return {applied};
+ });
+
+ // ---- Site knowledge: what has worked per host (read, and forget to relearn) ----
+ const siteParam=value=>{const host=siteHost('https://'+String(value??'')+'/');if(!host||host!==String(value).toLowerCase())fail('host_invalid',400);return host;};
+ route('GET','/admin/sites',async req=>{noQuery(req);await operator(req);return {sites:await siteKnowledgeOverview(store.pool,{config:gateway.config})};});
+ route('GET','/admin/sites/:host',async req=>{noQuery(req);await operator(req);const host=siteParam(req.params.host);return {host,routes:await siteRoutes(store.pool,host,{config:gateway.config})};});
+ route('DELETE','/admin/sites/:host',async req=>{
+  noQuery(req);const auth=await operator(req),host=siteParam(req.params.host);
+  const removed=await forgetSite(store.pool,host);
+  await store.pool.query("INSERT INTO routing_rule_audit(rule_id,action,before,after,actor) VALUES($1,'forget_site',$2,NULL,$3)",['site:'+host,{routes:removed},actorOf(auth)]);
+  return {host,forgotten_routes:removed};
  });
 
  // ---- Step 3: profile routing overrides (new workflows only) ----
