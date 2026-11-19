@@ -3,6 +3,8 @@
 # docker network create fetchx-internal). The platform reaches it as
 # http://engine:8790, and it sends job events to http://platform-events:8789;
 # that port is not published to the host.
+# A second copy on the same host (staging) sets FETCHX_IMAGE_TAG, FETCHX_PORT and
+# FETCHX_INTERNAL_NETWORK in its env file and runs with its own -p project name.
 name: fetchx
 services:
   db:
@@ -19,13 +21,13 @@ services:
       timeout: 3s
       retries: 20
   gateway:
-    image: fetchx:local
+    image: fetchx:${FETCHX_IMAGE_TAG:-local}
     build: .
     restart: unless-stopped
     init: true
     depends_on:
       db: {condition: service_healthy}
-    ports: [127.0.0.1:8788:8788]
+    ports: ["127.0.0.1:${FETCHX_PORT:-8788}:8788"]
     environment:
       DATABASE_URL: postgresql://fetchx:${FETCHX_DB_PASSWORD}@db/fetchx
       PLATFORM_CONFIG: /run/secrets/platform.json
@@ -48,6 +50,6 @@ services:
       retries: 3
     logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
 networks:
-  fetchx-internal: {external: true}
+  fetchx-internal: {external: true, name: "${FETCHX_INTERNAL_NETWORK:-fetchx-internal}"}
 volumes:
   fetchx-db:

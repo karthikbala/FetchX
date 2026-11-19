@@ -10,6 +10,10 @@ Run exactly one platform per database: it takes a PostgreSQL advisory lock at st
 
 Secrets: keep `platform.json`, the client token and database credentials out of Git, mode 0600, owned by UID 10001. Webhook secrets and queued webhook URLs are sealed with `sealingKey`; back up the key with the database, or the backup cannot be read.
 
+## Staging on the same host
+
+A second platform and engine can run next to production with their own Compose project names, databases and private network. Put these in each side's env file, next to the usual values: `FETCHX_IMAGE_TAG=staging`, `FETCHX_PORT=18788` and `FETCHX_INTERNAL_NETWORK=fetchx-staging-internal` for the platform, and `FETCHX_ENGINE_IMAGE_TAG=staging` and `FETCHX_INTERNAL_NETWORK=fetchx-staging-internal` for the engine. Then run `docker compose -p fetchx-staging …` and `docker compose -p fetchx-engine-staging …`. The image tags keep a staging build from replacing the image production runs.
+
 ## Deploying a release
 
 Deploy only from a tag on `main` (platform tags are `release-YYYYMMDD-<sha>`, engine tags `engine-YYYYMMDD-<sha>`), after the full test suite passes. The two deploy independently while the contract version stays the same; a contract change ships in the engine first, accepting both versions, then in the platform.
