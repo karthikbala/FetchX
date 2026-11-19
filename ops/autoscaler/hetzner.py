@@ -148,8 +148,9 @@ class Hetzner:
 
     def list_all(self, path, key):
         rows, page = [], 1
+        separator = "&" if "?" in path else "?"
         while page <= 100:
-            payload = self.request("GET", path + "?per_page=50&page=" + str(page))
+            payload = self.request("GET", path + separator + "per_page=50&page=" + str(page))
             try:
                 rows.extend(payload[key])
                 next_page = payload.get("meta", {}).get("pagination", {}).get("next_page")
@@ -212,11 +213,14 @@ class Hetzner:
             raise CloudError("cloud_ssh_key_invalid")
         return key["id"]
 
-    def create(self, name, labels, user_data, machine, ssh_key_id):
+    def create(self, name, labels, user_data, machine, ssh_key_id, image="ubuntu-24.04"):
         if type(ssh_key_id) is not int or not 1 <= ssh_key_id <= 9007199254740991:
             raise SafetyError("cloud_ssh_key_id_invalid")
+        # Stock Ubuntu, or a worker snapshot this controller baked (its image ID).
+        if image != "ubuntu-24.04" and (type(image) is not int or not 1 <= image <= 9007199254740991):
+            raise SafetyError("cloud_image_invalid")
         payload = self.request("POST", "/servers", dict(name=name, labels=labels, user_data=user_data,
-                               server_type=machine["server_type"], location=machine["location"], image="ubuntu-24.04",
+                               server_type=machine["server_type"], location=machine["location"], image=image,
                                ssh_keys=[str(ssh_key_id)],
                                start_after_create=True, automount=False,
                                public_net=dict(enable_ipv4=True, enable_ipv6=False)))
@@ -241,3 +245,30 @@ class Hetzner:
 
     def delete_ipv4(self, ip_id):
         return self.request("DELETE", "/primary_ips/" + str(ip_id), missing_ok=True)
+
+    # Worker snapshots: a powered-off bake VM's disk, with Docker, the worker image
+    # and the browser preinstalled. Only images carrying this deployment's labels.
+    def create_snapshot(self, server_id, description, labels):
+        if type(server_id) is not int or not 1 <= server_id <= 9007199254740991:
+            raise SafetyError("cloud_server_id_invalid")
+        payload = self.request("POST", "/servers/" + str(server_id) + "/actions/create_image",
+                               dict(type="snapshot", description=description, labels=labels))
+        try:
+            image = payload["image"]
+            if type(image["id"]) is not int or image["id"] < 1:
+                raise ValueError()
+            return image
+        except (KeyError, TypeError, ValueError):
+            raise UncertainCreate("create_uncertain") from None
+
+    def image(self, image_id):
+        result = self.request("GET", "/images/" + str(image_id), missing_ok=True)
+        return result["image"] if result else None
+
+    def snapshots(self, deployment):
+        if not isinstance(deployment, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,23}", deployment):
+            raise SafetyError("cloud_snapshot_deployment_invalid")
+        return self.list_all("/images?type=snapshot&label_selector=fetchx-deployment%3D" + deployment, "images")
+
+    def delete_image(self, image_id):
+        return self.request("DELETE", "/images/" + str(image_id), missing_ok=True)

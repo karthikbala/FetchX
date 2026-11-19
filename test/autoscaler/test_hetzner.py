@@ -57,6 +57,41 @@ class HetznerTests(unittest.TestCase):
         for field in ("volumes", "backups", "networks", "root_password"):
             self.assertNotIn(field, data)
 
+    def test_create_from_a_snapshot_takes_only_an_image_id(self):
+        client, opener = self.client([{"server": {"id": 1}}])
+        client.create("fx-test-id", {"owned": "synthetic"}, "#cloud-config", {"server_type": "cx23", "location": "hel1"}, 42, image=900)
+        self.assertEqual(json.loads(opener.requests[0].data)["image"], 900)
+        for image in ("ubuntu-22.04", "900", 0, True, None):
+            with self.assertRaisesRegex(SafetyError, "cloud_image_invalid"):
+                client.create("fx-test-id", {}, "#cloud-config", {"server_type": "cx23", "location": "hel1"}, 42, image=image)
+        self.assertEqual(len(opener.requests), 1)
+
+    def test_snapshot_requests_are_scoped_to_one_server_and_this_deployment(self):
+        labels = {"fetchx-deployment": "test", "fetchx-role": "worker-snapshot"}
+        client, opener = self.client([{"image": {"id": 900, "status": "creating"}, "action": {"id": 1}},
+                                      {"images": [{"id": 900}], "meta": {"pagination": {"next_page": 2}}},
+                                      {"images": [{"id": 901}], "meta": {"pagination": {"next_page": None}}},
+                                      {}])
+        self.assertEqual(client.create_snapshot(7, "fetchx worker", labels)["id"], 900)
+        req = opener.requests[0]
+        self.assertEqual((req.method, req.full_url), ("POST", "https://api.hetzner.cloud/v1/servers/7/actions/create_image"))
+        self.assertEqual(json.loads(req.data), {"type": "snapshot", "description": "fetchx worker", "labels": labels})
+        self.assertEqual([i["id"] for i in client.snapshots("test")], [900, 901])
+        self.assertEqual(opener.requests[1].full_url,
+                         "https://api.hetzner.cloud/v1/images?type=snapshot&label_selector=fetchx-deployment%3Dtest&per_page=50&page=1")
+        client.delete_image(900)
+        self.assertEqual((opener.requests[3].method, opener.requests[3].full_url), ("DELETE", "https://api.hetzner.cloud/v1/images/900"))
+        with self.assertRaisesRegex(SafetyError, "cloud_server_id_invalid"):
+            client.create_snapshot("7", "x", labels)
+        with self.assertRaisesRegex(SafetyError, "cloud_snapshot_deployment_invalid"):
+            client.snapshots("test&type=system")
+
+    def test_snapshot_post_without_an_image_is_uncertain(self):
+        client, _ = self.client([{"action": {"id": 1}}, urllib.error.URLError("synthetic")])
+        for _ in range(2):
+            with self.assertRaises(UncertainCreate):
+                client.create_snapshot(7, "fetchx worker", {})
+
     def test_create_timeout_and_http_errors(self):
         errors = [TimeoutError()] + [urllib.error.HTTPError("https://example.invalid", code, "secret-body", {}, None) for code in (408, 409, 429, 500, 503)]
         for error in errors:

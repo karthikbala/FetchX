@@ -46,6 +46,9 @@ class FakeCloud:
         self.capacity = True
         self.types = None
         self.created_machines = []
+        self.images = []
+        self.created_images = []
+        self.snapshot_error = None
 
     def server_types(self):
         if self.types is not None:
@@ -67,11 +70,12 @@ class FakeCloud:
         self.calls.append("ensure_ssh_key")
         return 42
 
-    def create(self, name, labels, user_data, machine, ssh_key_id):
+    def create(self, name, labels, user_data, machine, ssh_key_id, image="ubuntu-24.04"):
         if ssh_key_id != 42:
             raise AssertionError("controller must supply registered administrator key")
         self.calls.append("create")
         self.created_machines.append(copy.deepcopy(machine))
+        self.created_images.append((image, user_data))
         if self.create_error and not isinstance(self.create_error, UncertainCreate):
             raise self.create_error
         server = dict(id=len(self.servers) + 1, name=name, labels=labels, status="running",
@@ -107,15 +111,48 @@ class FakeCloud:
         if not self.leak:
             self.ips = [s for s in self.ips if s["id"] != identity]
 
+    def create_snapshot(self, server_id, description, labels):
+        self.calls.append("create_snapshot")
+        if not any(s["id"] == server_id and s["status"] == "off" for s in self.servers):
+            raise AssertionError("snapshots are taken only from a powered-off bake VM")
+        image = dict(id=900 + len(self.images), type="snapshot", status="creating", labels=dict(labels), description=description, disk_size=40.0)
+        self.images.append(image)
+        if self.snapshot_error:
+            raise self.snapshot_error
+        return copy.deepcopy(image)
+
+    def image(self, identity):
+        self.calls.append("image_get")
+        return copy.deepcopy(next((i for i in self.images if i["id"] == identity), None))
+
+    def snapshots(self, deployment):
+        return copy.deepcopy([i for i in self.images if i["labels"].get("fetchx-deployment") == deployment])
+
+    def delete_image(self, identity):
+        self.calls.append("delete_image")
+        self.images = [i for i in self.images if i["id"] != identity]
+
 
 class FakeDriver:
     def __init__(self):
         self.bootstraps = []
         self.disconnects = []
         self.renewals = []
+        self.bakes = []
+        self.manifest = "a" * 64
+        self.bake_error = None
 
-    def prepare(self, record):
-        return {"user_data": "#cloud-config\nsynthetic: true", "ssh_public_key": "ssh-ed25519 cHVibGlj"}
+    def prepare(self, record, preinstalled=False):
+        return {"user_data": "#cloud-config\nsynthetic: " + ("preinstalled" if preinstalled else "stock"), "ssh_public_key": "ssh-ed25519 cHVibGlj"}
+
+    def fingerprint(self):
+        return self.manifest
+
+    def bake(self, record, server):
+        self.bakes.append(record["id"])
+        if self.bake_error:
+            raise self.bake_error
+        return {"sealed": True, "manifest_sha256": record["manifest_sha256"]}
 
     def bootstrap(self, record, server):
         self.bootstraps.append(record["id"])
@@ -187,6 +224,166 @@ class ControllerTests(unittest.TestCase):
             self.tick()
         self.assertEqual(self.only_record()["state"], "ready")
 
+    # ---------- worker snapshots ----------
+
+    def snapshots_on(self):
+        self.controller.config.update(snapshot_boot=True, bake_retry_seconds=600)
+        self.pressure = False
+
+    def bake_record(self):
+        return next(r for r in self.controller.ledger.records() if r.get("purpose") == "bake")
+
+    def power_off(self):
+        for server in self.cloud.servers:
+            server["status"] = "off"
+
+    def run_bake(self):
+        self.tick()                      # reserve + create from stock Ubuntu
+        self.tick()                      # IPv4 ownership
+        self.tick()                      # install + seal (driver)
+        self.tick()                      # sealed, waiting for poweroff
+        self.power_off()
+        self.tick()                      # snapshot requested
+        self.cloud.images[-1]["status"] = "available"
+        self.tick()                      # snapshot recorded, bake VM deleted
+        self.tick()                      # IPv4 deleted
+        self.tick()                      # deletion confirmed
+
+    def test_bake_installs_seals_snapshots_and_deletes_its_vm(self):
+        self.snapshots_on()
+        self.run_bake()
+        bake = self.bake_record()
+        self.assertEqual(bake["state"], "deleted")
+        self.assertEqual(bake["manifest_sha256"], "a" * 64)
+        self.assertEqual(self.cloud.created_images[0], ("ubuntu-24.04", "#cloud-config\nsynthetic: stock"))
+        self.assertEqual(self.driver.bakes, [bake["id"]])
+        self.assertEqual(self.driver.bootstraps, [], "a bake VM never runs a worker")
+        self.assertEqual(self.cloud.servers, [])
+        self.assertEqual(self.cloud.ips, [])
+        self.assertEqual(self.controller.ledger.meta("snapshot")["image_id"], 900)
+        self.assertEqual(self.cloud.images[0]["labels"], {"fetchx-deployment": "test", "fetchx-role": "worker-snapshot",
+                                                          "fetchx-bake": bake["id"], "fetchx-manifest": "a" * 32})
+        # New workers boot from the snapshot with the light cloud-init.
+        self.pressure = True
+        self.tick()
+        worker = next(r for r in self.controller.ledger.records() if r.get("purpose") != "bake")
+        self.assertEqual(worker["image"], 900)
+        self.assertEqual(self.cloud.created_images[-1], (900, "#cloud-config\nsynthetic: preinstalled"))
+        # Nothing to bake while the snapshot matches the bundle.
+        self.tick(700)
+        self.assertEqual(len(self.driver.bakes), 1)
+
+    def test_a_snapshot_never_boots_a_server_with_a_smaller_disk(self):
+        self.snapshots_on()
+        self.run_bake()
+        self.controller.ledger.set_meta("snapshot", dict(self.controller.ledger.meta("snapshot"), disk_gb=80))
+        self.pressure = True
+        self.tick()
+        worker = next(r for r in self.controller.ledger.records() if r.get("purpose") != "bake")
+        self.assertEqual(worker["image"], "ubuntu-24.04", "the 40 GB type boots stock Ubuntu")
+        self.assertEqual(self.controller.ledger.meta("snapshot")["disk_gb"], 80, "the snapshot stays for larger types")
+
+    def test_bake_never_blocks_growth_or_counts_as_capacity(self):
+        self.snapshots_on()
+        self.tick()
+        self.assertEqual(self.bake_record()["state"], "booting")
+        self.pressure = True
+        self.tick()
+        workers = [r for r in self.controller.ledger.records() if r.get("purpose") != "bake"]
+        self.assertEqual(len(workers), 1)
+        self.assertEqual(workers[0]["image"], "ubuntu-24.04", "no snapshot yet: stock Ubuntu")
+
+    def test_failed_bake_deletes_its_vm_and_retries_after_backoff(self):
+        self.snapshots_on()
+        self.driver.bake_error = RuntimeError("synthetic install failure")
+        for _ in range(6):
+            self.tick()
+        self.assertEqual(self.bake_record()["state"], "deleted")
+        self.assertEqual(self.cloud.servers, [])
+        self.assertIsNone(self.controller.ledger.meta("snapshot"))
+        self.tick(60)
+        self.assertEqual(len([r for r in self.controller.ledger.records() if r.get("purpose") == "bake"]), 1, "backoff")
+        self.driver.bake_error = None
+        self.tick(600)
+        self.assertEqual(len([r for r in self.controller.ledger.records() if r.get("purpose") == "bake"]), 2)
+
+    def test_bake_vm_is_deleted_when_it_never_powers_off(self):
+        self.snapshots_on()
+        for _ in range(4):
+            self.tick()
+        first = self.bake_record()
+        self.assertEqual(first["bake_phase"], "sealed")
+        self.tick(self.controller.config["bake_timeout_seconds"])
+        self.tick()
+        self.tick()
+        self.assertEqual(next(r for r in self.controller.ledger.records() if r["id"] == first["id"])["state"], "deleted")
+        self.assertNotIn("create_snapshot", self.cloud.calls)
+
+    def test_a_new_bundle_boots_stock_ubuntu_and_bakes_again_retiring_the_old_snapshot(self):
+        self.snapshots_on()
+        self.run_bake()
+        self.driver.manifest = "b" * 64
+        self.pressure = True
+        self.tick(700)
+        worker = next(r for r in self.controller.ledger.records() if r.get("purpose") != "bake")
+        self.assertEqual(worker["image"], "ubuntu-24.04", "the snapshot holds the old bundle")
+        bakes = [r for r in self.controller.ledger.records() if r.get("purpose") == "bake"]
+        self.assertEqual(len(bakes), 2)
+        self.pressure = False
+        newer = next(r for r in bakes if r["state"] != "deleted")
+        self.assertEqual(newer["manifest_sha256"], "b" * 64)
+        for _ in range(3):
+            self.tick()
+        self.power_off()
+        for _ in range(2):
+            self.tick()
+        self.cloud.images[-1]["status"] = "available"
+        self.tick()
+        self.assertEqual([i["id"] for i in self.cloud.images], [901], "the old snapshot is deleted")
+        self.assertEqual(self.controller.ledger.meta("snapshot")["manifest_sha256"], "b" * 64)
+
+    def test_unusable_snapshot_falls_back_to_stock_and_bakes_again(self):
+        self.snapshots_on()
+        self.run_bake()
+        self.cloud.images.clear()
+        self.cloud.create_error = CloudError("cloud_http_error", 404, "not_found")
+        self.pressure = True
+        self.tick(700)
+        self.assertIsNone(self.controller.ledger.meta("snapshot"))
+        self.assertEqual(self.controller.ledger.meta("bake_started_at"), self.now, "a new bake starts at once")
+
+    def test_placement_rejection_keeps_the_snapshot_and_cools_the_type(self):
+        self.snapshots_on()
+        self.run_bake()
+        self.cloud.create_error = CloudError("cloud_http_error", 412, "resource_unavailable")
+        self.pressure = True
+        self.tick(700)
+        self.assertEqual(self.controller.ledger.meta("snapshot")["image_id"], 900)
+        self.assertIn("cx23@hel1", self.controller.ledger.meta("machine_cooldowns"))
+
+    def test_uncertain_snapshot_request_is_adopted_by_labels_never_reposted(self):
+        self.snapshots_on()
+        self.cloud.snapshot_error = UncertainCreate("create_uncertain")
+        for _ in range(4):
+            self.tick()
+        self.power_off()
+        self.tick()
+        self.assertEqual(self.bake_record()["bake_phase"], "sealed")
+        self.cloud.snapshot_error = None
+        self.tick()
+        self.assertEqual(self.bake_record()["bake_phase"], "imaging")
+        self.assertEqual(self.cloud.calls.count("create_snapshot"), 1)
+        self.assertEqual(self.bake_record()["image_id"], 900)
+
+    def test_snapshots_off_never_bakes(self):
+        self.pressure = False
+        for _ in range(3):
+            self.tick(4000)
+        self.assertEqual(self.driver.bakes, [])
+        self.assertNotIn("create", self.cloud.calls)
+        with self.assertRaisesRegex(SafetyError, "unsafe_bake_timing"):
+            validate_config(dict(self.config, bake_timeout_seconds=3600))
+
     def test_disabled_default_and_invalid_limits(self):
         self.assertFalse(validate_config(dict(self.config, enabled=False))["enabled"])
         with self.assertRaisesRegex(SafetyError, "authorization_limits_required"):
@@ -203,12 +400,12 @@ class ControllerTests(unittest.TestCase):
     def test_selects_cheapest_available_actual_price_and_persists_before_create(self):
         self.options_fixture()
         original_create = self.cloud.create
-        def inspect_create(name, labels, user_data, selected, ssh_key_id):
+        def inspect_create(name, labels, user_data, selected, ssh_key_id, image="ubuntu-24.04"):
             durable = next(r for r in self.controller.ledger.records() if r["id"] == labels["fetchx-worker"])
             self.assertEqual(durable["machine"], selected)
             self.assertEqual(durable["state"], "creating")
             self.assertEqual(durable["ssh_key_id"], ssh_key_id)
-            return original_create(name, labels, user_data, selected, ssh_key_id)
+            return original_create(name, labels, user_data, selected, ssh_key_id, image)
         self.cloud.create = inspect_create
         self.tick()
         selected = self.only_record()["machine"]

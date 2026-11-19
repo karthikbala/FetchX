@@ -31,11 +31,14 @@ def validate_config(raw):
                     cleanup_reserve_seconds=3600, metrics_max_age_seconds=15,
                     poll_seconds=5, worker_lease_seconds=180, renew_seconds=60,
                     drain_before_expiry_seconds=90, hard_delete_grace_seconds=60,
-                    max_vm_egress_bytes=1073741824, machine_cooldown_seconds=120)
+                    max_vm_egress_bytes=1073741824, machine_cooldown_seconds=120,
+                    snapshot_boot=False, bake_timeout_seconds=1800, bake_retry_seconds=3600)
     for key, value in defaults.items():
         c.setdefault(key, value)
     if type(c["enabled"]) is not bool:
         raise SafetyError("invalid_enabled")
+    if type(c["snapshot_boot"]) is not bool:
+        raise SafetyError("invalid_snapshot_boot")
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,23}", c.get("deployment", "")):
         raise SafetyError("invalid_deployment")
     for key in ("state_dir", "registry_path", "callback_socket"):
@@ -75,6 +78,9 @@ def validate_config(raw):
         raise SafetyError("invalid_max_additional_workers")
     if c["renew_seconds"] * 2 >= c["worker_lease_seconds"] or c["drain_before_expiry_seconds"] < 60 or c["hard_delete_grace_seconds"] < 60:
         raise SafetyError("unsafe_lease_timing")
+    # A bake must finish (upload, seal, snapshot) well inside the VM's hard lifetime.
+    if not 300 <= c["bake_timeout_seconds"] <= c["max_vm_lifetime_seconds"] - c["drain_before_expiry_seconds"]:
+        raise SafetyError("unsafe_bake_timing")
     return c
 
 
@@ -207,6 +213,16 @@ class Ledger:
                         m["server_hourly_micro_eur"] > m["server_hourly_ceiling_micro_eur"] or
                         m["ipv4_hourly_micro_eur"] > m["ipv4_hourly_ceiling_micro_eur"]):
                     raise SafetyError("ledger_machine_invalid")
+            if r.get("purpose", "worker") not in ("worker", "bake"):
+                raise SafetyError("ledger_record_invalid")
+            if r.get("purpose") == "bake":
+                if (not isinstance(r.get("manifest_sha256"), str) or not re.fullmatch(r"[a-f0-9]{64}", r["manifest_sha256"]) or
+                        r.get("bake_phase", "install") not in ("install", "sealed", "imaging", "done")):
+                    raise SafetyError("ledger_record_invalid")
+                if r.get("image_id") is not None:
+                    positive_int(r["image_id"], "record_image_id")
+            if r.get("image", "ubuntu-24.04") != "ubuntu-24.04":
+                positive_int(r["image"], "record_image")
             if r["state"] == "deleted":
                 positive_int(r["deleted_at"], "record_deleted_at")
                 if r["deleted_at"] < r["created_at"] or not r.get("server_id") or not r.get("ipv4_id"):
@@ -242,7 +258,7 @@ class Ledger:
             amount += charge if r["state"] == "deleted" else max(charge, r["reservation"])
         return amount
 
-    def reserve(self, now, worker_id, machine):
+    def reserve(self, now, worker_id, machine, **extra):
         with self.transaction():
             records = self.records()
             if any(r["id"] == worker_id for r in records):
@@ -265,7 +281,8 @@ class Ledger:
             if self.committed(now) + reservation > self.config["monthly_budget_micro_eur"]:
                 raise SafetyError("budget_cap")
             r = dict(id=worker_id, created_at=now, lease_expires_at=now + self.config["max_vm_lifetime_seconds"],
-                     state="reserved", rate=rate, reservation=reservation, server_id=None, ipv4_id=None, machine=dict(machine))
+                     state="reserved", rate=rate, reservation=reservation, server_id=None, ipv4_id=None, machine=dict(machine),
+                     **{k: v for k, v in extra.items() if k in ("purpose", "manifest_sha256", "image")})
             self.save(r)
             self.decision(now, "reserved", worker_id)
             return r

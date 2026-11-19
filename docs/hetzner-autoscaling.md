@@ -18,6 +18,19 @@ Defaults are a 30-second sustained queue threshold, 120-second scale-up cooldown
 
 Customer credits and proxy spending are unaffected by the controller. The infrastructure cap covers these managed VMs and Primary IPv4 addresses; it does not change existing host costs or customer source allowances.
 
+## Worker snapshots
+
+With `snapshot_boot: true`, new workers boot from a snapshot instead of stock Ubuntu. The snapshot already holds Docker, nftables, the worker image and the browser. A new VM only writes its own identity through cloud-init: SSH host key, keys, settings and lease. It then starts the container, and skips the package install and the 3 GB upload. Workers still run in the same locked-down container.
+
+The controller bakes the snapshot itself whenever the worker bundle (`asset_manifest`) changes. A bake VM is a ledger record like any worker, with the same budget, ownership labels, hard lifetime and cleanup.
+1. It boots stock Ubuntu and receives the assets.
+2. It is sealed and powered off: per-VM files, SSH host and authorized keys and the watchdog are removed, `cloud-init clean` runs, and the machine ID is reset. Only a VM that never ran a worker can be sealed.
+3. Its disk is saved as a snapshot labelled with the deployment and bundle, and the bake VM is deleted.
+
+Older worker snapshots are then deleted. Until the new snapshot is ready, and whenever it doesn't match the current bundle, workers boot stock Ubuntu. The same fallback applies when a server type's disk is smaller than the snapshot's source disk, or when Hetzner refuses the snapshot. A refused snapshot also clears it, so a new bake starts.
+
+`bake_timeout_seconds` (1800) bounds install and sealing. `bake_retry_seconds` (3600) spaces out attempts after a failure. A bake costs one VM-hour, and the snapshot is billed as Hetzner image storage.
+
 ## Deployment and operation
 
 Use the [deployment assets](../deploy/autoscaler/README.md) for the disabled example, pinned image/browser bundle, separate SSH identities, systemd service and workload watchdog. Keep populated configuration, credentials, browser binaries, images, captures and operational receipts private. Preserve the ledger during deployment and rollback. Run the controller as a single long-lived `run` process; `once` is only one reconciliation step and does not finish a slow background bootstrap by itself.
