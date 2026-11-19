@@ -16,7 +16,7 @@ export const PACK_OFFERS=Object.freeze(Object.fromEntries([
  ['credits-'+credits,Object.freeze({credits,amountMinor:usd,currency:'usd',paymentMethod:'card'})],
  ['credits-'+credits+'-inr',Object.freeze({credits,amountMinor:inr,currency:'inr',paymentMethod:'upi'})],
 ])));
-// Retain the legacy export for existing USD callers and deployment tooling.
+// The USD packs, which the payments worker requires in live mode.
 export const PACK_AMOUNTS=Object.freeze(Object.fromEntries(Object.entries(PACK_OFFERS).filter(([,v])=>v.currency==='usd').map(([id,v])=>[id,v.amountMinor])));
 export const billingCurrency=country=>country==='IN'?'inr':'usd';
 export const currencyPaymentMethod=currency=>currency==='inr'?'upi':currency==='usd'?'card':null;

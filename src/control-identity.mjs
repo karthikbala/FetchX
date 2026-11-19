@@ -1,15 +1,14 @@
 import {createHash,createHmac,randomBytes,randomInt,randomUUID,timingSafeEqual} from 'node:crypto';
 import {fail} from './policy.mjs';
 import {createControlMail} from './control-mail.mjs';
-import {TRIAL_CREDITS_PER_ACCOUNT,grantAccountTrialCredits,grantInitialCredits,reviewedCreditPolicy} from './control-credits.mjs';
-import {initPlayground} from './control-playground.mjs';
+import {grantTrial,initTrialAccounts,openAccount,trialCredits} from './billing/trial.mjs';
 import {createControlGoogle,googleConfiguration} from './control-google.mjs';
 import {createControlGithub,githubConfiguration,githubSettings,githubAuthorizationUrl} from './control-github.mjs';
 import {initControlConnect} from './control-connect.mjs';
 
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const PROJECT=/^cp_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-const SCOPES=Object.freeze(['fetch:read','fetch:write','usage:read','profiles:read']);
+const SCOPES=Object.freeze(['fetch:read','fetch:write','usage:read']);
 const TTL=600,SESSION_TTL=7*86400,GOOGLE_TTL=300,GITHUB_TTL=300;
 const plain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -35,7 +34,7 @@ export async function initControlIdentity(pool){await pool.query(`
  CREATE INDEX IF NOT EXISTS control_codes_email_created ON control_codes(email_hash,created_at);
  CREATE TABLE IF NOT EXISTS control_sessions(id uuid PRIMARY KEY,user_id uuid NOT NULL REFERENCES control_users(id),token_hash text NOT NULL UNIQUE,expires_at timestamptz NOT NULL,revoked_at timestamptz,created_at timestamptz NOT NULL DEFAULT now());
  CREATE INDEX IF NOT EXISTS control_sessions_user ON control_sessions(user_id);
- CREATE TABLE IF NOT EXISTS control_projects(id text PRIMARY KEY,user_id uuid NOT NULL REFERENCES control_users(id),name text NOT NULL,template_hash text NOT NULL,status text NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled')),created_at timestamptz NOT NULL DEFAULT now());
+ CREATE TABLE IF NOT EXISTS control_projects(id text PRIMARY KEY,user_id uuid NOT NULL REFERENCES control_users(id),name text NOT NULL,status text NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled')),created_at timestamptz NOT NULL DEFAULT now());
  CREATE TABLE IF NOT EXISTS control_memberships(user_id uuid NOT NULL REFERENCES control_users(id),project text NOT NULL REFERENCES control_projects(id),role text NOT NULL DEFAULT 'owner' CHECK(role IN ('owner')),created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(user_id,project));
  CREATE INDEX IF NOT EXISTS control_memberships_project ON control_memberships(project);
  CREATE TABLE IF NOT EXISTS control_keys(id uuid PRIMARY KEY,project text NOT NULL REFERENCES control_projects(id),name text NOT NULL,prefix text NOT NULL,token_hash text NOT NULL UNIQUE,scopes jsonb NOT NULL CHECK(jsonb_typeof(scopes)='array'),created_at timestamptz NOT NULL DEFAULT now(),last_used_at timestamptz,revoked_at timestamptz);
@@ -51,7 +50,7 @@ export async function initControlIdentity(pool){await pool.query(`
  CREATE INDEX IF NOT EXISTS control_github_challenges_binding ON control_github_challenges(binding_hash);
  CREATE TABLE IF NOT EXISTS control_github_identities(subject text PRIMARY KEY CHECK(subject ~ '^[1-9][0-9]{0,15}$'),user_id uuid NOT NULL UNIQUE REFERENCES control_users(id),created_at timestamptz NOT NULL DEFAULT now());
  `);
- await initPlayground(pool);
+ await initTrialAccounts(pool);
  await initControlConnect(pool);
 }
 
@@ -69,12 +68,6 @@ export class ControlIdentity{
   return control;
  }
  digest(domain,value){return createHmac('sha256',this.settings().bridgeSecret).update(`${domain}\0${value}`).digest('hex');}
- template(){
-  const raw=this.settings().projectTemplate;
-  if(!plain(raw)||Object.keys(raw).some(k=>!['id','v2_access_profiles','v2_entitlement','v2_discovery_policy'].includes(k))||typeof raw.id!=='string'||!/^[A-Za-z0-9_.:-]{1,100}$/.test(raw.id)||!Array.isArray(raw.v2_access_profiles)||raw.v2_access_profiles.some(k=>typeof k!=='string'||!this.config.v2?.accessProfiles?.[k])||!plain(raw.v2_entitlement)||!['metered','unmetered'].includes(raw.v2_entitlement.mode)||raw.v2_entitlement.mode==='metered'&&(!Number.isSafeInteger(raw.v2_entitlement.max_daily_operations)||raw.v2_entitlement.max_daily_operations<1))fail('project_template_configuration',503);
-  const policy=structuredClone(raw);delete policy.id;policy.profiles=[];
-  return {hash:hash(canonical(raw)),policy};
- }
  async rate(items){
   // A separate committed transaction retains failed attempts and serializes all
   // applicable buckets. There is no in-memory counter to reset on restart.
@@ -250,7 +243,7 @@ export class ControlIdentity{
   if(!row)fail('unauthorized',401);return {user:{id:row.user_id,email:row.email},session:{id:row.id,expires_at:row.expires_at}};
  }
  async revokeSession(token){this.settings();if(tokenValid(token,'fxs'))await this.store.pool.query('UPDATE control_sessions SET revoked_at=COALESCE(revoked_at,clock_timestamp()) WHERE token_hash=$1',[hash(token)]);return {revoked:true};}
- assertProject(row){if(!row)fail('project_not_found',404);if(row.status!=='active')fail('project_disabled',403);if(row.template_hash!==this.template().hash)fail('project_template_changed',403);return row;}
+ assertProject(row){if(!row)fail('project_not_found',404);if(row.status!=='active')fail('project_disabled',403);return row;}
  async projectRow(userId,projectId,c=this.store.pool,{lock=false}={}){
   this.settings();if(typeof userId!=='string'||!UUID.test(userId)||typeof projectId!=='string'||!PROJECT.test(projectId))fail('project_not_found',404);
   return this.assertProject((await c.query(`SELECT p.* FROM control_projects p JOIN control_memberships m ON m.project=p.id
@@ -262,36 +255,30 @@ export class ControlIdentity{
   return (await this.store.pool.query('SELECT p.* FROM control_projects p JOIN control_memberships m ON m.project=p.id WHERE m.user_id=$1 ORDER BY p.created_at,p.id',[userId])).rows.map(projectView);
  }
  async createProject(userId,input){
-  this.settings();const template=this.template();
+  this.settings();
   if(!plain(input)||Object.keys(input).some(k=>k!=='name'))fail('project_invalid');const name=label(input.name,'project_name_invalid');
   if(typeof userId!=='string'||!UUID.test(userId))fail('unauthorized',401);
-  const trial=reviewedCreditPolicy(this.config).trialCredits;
+  const trial=trialCredits(this.config);
   const row=await this.store.tx(async c=>{
    if(!(await c.query('SELECT id FROM control_users WHERE id=$1 FOR UPDATE',[userId])).rowCount)fail('unauthorized',401);
    const count=Number((await c.query('SELECT count(*) AS n FROM control_projects WHERE user_id=$1',[userId])).rows[0].n);
    if(count>=10)fail('project_limit',429);
-   const row=(await c.query('INSERT INTO control_projects(id,user_id,name,template_hash) VALUES($1,$2,$3,$4) RETURNING *',[`cp_${randomUUID()}`,userId,name,template.hash])).rows[0];
+   const row=(await c.query('INSERT INTO control_projects(id,user_id,name) VALUES($1,$2,$3) RETURNING *',[`cp_${randomUUID()}`,userId,name])).rows[0];
    await c.query('INSERT INTO control_memberships(user_id,project) VALUES($1,$2)',[userId,row.id]);
-   await grantInitialCredits(c,row.id,0);
-   await grantAccountTrialCredits(c,{userId,targetCredits:trial,templateHash:template.hash});
+   await openAccount(c,row.id);
+   await grantTrial(c,{userId,targetCredits:trial});
    return row;
   });
   await this.hydrateProject(row.id);return projectView(row);
  }
+ // Grants a user's trial on first use if they never had one, and registers the
+ // project for this process.
  async hydrateProject(projectId){
-  const control=this.settings();if(typeof projectId!=='string'||!PROJECT.test(projectId))fail('project_not_found',404);
-  const trial=control.creditPolicy;
-  const migrate=trial?.reviewed===true&&(trial.trialCredits===undefined||trial.trialCredits===TRIAL_CREDITS_PER_ACCOUNT);
-  const query=migrate?`SELECT p.*,EXISTS(SELECT 1 FROM control_trial_grant_receipts r
-   WHERE r.user_id=p.user_id AND r.target_credits=$2) AS trial_claimed FROM control_projects p WHERE p.id=$1`:
-   'SELECT * FROM control_projects WHERE id=$1';
-  const row=this.assertProject((await this.store.pool.query(query,migrate?[projectId,TRIAL_CREDITS_PER_ACCOUNT]:[projectId])).rows[0]);
-  if(migrate&&!row.trial_claimed){
-   const targetCredits=reviewedCreditPolicy(this.config).trialCredits;
-   await this.store.tx(c=>grantAccountTrialCredits(c,{userId:row.user_id,targetCredits,templateHash:row.template_hash}));
-  }
-  const policy=this.template().policy;
-  this.config.projects??={};this.config.projects[row.id]=policy;return policy;
+  this.settings();if(typeof projectId!=='string'||!PROJECT.test(projectId))fail('project_not_found',404);
+  const row=this.assertProject((await this.store.pool.query(`SELECT p.*,EXISTS(SELECT 1 FROM control_trial_grant_receipts r
+   WHERE r.user_id=p.user_id) AS trial_claimed FROM control_projects p WHERE p.id=$1`,[projectId])).rows[0]);
+  if(!row.trial_claimed)await this.store.tx(c=>grantTrial(c,{userId:row.user_id,targetCredits:trialCredits(this.config)}));
+  this.config.projects??={};this.config.projects[row.id]??={};return this.config.projects[row.id];
  }
  async keys(userId,projectId){await this.projectRow(userId,projectId);return (await this.store.pool.query('SELECT * FROM control_keys WHERE project=$1 ORDER BY created_at,id',[projectId])).rows.map(keyView);}
  keyInput(input){
@@ -336,7 +323,7 @@ export class ControlIdentity{
  }
  async authenticateKey(token){
   this.settings();if(!tokenValid(token,'fxk'))fail('unauthorized',401);
-  const row=(await this.store.pool.query('SELECT k.id,k.project,k.scopes,p.template_hash,p.status FROM control_keys k JOIN control_projects p ON p.id=k.project WHERE k.token_hash=$1 AND k.revoked_at IS NULL',[hash(token)])).rows[0];
+  const row=(await this.store.pool.query('SELECT k.id,k.project,k.scopes,p.status FROM control_keys k JOIN control_projects p ON p.id=k.project WHERE k.token_hash=$1 AND k.revoked_at IS NULL',[hash(token)])).rows[0];
   if(!row)fail('unauthorized',401);this.assertProject(row);await this.hydrateProject(row.project);
   if(!(await this.store.pool.query('UPDATE control_keys SET last_used_at=clock_timestamp() WHERE id=$1 AND revoked_at IS NULL RETURNING id',[row.id])).rowCount)fail('unauthorized',401);
   return {project:row.project,key_id:row.id,scopes:row.scopes};

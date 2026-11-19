@@ -2,9 +2,9 @@
 import Layout from '../../layouts/Layout.astro';
 import Brand from '../Brand.astro';
 import Icon from '../Icon.astro';
-import { viewTitles, type PreviewView } from '../../data/product-preview';
+import { viewTitles, type ConsoleView } from '../../data/console';
 import '../../styles/product-preview.css';
-const { view = 'overview' } = Astro.props as { view?: PreviewView };
+const { view = 'overview' } = Astro.props as { view?: ConsoleView };
 const page = viewTitles[view];
 const links = [
   { view: 'overview', label: 'Overview', href: '/app', icon: 'grid' },
@@ -30,7 +30,7 @@ const links = [
             <p>Available credits <strong data-credit-total>Loading…</strong></p>
             <dl class="pp-credit-breakdown" data-credit-breakdown hidden>
               <div><dt>Trial</dt><dd data-credit-trial>—</dd></div>
-              <div><dt>Paid</dt><dd data-credit-paid>—</dd></div>
+              <div><dt>Purchased</dt><dd data-credit-purchased>—</dd></div>
             </dl>
           </div>
           <a href="/app/billing" class="pp-upgrade">View balance <Icon name="arrow" size={15}/></a>
@@ -43,13 +43,13 @@ const links = [
           <p class="pp-inline-error pp-live-error" data-page-error role="alert" hidden></p>
           <section class="pp-card pp-workspace-gate" data-workspace-gate aria-live="polite"><h2 data-gate-title>Opening your workspace…</h2><p data-gate-description>Checking the service and your session.</p><a href="/login" class="pp-button pp-button-primary" data-login-link hidden>Verify your email</a><button type="button" class="pp-button pp-button-primary" data-open-project hidden>Create your first project</button></section>
           <div data-workspace-content hidden><slot/></div><noscript><p>Enable JavaScript to use the workspace.</p></noscript>
-        </div><footer class="pp-app-footer"><span>Project access and usage come from FetchX.</span><span>Source acceptance belongs to your application.</span></footer>
+        </div><footer class="pp-app-footer"><span>Only successful requests are charged.</span><span>Results are kept for 7 days.</span></footer>
       </div>
     </div>
     <div class="pp-toast" role="status" aria-live="polite" data-toast hidden></div>
-    <dialog class="pp-dialog" data-project-dialog aria-labelledby="project-title"><h2 id="project-title">Create a project.</h2><p>Access profiles and trial eligibility are assigned by the service.</p><form data-create-project><label class="pp-field">Project name<input name="name" maxlength="80" required autocomplete="off"/></label><p class="pp-inline-error" data-project-error role="alert"></p><div class="pp-dialog-actions"><button type="button" class="pp-button pp-button-secondary" data-close-project>Cancel</button><button type="submit" class="pp-button pp-button-primary">Create project</button></div></form></dialog>
+    <dialog class="pp-dialog" data-project-dialog aria-labelledby="project-title"><h2 id="project-title">Create a project.</h2><p>Your first project gets the trial credits.</p><form data-create-project><label class="pp-field">Project name<input name="name" maxlength="80" required autocomplete="off"/></label><p class="pp-inline-error" data-project-error role="alert"></p><div class="pp-dialog-actions"><button type="button" class="pp-button pp-button-secondary" data-close-project>Cancel</button><button type="submit" class="pp-button pp-button-primary">Create project</button></div></form></dialog>
     <dialog class="pp-dialog" data-key-dialog aria-labelledby="key-title"><h2 id="key-title">Save your API key.</h2><p>This secret is shown once. Keep it in your server environment.</p><code class="pp-key-secret" data-key-secret>Concealed</code><div class="pp-dialog-actions"><button type="button" class="pp-button pp-button-secondary" data-copy-key>Copy key</button><button type="button" class="pp-button pp-button-primary" data-close-key>I saved it · conceal</button></div></dialog>
-    <dialog class="pp-dialog pp-request-dialog" data-request-dialog aria-labelledby="request-title"><h2 id="request-title">Retained request.</h2><p data-request-detail-status></p><pre class="pp-code pp-live-output" tabindex="0" role="region" aria-label="Retained response text" data-request-detail></pre><button type="button" class="pp-button pp-button-secondary" data-close-request>Close</button></dialog>
+    <dialog class="pp-dialog pp-request-dialog" data-request-dialog aria-labelledby="request-title"><h2 id="request-title">Request</h2><p data-request-detail-status></p><pre class="pp-code pp-live-output" tabindex="0" role="region" aria-label="Request result" data-request-detail></pre><button type="button" class="pp-button pp-button-secondary" data-close-request>Close</button></dialog>
     <dialog class="pp-dialog" data-confirm-dialog aria-labelledby="confirm-title"><form method="dialog"><h2 id="confirm-title">Confirm action</h2><p data-confirm-description></p><div class="pp-dialog-actions"><button class="pp-button pp-button-secondary" value="cancel">Cancel</button><button class="pp-button pp-button-primary" value="confirm" data-confirm-action>Continue</button></div></form></dialog>
-  </div><script>import '../../scripts/product-preview';</script><script>import '../../scripts/admin-link';</script>
+  </div><script>import '../../scripts/console';</script><script>import '../../scripts/admin-link';</script>
 </Layout>

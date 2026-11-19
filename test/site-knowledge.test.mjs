@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Store} from '../src/store.mjs';
-import {siteHost,siteOutcome,routeState,recordSiteOutcome,siteRoutes,siteKnowledgeOverview,forgetSite,seedFromProbe} from '../src/site-knowledge.mjs';
+import {siteHost,routeState,recordSiteOutcome,siteRoutes,siteKnowledgeOverview,forgetSite,seedFromProbe} from '../src/site-knowledge.mjs';
 
 const enabled=!!process.env.TEST_DATABASE_URL;
 const html={'content-type':'text/html'};
@@ -12,20 +12,6 @@ test('site host keeps only a normalized host name',()=>{
  for(const bad of ['not a url','https://localhost/','https://127.0.0.1/',null,undefined])assert.equal(siteHost(bad),null);
 });
 
-test('outcome classification separates site evidence from everything else',()=>{
- assert.equal(siteOutcome({state:'completed',status:200,headers:html,body:'<html>ok</html>'}),'success');
- assert.equal(siteOutcome({state:'completed',status:302}),'success');
- assert.equal(siteOutcome({state:'completed',status:200,headers:html,body:'<title>Robot Check</title>'}),'blocked','a 200 challenge page is not success');
- assert.equal(siteOutcome({state:'failed',status:403}),'blocked');
- assert.equal(siteOutcome({state:'failed',error:'source_challenge'}),'blocked');
- assert.equal(siteOutcome({state:'completed',challenge:true,status:200}),'blocked');
- assert.equal(siteOutcome({state:'failed',status:429}),'rate_limited');
- assert.equal(siteOutcome({state:'failed',error:'source_timeout'}),'unreachable');
- // Says nothing about reaching the site: uncertain, internal, quota, provider faults, 404/500.
- for(const input of [{state:'unknown',status:200},{state:'failed',error:'operation_internal_error'},{state:'failed',error:'client_quota_exhausted'},
-  {state:'failed',error:'proxy_connect_rejected'},{state:'failed',error:'proxy_connect_failed'},{state:'completed',status:404},{state:'completed',status:500},{}])
-  assert.equal(siteOutcome(input),null,JSON.stringify(input));
-});
 
 test('route state ages, demotes and cools down',()=>{
  const now=Date.parse('2026-11-19T00:00:00Z'),day=86400000;

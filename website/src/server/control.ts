@@ -30,11 +30,12 @@ const CONNECT_ERRORS:Record<string,string>={
 };
 const STRIPE_KEY='[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
 export const CONTROL_REQUEST_LIMIT=96*1024;
-export const CONTROL_RESPONSE_LIMIT=24*1024*1024;
-// A 20 MB fetch can carry 26.7 MB of base64 plus a text preview and metadata.
+// Account responses are small; a fetch result can inline a 10 MB body
+// (13.4 MB of base64) plus its formats.
+export const CONTROL_RESPONSE_LIMIT=2*1024*1024;
 const CONTROL_FETCH_RESPONSE_LIMIT=28*1024*1024;
-const ADMIN_RULE='[a-z0-9][a-z0-9._-]{0,63}',ADMIN_PROFILE='[A-Za-z0-9][A-Za-z0-9._-]{0,127}';
-const fetchResultPath=new RegExp(`^/projects/${PROJECT}/(?:fetch(?:/|$)|requests/${UUID}$)`);
+const ADMIN_RULE='[a-z0-9][a-z0-9._-]{0,63}',ADMIN_HOST='[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?';
+const fetchResultPath=new RegExp(`^/projects/${PROJECT}/fetch(?:/${UUID})?$`);
 export const CONTROL_TIMEOUT_MS=85_000;
 const headers={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Pragma':'no-cache','X-Content-Type-Options':'nosniff','X-Robots-Tag':'noindex, nofollow'};
 const response=(status:number,body:unknown,extra:Record<string,string>={})=>new Response(JSON.stringify(body),{status,headers:{...headers,...extra}});
@@ -52,6 +53,19 @@ function browserConnectPayload(path:string,status:number,payload:Record<string,u
  return typeof state==='string'&&CONNECT_STATES.has(state)&&typeof client_name==='string'&&Array.isArray(scopes)&&scopes.every(scope=>typeof scope==='string')&&typeof expires_at==='string'
   ?{state,client_name,scopes,expires_at}:null;
 }
+// The only query strings the console sends: request-history filters and paging,
+// the usage period, and include_body on one result.
+const QUERY_RULES:[RegExp,Record<string,RegExp>][]=[
+ [new RegExp(`^/projects/${PROJECT}/fetch$`),{limit:/^(?:[1-9]|[1-9][0-9]|100)$/,status:/^(?:pending|succeeded|failed)$/,tag:/^[A-Za-z0-9_.:-]{1,64}$/,cursor:/^[A-Za-z0-9_-]{1,200}$/}],
+ [new RegExp(`^/projects/${PROJECT}/fetch/${UUID}$`),{include_body:/^(?:true|false)$/}],
+ [new RegExp(`^/projects/${PROJECT}/usage$`),{period:/^(?:day|month)$/}],
+];
+function queryAllowed(path:string,params:URLSearchParams):boolean {
+ const entries=[...params];
+ if(!entries.length)return true;
+ const rules=QUERY_RULES.find(([pattern])=>pattern.test(path))?.[1];
+ return !!rules&&new Set(entries.map(([name])=>name)).size===entries.length&&entries.every(([name,value])=>rules[name]?.test(value)===true);
+}
 function allowedMethods(path:string):string[]|null {
  if(['/status','/session'].includes(path))return ['GET'];
  if(CONNECT_CLI.has(path)||CONNECT_BROWSER.has(path))return ['POST'];
@@ -61,12 +75,12 @@ function allowedMethods(path:string):string[]|null {
  if(new RegExp(`^/projects/${PROJECT}/keys$`).test(path))return ['GET','POST'];
  if(new RegExp(`^/projects/${PROJECT}/keys/${UUID}/rotate$`).test(path))return ['POST'];
  if(new RegExp(`^/projects/${PROJECT}/keys/${UUID}$`).test(path))return ['DELETE'];
- if(new RegExp(`^/projects/${PROJECT}/(?:fetch|render|playground/prepare)$`).test(path))return ['POST'];
- if(new RegExp(`^/projects/${PROJECT}/(?:fetch|render)/(?:[A-Za-z0-9_.:-]|%3[Aa]){1,160}$`).test(path))return ['GET'];
- if(new RegExp(`^/projects/${PROJECT}/(?:requests|usage|billing)$`).test(path))return ['GET'];
+ if(new RegExp(`^/projects/${PROJECT}/fetch$`).test(path))return ['GET','POST'];
+ if(new RegExp(`^/projects/${PROJECT}/fetch/${UUID}$`).test(path))return ['GET','DELETE'];
+ if(new RegExp(`^/projects/${PROJECT}/(?:usage|billing|webhook-secret)$`).test(path))return ['GET'];
+ if(new RegExp(`^/projects/${PROJECT}/webhook-secret/rotate$`).test(path))return ['POST'];
  if(new RegExp(`^/projects/${PROJECT}/billing/stripe/checkout$`).test(path))return ['POST'];
  if(new RegExp(`^/projects/${PROJECT}/billing/stripe/checkout/${STRIPE_KEY}$`).test(path))return ['GET'];
- if(new RegExp(`^/projects/${PROJECT}/requests/${UUID}$`).test(path))return ['GET'];
  // Admin portal API (operator role enforced by the gateway; no query strings).
  if(path==='/admin/session'||path==='/admin/audit')return ['GET'];
  if(path==='/admin/rules')return ['GET','POST'];
@@ -77,9 +91,8 @@ function allowedMethods(path:string):string[]|null {
  if(path==='/admin/probes')return ['GET','POST'];
  if(new RegExp(`^/admin/probes/${UUID}$`).test(path))return ['GET'];
  if(new RegExp(`^/admin/probes/${UUID}/apply$`).test(path))return ['POST'];
- if(path==='/admin/profiles')return ['GET'];
- if(new RegExp(`^/admin/profiles/${ADMIN_PROFILE}/routing$`).test(path))return ['PUT','DELETE'];
- if(new RegExp(`^/admin/profiles/${ADMIN_PROFILE}/audit$`).test(path))return ['GET'];
+ if(path==='/admin/sites')return ['GET'];
+ if(new RegExp(`^/admin/sites/${ADMIN_HOST}$`).test(path))return ['GET','DELETE'];
  return null;
 }
 class ProxyFailure extends Error {constructor(readonly code:string){super(code);}}
@@ -159,8 +172,7 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
  if(!incoming.pathname.startsWith('/api/control/'))return error(404,'not_found','This account endpoint does not exist.');
  const methods=allowedMethods(path);if(!methods)return error(404,'not_found','This account endpoint does not exist.');
  if(!methods.includes(request.method))return response(405,{error:{code:'method_not_allowed',message:'This method is not supported.'}},{Allow:methods.join(', ')});
- const parameters=[...incoming.searchParams];
- if(parameters.length&&!(new RegExp(`^/projects/${PROJECT}/requests$`).test(path)&&parameters.length===1&&parameters[0][0]==='limit'&&/^(?:[1-9]|[1-4][0-9]|50)$/.test(parameters[0][1])))return error(400,'request_invalid','Check the submitted request.');
+ if(!queryAllowed(path,incoming.searchParams))return error(400,'request_invalid','Check the submitted request.');
  const origin=request.headers.get('Origin'),site=request.headers.get('Sec-Fetch-Site');
  const cliConnect=CONNECT_CLI.has(path),browserConnect=CONNECT_BROWSER.has(path);
  const rawCookie=request.headers.get('Cookie'),csrf=request.headers.get('X-CSRF-Token');
@@ -176,7 +188,7 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
  }
  const development=env.SITE_ENV==='development'&&env.FETCHX_CONTROL_ALLOW_LOOPBACK==='true'&&loopback(incoming);
  if(!env.FETCHX_CONTROL_URL||!env.FETCHX_CONTROL_SECRET){
-  if(path==='/status')return response(503,{enabled:false,mail_configured:false,github:{enabled:false},api_base_url:null,capability_scope:'service',capabilities:{native_http:false,render:false,routes:[]}});
+  if(path==='/status')return response(503,{enabled:false,mail_configured:false,github:{enabled:false},api_base_url:null});
   return error(503,'control_disabled','Account access is currently unavailable.');
  }
  let upstream:URL;
@@ -209,14 +221,14 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
   }
   submitted=true;
   const result=await fetch(upstream.href,{method:request.method,headers:forwarded,body,redirect:'manual',signal:controller.signal});
-  if(result.status>=300&&result.status<400){void result.body?.cancel().catch(()=>{});return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
+  if(result.status>=300&&result.status<400){void result.body?.cancel().catch(()=>{});return error(502,'control_upstream_invalid','The account service response could not be confirmed. Check Requests before sending the same work again.');}
   const fetchResult=fetchResultPath.test(path),limit=fetchResult?CONTROL_FETCH_RESPONSE_LIMIT:CONTROL_RESPONSE_LIMIT;
-  if(!/^application\/json(?:\s*;|$)/i.test(result.headers.get('Content-Type')??'')||Number(result.headers.get('Content-Length')??0)>limit){void result.body?.cancel().catch(()=>{});return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
+  if(!/^application\/json(?:\s*;|$)/i.test(result.headers.get('Content-Type')??'')||Number(result.headers.get('Content-Length')??0)>limit){void result.body?.cancel().catch(()=>{});return error(502,'control_upstream_invalid','The account service response could not be confirmed. Check Requests before sending the same work again.');}
   const bytes=await boundedBody(result.body,limit,controller.signal);
   let payload:unknown;try{
    payload=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:fetchResult}).decode(bytes));if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error();
    if(browserConnect){payload=browserConnectPayload(path,result.status,payload as Record<string,unknown>);if(!payload)throw new Error();}
-  }catch{return error(502,'control_upstream_invalid','The account service response could not be confirmed. Recover any saved request before sending more work.');}
+  }catch{return error(502,'control_upstream_invalid','The account service response could not be confirmed. Check Requests before sending the same work again.');}
   const output=fetchResult?new Response(bytes,{status:result.status,headers}):response(result.status,payload);
   const returnedCookies=cliConnect||browserConnect?[]:result.headers.getSetCookie();
   for(const name of [COOKIE,...(path.startsWith('/auth/google/')?[GOOGLE_COOKIE]:[]),...(path.startsWith('/auth/github/')?[GITHUB_COOKIE]:[])]){
@@ -227,6 +239,6 @@ export async function handleControl(request:Request,env:ControlEnv):Promise<Resp
   const retry=result.headers.get('Retry-After');if(retry&&/^\d{1,5}$/.test(retry))output.headers.set('Retry-After',retry);
   return output;
  } catch {
-  return error(controller.signal.aborted?504:502,controller.signal.aborted?'control_timeout':'control_unavailable',submitted?'The account service response could not be confirmed. Recover any saved request before sending more work.':'The account service is currently unavailable.');
+  return error(controller.signal.aborted?504:502,controller.signal.aborted?'control_timeout':'control_unavailable',submitted?'The account service response could not be confirmed. Check Requests before sending the same work again.':'The account service is currently unavailable.');
  } finally {clearTimeout(timer);}
 }

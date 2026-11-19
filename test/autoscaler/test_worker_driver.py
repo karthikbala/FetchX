@@ -55,7 +55,7 @@ class WorkerDriverTests(unittest.TestCase):
         }
         self.record = {"id": "worker-abc", "created_at": time.time(), "lease_expires_at": time.time() + 3600}
         self.server = {"public_net": {"ipv4": {"ip": "192.0.2.20"}}}
-        self.pin = {"engine": "chromium", "executablePath": "/opt/gateway-browser/chromium/chrome", "version": "151.0.1.2", "sha256": "a" * 64}
+        self.pin = {"engine": "camoufox", "executablePath": "/opt/gateway-browser/camoufox/camoufox-bin", "modelDir": "/opt/gateway-browser/model", "version": "158.0.1-beta.41", "sha256": "a" * 64}
         self.manifest = {"version": 1, "runtime_pin": self.pin,
                          "image": {"archive": str(self.assets / "image.tar"), "sha256": "", "ref": "fetchx-autoscaler-pinned:" + "b" * 64, "rootfs_layers": ["sha256:" + "c" * 64]},
                          "browser": {"archive": str(self.assets / "browser.tar"), "sha256": "", "executable": self.pin["executablePath"]},
@@ -323,7 +323,7 @@ class WorkerDriverTests(unittest.TestCase):
                     self.assertEqual(set(archive.getnames()), {"image.tar", "browser.tar", "seccomp.json", "manifest.json"})
                     self.assertEqual(json.load(archive.extractfile("manifest.json")), remote_manifest)
             return result()
-        body = {"ready": True, "busy": False, "runtime": runtime or {"engine": "chromium", "version": self.pin["version"], "sha256": self.pin["sha256"], "platform": "linux", "arch": "x64"}}
+        body = {"ready": True, "busy": False, "runtime": runtime or {"engine": "camoufox", "version": self.pin["version"], "sha256": self.pin["sha256"], "platform": "linux", "arch": "x64"}}
         http = Mock()
         http.return_value.getresponse.return_value.status = 200
         http.return_value.getresponse.return_value.read.return_value = json.dumps(body).encode()
@@ -347,7 +347,7 @@ class WorkerDriverTests(unittest.TestCase):
         def lstat(path):
             return Mock(st_mode=stat.S_IFSOCK | 0o600, st_uid=10001, st_gid=10001) if path == sock else real_lstat(path)
         body = json.dumps({"ready": True, "busy": False, "runtime": {
-            "engine": "chromium", "version": self.pin["version"], "sha256": self.pin["sha256"],
+            "engine": "camoufox", "version": self.pin["version"], "sha256": self.pin["sha256"],
             "platform": "linux", "arch": "x64"}}).encode()
         transport = Mock()
         transport.makefile.return_value = io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
@@ -374,7 +374,7 @@ class WorkerDriverTests(unittest.TestCase):
             self.worker.bootstrap(self.record, self.server)
 
     def test_bootstrap_never_accepts_unqualified_browser_health(self):
-        remote, _, http = self.bootstrap_fixture(runtime={"engine": "chromium", "version": self.pin["version"], "sha256": "f" * 64, "platform": "linux", "arch": "x64"})
+        remote, _, http = self.bootstrap_fixture(runtime={"engine": "camoufox", "version": self.pin["version"], "sha256": "f" * 64, "platform": "linux", "arch": "x64"})
         self.record["lease_expires_at"] = time.time() + .04
         sock = self.registry / (self.record["id"] + ".sock")
         real_lstat = Path.lstat
@@ -534,7 +534,7 @@ class AgentTests(unittest.TestCase):
             self.assertIn(flag, argv)
         self.assertEqual(len([arg for arg in argv if arg.startswith("--mount=")]), 4)
         self.assertFalse(any("token" in arg or "secret" in arg or "provider" in arg for arg in argv))
-        self.assertEqual(argv[-2:], ["node", "src/v2-browser-worker-service.mjs"])
+        self.assertEqual(argv[-2:], ["node", "src/browser/worker-service.mjs"])
 
     def test_layer_inventory_accepts_different_config_ids_and_rejects_order_changes(self):
         layers = ["sha256:" + "a" * 64, "sha256:" + "b" * 64]
@@ -555,12 +555,12 @@ class AgentTests(unittest.TestCase):
         return path
 
     def test_browser_extract_preserves_executable_without_suid_or_write_bits(self):
-        bundle = self.browser_archive("chromium/chrome")
+        bundle = self.browser_archive("camoufox/camoufox-bin")
         destination = self.home / "browser"
         destination.mkdir()
         agent.extract_browser(bundle, destination)
-        self.assertEqual((destination / "chromium/chrome").read_bytes(), b"bin")
-        self.assertEqual(stat.S_IMODE((destination / "chromium/chrome").stat().st_mode), 0o555)
+        self.assertEqual((destination / "camoufox/camoufox-bin").read_bytes(), b"bin")
+        self.assertEqual(stat.S_IMODE((destination / "camoufox/camoufox-bin").stat().st_mode), 0o555)
 
     def test_browser_archive_rejects_paths_links_and_special_files(self):
         for name, kind, target in (("../escape", tarfile.REGTYPE, ""), ("/escape", tarfile.REGTYPE, ""), ("link", tarfile.SYMTYPE, "../../escape"), ("hard", tarfile.LNKTYPE, "other"), ("fifo", tarfile.FIFOTYPE, "")):
@@ -577,7 +577,7 @@ class AgentTests(unittest.TestCase):
 
     def test_complete_synthetic_asset_install_validates_archive_layers_and_pin(self):
         (self.home / "pin").mkdir()
-        browser = self.browser_archive("chromium/chrome")
+        browser = self.browser_archive("camoufox/camoufox-bin")
         image = self.home / "image.tar"
         tag = "fetchx-autoscaler-pinned:" + "a" * 64
         layers = ["sha256:" + "b" * 64, "sha256:" + "c" * 64]
@@ -590,7 +590,7 @@ class AgentTests(unittest.TestCase):
                 archive.addfile(info, io.BytesIO(raw))
         seccomp = self.home / "input-seccomp.json"
         seccomp.write_text('{"defaultAction":"SCMP_ACT_ERRNO"}')
-        pin = {"engine": "chromium", "executablePath": "/opt/gateway-browser/chromium/chrome", "version": "151.0.1.2", "sha256": hashlib.sha256(b"bin").hexdigest()}
+        pin = {"engine": "camoufox", "executablePath": "/opt/gateway-browser/camoufox/camoufox-bin", "modelDir": "/opt/gateway-browser/model", "version": "158.0.1-beta.41", "sha256": hashlib.sha256(b"bin").hexdigest()}
         manifest = {"version": 1, "image": {"archive": "image.tar", "sha256": agent.sha(image), "ref": tag, "rootfs_layers": layers},
                     "browser": {"archive": "browser.tar", "sha256": agent.sha(browser), "executable": pin["executablePath"]},
                     "runtime_pin": pin, "seccomp": {"path": "seccomp.json", "sha256": agent.sha(seccomp)}}
@@ -609,7 +609,7 @@ class AgentTests(unittest.TestCase):
         with patch.object(agent.sys, "stdin", Mock(buffer=payload)), patch.object(agent, "run", side_effect=docker) as run:
             agent.install()
         self.assertEqual(json.loads((self.home / "pin/runtime.json").read_text()), pin)
-        self.assertEqual(agent.sha(self.home / "browser/chromium/chrome"), pin["sha256"])
+        self.assertEqual(agent.sha(self.home / "browser/camoufox/camoufox-bin"), pin["sha256"])
         self.assertEqual((self.home / "manifest.json").read_text(), agent.canonical(manifest))
         self.assertEqual(run.call_count, 2)
         with self.assertRaisesRegex(ValueError, "already installed"):
@@ -618,11 +618,14 @@ class AgentTests(unittest.TestCase):
     def test_preparer_uses_existing_reviewed_assets_and_creates_private_deterministic_bundles(self):
         browser = self.home / "browser"
         browser.mkdir()
-        binary = browser / "chrome"
-        binary.write_bytes(b"synthetic chromium")
+        binary = browser / "camoufox-bin"
+        binary.write_bytes(b"synthetic camoufox")
         binary.chmod(0o555)
+        (browser / "model").mkdir()
+        (browser / "model/.pinned-model").write_text("synthetic\n")
         runtime = self.home / "runtime.json"
-        runtime.write_text(json.dumps({"engine": "chromium", "executablePath": "/opt/gateway-browser/chrome", "version": "151.0.1.2", "sha256": agent.sha(binary)}))
+        runtime.write_text(json.dumps({"engine": "camoufox", "executablePath": "/opt/gateway-browser/camoufox-bin", "modelDir": "/opt/gateway-browser/model",
+                                       "version": "158.0.1-beta.41", "sha256": agent.sha(binary)}))
         seccomp = self.home / "seccomp.json"
         seccomp.write_text("{}")
         source = "sha256:" + "a" * 64

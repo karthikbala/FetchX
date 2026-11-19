@@ -1,146 +1,121 @@
 ---
 import Icon from '../Icon.astro';
-import { type PreviewView } from '../../data/product-preview';
-const { view } = Astro.props as { view: PreviewView };
+import { FORMATS, KEY_SCOPES, type ConsoleView } from '../../data/console';
+const { view } = Astro.props as { view: ConsoleView };
 ---
 {(view === 'overview' || view === 'billing') && <>
-  {view === 'billing' && <section class="pp-card pp-credit-summary" data-credit-summary aria-labelledby="credit-summary-title">
+  <section class="pp-card pp-credit-summary" data-credit-summary aria-labelledby="credit-summary-title">
     <h2 id="credit-summary-title">Available credits</h2>
     <p class="pp-credit-total" data-credit-total>Loading…</p>
     <dl class="pp-credit-breakdown" data-credit-breakdown hidden>
-      <div><dt>Trial credits</dt><dd data-credit-trial>—</dd></div>
-      <div><dt>Paid credits</dt><dd data-credit-paid>—</dd></div>
+      <div><dt>Trial</dt><dd data-credit-trial>—</dd></div>
+      <div><dt>Purchased</dt><dd data-credit-purchased>—</dd></div>
+      <div><dt>Reserved by running requests</dt><dd data-credit-reserved>—</dd></div>
     </dl>
-    <p class="pp-credit-note" data-credit-summary-note></p>
-  </section>}
-  <div class="pp-metrics"><article class="pp-card pp-metric"><span data-credits-available-label>Available trial credits</span><strong data-credits-available>—</strong><small data-credits-granted>Project allocation</small></article><article class="pp-card pp-metric"><span data-credits-used-label>Trial credits used</span><strong data-credits-used>—</strong><small>Settled operations</small></article><article class="pp-card pp-metric"><span>Reserved + held</span><strong data-reserved-credits>—</strong><small>Unknown work retains its reservation</small></article><article class="pp-card pp-metric"><span>Total requests</span><strong data-request-count>—</strong><small>Project lifetime · gateway operations</small></article></div>
-  {view === 'billing' && <>
-    <p class="pp-form-help" data-paid-credits-unavailable hidden>Paid credit checkout is currently unavailable for this project.</p>
-    <section class="pp-card pp-info-card pp-stripe-billing" data-paid-credits-panel aria-labelledby="paid-credits-heading" hidden>
-      <h2 id="paid-credits-heading" data-paid-credits-heading>Paid credit balance</h2>
-      <dl class="pp-live-facts"><div data-paid-credits-available-row><dt>Available</dt><dd data-paid-credits-available>—</dd></div><div><dt>Used</dt><dd data-paid-credits-used>—</dd></div><div><dt>Reserved</dt><dd data-paid-credits-reserved>—</dd></div><div><dt>Held</dt><dd data-paid-credits-held>—</dd></div></dl>
-      <p class="pp-inline-error" data-paid-credits-hold role="alert" hidden>Payment hold. Contact FetchX to review this project’s credits.</p>
-      <div class="pp-stripe-history" data-paid-credits-use hidden><p>Choose HTTP and an available proxy route in the playground. Credit usage appears with each result.</p><div class="pp-stripe-actions"><a href="/app/playground" class="pp-text-link">Open playground <Icon name="arrow" size={15}/></a><a href="/docs/fetch#paid-public-urls" class="pp-text-link">See the API example <Icon name="arrow" size={15}/></a></div></div>
-    </section>
-    <section class="pp-card pp-info-card pp-stripe-billing" data-stripe-billing aria-labelledby="stripe-billing-heading" hidden>
-      <div class="pp-stripe-heading"><h2 id="stripe-billing-heading">Prepaid credit packs</h2><span class="pp-soft-tag" data-stripe-mode></span></div>
-      <p data-stripe-mode-help></p>
-      <div class="pp-stripe-notice"><p data-stripe-status role="status"></p><div class="pp-stripe-actions"><button type="button" class="pp-button pp-button-secondary" data-stripe-check hidden>Check checkout status</button><button type="button" class="pp-button pp-button-primary" data-stripe-resume hidden>Resume saved checkout <Icon name="arrow" size={15}/></button></div></div>
-      <p class="pp-inline-error" data-stripe-error role="alert" hidden></p>
-      <div class="pp-stripe-plans" data-stripe-plans></div>
-      <div class="pp-stripe-history" data-stripe-history hidden><h3>Purchase history</h3><ul data-stripe-purchases></ul></div>
-    </section>
-  </>}
-  <div class="pp-two-panels pp-live-panels"><section class="pp-card pp-info-card"><h2>Recorded outcomes</h2><dl class="pp-live-facts"><div><dt>Source successes</dt><dd data-source-successes>—</dd></div><div><dt>Source failures</dt><dd data-source-failures>—</dd></div><div><dt>Gateway failures</dt><dd data-gateway-failures>—</dd></div><div><dt>Unknown outcomes</dt><dd data-unknown-outcomes>—</dd></div><div><dt>Mean latency</dt><dd data-mean-latency>—</dd></div><div><dt>95th percentile</dt><dd data-p95-latency>—</dd></div></dl><p class="pp-form-help">A source response still needs validation in your application. Provider invoices are accounted for separately.</p></section><section class="pp-card pp-info-card"><span class="pp-eyebrow" data-billing-eyebrow>PROJECT TRIAL ACCESS</span><h2 data-billing-status>Checking status…</h2><p data-billing-description>Fetching the current allocation and approval status.</p><dl class="pp-live-facts"><div><dt>Reserved credits</dt><dd data-credits-reserved>—</dd></div><div><dt>Held credits</dt><dd data-credits-held>—</dd></div><div data-credits-released-row><dt>Released credits</dt><dd data-credits-released>—</dd></div></dl><p class="pp-form-help" data-billing-policy>Trial credits follow the project’s configured allowance. Paid credits have a separate balance.</p><p class="pp-form-help" data-trial-daily-limit hidden></p><a href="/contact" class="pp-text-link">Discuss access <Icon name="arrow" size={15}/></a></section></div>
+    <p class="pp-inline-error" data-credit-hold role="alert" hidden>Spending is paused while a payment is reviewed. Contact FetchX if this does not clear.</p>
+  </section>
+  <div class="pp-metrics">
+    <article class="pp-card pp-metric"><span>Credits used</span><strong data-usage-credits>—</strong><small>This month</small></article>
+    <article class="pp-card pp-metric"><span>Successful requests</span><strong data-usage-succeeded>—</strong><small>Charged at the step that worked</small></article>
+    <article class="pp-card pp-metric"><span>Failed requests</span><strong data-usage-failed>—</strong><small>Never charged</small></article>
+    <article class="pp-card pp-metric"><span>Captchas solved</span><strong data-usage-captcha>—</strong><small>This month</small></article>
+  </div>
 </>}
-{view === 'overview' && <section class="pp-card"><div class="pp-card-heading"><div><h2>Recent requests</h2><p>Retained project operations.</p></div><a href="/app/requests" class="pp-text-link">View all <Icon name="arrow" size={16}/></a></div><div data-request-list data-request-limit="5"></div></section>}
+{view === 'billing' && <>
+  <section class="pp-card pp-info-card" aria-labelledby="usage-steps-title">
+    <h2 id="usage-steps-title">Where credits went</h2>
+    <p class="pp-form-help">Each successful request costs the price of the step that got the data. Earlier failed steps cost nothing.</p>
+    <div data-usage-steps></div>
+    <h3>Prices</h3>
+    <dl class="pp-live-facts" data-price-list></dl>
+  </section>
+  <section class="pp-card pp-info-card pp-stripe-billing" data-stripe-billing aria-labelledby="stripe-billing-heading" hidden>
+    <div class="pp-stripe-heading"><h2 id="stripe-billing-heading">Buy credits</h2><span class="pp-soft-tag" data-stripe-mode></span></div>
+    <p data-stripe-mode-help></p>
+    <div class="pp-stripe-notice"><p data-stripe-status role="status"></p><div class="pp-stripe-actions"><button type="button" class="pp-button pp-button-secondary" data-stripe-check hidden>Check checkout status</button><button type="button" class="pp-button pp-button-primary" data-stripe-resume hidden>Resume saved checkout <Icon name="arrow" size={15}/></button></div></div>
+    <p class="pp-inline-error" data-stripe-error role="alert" hidden></p>
+    <div class="pp-stripe-plans" data-stripe-plans></div>
+    <div class="pp-stripe-history" data-stripe-history hidden><h3>Purchase history</h3><ul data-stripe-purchases></ul></div>
+  </section>
+  <p class="pp-form-help" data-stripe-unavailable hidden>Buying credits is not available for this project yet. <a href="/contact" class="pp-text-link">Contact FetchX</a></p>
+</>}
+{view === 'overview' && <section class="pp-card"><div class="pp-card-heading"><div><h2>Recent requests</h2><p>The last requests made in this project.</p></div><a href="/app/requests" class="pp-text-link">View all <Icon name="arrow" size={16}/></a></div><div data-request-list data-request-limit="5"></div></section>}
 {view === 'playground' && <div class="pp-playground-grid">
-  <section class="pp-card pp-request-panel" aria-label="Configure request"><form data-playground-form autocomplete="off">
-    <fieldset class="pp-request-config" data-request-config aria-label="Request settings">
-      <label class="pp-field">Destination URL<input type="url" name="url" data-request-url placeholder="https://example.com/" required maxlength="12000" spellcheck="false" autocomplete="off" aria-describedby="request-url-help"/><small id="request-url-help">Enter a public website URL.</small></label>
-      <fieldset class="pp-mode-field"><legend>Execution</legend><div class="pp-mode-options">
-        <label><input type="radio" name="mode" value="http" checked aria-describedby="request-http-help"/><span><Icon name="code" size={19}/><strong>HTTP</strong><small id="request-http-help" data-execution-help="http">Source response</small></span></label>
-        <label><input type="radio" name="mode" value="browser" disabled aria-describedby="request-browser-help"/><span><Icon name="globe" size={19}/><strong>Browser</strong><small id="request-browser-help" data-execution-help="browser">Rendered page</small></span></label>
-      </div></fieldset>
-      <label class="pp-field">Route<select name="route" data-request-route required aria-describedby="request-route-help"><option value="">Loading routes…</option></select><small id="request-route-help" data-route-help></small></label>
-      <div class="pp-field pp-country-picker" data-country-picker hidden>
-        <label id="request-country-label" for="request-country">Proxy country</label>
-        <input id="request-country" type="text" data-request-country role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="request-country-options" aria-describedby="request-country-help" placeholder="Search by name or code" spellcheck="false" autocomplete="off" disabled/>
-        <div class="pp-country-menu" data-country-menu hidden>
-          <ul id="request-country-options" data-country-options role="listbox" aria-labelledby="request-country-label"></ul>
-          <p data-country-empty role="status" hidden>No matching proxy countries.</p>
-        </div>
-        <small id="request-country-help" data-country-help></small>
-      </div>
-      <div class="pp-key-choice" data-request-keys hidden>
-        <p class="pp-form-help" data-selected-key hidden></p>
-        <label class="pp-field" data-request-key-field hidden>API key<select data-request-key></select></label>
-        <p class="pp-form-help" data-request-key-empty hidden>Create an active key with permission to send requests. <a class="pp-text-link" href="/app/keys">Manage API keys →</a></p>
-      </div>
-      <details class="pp-request-advanced" data-request-advanced>
+  <section class="pp-card pp-request-panel" aria-label="Request"><form data-playground-form autocomplete="off">
+    <fieldset class="pp-request-config" aria-label="Request settings">
+      <label class="pp-field">URL<input type="url" name="url" placeholder="https://example.com/" required maxlength="12000" spellcheck="false" autocomplete="off" aria-describedby="request-url-help"/><small id="request-url-help">Any public http or https URL.</small></label>
+      <label class="pp-field">Browser<select name="render" aria-describedby="request-render-help">
+        <option value="auto" selected>Auto: HTTP first, a browser when needed</option>
+        <option value="always">Always use a browser</option>
+        <option value="never">Never use a browser</option>
+      </select><small id="request-render-help">Auto is the cheapest way to get the data.</small></label>
+      <fieldset class="pp-scopes"><legend>Return</legend>{FORMATS.map(format => <label><input type="checkbox" name="formats" value={format} checked={format === 'markdown'}/>{format}</label>)}</fieldset>
+      <details class="pp-request-advanced">
         <summary>Advanced</summary>
-        <label class="pp-field" data-request-profile-field hidden>Access profile<select data-request-profile></select></label>
-        <p class="pp-form-help" data-profile-summary>FetchX checks your destination before sending.</p>
-        <label class="pp-field" data-request-method-field hidden>Method<select data-request-method><option>GET</option></select></label>
-        <fieldset class="pp-request-headers" data-request-headers hidden><legend>Request headers</legend>
-          <label class="pp-field" data-header-field hidden>Accept<input data-request-header="accept" placeholder="text/html" maxlength="1024" autocomplete="off"/></label>
-          <label class="pp-field" data-header-field hidden>Accept-Language<input data-request-header="accept-language" placeholder="en-US" maxlength="1024" autocomplete="off"/></label>
-          <label class="pp-field" data-header-field hidden>User-Agent<input data-request-header="user-agent" maxlength="1024" autocomplete="off"/></label>
-        </fieldset>
-        <label class="pp-browser-option" data-screenshot-field hidden><input type="checkbox" data-request-screenshot/> Capture a screenshot</label>
-        <label class="pp-field" data-wait-field hidden>Wait after page load (ms)<input type="number" data-request-wait min="0" step="1" inputmode="numeric" placeholder="Default"/></label>
+        <label class="pp-field">Country<input name="country" maxlength="2" placeholder="Learned per site, else US" pattern="[A-Za-z]{2}" spellcheck="false" autocomplete="off"/></label>
+        <label class="pp-field">Route<select name="route">
+          <option value="" selected>Auto: try every route</option>
+          <option value="direct">Direct only</option>
+          <option value="datacenter">Datacenter only</option>
+          <option value="residential">Residential only</option>
+        </select><small>A fixed route makes one attempt and explains exactly what happened.</small></label>
+        <label class="pp-field">Wait for a CSS selector<input name="wait_selector" maxlength="512" placeholder=".price" spellcheck="false" autocomplete="off"/></label>
+        <label class="pp-field">Most credits to spend<input type="number" name="max_credits" min="1" max="100000" step="1" inputmode="numeric" placeholder="No limit"/></label>
+        <label class="pp-field">Most attempts<input type="number" name="max_attempts" min="1" max="5" step="1" inputmode="numeric" placeholder="5"/></label>
+        <label class="pp-browser-option"><input type="checkbox" name="fix_headers" checked/> Fix automation headers (User-Agent, Accept)</label>
       </details>
     </fieldset>
     <div class="pp-request-send">
-      <p class="pp-form-help pp-request-status" data-request-status role="status">Enter a URL to check the request.</p>
       <p class="pp-inline-error" data-fetch-error role="alert" hidden></p>
-      <button type="submit" class="pp-button pp-button-primary pp-full" data-run-request disabled>Send request <Icon name="arrow" size={17}/></button>
+      <button type="submit" class="pp-button pp-button-primary pp-full" data-run-request disabled>Fetch <Icon name="arrow" size={17}/></button>
     </div>
-  </form>
-  <div class="pp-live-request-actions">
-    <button type="button" class="pp-button pp-button-secondary" data-new-request hidden>Start a new request</button>
-    <label class="pp-field" data-pending-label hidden>Pending requests<select data-pending-operation></select></label>
-    <button type="button" class="pp-button pp-button-secondary" data-recover-result hidden>Recover saved result</button>
-    <p class="pp-form-help" data-recovery-note hidden>Recovery reads the saved result. It never sends a new source request.</p>
-  </div></section>
-  <section class="pp-card pp-response-panel" aria-label="Response inspector">
+  </form></section>
+  <section class="pp-card pp-response-panel" aria-label="Result">
     <div class="pp-result-overview">
       <div class="pp-result-title"><h2>Result</h2><span class="pp-status" data-response-state role="status" aria-live="polite">Ready</span></div>
       <p class="pp-form-help" data-response-note>No request has been sent.</p>
-      <p class="pp-inline-error" data-response-error role="alert" hidden></p>
       <dl class="pp-result-facts" data-result-facts hidden>
-        <div><dt>Source status</dt><dd data-result-source>—</dd></div><div><dt>Route</dt><dd data-result-route>—</dd></div><div><dt>Country</dt><dd data-result-country>—</dd></div>
-        <div data-result-duration-metric hidden><dt>Duration</dt><dd data-result-duration>—</dd></div><div><dt>Decoded bytes</dt><dd data-result-bytes>—</dd></div>
+        <div><dt>Site status</dt><dd data-result-status>—</dd></div>
+        <div><dt>Credits charged</dt><dd data-result-credits>—</dd></div>
+        <div><dt>Attempts</dt><dd data-result-attempts>—</dd></div>
+        <div><dt>Browser</dt><dd data-result-rendered>—</dd></div>
       </dl>
-      <section class="pp-credit-usage" data-credit-usage aria-labelledby="credit-usage-title" hidden>
-        <h3 id="credit-usage-title">Credit usage</h3>
-        <p class="pp-credit-usage-summary" data-credit-usage-summary role="status"></p>
-        <dl class="pp-result-facts" data-credit-usage-meter hidden>
-          <div data-credit-usage-transfer-row hidden><dt>Billed transfer</dt><dd data-credit-usage-transfer></dd></div>
-          <div data-credit-usage-block-size-row hidden><dt>Billing block size</dt><dd data-credit-usage-block-size></dd></div>
-          <div data-credit-usage-blocks-row hidden><dt>Blocks billed</dt><dd data-credit-usage-blocks></dd></div>
-          <div data-credit-usage-rate-row hidden><dt>Credit rate</dt><dd data-credit-usage-rate></dd></div>
-        </dl>
-        <p class="pp-credit-usage-calculation" data-credit-usage-calculation hidden></p>
-      </section>
-      <p class="pp-result-operation pp-form-help" data-operation-row hidden>Operation key <code data-operation-key></code></p>
+      <div data-attempt-list></div>
     </div>
-    <div class="pp-response-toolbar"><div class="pp-tabs" role="tablist" aria-label="Response views">
-      <button type="button" role="tab" id="tab-output" aria-selected="true" aria-controls="panel-output" data-inspector-tab="output">Body</button>
+    <div class="pp-response-toolbar"><div class="pp-tabs" role="tablist" aria-label="Result views">
+      <button type="button" role="tab" id="tab-output" aria-selected="true" aria-controls="panel-output" data-inspector-tab="output">Content</button>
       <button type="button" role="tab" id="tab-headers" aria-selected="false" aria-controls="panel-headers" tabindex="-1" data-inspector-tab="headers">Headers</button>
-      <button type="button" role="tab" id="tab-diagnostics" aria-selected="false" aria-controls="panel-diagnostics" tabindex="-1" data-inspector-tab="diagnostics">Diagnostics</button>
+      <button type="button" role="tab" id="tab-json" aria-selected="false" aria-controls="panel-json" tabindex="-1" data-inspector-tab="json">JSON</button>
       <button type="button" role="tab" id="tab-screenshot" aria-selected="false" aria-controls="panel-screenshot" tabindex="-1" data-inspector-tab="screenshot" hidden>Screenshot</button>
       <button type="button" role="tab" id="tab-code" aria-selected="false" aria-controls="panel-code" tabindex="-1" data-inspector-tab="code">Code</button>
     </div></div>
     <div class="pp-response-body" id="panel-output" role="tabpanel" aria-labelledby="tab-output" data-inspector-panel="output">
-      <div class="pp-artifact-toolbar"><p class="pp-form-help" data-body-description>Response body</p><button type="button" class="pp-copy-button" data-copy-body hidden>Copy body</button><button type="button" class="pp-copy-button" data-download-body hidden>Download body</button></div>
-      <pre class="pp-code pp-live-output" tabindex="0" role="region" aria-label="Response text" data-response-output>Send a request to inspect the response body.</pre>
-      <p class="pp-form-help">HTML and rendered DOM are shown as text.</p>
+      <div class="pp-artifact-toolbar"><p class="pp-form-help" data-output-label>Content</p><button type="button" class="pp-copy-button" data-copy-output hidden>Copy</button><button type="button" class="pp-copy-button" data-download-body hidden>Download body</button></div>
+      <pre class="pp-code pp-live-output" tabindex="0" role="region" aria-label="Content" data-response-output>Fetch a URL to see its content.</pre>
     </div>
     <div class="pp-response-body" id="panel-headers" role="tabpanel" aria-labelledby="tab-headers" data-inspector-panel="headers" hidden>
-      <div class="pp-artifact-toolbar"><button type="button" class="pp-copy-button" data-copy-headers hidden>Copy headers</button></div>
-      <pre class="pp-code pp-live-output" tabindex="0" role="region" aria-label="Source response headers" data-response-headers>No source headers retained.</pre>
+      <pre class="pp-code pp-live-output" tabindex="0" role="region" aria-label="Response headers and cookies" data-response-headers>No headers yet.</pre>
     </div>
-    <div class="pp-response-body" id="panel-diagnostics" role="tabpanel" aria-labelledby="tab-diagnostics" data-inspector-panel="diagnostics" hidden><pre class="pp-code pp-live-output" tabindex="0" role="region" aria-label="Response diagnostics" data-response-diagnostics>No diagnostics yet.</pre></div>
+    <div class="pp-response-body" id="panel-json" role="tabpanel" aria-labelledby="tab-json" data-inspector-panel="json" hidden>
+      <pre class="pp-code pp-live-output" tabindex="0" role="region" aria-label="The API response" data-response-json>No response yet.</pre>
+    </div>
     <div class="pp-response-body" id="panel-screenshot" role="tabpanel" aria-labelledby="tab-screenshot" data-inspector-panel="screenshot" hidden>
-      <div class="pp-artifact-toolbar"><button type="button" class="pp-copy-button" data-download-screenshot>Download screenshot</button></div>
-      <img class="pp-browser-screenshot" data-browser-screenshot alt="Screenshot of the retained browser page"/>
+      <img class="pp-browser-screenshot" data-browser-screenshot alt="Screenshot of the fetched page"/>
     </div>
     <div class="pp-response-body" id="panel-code" role="tabpanel" aria-labelledby="tab-code" data-inspector-panel="code" hidden>
       <div class="pp-code-toolbar">
-        <label>Operation<select data-code-operation><option value="send">Send request</option><option value="recover" disabled>Recover this request</option></select></label>
         <label>Language<select data-code-language><option value="curl">cURL</option><option value="javascript">JavaScript</option><option value="python">Python</option></select></label>
-        <button type="button" class="pp-copy-button" data-copy-code disabled>Copy code</button>
+        <button type="button" class="pp-copy-button" data-copy-code>Copy code</button>
       </div>
-      <pre class="pp-code pp-live-output" tabindex="0" role="region" aria-label="Generated request code" data-generated-code>Prepare a request to generate code.</pre>
-      <p class="pp-form-help">Set FETCHX_API_KEY in your server environment. Send creates a new operation key when it runs; recover reads the saved key.</p>
+      <pre class="pp-code pp-live-output" tabindex="0" role="region" aria-label="Request code" data-generated-code>Enter a URL to see the code for this request.</pre>
+      <p class="pp-form-help">Set FETCHX_API_KEY in your server environment. Never put a key in browser code.</p>
     </div>
   </section>
 </div>}
-{view === 'requests' && <section class="pp-card"><div class="pp-card-heading"><div><h2>Request history</h2><p>Bounded retained history. Source captures appear only when you open a request.</p></div><button type="button" class="pp-button pp-button-secondary" data-refresh-history>Refresh history</button></div><div class="pp-filter-row"><label class="pp-field pp-live-search">Search operation ID<input type="search" data-request-search placeholder="Filter retained operations"/></label><label class="pp-field">State<select data-request-filter><option value="all">All states</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="unknown">Unknown</option><option value="running">Running</option><option value="reserved">Reserved</option></select></label><span class="pp-soft-tag" data-filter-count>Loading…</span></div><div data-request-list></div></section>}
+{view === 'requests' && <section class="pp-card"><div class="pp-card-heading"><div><h2>Requests</h2><p>Open a request to see its result and every attempt.</p></div><button type="button" class="pp-button pp-button-secondary" data-refresh-history>Refresh</button></div><div class="pp-filter-row"><label class="pp-field">Status<select data-request-filter><option value="">All</option><option value="succeeded">Succeeded</option><option value="failed">Failed</option><option value="pending">Pending</option></select></label><label class="pp-field pp-live-search">Tag<input type="search" data-request-tag maxlength="64" placeholder="Filter by tag"/></label><span class="pp-soft-tag" data-filter-count>Loading…</span></div><div data-request-list></div><button type="button" class="pp-button pp-button-secondary" data-more-requests hidden>Load more</button></section>}
 {view === 'keys' && <>
-  <div class="pp-callout"><Icon name="lock" size={22}/><div><strong>Project credentials, with explicit permissions.</strong><p>Secrets are revealed once. Rotation revokes the old key. Never expose a key in browser code.</p></div></div>
-  <section class="pp-card pp-live-key-create"><div class="pp-card-heading"><h2>Create an API key</h2></div><form data-create-key><label class="pp-field">Key name<input name="name" data-key-name maxlength="80" placeholder="Production server" required autocomplete="off"/></label><fieldset class="pp-scopes"><legend>Key permissions</legend>{['fetch:read','fetch:write','usage:read','profiles:read'].map(scope=><label><input type="checkbox" name="scope" value={scope} checked/>{scope}</label>)}</fieldset><button type="submit" class="pp-button pp-button-primary" data-generate-key>Create API key</button></form></section>
-  <section class="pp-card"><div class="pp-card-heading"><div><h2>Project keys</h2><p>Safe metadata only. Existing secrets cannot be retrieved.</p></div></div><div data-key-list></div></section>
+  <div class="pp-callout"><Icon name="lock" size={22}/><div><strong>Project keys with explicit permissions.</strong><p>A secret is shown once. Rotating revokes the old key. Never put a key in browser code.</p></div></div>
+  <section class="pp-card pp-live-key-create"><div class="pp-card-heading"><h2>Create an API key</h2></div><form data-create-key><label class="pp-field">Key name<input name="name" data-key-name maxlength="80" placeholder="Production server" required autocomplete="off"/></label><fieldset class="pp-scopes"><legend>Permissions</legend>{KEY_SCOPES.map(scope => <label><input type="checkbox" name="scope" value={scope.id} checked/>{scope.label} <small>{scope.detail}</small></label>)}</fieldset><button type="submit" class="pp-button pp-button-primary" data-generate-key>Create API key</button></form></section>
+  <section class="pp-card"><div class="pp-card-heading"><div><h2>Project keys</h2><p>Existing secrets cannot be shown again.</p></div></div><div data-key-list></div></section>
 </>}
-{view === 'onboarding' && <div class="pp-onboarding-layout"><section class="pp-card pp-checklist"><div class="pp-card-heading"><h2>Your first integration</h2><span class="pp-soft-tag" data-onboarding-count>Checking…</span></div><ol><li data-checklist-email><span class="pp-step-check">1</span><div><h3>Verify your email</h3><p>Your current session belongs to a verified account.</p></div></li><li data-checklist-project><span class="pp-step-check">2</span><div><h3>Create a project</h3><p>Each project has its own approved access and credits.</p><button type="button" class="pp-text-link" data-open-project>Create another project →</button></div></li><li data-checklist-key><span class="pp-step-check">3</span><div><h3>Create a scoped API key</h3><p>Keep the secret in your server environment.</p><a href="/app/keys" class="pp-text-link">Manage API keys →</a></div></li><li data-checklist-request><span class="pp-step-check">4</span><div><h3>Send your first request</h3><p>Inspect a retained response and validate the source data.</p><a href="/app/playground" class="pp-text-link">Open playground →</a></div></li></ol></section><aside class="pp-card pp-onboarding-aside"><span class="pp-eyebrow">KEEP THE OPERATION KEY</span><h2>A clear path through uncertainty.</h2><p>If a request times out, recover the saved operation using its original key. A new request is a deliberate action and may use additional credits.</p><a href="/docs" class="pp-text-link">Read the integration guide <Icon name="arrow" size={15}/></a></aside></div>}
+{view === 'onboarding' && <div class="pp-onboarding-layout"><section class="pp-card pp-checklist"><div class="pp-card-heading"><h2>Your first integration</h2><span class="pp-soft-tag" data-onboarding-count>Checking…</span></div><ol><li data-checklist-email><span class="pp-step-check">1</span><div><h3>Verify your email</h3><p>Your session belongs to a verified account.</p></div></li><li data-checklist-project><span class="pp-step-check">2</span><div><h3>Create a project</h3><p>Your first project gets the trial credits.</p><button type="button" class="pp-text-link" data-open-project>Create another project →</button></div></li><li data-checklist-key><span class="pp-step-check">3</span><div><h3>Create an API key</h3><p>Keep the secret in your server environment.</p><a href="/app/keys" class="pp-text-link">Manage API keys →</a></div></li><li data-checklist-request><span class="pp-step-check">4</span><div><h3>Fetch your first page</h3><p>Try a URL in the playground, then copy its code.</p><a href="/app/playground" class="pp-text-link">Open playground →</a></div></li></ol></section><aside class="pp-card pp-onboarding-aside"><span class="pp-eyebrow">ONLY SUCCESS IS CHARGED</span><h2>Retries are safe.</h2><p>Send an idempotency_key with each request. If a response is lost, send the same request again: FetchX returns the first result and never charges twice.</p><a href="/docs" class="pp-text-link">Read the API guide <Icon name="arrow" size={15}/></a></aside></div>}

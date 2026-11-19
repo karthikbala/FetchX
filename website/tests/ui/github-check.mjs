@@ -74,11 +74,11 @@ async function scenario(name, options, run) {
     if (path === '/auth/code') return send({ challenge_id: 'synthetic-email-challenge', expires_in: 600, accepted: true });
     if (path === '/auth/verify') { assert.equal(body.code, '12345678'); signedIn = true; return send(session()); }
     if (path === '/auth/logout') { assert.equal(request.headers()['x-csrf-token'], csrf); signedIn = false; return send({ logged_out: true }); }
-    if (path === '/projects/' + project.id) return send({ project, capabilities: { native_http: true, routes: ['direct'] }, access_profiles: [] });
+    if (path === '/projects/' + project.id) return send({ project });
     if (path.endsWith('/keys')) return send({ keys: [] });
-    if (path.endsWith('/requests')) return send({ operations: [] });
-    if (path.endsWith('/usage')) return send({ credits: { granted: 25, available: 25 }, gateway: { outcomes: {}, by_key_and_state: [] } });
-    if (path.endsWith('/billing')) return send({ status: 'trial', credits: { available: 25 }, commercial_enabled: false });
+    if (path.endsWith('/fetch')) return send({ items: [], next_cursor: null });
+    if (path.endsWith('/usage')) return send({ balance: { credits: 25, trial: 25, purchased: 0, reserved: 0, payment_hold: false }, used: { credits: 0, succeeded: 0, failed: 0, captcha_solved: 0 }, by_step: [], daily: [] });
+    if (path.endsWith('/billing')) return send({ balance: { credits: 25, reserved: 0, available: 25, trial: 25, purchased: 0, held: false }, prices: { http: 1 } });
     throw new Error('Unexpected synthetic API route: ' + path);
   });
   try {

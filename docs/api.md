@@ -1,100 +1,34 @@
-# FetchX v1 workflow API
+# API
 
-FetchX v1 provides authenticated HTTP fetching, configured browser rendering and reviewed interactions. Source profiles define destinations, country, rendering, methods, readiness and budgets. The `/v1` routes require a provisioned project credential in `Authorization: Bearer <project-token>`.
+The contract is [`openapi.json`](openapi.json); `test/api-contract.test.mjs` holds the gateway to it. The published guide at [fetchx.ai/docs](https://fetchx.ai/docs) is built from the same file (`website/src/data/api-docs.ts`). This page is the short version for people working on the code.
 
-For the customer v2 endpoints, see the [OpenAPI contract](openapi.json) and the
-[API compatibility policy](api-compatibility.md).
+## Endpoints
 
-## Fetch and recover
+| Method and path | Key scope | What it does |
+| --- | --- | --- |
+| `POST /v1/fetch` | `fetch:write` | Get a URL. 200 when finished (`succeeded` or `failed`), 202 while running |
+| `GET /v1/fetch` | `fetch:read` | List requests, newest first: `status`, `tag`, `idempotency_key`, `since`, `limit`, `cursor` |
+| `GET /v1/fetch/{id}` | `fetch:read` | The result; `include_body=false` for polling |
+| `GET /v1/fetch/{id}/content` | `fetch:read` | The body as received, with its Content-Type |
+| `GET /v1/fetch/{id}/screenshot` | `fetch:read` | The JPEG screenshot |
+| `DELETE /v1/fetch/{id}` | `fetch:read` | Delete everything the site sent, now |
+| `GET /v1/usage` | `usage:read` | Balance and usage for a day, a month or a range |
 
-`GET /v1/profiles` lists the calling project's profile IDs, execution mode, country, methods, recipe names and response limit. Provider credentials and source recipes are not disclosed.
+Keys are `fxk_` console keys with scopes, or a `tokenHash` in `config.projects` (unmetered, all scopes). The console API (`/control/...`, behind the website's bridge) mirrors these per project; see [console](console.md).
 
-```sh
-curl http://localhost:8788/v1/fetch \
-  -H "Authorization: Bearer $FETCHX_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"profile":"example.http","url":"https://example.com/","idempotency_key":"example-2026-10-29"}'
-```
+## A request's life
 
-Persist the key before calling. `POST /v1/fetch` creates a sticky workflow, executes one operation, and closes it after capture. The provider may make bounded first-request fallback attempts within that workflow. Repeating the same payload/key returns the original capture; changing the payload conflicts. A lost response is recovered with `GET /v1/fetch/:key`. Do not create another key to retry an uncertain dispatch. Do not mix the same key across synchronous and queued calls. Stored results eventually expire according to retention policy; expiry does not grant a fresh source request.
+1. **Admission** (`FetchService.submit`): parse and validate (`src/fetch/request.mjs`), check the idempotency key (same key and body returns the stored result; a different body is a 409), the project's concurrency limit, and plan the ladder (`src/fetch/ladder.mjs`). Credits are reserved: at least the cheapest step, at most `max_credits` or the most expensive step. Nothing has been sent yet, so every refusal here is a 4xx and free.
+2. **The ladder** (`FetchService.#run`): each step is an HTTP attempt (`http-attempt.mjs`, redirects followed and re-checked) or a browser attempt (`browser-attempt.mjs`, through a worker and the egress relay). Each response is classified (`outcome.mjs`): `success`, `answered` (a real 404/410), `blocked`, `rate_limited`, `login_required`, `site_error`, `needs_browser`. The next step depends on the last result: a 429 goes to a fresh residential IP, a JavaScript shell to a browser. Steps refused before anything was sent (`not_admitted`) do not count against `max_attempts`.
+3. **Finish** (`#finish`): on success, charge the winning step's price (`billing/ledger.mjs`), at most the reservation; otherwise release it. Store the summary with the request and everything the site sent in `fetch_content` (sealed, deleted after 7 days or on DELETE). Deliver the webhook.
+4. **Learning** (`#learn`): every attempt updates `site_routes` for the host ([site knowledge](site-knowledge.md)).
 
-The response includes `id`, `workflow`, `status` (source HTTP status), `provider_status`, `provider`, `country`, `headers`, `body_base64`, `captured_at`, `error`, `fallback_blocked` and accounting metadata. Browser responses include `browser_tier` and `browser_version`. API HTTP 200 means a retained result is available: inspect its source status/error and validate its content before accepting a record.
+A request still running when the gateway stops is closed as `uncertain` at the next start and its credits released; FetchX never resends it.
 
-New residential captures report `customer_traffic.cost_usd` at $2 per
-1,000,000,000 bytes through Evomi or DataImpulse. This exact decimal string
-prices traffic in both directions across the operation's attempts, including
-an authorized fallback. A fully measured failed attempt can contribute to the
-total. If an attempt's traffic is uncertain, the charge is null. A completed
-job exposes the same object under `result.customer_traffic`. Idempotent replay
-returns the saved capture. See the [meter and example](fetch-api.md#residential-traffic-charges).
+## Errors
 
-Optional request fields are `method`, `headers`, `body_base64`, `main_document`, `resource_type`, `zipcode` (legacy profiles) and `browser`. Browser captures require GET and `main_document:true` (the fetch facade defaults it to true). Rendering is selected by the reviewed profile, not by an unreviewed caller flag. Use the existing workflow API for multi-operation sessions; each capture restores cookies/localStorage, not in-memory JavaScript state.
+Refused calls are `{error: {code, message, details?}}` with a 4xx (`src/api/v1.mjs`). Failed fetches are HTTP 200 with `status: failed` and `error: {code, message, next: {action, detail}}`; `nextAction()` in `src/fetch/service.mjs` maps each code to the next step. The code lists are in the contract and in the [published errors page](https://fetchx.ai/docs/errors).
 
-## Browser recipes
+## Changing the API
 
-Recipes live in the server-side source profile. A caller selects a recipe and supplies only its declared text variables:
-
-```json
-{"profile":"catalog.browser","url":"https://catalog.example/search","idempotency_key":"search-001","browser":{"recipe":"search","values":{"query":"desk"}}}
-```
-
-Example profile fragment (replace selectors and approve destination/method rules before using):
-
-```json
-{
-  "execution": "browser",
-  "readySelector": "#results",
-  "browserRecipes": {
-    "search": {
-      "steps": [
-        {"action":"fill","selector":"#query","valueFrom":"query"},
-        {"action":"click","selector":"#search"},
-        {"action":"wait","selector":"#results"}
-      ],
-      "extract": {
-        "titles":{"selector":"#results .title","all":true},
-        "first_link":{"selector":"#results a","attribute":"href"}
-      },
-      "screenshot":"viewport"
-    }
-  }
-}
-```
-
-Actions: `fill`, `select`, `click`, `press` (Enter/Tab/Escape/arrows), `wait`, `scroll` into view. Selectors and static values are reviewed configuration. `fill`/`select` accept either `value` or `valueFrom`. Wait states are visible, hidden, attached or detached. No caller JavaScript or arbitrary CDP endpoint is exposed. Up to 20 steps, 20 extraction fields and 100 matches per field; text values are bounded to 4,096 characters. The entire worker has a 60-second deadline. Screenshots are PNG viewport or a reviewed element selector, and share the response-byte ceiling with HTML and extraction. `extracted`, `screenshot`, `actions_completed`, `action_step` identify outputs and progress without logging submitted values.
-
-Any action other than a wait makes the capture non-replayable across providers. A subsequent denial or timeout cannot automatically submit the form again. Initial navigation blocks can still qualify for normal bounded fallback. Uncertain transport outcomes never authorize rotation. A source 429 on a residential workflow's first cookie-free GET advances to the next residential route (Evomi → DataImpulse) in a fresh session, and only the limited egress is cooled down meanwhile. A 429 on the last route cools down the source and origin. Later requests never change egress unless the profile sets `maxSessionRenewals` (integer 0–10, default 0): then a later cookie-free GET that returns 429, a denial or a recognized challenge before any browser action starts a fresh residential session. That session gets a new sticky session id, starts again from the first route and has no saved cookies or browser state. The request is retried once in it, including first-GET provider rotation. Only the limited egress is cooled down while a renewal remains. Each renewal is counted against `maxSessionRenewals` and is visible as `session_renewals` on the workflow and as routing reason `session_renewal`. Workflow request, byte, pacing and residential budgets still apply. Do not enable renewal for profiles whose sessions carry a login or other state that must survive. A saved page or extracted selector value is not application acceptance.
-
-## Durable asynchronous jobs
-
-Enable `jobs.enabled:true` in server configuration. `POST /v1/jobs` accepts the same payload as `/v1/fetch` and returns HTTP 202 with a job ID and `queued` state. `GET /v1/jobs/:id` returns state and, when retained, the result. `DELETE /v1/jobs/:id` cancels only queued jobs. Identical job submissions replay the same job; changed payloads conflict.
-
-One worker executes jobs under the gateway's database ownership lock. Queued work survives restart and expires after 30 minutes if not started. Running jobs interrupted by a crash become `unknown`; FetchX looks up any retained capture but never blindly repeats a source operation. Completed means processing finished, not that the source returned usable data. Inspect the nested result. Queue defaults: 20 pending/running jobs per project and 100 globally; configure `maxQueuedJobs` on a project and `jobs.maxQueued` globally. Existing bandwidth/admission limits also apply at dispatch. Polling and cancellation are project-scoped. Webhooks and horizontal workers are not part of 0.2.
-
-## Routing and limits
-
-New native profiles: Evomi, then DataImpulse. Browser profiles: Evomi/free, DataImpulse/free, Evomi/paid, DataImpulse/paid (CloakBrowser). Camoufox profiles use Evomi/free and DataImpulse/free, followed by the CloakBrowser routes only when the profile sets `browserEngineFallback: "cloakbrowser"`. Fallback is qualified, bounded and restricted to the first eligible operation; eligible outcomes are denial (401/403), a recognized challenge, a transport failure and a source 429. Paid browser builds require a valid paid entitlement; the free trial is not perpetual. No binaries, trial keys or subscriptions are included in this repository. Scrape.do/Oxylabs adapters remain available for explicitly configured legacy routes.
-
-Residential usage is reserved before dispatch. Local byte counters are not provider invoices; failed or uncertain attempts retain reservations until authoritative reconciliation. FetchX does not promise success-only billing. Status and diagnostics remain at `/v1/status` and `/v1/operations/:id/diagnostics`.
-
-For native Oxylabs routes matching the optional operator-owned
-`datacenterFixedFeePool` policy documented in [API v2](api-v2.md#included-datacenter-traffic-pricing),
-new v1 operation captures also include additive
-`accounting:{estimated_micro_usd:0,invoice_micro_usd:null,pricing:{...}}` with
-`pricing.basis:"operator_fixed_fee_pool"` and
-`pricing.customer_traffic_charge_micro_usd:0`. The original decision is saved in
-the private reserve ledger event and rechecked before transport dispatch. This
-does not allocate a subscription or infer an invoice. Lookup/replay retains the
-saved capture; historical captures gain no inferred price. Existing `credits`
-and workflow billing credit summaries keep their original Scrape.do meaning.
-Other provider attempts and paid fallback do not inherit an Oxylabs zero charge.
-An invalid/mismatched installed policy returns unavailable accounting without a
-customer zero charge; v1 has no dollar cost-ceiling input. Source/profile/project
-and byte restrictions remain unchanged.
-
-## Remaining capability work
-
-Automatic CAPTCHA solving, vendor-specific managed unblocking, general interactive browser sessions/CDP, durable webhook delivery, cross-process browser pools and distributed job ownership are not implemented. Qualify real source identity, context and completeness before migrating a crawler. Provider connectivity, fixture tests and HTTP 200 alone do not establish source acceptance.
-
-## CAPTCHA jobs
-
-Profiles advertising `captcha.async_required` must use `/v1/jobs`. A synchronous fetch is rejected before dispatch. Results include a safe `captcha` summary; `verified` means the reviewed source success selector appeared after token submission. It does not replace application record validation. See [configuration and accounting](captcha.md).
+Change `openapi.json` first, run `npm run api:generate` for the client types, then the code. The contract test fails on an undocumented route, a wrong scope, or a real response that does not match its schema.

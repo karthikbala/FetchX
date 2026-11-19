@@ -33,12 +33,12 @@ type Parameter = {
   required?: boolean;
   schema: Schema | Reference;
 };
-type Method = 'get' | 'post';
+type Method = 'get' | 'post' | 'delete';
 type Operation = {
   operationId: string;
   summary: string;
   description?: string;
-  'x-managed-key-scope': string;
+  'x-scope': string;
   requestBody?: Body | Reference;
   parameters?: (Parameter | Reference)[];
   responses: Record<string, Response | Reference>;
@@ -64,13 +64,13 @@ function resolve<T extends object>(value: T | Reference): T {
 }
 
 export const contractOperations = Object.entries(contract.paths).flatMap(([path, methods]) =>
-  (['get', 'post'] as const).flatMap(method => {
+  (['post', 'get', 'delete'] as const).flatMap(method => {
     const operation = methods[method];
     return operation ? [{
       ...operation,
       path,
       method: method.toUpperCase() as Uppercase<Method>,
-      scope: operation['x-managed-key-scope'],
+      scope: operation['x-scope'],
     }] : [];
   }),
 );
@@ -101,12 +101,12 @@ function requiredExample(media: Media, name = 'example'): unknown {
   return example.value;
 }
 
-export function requestExample(operation: ContractOperation) {
-  return requiredExample(requestMedia(operation)) as { idempotency_key: string };
+export function requestExample(operation: ContractOperation, name: string) {
+  return requiredExample(requestMedia(operation), name) as Record<string, unknown>;
 }
 
-export function responseExample(operation: ContractOperation, name?: string) {
-  return requiredExample(responseMedia(operation, '200'), name);
+export function responseExample(operation: ContractOperation, name: string, status = '200') {
+  return requiredExample(responseMedia(operation, status), name);
 }
 
 function fieldType(value: Schema | Reference): string {
@@ -168,7 +168,7 @@ function fieldRows(value: Schema | Reference, nested: string[], includeConstrain
 }
 
 export function requestRows(operation: ContractOperation): string[][] {
-  return fieldRows(requestMedia(operation).schema, ['access_profile', 'proxy'], true);
+  return fieldRows(requestMedia(operation).schema, ['route', 'wait_for'], true);
 }
 
 export function responseRows(operation: ContractOperation, nested: string[] = []): string[][] {

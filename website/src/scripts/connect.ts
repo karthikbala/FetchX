@@ -17,7 +17,6 @@ const scopeDetails: Record<string, string> = {
   'fetch:read': 'Read fetch results',
   'fetch:write': 'Submit fetch requests',
   'usage:read': 'Read project usage',
-  'profiles:read': 'Read access profiles',
 };
 
 class ConnectError extends Error {

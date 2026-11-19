@@ -1,6 +1,6 @@
 import {createHash,createHmac,createPublicKey,timingSafeEqual,verify} from 'node:crypto';
 import {fail} from './policy.mjs';
-import {paidCreditPack} from './control-paid-credits.mjs';
+import {packCredits} from './billing/purchases.mjs';
 import {
  BROKER_MAX_BODY,BROKER_PATH,BROKER_SECRET,EVENT_SUBJECTS,KEY_ID,RELAY_TIME_WINDOW,SHA256,
  PACK_OFFERS,STRIPE_VERSION,audience,brokerMessage,checkoutForm,customerForm,exact,fresh,relayMessage,sessionPrefix,stripeChargeId,stripeRefundId,stripeSubjectId,
@@ -71,7 +71,7 @@ export function stripeSettings(config,{allowDirect=false}={}){
 export function approvedPaidCreditPlan(plan){
  const offer=PACK_OFFERS[plan?.id];
  return !!offer&&plan.currency===offer.currency&&plan.amountMinor===offer.amountMinor&&plan.credits===offer.credits&&
-  paidCreditPack(plan.amountMinor,plan.currency)===plan.credits&&
+  packCredits(plan.amountMinor,plan.currency)===plan.credits&&
   plan.name===plan.credits.toLocaleString('en-US')+' credits';
 }
 export async function lockStripeSales(client,mode){

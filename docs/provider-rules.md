@@ -1,6 +1,6 @@
 # Provider rules, failure layers and reachability probes
 
-FetchX keeps site knowledge out of code. What it learns about destinations is expressed as configuration: profile fields and provider rules.
+FetchX keeps site-specific behaviour out of code. A provider rule keeps one proxy provider away from some hosts; [site knowledge](site-knowledge.md) learns the rest from traffic.
 
 ## Provider rules
 
@@ -14,38 +14,37 @@ A provider rule removes one proxy provider from consideration for matching desti
 }
 ```
 
-- `provider`: `oxylabs`, `scrapedo`, `evomi` or `dataimpulse`.
+- `provider`: `oxylabs`, `evomi` or `dataimpulse`.
 - `match`: exactly one of `host` (exact hostname) or `hostSuffix` (starting with a dot, for example `.gov`; matches `x.gov` and the bare label `gov`).
-- `action`: `exclude` (the only action). Rules never add routes, widen profiles or bypass budgets.
+- `action`: `exclude` (the only action). Rules never add routes or bypass budgets.
 - `enabled: false` disables a rule. A config rule with the same `id` as a default replaces it.
 
-Precedence: shipped defaults (`src/provider-rules-defaults.mjs`) < `config.providerRules` < database rules (operator CLI now, admin portal later). A later layer with the same `id` replaces the rule entirely.
+Precedence: shipped defaults (`src/provider-rules-defaults.mjs`) < `config.providerRules` < database rules (operator CLI and admin portal). A later layer with the same `id` replaces the rule entirely.
 
 Reviewed defaults ship in `src/provider-rules-defaults.mjs`. The first default is `oxylabs-gov`, which excludes Oxylabs for `.gov` hosts. On 2026-11-16 Oxylabs answered CONNECT with HTTP 444 for `myplace.cuyahogacounty.gov`, `www.cuyahogacounty.gov`, `www.usa.gov`, `ohio.gov`, `www.irs.gov` and `www.clevelandohio.gov`, from US, CA and GB exits, while `example.com` worked through the same proxy.
 
-Enforcement, always before any reservation or dispatch, so an excluded provider is never charged:
+Enforcement, always before anything is sent:
 
-- **v1 datacenter (Oxylabs) and Scrape.do:** the operation fails with `provider_host_excluded` (HTTP 409, details: provider, rule, host). Scrape.do fallback is skipped when Scrape.do is excluded.
-- **v1 residential:** excluded providers are skipped in the route ladder. A workflow whose first route is excluded for the requested host starts its first GET on the next allowed route. Provider fallback, session renewal and the CloakBrowser fallback skip excluded routes. If none is left, `provider_host_excluded`.
-- **v2:** a session's datacenter or residential provider is checked against the request host and every redirect host. The request fails with `provider_host_excluded` and nothing is sent.
+- **Planning:** a datacenter step whose provider is excluded for the host is skipped, and so is a residential step when both residential providers are excluded. Skipped steps are listed in the response's `skipped` with `excluded_by_provider_rule`.
+- **Residential choice:** when one residential provider is excluded, the other carries the step.
+- **Browser:** every host the page reaches, including redirect hops, is checked against the step's provider; a match is refused with `provider_excluded`.
 
 ## Failure layers
 
-Native transport failures now say which layer failed:
+A refused CONNECT says which layer failed (`openProxyTunnel` in `src/fetch/transport.mjs`):
 
-| Error | Outcome category | Meaning |
+| Error | Meaning | In auto mode |
 | --- | --- | --- |
-| `provider_target_refused` | `provider_refused` | The proxy provider answered CONNECT with a 4xx (for example 403, 444, 451). The source was never contacted. It does not count against route health. Residential fallback and Scrape.do fallback may try another provider. |
-| `provider_account_rejected` | — | CONNECT 401/402/407: provider credentials or access. |
-| `source_unreachable` | `source_unreachable` | The proxy answered CONNECT 502/503/504: it could not reach the destination, which is the usual sign of a country or IP-type firewall. It does not count against route health and may fall back to another provider. |
-| `proxy_connect_failed` | `transport_failure` | The proxy or the tunnel failed in another way. |
-| `source_denied` / `source_challenge` / `rate_limited` | as named | The source answered at HTTP level. |
+| `provider_target_refused` | The proxy provider answered CONNECT with another 4xx (for example 403, 444, 451). The site was never contacted. | `not_admitted`: the next step runs; no attempt is used |
+| `provider_account_rejected` | CONNECT 401/402/407: our provider credentials or access. | `not_admitted` |
+| `source_unreachable` | The proxy answered CONNECT 502/503/504: the exit could not reach the site, the usual sign of a country or IP-type firewall. | `unreachable`, learned for the route |
+| `proxy_connect_refused`, `proxy_connect_failed` | The proxy itself could not be reached. | `not_admitted` |
 
-v2 already reports CONNECT status and stage in its diagnostics (`proxy_connect_rejected` with `provider_status`).
+Answers from the site itself (403, a challenge page, 429, 5xx) are classified by `src/fetch/outcome.mjs`.
 
 ## Reachability probe
 
-Operators can measure how a new host can be reached before writing its profile:
+Operators can measure how a host can be reached, for example before writing a rule:
 
 ```bash
 GATEWAY_CONFIG=/run/secrets/gateway.json node scripts/probe-reachability.mjs myplace.cuyahogacounty.gov US,CA,GB,DE
@@ -61,11 +60,10 @@ The summary turns the matrix into generic facts:
 - `provider_refused`: providers that refused in every probed country. `proposed_provider_rules` holds a host rule for each.
 - `datacenter_blocked_countries`: the datacenter route fails where residential in the same country succeeds.
 - `recommended_route`: the cheapest route that returned `ok` (datacenter, then residential HTTP). It falls back to an unverified residential browser suggestion when residential only reached a challenge.
-- `proposed_profile`: `v1` (`country`, plus `routingPolicy`/`execution` when residential) and `v2` (`countries`, `proxy_classes`).
 
-The output is a proposal. An operator reviews it and applies the profile fields and rules. Nothing is changed automatically.
+The output is a proposal. An operator reviews it and applies the proposed rules. A completed probe also seeds site knowledge for its `http` routes. Nothing else changes automatically.
 
-## Database rules and the operator CLI (admin portal step 1)
+## Database rules and the operator CLI
 
 Rules can also live in the database (`routing_rules`), with every change recorded in `routing_rule_audit` (actor, before, after, time). The gateway loads them at start and refreshes them every `providerRulesRefreshMs` (default 30000; 1000–3600000), so edits apply without a restart. An invalid row is skipped and reported (`provider_rules_rejected`); it never breaks routing.
 
@@ -82,9 +80,9 @@ FETCHX_OPERATOR=you@example.com node src/operator.mjs rules audit [rule-id]
 - **Overriding defaults and config:** enabling or disabling a default/config rule writes a database override, and requires a reason.
 - **Deleting:** default and config rules cannot be deleted; disable them instead.
 
-The admin portal (see `docs/plans/admin-portal.md`) builds on these same functions.
+The admin portal builds on these same functions.
 
-## Admin API (admin portal step 2)
+## Admin API
 
 Operators manage rules over the control plane. It is disabled unless `controlPlane.admin.enabled` is `true`. Operators are granted out of band:
 
@@ -107,25 +105,18 @@ Grants and revocations are recorded in `control_operator_audit`. Revocation take
 | POST | `/admin/rules/test` | `{provider, host}` | `{excluded, rule, reason}`: would this provider be used for this host? (read-only) |
 | GET | `/admin/rules/:id/audit`, `/admin/audit` | — | Audit entries (actor = operator email, before, after, time) |
 
-## Probe jobs, applying proposals and profile routing (admin portal step 3)
+## Probe jobs and applying proposals
 
 Probes run in the background on the gateway. `POST /admin/probes` returns at once with a probe id. Only one probe runs at a time (`probe_busy`, 409), and at most `controlPlane.admin.maxProbesPerDay` start in 24 hours (default 20, `probe_daily_limit`, 429). Each probe takes a public hostname and 1–6 country codes. A gateway restart marks unfinished probes `interrupted`; they never resume on their own. Reports are stored in `admin_probes` and hold metadata only (see "Reachability probe" above).
 
-Profile routing overrides change only `country`, `routingPolicy`, `execution`, `browserEngine`, `browserEngineFallback`, `maxRouteAttempts` and `maxSessionRenewals`. Hosts, methods, headers, byte, request and credit limits cannot be changed here. Each override is merged onto the profile and checked by `residentialPolicy` against the live config before it is saved, and again when it is loaded. An invalid stored override is skipped and logged as `profile_overrides_rejected`. Overrides apply to workflows created afterwards; running workflows keep the policy they started with. Every create, update and delete is recorded in `source_profile_override_audit`.
 
 | Method | Path | Body | Result |
 | --- | --- | --- | --- |
 | GET | `/admin/probes` | — | The last 50 probes with state and a short summary |
 | POST | `/admin/probes` | `{host, countries, include_excluded?}` | Starts a probe: `{probe: {id, state: "queued", …}}` |
 | GET | `/admin/probes/:id` | — | The probe with its full stored report |
-| POST | `/admin/probes/:id/apply` | `{rules?: [id…], profile?: {id, version?}}` | Saves the chosen *proposed* rules, with the probe as evidence, and/or merges the proposed v1 routing into the profile's override (`probe_not_complete`, `probe_rule_not_proposed`, `probe_profile_not_proposed`) |
-| GET | `/admin/profiles` | — | Every source profile: base, override, version, effective and resolved routing, plus the editable `fields` |
-| PUT | `/admin/profiles/:id/routing` | `{patch, version?}` | Creates (no `version`) or replaces (matching `version`) the override (`profile_override_invalid`, `profile_override_version_conflict`) |
-| DELETE | `/admin/profiles/:id/routing` | — | Removes the override; new workflows use the base profile |
-| GET | `/admin/profiles/:id/audit` | — | Override history |
+| POST | `/admin/probes/:id/apply` | `{rules: [id…]}` | Saves the chosen *proposed* rules, with the probe as evidence (`probe_not_complete`, `probe_apply_empty`, `probe_rule_not_proposed`) |
 
-## Admin page (admin portal step 4)
+## Admin page
 
-Operators manage all of this at `https://fetchx.ai/app/admin`. It has four tabs: provider rules (list, add/edit, enable/disable with a reason, delete, host test), reachability probes (start, watch, per-cell results, apply), profile routing and the audit log. The workspace sidebar shows an Admin link only when `/admin/session` succeeds. Everything on the page is rendered as text, and every write sends the session's CSRF token.
-
-Existing `config.providerRules` need no migration. They keep working and appear with source `config`. See the migration note in `docs/plans/admin-portal.md`.
+Operators manage all of this at `https://fetchx.ai/app/admin`: provider rules (list, add, edit, enable or disable with a reason, delete, host test), reachability probes (start, watch, per-cell results, apply proposed rules), site knowledge (hosts, their routes, forget a host) and the audit log.

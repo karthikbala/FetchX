@@ -5,13 +5,6 @@ const $ = <T extends Element = HTMLElement>(sel: string, root: ParentNode = docu
 const $$ = <T extends Element = HTMLElement>(sel: string, root: ParentNode = document) => [...root.querySelectorAll(sel)] as T[];
 let csrf = '';
 let providers: string[] = [];
-let profilesCache: Json[] = [];
-const FIELD_HELP: Record<string, string> = {
-  country: 'Two-letter country (e.g. US)', routingPolicy: 'legacy or residential-v1', execution: 'http or browser',
-  browserEngine: 'camoufox or cloakbrowser', browserEngineFallback: 'cloakbrowser (Camoufox profiles only)',
-  maxRouteAttempts: '1–6', maxSessionRenewals: '0–10',
-};
-const NUMERIC = new Set(['maxRouteAttempts', 'maxSessionRenewals']);
 
 class ApiError extends Error { constructor(readonly status: number, readonly code: string, message: string) { super(message); } }
 async function api(path: string, init: { method?: string; body?: unknown } = {}): Promise<Json> {
@@ -170,63 +163,48 @@ async function showProbe(id: string) {
       ['Geo-restricted', s.geo_restricted ? 'yes' : 'no'], ['Providers refusing', (s.provider_refused ?? []).join(', ') || '—'],
       ['Datacenter blocked in', (s.datacenter_blocked_countries ?? []).join(', ') || '—'],
       ['Recommended route', s.recommended_route ? `${s.recommended_route.class} ${s.recommended_route.country} via ${s.recommended_route.provider} (${s.recommended_route.execution}${s.recommended_route.verified === false ? ', unverified' : ''})` : '—'],
-      ['Proposed v1 routing', s.proposed_profile?.v1 ? JSON.stringify(s.proposed_profile.v1) : '—'],
       ['Error', probe.error ?? '—']];
     $('[data-probe-summary]')!.replaceChildren(...rows.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })]));
     const rules: Json[] = s.proposed_provider_rules ?? [];
     $('[data-apply-rules]')!.replaceChildren(...(rules.length ? rules.map(rule => el('label', { class: 'fx-admin-inline' },
       el('input', { type: 'checkbox', name: 'rule', value: rule.id }), `Add rule ${rule.id}: no ${rule.provider} for ${matchText(rule.match)}`)) : [el('p', { class: 'fx-admin-hint', text: 'No provider rules proposed.' })]));
-    const select = $<HTMLSelectElement>('[data-apply-profile]')!;
-    if (!profilesCache.length) profilesCache = (await api('/admin/profiles')).profiles;
-    select.replaceChildren(el('option', { value: '', text: '— none —' }), ...profilesCache.map(p => el('option', { value: p.id, text: p.id })));
-    select.disabled = !s.proposed_profile?.v1;
     $<HTMLFormElement>('[data-apply-form]')!.hidden = probe.state !== 'complete';
     box.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 }
 async function submitApply(event: SubmitEvent) {
   event.preventDefault();
-  const form = event.currentTarget as HTMLFormElement, data = new FormData(form), id = $('[data-probe-detail]')!.dataset.probeId!;
-  const rules = data.getAll('rule').map(String), profileId = String(data.get('profile') ?? '');
-  const body: Json = { rules };
-  if (profileId) { const current = profilesCache.find(p => p.id === profileId); body.profile = { id: profileId, ...(current?.version ? { version: current.version } : {}) }; }
-  if (!window.confirm(`Apply ${rules.length} rule(s)${profileId ? ` and the proposed routing to ${profileId}` : ''}?`)) return;
-  await run(async () => { await api(`/admin/probes/${id}/apply`, { method: 'POST', body }); toast('Proposal applied.'); profilesCache = []; await Promise.all([loadRules(), loadProbes(), loadProfiles()]); });
+  const form = event.currentTarget as HTMLFormElement, id = $('[data-probe-detail]')!.dataset.probeId!;
+  const rules = new FormData(form).getAll('rule').map(String);
+  if (!rules.length) { showError(new ApiError(400, 'probe_apply_empty', 'Select at least one proposed rule.')); return; }
+  if (!window.confirm(`Add ${rules.length} provider rule(s)?`)) return;
+  await run(async () => { await api(`/admin/probes/${id}/apply`, { method: 'POST', body: { rules } }); toast('Rules added.'); await Promise.all([loadRules(), loadProbes()]); });
 }
 
-// ---- Profiles ----
-async function loadProfiles() {
-  const data = await api('/admin/profiles'); profilesCache = data.profiles;
-  const fmt = (o: Json | null) => (o && Object.keys(o).length ? Object.entries(o).map(([k, v]) => `${k}=${v}`).join(', ') : '—');
-  $('[data-profiles-body]')!.replaceChildren(...profilesCache.map(p => el('tr', {}, cell(p.id), cell((p.hosts ?? []).join(', ')),
-    cell(fmt(p.resolved ?? p.effective)), cell(p.override ? `${fmt(p.override)} · v${p.version} · ${p.updated_by}` : '—'),
-    cell(el('button', { type: 'button', text: 'Edit routing', onclick: () => editProfile(p) })))));
+// ---- Site knowledge ----
+async function loadSites() {
+  const { sites } = await api('/admin/sites');
+  $('[data-sites-body]')!.replaceChildren(...(sites as Json[]).map(site => el('tr', {}, cell(site.host), cell(String(site.routes)),
+    cell(String(site.proven ?? 0)), cell(String(site.cooling ?? 0)), cell(String(site.failing ?? 0)), cell(when(site.updated_at)),
+    cell(el('button', { type: 'button', text: 'Routes', onclick: () => void run(() => showSite(site.host)) }),
+      el('button', { type: 'button', text: 'Forget', onclick: () => void forgetSite(site.host) })))));
 }
-function editProfile(profile: Json) {
-  const form = $<HTMLFormElement>('[data-profile-form]')!; form.hidden = false; form.dataset.profile = profile.id; form.dataset.version = String(profile.version ?? '');
-  $('[data-profile-form-title]')!.textContent = `Edit routing · ${profile.id}`;
-  const fields = Object.keys(FIELD_HELP);
-  $('[data-profile-fields]')!.replaceChildren(...fields.map(name => el('label', {}, `${name} (${FIELD_HELP[name]})`,
-    el('input', { name, value: profile.override?.[name] ?? '', placeholder: profile.effective?.[name] !== undefined ? `current: ${profile.effective[name]}` : 'not set' }))));
-  ($('[data-profile-reset]') as HTMLButtonElement).disabled = !profile.override;
-  form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+async function showSite(host: string) {
+  const { routes } = await api(`/admin/sites/${encodeURIComponent(host)}`);
+  const box = $('[data-site-detail]')!; box.hidden = false;
+  $('[data-site-title]')!.textContent = `Routes · ${host}`;
+  $('[data-site-routes]')!.replaceChildren(...(routes as Json[]).map(route => el('tr', {}, cell(route.execution), cell(route.proxy_class),
+    cell(route.country ?? '—'), cell(route.provider ?? '—'), cell(tag(route.state, route.state === 'proven' ? 'is-ok' : ['cooling', 'failing'].includes(route.state) ? 'is-off' : '')),
+    cell(String(route.successes)), cell(String(route.failures)), cell(route.last_outcome ?? '—'), cell(when(route.retry_not_before)))));
+  box.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
-async function submitProfile(event: SubmitEvent) {
-  event.preventDefault();
-  const form = event.currentTarget as HTMLFormElement, data = new FormData(form), patch: Json = {};
-  for (const [name, raw] of data.entries()) { const value = String(raw).trim(); if (value) patch[name] = NUMERIC.has(name) ? Number(value) : value; }
-  if (!Object.keys(patch).length) { showError(new ApiError(400, 'profile_override_empty', 'Set at least one field, or use Remove override.')); return; }
-  const version = Number(form.dataset.version) || null;
-  await run(async () => { await api(`/admin/profiles/${encodeURIComponent(form.dataset.profile!)}/routing`, { method: 'PUT', body: { patch, version } }); toast('Override saved.'); form.hidden = true; await loadProfiles(); });
-}
-async function resetProfile() {
-  const form = $<HTMLFormElement>('[data-profile-form]')!, id = form.dataset.profile!;
-  if (!window.confirm(`Remove the routing override for ${id}? New workflows use its base settings again.`)) return;
-  await run(async () => { await api(`/admin/profiles/${encodeURIComponent(id)}/routing`, { method: 'DELETE' }); toast('Override removed.'); form.hidden = true; await loadProfiles(); });
+async function forgetSite(host: string) {
+  if (!window.confirm(`Forget everything FetchX learned about ${host}? The next request starts from the cheapest route again.`)) return;
+  await run(async () => { await api(`/admin/sites/${encodeURIComponent(host)}`, { method: 'DELETE' }); toast(`Forgot ${host}.`); $('[data-site-detail]')!.hidden = true; await loadSites(); });
 }
 
 // ---- Tabs and boot ----
-const loaders: Record<string, () => Promise<void>> = { rules: loadRules, probes: loadProbes, profiles: loadProfiles, audit: loadAudit };
+const loaders: Record<string, () => Promise<void>> = { rules: loadRules, probes: loadProbes, sites: loadSites, audit: loadAudit };
 function selectTab(name: string) {
   for (const tab of $$('[data-tab]')) tab.setAttribute('aria-selected', String(tab.dataset.tab === name));
   for (const panel of $$('[data-panel]')) panel.hidden = panel.dataset.panel !== name;
@@ -253,9 +231,6 @@ async function boot() {
   $('[data-test-form]')!.addEventListener('submit', event => void submitTest(event as SubmitEvent));
   $('[data-probe-form]')!.addEventListener('submit', event => void submitProbe(event as SubmitEvent));
   $('[data-apply-form]')!.addEventListener('submit', event => void submitApply(event as SubmitEvent));
-  $('[data-profile-form]')!.addEventListener('submit', event => void submitProfile(event as SubmitEvent));
-  $('[data-profile-reset]')!.addEventListener('click', () => void resetProfile());
-  $('[data-profile-cancel]')!.addEventListener('click', () => { $('[data-profile-form]')!.hidden = true; });
   await run(loadRules);
 }
 void boot();

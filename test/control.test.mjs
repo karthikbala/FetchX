@@ -7,26 +7,26 @@ import {registerControl,controlCsrf,CONTROL_COOKIE,isControlRequest} from '../sr
 const origin='https://fetchx.ai',secret='synthetic-bridge-secret-32-bytes-minimum',token='fxs_'+'s'.repeat(43);
 const project='cp_00000000-0000-4000-8000-000000000001',foreign='cp_00000000-0000-4000-8000-000000000002',operation='00000000-0000-4000-8000-000000000003';
 const user={id:'user-one',email:'synthetic@example.com',token_hash:'private-user-hash'};
-const metadata={id:project,name:'Synthetic project',status:'active',template_hash:'private-template-hash'};
+const metadata={id:project,name:'Synthetic project',status:'active'};
 const key={id:operation,project,name:'Synthetic key',prefix:'fxk_safe',scopes:['fetch:read'],token_hash:'private-token-hash'};
-const envelope={success:false,state:'unknown',operation_id:operation,idempotency_key:'saved',data:null,retry:{safe_to_retry:false,lookup_url:'/v2/fetch/saved'}};
-async function fixture({fetchResult=envelope,...options}={}){
+async function fixture({fetchResult=null,...options}={}){
  const calls=[],queries=[];let revoked=false;
  const identity={mailConfigured:true,requestCode:async data=>{calls.push(['code',data]);return {challenge_id:operation,expires_in:600,accepted:true};},verifyCode:async()=>({user,session:{token,expires_at:'2030-01-01T00:00:00Z'}}),session:async value=>{if(value!==token||revoked)throw new GatewayError('unauthorized',401);return {user,session:{id:operation}};},revokeSession:async()=>{revoked=true;},projects:async()=>[metadata],createProject:async()=>metadata,requireProject:async(uid,id)=>{calls.push(['member',uid,id]);if(id!==project)throw new GatewayError('project_not_found',404);return metadata;},hydrateProject:async id=>calls.push(['hydrate',id]),keys:async()=>[key],createKey:async()=>({...key,token:'fxk_'+'k'.repeat(43)}),rotateKey:async()=>({...key,token:'fxk_'+'r'.repeat(43)}),revokeKey:async()=>calls.push(['revoke'])};
- const pool={query:async(sql,args)=>{queries.push({sql,args});if(sql.includes('percentile_cont'))return {rows:[{completed_operations:1,mean:400,p50:400,p95:400}]};return {rows:[{id:operation,state:'completed',error:null,created_at:'2026-11-01T00:00:00Z',finished_at:'2026-11-01T00:00:00.400Z',profile_id:'source',profile_version:1,provider:'direct',proxy_class:'direct',summary:{source_http_status:200,physical_requests:1,decoded_bytes:12,private_capture:'secret source URL',diagnostics:{private:'secret'}}}]};}};
  identity.authMethods=async()=>({github:false});
- const v2={store:{pool},recentOperations:async(id,raw)=>{queries.push({args:[id,Number(raw.limit??25)]});return {operations:[{id:operation,state:'completed',error:null,created_at:'2026-11-01T00:00:00Z',finished_at:'2026-11-01T00:00:00.400Z',latency_ms:400,access_profile:{id:'source',version:1},routing:{class:'direct',country:null,provider:'direct',private:'secret'},private_capture:'secret source URL',diagnostics:{private:'secret'},source_http_status:200}]};},capabilities:async()=>({transports:{http:true,browser:true},proxy_classes:{direct:true,datacenter:true,residential:true},features:{browser_network_probe:true}}),profiles:async()=>({access_profiles:[{id:'source',version:1,proxy_classes:['direct','residential'],route_reservations:[{class:'direct'},{class:'residential'}],browser_probe:{enabled:true}}]}),usage:async()=>({outcomes:{source_successes:1}})};
- const app=Fastify();app.decorate('v2',v2);app.decorate('publicFetch',{fetch:async(id,body,identity,options)=>{calls.push(['fetch',id,body,identity,options]);if(body.render)throw new GatewayError('capability_unsupported',409);return fetchResult;},lookup:async(id,saved)=>{calls.push(['lookup',id,saved]);return fetchResult;},lookupOperation:async(id,op)=>{calls.push(['lookupOperation',id,op]);return fetchResult;}});
- if(options.testRender){
-  const rendered={...envelope,execution:'browser'};
-  v2.readOperation=async(id,op)=>{calls.push(['readOperation',id,op]);return {id:op,execution:'browser'};};
-  app.decorate('publicRender',{render:async(id,body,selected)=>{calls.push(['render',id,body,selected]);return rendered;},
-   lookup:async(id,saved)=>{calls.push(['renderLookup',id,saved]);return rendered;},
-   lookupOperation:async(id,op,retained)=>{calls.push(['renderLookupOperation',id,op,retained]);return rendered;}});
- }
- const config={enabled:true,origins:[origin],bridgeSecret:secret,creditPolicy:{weights:{direct:1}},...options};
- const credits={usage:async()=>({granted:10,available:9,held:1})};
- registerControl(app,{config:{controlPlane:config}},{identity,credits});await app.ready();
+ const view={id:operation,status:'succeeded',url:'https://example.com/',data:{status_code:200},credits:{charged:1},attempts:[],error:null};
+ const service={
+  submit:async(id,body,meta)=>{calls.push(['submit',id,body,meta]);return fetchResult??view;},
+  list:async(id,query)=>{queries.push({args:[id,query]});return {items:[{id:operation,status:'succeeded'}],next_cursor:null};},
+  get:async(id,rid,options)=>{calls.push(['get',id,rid,options]);return view;},
+  remove:async(id,rid)=>{calls.push(['remove',id,rid]);},
+  webhookSecret:async(id,options)=>options?.rotate?'whsec_rotated':'whsec_current',
+  store:{pool:{query:async()=>({rows:[{succeeded:3,failed:1}]})}},
+ };
+ const ledger={prices:{http:1},metered:()=>true,balance:async()=>({credits:9,available:9,reserved:0,trial:10,purchased:0,held:false}),
+  usage:async()=>({credits:1,by_step:[{step:'http',requests:1,credits:1}],captcha_solved:0,daily:[]})};
+ const app=Fastify();
+ const config={enabled:true,origins:[origin],bridgeSecret:secret,...options};
+ registerControl(app,{config:{controlPlane:config}},{identity,ledger,service});await app.ready();
  const send=(method,path,payload,extra={})=>app.inject({method,url:'/control'+path,headers:{origin,'x-fetchx-control-secret':secret,cookie:`${CONTROL_COOKIE}=${token}`,'x-csrf-token':controlCsrf(token,secret),...extra},...(payload===undefined?{}:{payload})});
  return {app,send,calls,queries,identity};
 }
@@ -48,10 +48,10 @@ test('control authenticates the bridge, exact origin, session and session-bound 
 
 test('control checks membership for every project resource and never accepts body grants or credentials',async t=>{
  const f=await fixture();t.after(()=>f.app.close());
- for(const [method,path,body]of [['GET',''],['GET','/keys'],['POST','/keys',{name:'new'}],['POST',`/keys/${operation}/rotate`,{}],['DELETE',`/keys/${operation}`],['POST','/fetch',{idempotency_key:'x'}],['GET','/fetch/saved'],['POST','/playground/prepare',{}],['POST','/render',{}],['GET','/render/saved'],['GET','/requests'],['GET',`/requests/${operation}`],['GET','/usage'],['GET','/billing']]){
+ for(const [method,path,body]of [['GET',''],['GET','/keys'],['POST','/keys',{name:'new'}],['POST',`/keys/${operation}/rotate`,{}],['DELETE',`/keys/${operation}`],['POST','/fetch',{url:'https://example.com/'}],['GET',`/fetch/${operation}`],['GET','/fetch'],['DELETE',`/fetch/${operation}`],['GET','/webhook-secret'],['GET','/usage'],['GET','/billing']]){
   const denied=await f.send(method,`/projects/${foreign}${path}`,body);assert.equal(denied.statusCode,404,path);assert.equal(denied.json().error.code,'project_not_found');
  }
- assert.equal(f.calls.some(c=>c[0]==='fetch'),false);assert.equal(f.queries.length,0);
+ assert.equal(f.calls.some(c=>c[0]==='submit'),false);assert.equal(f.queries.length,0);
  assert.equal((await f.send('POST','/projects',{name:'x',v2_access_profiles:['unapproved']})).statusCode,400);
  assert.equal((await f.send('POST',`/projects/${project}/keys`,{name:'x',token:'caller-choice'})).statusCode,400);
  const keys=await f.send('GET',`/projects/${project}/keys`);assert.deepEqual(keys.json().keys[0].scopes,['fetch:read']);assert.ok(!keys.body.includes('token_hash'));
@@ -60,72 +60,9 @@ test('control checks membership for every project resource and never accepts bod
  const rotated=await f.send('POST',`/projects/${project}/keys/${operation}/rotate`,{});assert.equal(rotated.statusCode,200);assert.match(rotated.json().token,/^fxk_/);assert.ok(!rotated.body.includes('token_hash'));
 });
 
-test('control projects expose only HTTP routes and safe real history, usage and billing projections',async t=>{
- const f=await fixture();t.after(()=>f.app.close());
- const detail=await f.send('GET',`/projects/${project}`),data=detail.json();
- assert.equal((await f.send('GET','/status')).json().capability_scope,'service');
- assert.equal(data.capabilities.capability_scope,'project');
- assert.equal(data.capabilities.render,false);assert.equal(data.capabilities.transports.browser,false);assert.deepEqual(data.capabilities.routes,['direct']);assert.deepEqual(data.access_profiles[0].proxy_classes,['direct']);assert.deepEqual(data.access_profiles[0].browser_probe,{enabled:false});
- const recent=await f.send('GET',`/projects/${project}/requests?limit=5`);assert.equal(recent.json().operations[0].latency_ms,400);assert.equal(recent.json().operations[0].routing.class,'direct');assert.ok(!recent.body.includes('secret'));assert.ok(!recent.body.includes('diagnostics'));
- assert.deepEqual(f.queries.at(-1).args,[project,5]);
- assert.equal((await f.send('GET',`/projects/${project}/requests?limit=51`)).statusCode,400);
- const usage=await f.send('GET',`/projects/${project}/usage`);assert.equal(usage.json().gateway.latency_ms.mean,400);assert.equal(usage.json().credits.held,1);
- assert.deepEqual((await f.send('GET',`/projects/${project}/billing`)).json(),{status:'trial',credits:{granted:10,available:9,held:1},commercial_enabled:false});
- assert.equal(recent.headers['cache-control'],'no-store');
-});
 
-test('control fetch uses trusted console identity and recovery reads retained state without redispatch',async t=>{
- const f=await fixture();t.after(()=>f.app.close());
- const submitted=await f.send('POST',`/projects/${project}/fetch`,{idempotency_key:'saved'});
- assert.equal(submitted.json().state,'unknown');assert.equal(submitted.json().retry.safe_to_retry,false);assert.equal(submitted.json().retry.lookup_url,`/api/control/projects/${project}/fetch/saved`);
- assert.deepEqual(f.calls.find(c=>c[0]==='fetch'),['fetch',project,{idempotency_key:'saved'},{keyId:'console'},{automaticTransfer:false}]);
- await f.send('GET',`/projects/${project}/fetch/saved`);await f.send('GET',`/projects/${project}/requests/${operation}`);
- assert.equal(f.calls.filter(c=>c[0]==='fetch').length,1);assert.equal(f.calls.filter(c=>c[0]==='lookup').length,1);
- const automatic=await f.send('POST',`/projects/${project}/fetch`,{idempotency_key:'automatic',automatic_transfer:true});
- assert.equal(automatic.statusCode,200,automatic.body);
- assert.deepEqual(f.calls.filter(c=>c[0]==='fetch').at(-1),['fetch',project,{idempotency_key:'automatic'},{keyId:'console'},{automaticTransfer:true}]);
- for(const value of [false,null,'true',1,{}]){
-  const invalid=await f.send('POST',`/projects/${project}/fetch`,{idempotency_key:'invalid',automatic_transfer:value});
-  assert.equal(invalid.statusCode,400,invalid.body);assert.equal(invalid.json().error.code,'request_invalid');
- }
- assert.equal(f.calls.filter(c=>c[0]==='fetch').length,2);
- const unsupported=await f.send('POST',`/projects/${project}/fetch`,{idempotency_key:'render',render:true});assert.equal(unsupported.statusCode,409);assert.equal(unsupported.json().error.code,'capability_unsupported');assert.equal(unsupported.json().supported.render,false);
-});
 
-test('control returns a bounded text preview with complete bytes on HTTP submissions and recovery',async t=>{
- const first='a'.repeat(31_999),text=first+'😀'+'b'.repeat(1_000_000),body_base64=Buffer.from(text).toString('base64');
- const data={content_type:'text/plain',text,body_base64},f=await fixture({fetchResult:{...envelope,data}});
- t.after(()=>f.app.close());
- for(const [method,path,payload] of [
-  ['POST','/fetch',{idempotency_key:'saved',automatic_transfer:true}],['GET','/fetch/saved'],['GET',`/requests/${operation}`]
- ]){
-  const response=await f.send(method,`/projects/${project}${path}`,payload);
-  assert.equal(response.statusCode,200);
-  const result=response.json();
-  assert.equal(result.data.text,null);assert.equal(result.data.text_preview,first);assert.equal(result.data.text_is_preview,true);
-  assert.equal(result.data.body_base64,body_base64);assert.equal(result.data.content_type,'text/plain');
- }
- assert.equal(data.text,text);assert.equal(f.calls.filter(c=>c[0]==='fetch').length,1);
-});
 
-test('control browser routes forward only named attribution and recover typed retained operations',async t=>{
- const f=await fixture({testRender:true});t.after(()=>f.app.close());
- f.identity.keys=async()=>[{...key,scopes:['fetch:write']}];
- const body={idempotency_key:'saved',url:'https://example.com/',access_profile:{id:'synthetic',version:1},proxy:{class:'direct',country:null},screenshot:true,wait_ms:200};
- assert.equal((await f.send('POST',`/projects/${project}/render`,body,{'x-csrf-token':''})).statusCode,403);
- const submitted=await f.send('POST',`/projects/${project}/render`,{...body,key_id:key.id});
- assert.equal(submitted.statusCode,200,submitted.body);
- assert.equal(submitted.json().execution,'browser');
- assert.equal(submitted.json().retry.lookup_url,`/api/control/projects/${project}/render/saved`);
- assert.deepEqual(f.calls.find(c=>c[0]==='render'),['render',project,body,{keyId:key.id,userId:user.id,requireSoleKey:false}]);
- f.identity.keys=async()=>[];
- const recovery=await f.send('GET',`/projects/${project}/render/saved`);
- assert.equal(recovery.json().state,'unknown');
- const history=await f.send('GET',`/projects/${project}/requests/${operation}`);
- assert.equal(history.json().retry.lookup_url,`/api/control/projects/${project}/requests/${operation}`);
- assert.deepEqual(f.calls.find(c=>c[0]==='renderLookupOperation'),['renderLookupOperation',project,operation,{id:operation,execution:'browser'}]);
- assert.equal(f.calls.filter(c=>c[0]==='render').length,1);
-});
 
 test('control rejects malformed, oversized and unknown requests with stable errors',async t=>{
  const f=await fixture();t.after(()=>f.app.close());
@@ -159,4 +96,25 @@ test('local mailbox status is disclosed only for the trusted adapter under expli
  const f=await fixture({allowLoopbackDevelopment:true,origins:[local],sessionSecure:false});t.after(()=>f.app.close());
  f.identity.mail={configured:true,delivery:'gmail'};
  assert.equal((await f.send('GET','/status',undefined,{origin:local})).json().mail_delivery,undefined);
+});
+
+test('the console playground, history, usage, billing and webhook secret go through the one fetch service and ledger',async t=>{
+ const f=await fixture();t.after(()=>f.app.close());
+ assert.deepEqual((await f.send('GET',`/projects/${project}`)).json(),{project:{id:project,name:'Synthetic project',status:'active'}});
+ const submitted=await f.send('POST',`/projects/${project}/fetch`,{url:'https://example.com/',formats:['markdown']});
+ assert.equal(submitted.statusCode,200);assert.equal(submitted.json().status,'succeeded');
+ assert.deepEqual(f.calls.find(c=>c[0]==='submit'),['submit',project,{url:'https://example.com/',formats:['markdown']},{keyId:'console'}]);
+ const history=await f.send('GET',`/projects/${project}/fetch?limit=5`);
+ assert.deepEqual(history.json().items,[{id:operation,status:'succeeded'}]);assert.equal(f.queries.at(-1).args[0],project);assert.equal(f.queries.at(-1).args[1].limit,'5');
+ assert.equal(history.headers['cache-control'],'no-store');
+ assert.equal((await f.send('GET',`/projects/${project}/fetch/${operation}?include_body=false`)).json().id,operation);
+ assert.deepEqual(f.calls.find(c=>c[0]==='get'),['get',project,operation,{includeBody:false}]);
+ assert.equal((await f.send('GET',`/projects/${project}/fetch/not-a-uuid`)).statusCode,400);
+ assert.deepEqual((await f.send('DELETE',`/projects/${project}/fetch/${operation}`)).json(),{deleted:true});
+ const usage=(await f.send('GET',`/projects/${project}/usage?period=day`)).json();
+ assert.equal(usage.balance.credits,9);assert.equal(usage.used.succeeded,3);assert.deepEqual(usage.by_step,[{step:'http',requests:1,credits:1}]);
+ const billing=(await f.send('GET',`/projects/${project}/billing`)).json();
+ assert.equal(billing.balance.available,9);assert.deepEqual(billing.prices,{http:1});
+ assert.deepEqual((await f.send('GET',`/projects/${project}/webhook-secret`)).json(),{secret:'whsec_current'});
+ assert.deepEqual((await f.send('POST',`/projects/${project}/webhook-secret/rotate`,{})).json(),{secret:'whsec_rotated'});
 });

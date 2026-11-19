@@ -36,6 +36,9 @@ def prepare(image, browser_home, runtime_pin, seccomp, output):
     binary = browser_home / executable.removeprefix("/opt/gateway-browser/")
     if sha(binary) != pin.get("sha256"):
         raise ValueError("existing browser differs from runtime pin")
+    model = pin.get("modelDir", "")
+    if not model.startswith("/opt/gateway-browser/") or ".." in Path(model).parts or not (browser_home / model.removeprefix("/opt/gateway-browser/") / ".pinned-model").is_file():
+        raise ValueError("the Camoufox fingerprint model must sit in the browser home")
     details = json.loads(run(["docker", "image", "inspect", image]).stdout)[0]
     if details.get("Os") != "linux" or details.get("Architecture") != "amd64" or not re.fullmatch(r"sha256:[a-f0-9]{64}", details.get("Id", "")):
         raise ValueError("reviewed image must be Linux AMD64")

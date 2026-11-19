@@ -4,27 +4,31 @@
  */
 
 export interface paths {
-    "/v2/fetch": {
+    "/v1/fetch": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List recent requests
+         * @description The project's requests, newest first, without bodies.
+         */
+        get: operations["listFetches"];
         put?: never;
         /**
-         * Fetch a native HTTP response
-         * @description Runs one native HTTP operation against an approved destination. Keep the caller key and identical inputs for safe recovery. Rendering and scripts are unavailable on this endpoint.
+         * Get a URL
+         * @description Gets a URL and returns its data. With only `url`, FetchX climbs from the cheapest route (HTTP direct, datacenter, residential with fresh IPs on a 429, then a browser) until the site gives its real answer, starting at the step that worked for this site before. Only the step that worked is charged. GET and HEAD may use up to `max_attempts` attempts; any other method gets exactly one attempt and never a browser.
          */
-        post: operations["fetch"];
+        post: operations["createFetch"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/v2/fetch/{key}": {
+    "/v1/fetch/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -32,10 +36,34 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Recover Fetch by caller key
-         * @description Read-only recovery of a project-owned Fetch operation. This does not start, retry or resume source work.
+         * Read a request's result
+         * @description The same object POST /v1/fetch returned. Use it to poll a pending request. After 7 days, or after DELETE, everything the site sent is gone and `data.content_expired` is true; the summary, attempts and credits stay for 90 days.
          */
-        get: operations["lookupFetch"];
+        get: operations["getFetch"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete stored content now
+         * @description Deletes everything the site sent (body, headers, cookies, formats, screenshot) instead of after 7 days. The id, status, attempts and credits stay, for billing.
+         */
+        delete: operations["deleteFetch"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fetch/{id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download the body
+         * @description The response body exactly as the site sent it (or the rendered HTML from a browser), with the site's Content-Type. Use it for PDFs, images and anything too large to inline.
+         */
+        get: operations["getFetchContent"];
         put?: never;
         post?: never;
         delete?: never;
@@ -44,7 +72,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v2/fetch/operations/{id}": {
+    "/v1/fetch/{id}/screenshot": {
         parameters: {
             query?: never;
             header?: never;
@@ -52,10 +80,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read an HTTP operation in Fetch format
-         * @description Read any project-owned v2 HTTP operation through the Fetch envelope, including provisioned native HTTP operations. A native or internal operation key is distinct from the caller key and cannot be replayed as a facade submission. Browser operations return capability_unsupported.
+         * Download the screenshot
+         * @description The JPEG screenshot, when `formats` included `screenshot`.
          */
-        get: operations["getFetchOperation"];
+        get: operations["getFetchScreenshot"];
         put?: never;
         post?: never;
         delete?: never;
@@ -64,47 +92,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v2/render/prepare": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Check a managed Render target and get its browser profile
-         * @description Managed fxk_ keys only. Runs the Playground's browser policy for one public HTTPS URL and proxy. It does not resolve or contact the source, reserve credits or create a profile record. When ready is true, submit the returned url and access_profile with the same proxy and a new idempotency key to POST /v2/render.
-         */
-        post: operations["prepareRender"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/render": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Render a page in a dedicated browser session
-         * @description Opens an approved HTTPS page with GET in a dedicated browser session. Render requires a qualified runtime and an approved browser profile and route. Managed projects use the Render profile issued by their playground for the selected destination and need approved browser credit weights. Check features.browser_render in GET /v2/capabilities. This endpoint accepts an optional wait and viewport screenshot.
-         */
-        post: operations["render"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/render/{key}": {
+    "/v1/usage": {
         parameters: {
             query?: never;
             header?: never;
@@ -112,108 +100,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Recover Render by caller key
-         * @description Read-only recovery of a project-owned Render operation. Recovery reads retained evidence even if execution is now unavailable. It does not open a browser session or send source work.
-         */
-        get: operations["lookupRender"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/scrape": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Render one page and convert its retained DOM
-         * @description Requires an enabled project-specific route or operator-reviewed managed Direct Scrape. Managed keys need fetch:write and use the existing project-bound public HTTPS Playground browser policy and operation credits. Saved captures replay by the original X-Idempotency-Key even when new Scrape admission is disabled; project and key authorization still apply.
-         */
-        post: operations["scrape"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/capabilities": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read gateway capabilities
-         * @description Read the current v2 capability configuration for this project. Availability does not grant access to a destination, profile or route.
-         */
-        get: operations["getCapabilities"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/access-profiles": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List approved access profiles
-         * @description Read the project’s configured access profiles, route reservations and limits. Managed Render uses the browser profile issued through the playground.
-         */
-        get: operations["listAccessProfiles"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/recipes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List approved native HTTP recipes
-         * @description Read approved recipes and their immutable versions. Recipe execution is part of the provisioned native API.
-         */
-        get: operations["listRecipes"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/usage": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read project usage
-         * @description Read lifetime v2 usage and accounting for this project, including estimates, known invoice amounts and separately tracked request credits where applicable.
+         * Credits and usage
+         * @description The balance and where credits went in a period (UTC).
          */
         get: operations["getUsage"];
         put?: never;
@@ -224,80 +112,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v2/operations": {
+}
+export interface webhooks {
+    fetchFinished: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * List recent operations
-         * @description Read recent operation summaries for this project. This bounded window has no cursor and omits source bodies and artifacts.
-         */
-        get: operations["listOperations"];
+        get?: never;
         put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/operations/by-key/{key}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+        /**
+         * A request with webhook_url finished
+         * @description FetchX POSTs the finished result (without the body) to webhook_url. Verify `X-FetchX-Signature: sha256=<hex>`, an HMAC-SHA256 with the project's webhook secret over `<X-FetchX-Timestamp>.<raw body>`. Delivery is tried 3 times.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "X-FetchX-Signature": string;
+                    "X-FetchX-Timestamp": string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["FetchResult"];
+                };
+            };
+            responses: {
+                /** @description Any 2xx acknowledges the delivery. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
         };
-        /**
-         * Read a native operation by stored key
-         * @description Read project-owned operation metadata by the native key. This does not start or resume work.
-         */
-        get: operations["lookupOperation"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/operations/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read an operation by ID
-         * @description Read the project-owned operation record, execution type, result metadata and accounting. This does not start or resume work.
-         */
-        get: operations["getOperation"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v2/artifacts/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read a retained artifact
-         * @description Read project-owned retained evidence and its encoding metadata. Treat retained bodies and headers as sensitive source data.
-         */
-        get: operations["getArtifact"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -305,890 +159,273 @@ export interface paths {
         trace?: never;
     };
 }
-export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        Identifier: string;
-        /** Format: uuid */
-        ResourceId: string;
-        ProfileReference: {
-            id: components["schemas"]["Identifier"];
-            version: number;
-        };
-        /** @enum {string} */
-        ProxyClass: "direct" | "datacenter" | "residential";
-        CountryCode: string;
-        ProxySelection: {
-            /** @constant */
-            class: "direct";
-            country: null;
-        } | {
-            /** @enum {string} */
-            class: "datacenter" | "residential";
-            country: components["schemas"]["CountryCode"];
-        };
-        Routing: {
-            class: components["schemas"]["ProxyClass"];
-            country: components["schemas"]["CountryCode"] | null;
-            /** @description Effective provider identifier. A direct route reports direct. */
-            provider: string;
-        };
         FetchRequest: {
-            /** @description Caller-generated durable key. Save it before submitting. A changed request under a bound key returns 409. */
-            idempotency_key: components["schemas"]["Identifier"];
-            /** @description Approved access profile reference with its immutable version. Required for provisioned projects. For managed fxk_ keys, omitting it selects public-url-http version 1 when that paid public URL profile is available to the project. */
-            access_profile?: components["schemas"]["ProfileReference"];
-            /**
-             * Format: uri
-             * @description Approved absolute HTTPS destination. Profile rules restrict origin, path and method.
-             */
+            /** @description The page, API or file to get. Public http or https only: private, local and metadata addresses are refused, checked after DNS and on every redirect. */
             url: string;
-            /** @description Explicit proxy class and country. Use null for direct or an approved uppercase country for a proxied route. Use {"class": "auto"} to let FetchX choose and escalate. */
-            proxy: components["schemas"]["ProxySelection"] | components["schemas"]["AutoProxySelection"];
-            /** @description Optional conservative spending ceiling in micro-USD. Admission fails when the estimate exceeds it or cannot be guaranteed. */
-            max_estimated_micro_usd?: number;
-            /** @description Optional existing HTTP session with the same profile version, proxy class and country. */
-            session_id?: components["schemas"]["ResourceId"];
             /**
-             * @description Approved native HTTP method.
+             * @description Only GET and HEAD escalate. Other methods get one attempt, never a browser, and are never retried.
              * @default GET
              * @enum {string}
              */
             method?: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
-            /** @description Only source headers approved for this destination. Keep gateway credentials and cookies out of these values. */
+            /** @description Headers for the site, cookies and Authorization included (stored encrypted, never logged). Up to 64 headers and 16 KB. Host, hop-by-hop, Forwarded and X-Forwarded-* are refused. */
             headers?: {
                 [key: string]: string;
             };
-            /** @description Canonical base64 for the native request body, subject to the profile limit. Omit or set null for GET or HEAD. */
-            body_base64?: string | null;
+            /** @description A text request body, up to 1 MB. Only with POST, PUT, PATCH or DELETE. */
+            body?: string;
+            /** @description A binary request body in base64, instead of body. */
+            body_base64?: string;
             /**
-             * @description Opt in to the gateway’s bounded retry for eligible pristine HTTP reads on a dedicated datacenter route. It never authorizes retry of uncertain or stateful work. Paid routes reject retry: true.
-             * @default false
+             * @description auto tries HTTP first and moves to a browser when HTTP is blocked or the page is an empty JavaScript shell; always starts in a browser; never stays on HTTP.
+             * @default auto
+             * @enum {string}
              */
-            retry?: boolean;
-            /** @description Paid HTTP only. Bidirectional wire ceiling in decimal MB, in 0.25 MB steps. Omit on Public URL HTTP to size the reservation from the available balance, max_credits and the transfer limits. Supplying it on an eligible direct or datacenter profile selects paid billing. */
-            max_transfer_mb?: number;
-            /** @description Paid HTTP only. Positive cap on the prepaid credits the gateway may reserve for this request. Admission fails with max_credits_exceeded when the reservation needs more. */
-            max_credits?: number;
+            render?: "auto" | "always" | "never";
+            /** @description In a browser, wait for a CSS selector or a fixed time. Implies a browser. */
+            wait_for?: {
+                /** @description A CSS selector. */
+                selector?: string;
+                ms?: number;
+            };
+            /** @description The exit country for proxy routes (ISO 3166-1 alpha-2). Defaults to the country that worked for this site before, else US. */
+            country?: string;
+            /** @description One fixed route; turns auto mode off: one attempt, with a precise error. */
+            route?: {
+                /** @enum {string} */
+                class: "direct" | "datacenter" | "residential";
+                /** @description Required for datacenter and residential; null for direct. */
+                country?: string | null;
+                /** @description true uses a browser on this route. */
+                render?: boolean;
+            };
+            /** @description Extra outputs. screenshot needs a browser. */
+            formats?: ("markdown" | "text" | "links" | "metadata" | "json" | "screenshot")[];
             /**
-             * @description Auto mode only: the most attempts that reach the site. Steps refused at admission cost nothing and do not count.
+             * @description Return the body. Set false when only formats are needed.
+             * @default true
+             */
+            include_body?: boolean;
+            /**
+             * @description The most attempts that may reach the site. Steps refused before anything is sent do not count.
              * @default 5
              */
             max_attempts?: number;
-        };
-        RenderRequest: {
-            /** @description Caller-generated durable key. Save it before submitting. A changed request under a bound key returns 409. */
-            idempotency_key: components["schemas"]["Identifier"];
-            /** @description Approved access profile reference with its immutable version. */
-            access_profile: components["schemas"]["ProfileReference"];
             /**
-             * Format: uri
-             * @description Approved absolute HTTPS destination. Profile rules restrict origin, path and method.
+             * @description Replace automation User-Agents (curl, python-requests…) with a browser one and add a missing Accept and Accept-Language.
+             * @default true
              */
-            url: string;
-            /** @description Explicit proxy class and country. Use null for direct or an approved uppercase country for a proxied route. */
-            proxy: components["schemas"]["ProxySelection"];
-            /** @description Optional conservative spending ceiling in micro-USD. Admission fails when the estimate exceeds it or cannot be guaranteed. */
-            max_estimated_micro_usd?: number;
+            fix_headers?: boolean;
+            /** @description The most this request may cost. Steps that would cost more are skipped. */
+            max_credits?: number;
             /**
-             * @description Capture a viewport JPEG of at most 1 MiB when approved and available.
+             * @description Total time for all attempts.
+             * @default 60000
+             */
+            timeout_ms?: number;
+            /**
+             * @description true answers 202 at once; false waits up to 60 seconds, then answers 202.
              * @default false
              */
-            screenshot?: boolean;
-            /** @description Post-load wait in milliseconds for client-side rendering to settle, limited by the access profile's max_wait_ms. Omission uses the profile default. */
-            wait_ms?: number;
-        };
-        FacadeError: {
-            /** @description Stable machine-readable error code. Handle unknown codes conservatively. */
-            code: string;
-            /** @description Safe human-readable description. Branch on code. */
-            message: string;
-            /** @description Stage at which the failure was reported. */
-            stage: string;
-            /** @description Optional structured guidance. source_challenge reports the vendor and HTTP status; source_cooldown reports the origin and its expiry. On a Public URL transfer cutoff it reports max_transfer_mb, max_allowed_transfer_mb, reserved_credits and, when a larger ceiling is possible, next.max_transfer_mb and next.max_credits for a new operation with a new idempotency key. */
-            details?: components["schemas"]["ChallengeDetails"] | components["schemas"]["CooldownDetails"] | {
-                [key: string]: unknown;
-            };
-        };
-        RetryGuidance: {
-            /** @description Whether the gateway can suggest a deliberate new source request, subject to the other conditions here. */
-            safe_to_retry: boolean;
-            /** @description Whether an identical submission using the caller key can recover an existing operation without redispatching it. An unbound key can still admit work. */
-            same_key_replay_safe: boolean;
-            /** @description Whether this result permits consideration of new source work. */
-            new_request_allowed: boolean;
-            /** @description Suggested caller action. Use read-only recovery when uncertain. Known values include complete, recover_by_key, check_url, review_source_access, wait_for_source_retry_after, consider_approved_residential_fresh_session (Fetch), consider_residential_new_request (Render), review_proxy_configuration, review_transfer_limit and retry_same_key. */
-            next_action: string;
-            /** @description Relative read-only recovery URL, when available. */
-            lookup_url: string | null;
-            /** @description Seconds or an HTTP date to wait before a new request. Also reported with source_challenge and source_forbidden when the source or a FetchX cooldown sets a wait. */
-            retry_after?: string | null;
-            suggested_proxy?: components["schemas"]["ProxySelection"];
-            requires_new_idempotency_key?: boolean;
-            requires_fresh_session?: boolean;
-            /** @description Fetch reported on an explicitly requested bounded gateway retry. */
-            requested?: boolean;
-            /** @description Number of gateway attempts in the retained retry evidence. */
-            attempts?: number;
-            route_changed?: boolean;
-            effective_session_id?: components["schemas"]["ResourceId"];
-            stop_reason?: string | null;
-            /** @description Render only. Call POST /v2/render/prepare for the suggested route before the new request, to get its profile and quote. */
-            requires_render_preparation?: boolean;
-        };
-        FacadeData: {
-            /** @description Source HTTP status. It can be null and is independent of gateway_http_status. */
-            status: number | null;
-            /** @description Final source URL in the retained evidence, if known. */
-            final_url: string | null;
-            content_type: string | null;
-            /** @description Retained decoded response bytes for Fetch or generated UTF-8 DOM bytes for Render. */
-            body_base64: string | null;
-            /** @description Retained UTF-8 text, when available. Treat HTML as inert content. */
-            text: string | null;
-            /** @description The source Retry-After value, if retained. It may be a delay or an HTTP date. */
-            retry_after: string | null;
-            /** @description Allowlisted source response headers. This excludes cookies and credential headers. */
-            headers: {
-                [key: string]: string;
-            };
-        };
-        ArtifactSummary: {
-            id: components["schemas"]["ResourceId"];
-            /** @description Evidence kind such as native_response, download, browser_response, rendered_dom or browser_screenshot. */
-            kind: string;
-            /** @description Source status associated with this evidence, when available. */
-            status: number | null;
-            encoded_sha256: string | null;
-            decoded_sha256: string | null;
-            encoded_bytes: number | null;
-            decoded_bytes: number | null;
-            content_encoding: string | null;
-            decoding_error: string | null;
-            /** @description Fetch attempt number when the gateway retained retry evidence. */
-            attempt?: number;
+            async?: boolean;
             /**
-             * @description Present for an included Render viewport screenshot.
-             * @constant
+             * Format: uri
+             * @description A public https URL that receives the result when the request finishes.
              */
-            content_type?: "image/jpeg";
-            /** @description Included viewport JPEG for a retained screenshot when available. */
-            body_base64?: string;
+            webhook_url?: string;
+            /** @description The same key with the same body returns the same result and is charged once. Generated when absent. */
+            idempotency_key?: string;
+            /** @description Your labels, to filter the list. */
+            tags?: string[];
         };
-        RequestCreditAttribution: {
-            credits: number;
-            /** @description Reservation state, such as reserved, settled, held or released. */
-            state: string;
-            key_id: string;
-            policy_version: string;
+        FetchResult: {
+            /** Format: uuid */
+            id: string;
             /** @enum {string} */
-            unit: "logical_http_operation" | "logical_browser_operation";
-        };
-        Accounting: {
-            provider: string;
-            reserved_tunnel_bytes: number;
-            observed_tunnel_bytes: number | null;
-            /** @description Conservative configured estimate. Null means no guarantee is available. */
-            estimated_micro_usd: number | null;
-            /** @description Authoritatively reconciled provider invoice amount, if known. */
-            invoice_micro_usd: number | null;
-            basis: string;
-            request_credits?: components["schemas"]["RequestCreditAttribution"];
-            /** @description Route-specific pricing evidence, when available. */
-            pricing?: {
-                [key: string]: unknown;
-            };
-            /** @description Customer traffic accounting, when available. */
-            customer_traffic?: {
-                [key: string]: unknown;
-            };
-            /** @description Conservative customer traffic reservation, when available. */
-            customer_traffic_reservation?: {
-                [key: string]: unknown;
-            };
-            paid_credits?: components["schemas"]["PaidCreditAttribution"];
-        };
-        FetchUsage: {
-            /** @description Provider accounting, conservative estimates and managed request credits where applicable. */
-            accounting: components["schemas"]["Accounting"];
-            /** @description Known native HTTP requests. Null for Render. */
-            native_requests: number | null;
-            encoded_bytes: number | null;
-            decoded_bytes: number | null;
-            tunnel_bytes: number | null;
-            /** @description What the byte counters measure. Measurements and reservations are separate from invoices. */
-            byte_basis: string | null;
-            dns_requests: number | null;
-            dns_encoded_bytes: number | null;
-            dns_decoded_bytes: number | null;
-            dns_tunnel_bytes: number | null;
-            /** @description Paid HTTP only. Complete local observation of bidirectional wire bytes, including TLS, CONNECT, DNS over HTTPS and redirects, when available. */
-            wire_bytes?: number | null;
-            /** @description Paid HTTP only. Confirmed wire bytes. */
-            wire_bytes_lower_bound?: number | null;
-        };
-        RenderUsage: {
-            /** @description Provider accounting, conservative estimates and managed request credits where applicable. */
-            accounting: components["schemas"]["Accounting"];
-            /** @description Known native HTTP requests. Null for Render. */
-            native_requests: number | null;
-            encoded_bytes: number | null;
-            decoded_bytes: number | null;
-            tunnel_bytes: number | null;
-            /** @description What the byte counters measure. Measurements and reservations are separate from invoices. */
-            byte_basis: string | null;
-            browser_requests: number | null;
-            blocked_requests: number | null;
-            dom_bytes: number | null;
-            screenshot_bytes: number | null;
-            capture_complete: boolean | null;
-            duration_ms: number | null;
-            /** @description Count of page requests the browser policy blocked, by reason. */
-            blocked_reasons?: {
-                [key: string]: number;
-            } | null;
-            /** @description Number of other public origins the page loaded subresources from. */
-            subresource_origins?: number | null;
-        };
-        FacadeResponse: {
-            /** @description Whether FetchX obtained a successful source result. HTTP 200 alone does not establish this. */
-            success: boolean;
-            /** @description Durable operation state, or rejected for many admission failures. Reserved, running or unknown results require recovery. */
-            state: string;
-            /** @description HTTP status of the gateway response. Retained operations use 200 even when the source denied access or capture is incomplete. */
-            gateway_http_status: number;
-            /** @description Durable operation identifier, if available. */
-            operation_id: components["schemas"]["ResourceId"] | null;
-            /** @description Owning session identifier, if available. */
-            session_id: components["schemas"]["ResourceId"] | null;
-            /** @description Caller key for facade submission and key lookup. An operation-ID projection can show a native key or null. */
-            idempotency_key: components["schemas"]["Identifier"] | null;
-            /** @description caller, native_operation or internal_operation, when available. Only caller keys can be used for same-key facade replay. */
-            idempotency_key_scope?: string;
-            /** @description Internal operation key in an operation-ID projection. It cannot be used as the original caller key. */
-            internal_idempotency_key?: components["schemas"]["Identifier"];
-            /** @description Effective pinned route, if available. */
-            routing: components["schemas"]["Routing"] | null;
-            /** @description Retained source data. Can be null before evidence is available. */
-            data: components["schemas"]["FacadeData"] | null;
-            /** @description Retained evidence references. GET /v2/artifacts/{id} retrieves a full project-owned artifact. */
-            artifacts: components["schemas"]["ArtifactSummary"][];
-            /** @description Safe diagnostics, when available. Fields vary by failure stage and transport. */
-            diagnostics: {
-                [key: string]: unknown;
-            } | null;
-            /** @description Structured gateway or source failure when present. Retained failures can have gateway HTTP 200. */
-            error: components["schemas"]["FacadeError"] | null;
-            retry: components["schemas"]["RetryGuidance"];
-            /**
-             * @description The caller decides whether the retained evidence satisfies its application.
-             * @constant
-             */
-            application_acceptance: "not_evaluated";
-        };
-        FetchResponse: components["schemas"]["FacadeResponse"] & {
-            usage: components["schemas"]["FetchUsage"] | null;
-            /** @description Fetch capabilities reported in a structured failure. */
-            supported?: {
-                /** @constant */
-                transport: "http";
-                /** @constant */
-                render: false;
-            };
-            /** @description Auto mode summary. When the final attempt was a rendered browser, data and usage follow the render response shape. */
-            auto?: components["schemas"]["AutoSummary"];
-        };
-        RenderResponse: components["schemas"]["FacadeResponse"] & {
-            usage: components["schemas"]["RenderUsage"] | null;
-            /**
-             * @description Execution mode for Render.
-             * @constant
-             */
-            execution: "browser";
-            /** @description Render response shape marker reported in a structured failure. This does not guarantee availability. */
-            supported?: {
-                /** @constant */
-                transport: "browser";
-                /** @constant */
-                render: true;
-            };
-            /** @description Engine and version that served the render, when known. */
-            browser?: {
-                /** @description Browser engine that served the render, for example camoufox. */
-                engine: string | null;
-                version: string | null;
-            } | null;
-        };
-        NativeError: {
-            /** @description Machine-readable gateway error code. */
-            error: string;
-            /** @description Additional safe information when provided by the gateway. */
-            details?: {
-                [key: string]: unknown;
-            };
-            /** @description Safe diagnostics, when available. Fields vary by failure stage and transport. */
-            diagnostics?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        CapabilitiesResponse: {
-            /** @constant */
-            api_version: "2";
-            transports: {
-                http: boolean;
-                /** @description Native transport field. Read features.browser_render to check the separate Render facade. */
-                browser: boolean;
-            };
-            proxy_classes: {
-                direct: boolean;
-                datacenter: boolean;
-                residential: boolean;
-            };
-            features: {
-                native_responses: boolean;
-                downloads: boolean;
-                encoded_bodies: boolean;
-                cookie_jar: boolean;
-                json_pointers: boolean;
-                dom_selectors: boolean;
-                websockets: boolean;
-                local_storage: boolean;
-                live_leases: boolean;
-                discovery_profiles: boolean;
-                /** @description Native browser probe availability for provisioned projects. */
-                browser_network_probe: boolean;
-                /** @description Whether Render is currently available for this project. For managed keys this uses the Playground's browser route checks, including runtime, reviewed route pricing and route health. Use POST /v2/render/prepare for a target-specific check. */
-                browser_render: boolean;
-            };
-            retries: {
-                owner: string;
-                max_physical_retries: number;
-                default_physical_retries: number;
-                opt_in: string;
-                scope: string;
-            };
-            profile_approval: string;
-            browser_probe: {
-                available: boolean;
-                reason: string | null;
-                original_encoded_available: boolean;
-                max_requests: number;
-                max_decoded_bytes: number;
-                max_dom_bytes: number;
-                proxy_classes: components["schemas"]["ProxyClass"][];
-                methods: ("GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE")[];
-                live_leases: boolean;
-            };
-            /** @description Additional provisioned discovery limits are included when configured. */
-            discovery_profile_policy: {
-                enabled: boolean;
-            };
-            /**
-             * @description The capability view is for the authenticated project.
-             * @constant
-             */
-            capability_scope: "project";
-            /** @description Managed projects only. Paid HTTP readiness. */
-            paid_http?: {
-                proxy_classes: {
-                    direct: boolean;
-                    datacenter: boolean;
-                    residential: boolean;
-                };
-                public_url_access_profile: components["schemas"]["ProfileReference"] | null;
-                /** @description Present when extended Public URL coverage is ready. */
-                public_url_access_profiles?: components["schemas"]["ProfileReference"][];
-                public_url_transfer_limits?: components["schemas"]["TransferLimits"];
-            };
-        };
-        AccessProfile: {
-            id: components["schemas"]["Identifier"];
-            version: number;
-            origins: string[];
-            paths: string[] | null;
-            method_paths: {
-                [key: string]: string[];
-            } | null;
-            methods: ("GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE")[];
-            headers: string[];
-            proxy_classes: components["schemas"]["ProxyClass"][];
-            countries: components["schemas"]["CountryCode"][];
-            limits: {
-                max_requests: number;
-                max_encoded_bytes: number;
-                max_decoded_bytes: number;
-                max_session_encoded_bytes: number;
-                max_input_bytes: number;
-                max_tunnel_bytes: number;
-                max_redirects: number;
-                max_expansion_ratio: number;
-                timeout_ms: number;
-                min_interval_ms: number;
-                ttl_seconds: number;
-            };
-            route_reservations: {
-                class: components["schemas"]["ProxyClass"];
-                country: components["schemas"]["CountryCode"] | null;
-                provider: string | null;
-                reserved_tunnel_bytes: number;
-                estimated_micro_usd: number | null;
-                customer_traffic_reservation?: {
-                    [key: string]: unknown;
-                };
-                pricing?: {
-                    [key: string]: unknown;
-                };
-                paid_credit_reservation?: components["schemas"]["PaidCreditQuote"];
-            }[];
-            /** @description Native browser probe limits when applicable. For managed projects use the Render profile issued by the playground. */
-            browser_probe?: {
-                enabled: boolean;
-                max_wait_ms?: number;
-                settle_ms?: number;
-                /** @description public lets the page load scripts, styles, images, fonts and data calls from other public origins within the caps. */
-                subresources?: string;
-                /** @description Whether child-frame documents may load. */
-                frames?: boolean;
-                /** @description Whether the page's own XHR or fetch POSTs (up to 64 KiB) may be sent. */
-                page_post?: boolean;
-            };
-            /** @description Present for discovery and public_url_http profiles. */
-            kind?: string;
-            max_paid_cost_micro_usd?: number;
-            /** @description Public URL HTTP profiles only. */
-            transfer_limits?: components["schemas"]["TransferLimits"];
-            /** @description Public URL HTTP profiles only. Paid daily operation quota, if configured. */
-            max_daily_operations?: number | null;
-        };
-        AccessProfilesResponse: {
-            access_profiles: components["schemas"]["AccessProfile"][];
-        };
-        Recipe: {
-            id: components["schemas"]["Identifier"];
-            version: number;
-            /** @constant */
-            kind: "http";
-            access_profile: components["schemas"]["ProfileReference"];
-            request?: {
-                /** @enum {string} */
-                method?: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
-                path_pattern?: string;
-            };
-            json_pointers?: {
-                [key: string]: string;
-            };
-        };
-        RecipesResponse: {
-            recipes: components["schemas"]["Recipe"][];
-        };
-        Operation: {
-            id: components["schemas"]["ResourceId"];
-            key_id: string;
-            /** @description Durable operation state such as reserved, running, completed, failed or unknown. */
-            state: string;
-            /** @description Native operation error code, if present. See source status independently. */
-            error: string | null;
-            /** @enum {string} */
-            execution: "http" | "browser";
-            access_profile: components["schemas"]["ProfileReference"];
+            status: "pending" | "succeeded" | "failed";
+            idempotency_key: string;
+            url: string;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             finished_at: string | null;
-            /** @description Stored native operation key. Fetch or Render facade operations use an internal key here. */
-            idempotency_key: components["schemas"]["Identifier"];
-            session_id: components["schemas"]["ResourceId"];
-            recipe: components["schemas"]["ProfileReference"] | null;
-            /** @description Retained native result metadata. The transport determines additional fields. */
-            result: {
-                status: number | null;
-                final_url: string | null;
-                artifacts: {
-                    id: components["schemas"]["ResourceId"];
-                    kind: string;
-                    status?: number | null;
-                    encoded_bytes?: number | null;
-                    decoded_bytes?: number | null;
-                    content_encoding?: string | null;
-                    attempt?: number;
-                }[];
-                physical_requests: number | null;
-                encoded_bytes?: number | null;
-                decoded_bytes?: number | null;
-                tunnel_bytes?: number | null;
-                provider_status?: number | null;
-                /** @description The source Retry-After value, if retained. It may be a delay or an HTTP date. */
-                retry_after?: string | null;
-                /** @description Safe diagnostics, when available. Fields vary by failure stage and transport. */
-                diagnostics?: {
-                    [key: string]: unknown;
-                } | null;
-                /** @description Native recipe outputs, when evaluated. Keys are recipe-specific. */
-                extracted?: {
-                    [key: string]: unknown;
-                };
-                capture_complete?: boolean;
-                /** @description Only part of the evidence was retained. Unknown work must be recovered before sending a new request. */
-                partial?: boolean;
-                additional_dispatches_unknown?: boolean;
-            } | null;
-            accounting: components["schemas"]["Accounting"];
+            tags: string[];
+            /** @description What the site answered: on success the real answer, on failure the last response. Null only when nothing reached the site. */
+            data: components["schemas"]["FetchData"] | null;
+            credits: {
+                /** @description 0 unless the request succeeded. */
+                charged: number;
+                /** @description The most this request could have cost (null for unmetered projects). */
+                max: number | null;
+            };
+            /** @description One entry per step tried, in order. Providers are never named. */
+            attempts: components["schemas"]["Attempt"][];
+            /** @description Steps that were not tried, and why. */
+            skipped: components["schemas"]["SkippedStep"][];
+            /** @description Headers FetchX corrected. */
+            fixes: ("user-agent" | "accept" | "accept-language")[];
+            error: components["schemas"]["FetchError"] | null;
         };
-        RecentOperationsResponse: {
-            operations: {
-                id: components["schemas"]["ResourceId"];
-                key_id: string;
-                /** @description Durable operation state such as reserved, running, completed, failed or unknown. */
-                state: string;
-                /** @description Native operation error code, if present. See source status independently. */
-                error: string | null;
-                /** @enum {string} */
-                execution: "http" | "browser";
-                access_profile: components["schemas"]["ProfileReference"];
-                /** Format: date-time */
-                created_at: string;
-                /** Format: date-time */
-                finished_at: string | null;
-                latency_ms: number | null;
-                routing: components["schemas"]["Routing"];
-                source_http_status: number | null;
-                physical_requests: number | null;
-                encoded_bytes: number | null;
-                decoded_bytes: number | null;
-                tunnel_bytes: number | null;
-                /** @description Safe diagnostics, when available. Fields vary by failure stage and transport. */
-                diagnostics: {
-                    [key: string]: unknown;
-                } | null;
-                provider: string;
-                estimated_micro_usd: number | null;
-                invoice_micro_usd: number | null;
-                request_credits?: components["schemas"]["RequestCreditAttribution"];
-            }[];
-            /** @constant */
-            scope: "v2_project_recent";
-            limit: number;
-        };
-        UsageResponse: {
-            project: string;
-            key_id: string;
-            entitlement: {
-                /** @enum {string} */
-                mode: "unmetered" | "metered";
-                max_daily_operations: number | null;
+        FetchData: {
+            /** @description The site's HTTP status. */
+            status_code: number;
+            /** @description The URL after redirects. */
+            final_url: string;
+            content_type: string | null;
+            /** @description True when a browser produced the result. */
+            rendered: boolean;
+            body_bytes: number;
+            /** @description True after 7 days or DELETE: everything below is gone. */
+            content_expired?: boolean;
+            /** @description Selected response headers. */
+            headers?: {
+                [key: string]: string;
             };
-            outcomes: {
-                source_successes: number;
-                source_failures: number;
-                gateway_failures: number;
-                unknown: number;
-                physical_requests: number;
-                encoded_bytes: number;
-                decoded_bytes: number;
-            };
-            outcomes_by_key: {
-                [key: string]: {
-                    source_successes: number;
-                    source_failures: number;
-                    gateway_failures: number;
-                    unknown: number;
-                    physical_requests: number;
-                    encoded_bytes: number;
-                    decoded_bytes: number;
-                };
-            };
-            by_key_and_state: {
-                key_id: string;
-                state: string;
-                operations: number;
-                reserved_or_actual_requests: number;
-                reserved_or_actual_encoded_bytes: number;
-                held_tunnel_bytes: number;
-                observed_tunnel_bytes: number | null;
-                estimated_micro_usd: number | null;
-                unknown_estimate_operations: number;
-                known_invoice_micro_usd: number | null;
-                unknown_invoice_operations: number;
-            }[];
-            request_credits?: {
-                granted: number;
-                available: number;
-                reserved: number;
-                settled: number;
-                held: number;
-                released: number;
-                unit: string;
-                basis: string;
-                commercial_enabled: boolean;
-            };
-            /** @constant */
-            scope: "v2_project_lifetime";
-            /** @constant */
-            application_acceptance: "not_measured";
-            /** @constant */
-            invoice_basis: "unknown_until_authoritative_reconciliation";
-            /** @description Managed projects only. Prepaid credit balance. */
-            paid_credits?: components["schemas"]["PaidCreditBalance"];
-            /** @description Present when trial and purchased credits share one balance. */
-            credit_balance?: {
-                /** @constant */
-                mode: "unified";
-            } & components["schemas"]["PaidCreditBalance"];
-        };
-        Artifact: {
-            id: components["schemas"]["ResourceId"];
-            /** @description Evidence kind such as native_response, download, browser_response, rendered_dom or browser_screenshot. */
-            kind: string;
-            /** @description Source status associated with this evidence, when available. */
-            status: number | null;
-            encoded_sha256: string | null;
-            decoded_sha256: string | null;
-            encoded_bytes: number | null;
-            decoded_bytes: number | null;
-            content_encoding: string | null;
-            decoding_error: string | null;
-            operation_id: components["schemas"]["ResourceId"];
-            url: string;
+            /** @description Cookies the site set, for multi-step flows. */
+            cookies?: components["schemas"]["Cookie"][];
+            /** @description The body: utf-8 text, or base64 for binary. Left out when include_body is false or when it is too large to inline (see body_url). */
+            body?: string;
             /** @enum {string} */
-            method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
-            /** @description Retained source or generated artifact headers. Treat full artifact contents as sensitive. */
-            headers: {
-                [key: string]: string | string[];
-            };
-            raw_headers: string[] | null;
+            body_encoding?: "utf-8" | "base64";
+            /** @description Where to download a body too large to inline. */
+            body_url?: string;
+            /** @description formats: markdown. */
+            markdown?: string;
+            /** @description formats: text. */
+            text?: string;
+            /** @description formats: links. */
+            links?: {
+                url: string;
+                text: string;
+            }[];
+            metadata?: components["schemas"]["PageMetadata"];
+            /** @description formats: json, the body parsed as JSON (null when it is not JSON). */
+            json?: unknown;
+            /** @description formats: screenshot, base64 JPEG. Also at /v1/fetch/{id}/screenshot. */
+            screenshot?: string;
+        };
+        Cookie: {
+            name: string;
+            value: string;
+            domain: string;
+            path: string;
             /** Format: date-time */
-            captured_at: string;
-            encoded_body_base64: string | null;
-            decoded_body_base64: string | null;
-            tunnel_bytes: number | null;
-            provider_status: number | null;
-            encoded_size_basis?: string | null;
-            original_encoded_available?: boolean;
-            generated?: boolean;
-            main_document?: boolean;
-            attempt?: number;
-            /** @description Browser request metadata when retained. */
-            request?: {
-                [key: string]: unknown;
-            };
+            expires?: string;
         };
-        /** @description Prepaid credit reservation for one billing block or the requested ceiling. */
-        PaidCreditQuote: {
-            tariff_version: string;
-            route_class: components["schemas"]["ProxyClass"];
-            block_bytes: number;
-            credits_per_block: number;
-            max_transfer_bytes: number;
-            reserved_credits: number;
-        };
-        /** @description Prepaid credits reserved and settled for this operation. */
-        PaidCreditAttribution: {
-            /** @constant */
-            unit: "credits";
-            /** @enum {string} */
-            basis: "prepaid_http_wire_credits" | "prepaid_logical_operation_credits";
-            /** @description Reservation state, such as reserved, held, settled or released. */
-            state: string;
-            reserved_credits: number;
-            used_credits: number | null;
-            billable_bytes: number | null;
-            billable_blocks?: number | null;
-            settlement_basis: string | null;
-            policy_version: string;
-            tariff_version: string;
-            route_class: string;
-            block_bytes: number | null;
-            credits_per_block: number | null;
-            max_transfer_bytes: number | null;
-        };
-        TransferLimits: {
-            min_transfer_mb: number;
-            max_transfer_mb: number;
-            step_mb: number;
-            max_encoded_bytes: number;
-            max_decoded_bytes: number;
-            body_limit_basis: string;
-            default_transfer_policy: string;
-        };
-        PaidCreditBalance: {
-            /** @constant */
-            unit: "credits";
-            reserved: number;
-            held: number;
-            used: number;
-            granted: number;
-            available: number;
-            revoked_unused: number;
-            payment_hold: boolean;
-        };
-        RenderPreparationRequest: {
-            /** @description Public HTTPS target to render. */
-            url: string;
-            proxy: components["schemas"]["ProxySelection"];
-        };
-        RenderPreparation: {
-            /** @description True when the returned profile, route and quote can be used now. Admission checks again before dispatch. */
-            ready: boolean;
-            /** @enum {string|null} */
-            execution: "browser" | null;
-            /** @description Normalized target to submit to POST /v2/render. */
-            url: string | null;
-            access_profile: components["schemas"]["ProfileReference"] | null;
-            quote: {
-                credits: number;
-                max_estimated_micro_usd: number;
-            } | null;
-            errors: {
-                field: string;
-                code: string;
-                message: string;
-            }[];
-        };
-        /** @enum {string} */
-        ScrapeFormat: "markdown" | "html" | "rawHtml" | "links";
-        ScrapeRequest: {
-            /** Format: uri */
-            url: string;
-            /**
-             * @default [
-             *       "markdown"
-             *     ]
-             */
-            formats?: (components["schemas"]["ScrapeFormat"] | {
-                type: components["schemas"]["ScrapeFormat"];
-            })[];
-            /** @default true */
-            onlyMainContent?: boolean;
-            /**
-             * @description Additional settle time in milliseconds, subject to the access profile limit.
-             * @default 0
-             */
-            waitFor?: number;
-            /** @description Requested browser operation deadline in milliseconds, capped by the access profile and existing dispatch limits. */
-            timeout?: number;
-            /** @description Discarded SDK attribution. */
-            origin?: string;
-            /** @description Discarded SDK attribution. */
-            integration?: string;
-            /**
-             * @description Discarded Python SDK default.
-             * @constant
-             */
-            mobile?: false;
-            /**
-             * @description Discarded Python SDK default.
-             * @constant
-             */
-            removeBase64Images?: true;
-            /**
-             * @description Discarded Python SDK default.
-             * @constant
-             */
-            fastMode?: false;
-            /**
-             * @description Discarded Python SDK default.
-             * @constant
-             */
-            blockAds?: true;
-            /**
-             * @description Discarded Python SDK default.
-             * @constant
-             */
-            maxAge?: 14400000;
-            /**
-             * @description Discarded Python SDK default.
-             * @constant
-             */
-            storeInCache?: true;
-        };
-        ScrapeMetadata: {
-            /** Format: uri */
-            sourceURL: string;
-            /** Format: uri */
-            url: string;
-            statusCode: number;
-            contentType?: string;
+        /** @description formats: metadata. */
+        PageMetadata: {
             title?: string;
             description?: string;
+            canonical_url?: string;
             language?: string;
+            open_graph?: {
+                [key: string]: string;
+            };
         };
-        ScrapeDocument: {
-            metadata: components["schemas"]["ScrapeMetadata"];
-            markdown?: string;
-            html?: string;
-            rawHtml?: string;
-            links?: string[];
-        };
-        ScrapeSuccess: {
-            /** @constant */
-            success: true;
-            data: components["schemas"]["ScrapeDocument"];
-        };
-        ScrapeFailure: {
-            /** @constant */
-            success: false;
-            code: string;
-            error: string;
-        };
-        /** @description Reported with source_challenge. The page was a bot-manager interstitial; a challenge page wins over its HTTP status, including 403 and 429. */
-        ChallengeDetails: {
-            /** @description Protection vendor when the passive classifier can attribute it, otherwise unknown. */
-            vendor: string;
-            http_status: number | null;
-        };
-        /** @description Reported with source_cooldown. FetchX holds new requests to this origin until cooldown_until. */
-        CooldownDetails: {
-            /** @constant */
-            scope: "origin";
-            origin: string;
-            /** Format: date-time */
-            cooldown_until: string;
-            retry_after_seconds: number;
-        };
-        /** @description Auto mode: FetchX picks the route. It starts from what worked for the host, then climbs cheapest first through HTTP direct, datacenter and residential, a rendered browser on residential, a fresh residential session (new IP), and a browser on datacenter, within the access profile and provider rules. Only GET and HEAD escalate (browser steps are GET only). Only the attempt that succeeds is billed. */
-        AutoProxySelection: {
-            /** @constant */
-            class: "auto";
-            /** @description Optional preferred country. Defaults to the country that worked for the host, else US. */
-            country?: components["schemas"]["CountryCode"] | null;
-        };
-        AutoAttempt: {
+        Attempt: {
             /** @enum {string} */
             transport: "http" | "browser";
-            class: components["schemas"]["ProxyClass"];
-            country: components["schemas"]["CountryCode"] | null;
-            /** @description Present on a repeat of the same route on a fresh session (new IP). */
+            /** @enum {string} */
+            class: "direct" | "datacenter" | "residential";
+            country: string | null;
+            /** @description A fresh residential IP for the same step. */
             rotation?: number;
-            /** @enum {string} */
-            result: "success" | "answered" | "blocked" | "rate_limited" | "failed" | "uncertain" | "not_admitted" | "waited";
-            /** @description Admission code when the step was not admitted or was waited out. */
+            /**
+             * @description not_admitted means nothing reached the site on this step (for example the provider refused the host); it does not count as an attempt.
+             * @enum {string}
+             */
+            result: "success" | "answered" | "blocked" | "rate_limited" | "login_required" | "site_error" | "needs_browser" | "unreachable" | "failed" | "too_large" | "uncertain" | "not_admitted" | "url_not_allowed";
+            /** @description The underlying error, when result is not_admitted or failed. */
             code?: string;
+            status_code: number | null;
+            ms?: number | null;
+            /** @description Captchas met on this step, as type:outcome. */
+            captcha?: string[];
         };
-        AutoNextStep: {
+        SkippedStep: {
             /** @enum {string} */
-            action: "retry_after" | "retry_later" | "recover" | "review_access";
-            retry_after_seconds?: number;
-            detail: string;
+            transport: "http" | "browser";
+            /** @enum {string} */
+            class: "direct" | "datacenter" | "residential";
+            country: string | null;
+            /** @description For example excluded_by_provider_rule, over_max_credits or cooling. */
+            reason: string;
         };
-        /** @description Present when proxy.class was auto. Never names providers or protection vendors. */
-        AutoSummary: {
-            /** @constant */
-            mode: "auto";
-            attempts: number;
-            max_attempts: number;
-            routes_tried: components["schemas"]["AutoAttempt"][];
-            routes_skipped?: {
-                transport?: string;
-                class?: string;
-                country?: string | null;
+        FetchError: {
+            /** @enum {string} */
+            code: "blocked" | "rate_limited" | "login_required" | "site_error" | "unreachable" | "cooling_down" | "timeout" | "too_large" | "uncertain" | "route_unavailable" | "url_not_allowed";
+            message: string;
+            retry_after_seconds?: number;
+            /** @description What to do next. */
+            next: {
                 /** @enum {string} */
-                reason?: "cooling" | "excluded_by_provider_rule";
+                action: "retry_after" | "retry_later" | "use_auto" | "provide_credentials" | "check_url" | "raise_timeout" | "render_never" | "recover";
+                retry_after_seconds?: number;
+                detail: string;
+            };
+        };
+        FetchList: {
+            items: {
+                /** Format: uuid */
+                id: string;
+                /** @enum {string} */
+                status: "pending" | "succeeded" | "failed";
+                url: string;
+                /** Format: date-time */
+                created_at: string;
+                credits: {
+                    charged: number;
+                };
+                error_code: string | null;
+                tags: string[];
+                idempotency_key: string;
             }[];
-            /** @description Which dispatched attempt was billed; null when nothing was billed. */
-            billed_attempt: number | null;
-            /** @description Headers FetchX fixed, such as an automation User-Agent replaced with a browser one. */
-            headers_adjusted?: string[];
-            next: components["schemas"]["AutoNextStep"] | null;
+            next_cursor: string | null;
+        };
+        Usage: {
+            balance: {
+                /** @description Available now. */
+                credits: number;
+                trial: number;
+                purchased: number;
+                /** @description Held by running requests. */
+                reserved: number;
+                payment_hold: boolean;
+            } | null;
+            period: {
+                /** Format: date-time */
+                from: string;
+                /** Format: date-time */
+                to: string;
+            };
+            used: {
+                credits: number;
+                succeeded: number;
+                failed: number;
+                captcha_solved: number;
+            };
+            by_step: {
+                /** @enum {string} */
+                step: "http" | "http_residential" | "browser" | "browser_residential";
+                requests: number;
+                credits: number;
+            }[];
+            daily: {
+                /** Format: date */
+                date: string;
+                requests: number;
+                credits: number;
+            }[];
+        };
+        Error: {
+            error: {
+                code: string;
+                message: string;
+                details?: Record<string, never>;
+                retry_after_seconds?: number;
+            };
         };
     };
     responses: never;
@@ -1199,911 +436,430 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    fetch: {
+    listFetches: {
+        parameters: {
+            query?: {
+                status?: "pending" | "succeeded" | "failed";
+                tag?: string;
+                /** @description Find the request made with this key. */
+                idempotency_key?: string;
+                /** @description Only requests created after this time. */
+                since?: string;
+                limit?: number;
+                /** @description `next_cursor` from the previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of requests. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchList"];
+                };
+            };
+            /** @description A query parameter is wrong. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key is missing, wrong or revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createFetch: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** @description JSON request subject to gateway and access profile limits. */
         requestBody: {
             content: {
                 "application/json": components["schemas"]["FetchRequest"];
             };
         };
         responses: {
-            /** @description The retained operation, including successful source results, source errors and incomplete operations. Check success, state and data.status. */
+            /** @description The fetch finished: `status` is `succeeded` or `failed`. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["FetchResult"];
                 };
             };
-            /** @description Invalid request or identifier. */
+            /** @description Still running: `async` was true, or the result took longer than 60 seconds. Poll GET /v1/fetch/{id} or wait for the webhook. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResult"];
+                };
+            };
+            /** @description A field is missing or wrong, or the URL is not public. Nothing was sent. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Missing or invalid project Bearer token. */
+            /** @description The API key is missing, wrong or revoked. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Missing key scope or an authorization or policy restriction. */
+            /** @description Not enough credits for the cheapest step, max_credits below it, or spending paused by a payment issue. Nothing was sent. */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The requested project-owned resource was not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FetchResponse"];
-                };
-            };
-            /** @description A bound request conflicts with this input, or the requested capability is unavailable. */
+            /** @description The idempotency_key was used before with a different request. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The JSON request exceeds the gateway body limit. */
+            /** @description The request body is over 1 MB. */
             413: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Unsupported request content type. */
-            415: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FetchResponse"];
-                };
-            };
-            /** @description A gateway limit, source cooldown or cost ceiling prevents admission. */
+            /** @description The project has too many requests running. Wait `retry_after_seconds`. */
             429: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Internal gateway failure. Recover by the original key before considering new source work. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FetchResponse"];
-                };
-            };
-            /** @description Gateway capacity, route availability or operator configuration prevents completion. */
+            /** @description FetchX cannot take work right now. Nothing was charged. */
             503: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
-                };
-            };
-            /** @description The retained artifact quota prevents admission. */
-            507: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FetchResponse"];
-                };
-            };
-            /** @description Other gateway error. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };
     };
-    lookupFetch: {
+    getFetch: {
+        parameters: {
+            query?: {
+                /** @description false leaves out the body, for cheap polling. */
+                include_body?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description The request id returned by POST /v1/fetch. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The request has finished. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResult"];
+                };
+            };
+            /** @description The request is still running. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResult"];
+                };
+            };
+            /** @description The API key is missing, wrong or revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No request with that id in this project. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteFetch: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Original caller-supplied idempotency key. URL-encode it as a single path segment. */
-                key: components["schemas"]["Identifier"];
+                /** @description The request id returned by POST /v1/fetch. */
+                id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The retained operation, including successful source results, source errors and incomplete operations. Check success, state and data.status. */
-            200: {
+            /** @description Deleted. */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["FetchResponse"];
-                };
+                content?: never;
             };
-            /** @description Invalid request or identifier. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FetchResponse"];
-                };
-            };
-            /** @description Missing or invalid project Bearer token. */
+            /** @description The API key is missing, wrong or revoked. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Missing key scope or an authorization or policy restriction. */
+            /** @description The API key does not have the scope this endpoint needs. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The requested project-owned resource was not found. */
+            /** @description No request with that id in this project. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description A bound request conflicts with this input, or the requested capability is unavailable. */
+            /** @description The request is still running. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
-                };
-            };
-            /** @description Internal gateway failure. Recover by the original key before considering new source work. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FetchResponse"];
-                };
-            };
-            /** @description Other gateway error. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };
     };
-    getFetchOperation: {
+    getFetchContent: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Project-owned operation ID. */
-                id: components["schemas"]["ResourceId"];
+                /** @description The request id returned by POST /v1/fetch. */
+                id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The retained operation, including successful source results, source errors and incomplete operations. Check success, state and data.status. */
+            /** @description The body. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "*/*": string;
                 };
             };
-            /** @description Invalid request or identifier. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FetchResponse"];
-                };
-            };
-            /** @description Missing or invalid project Bearer token. */
+            /** @description The API key is missing, wrong or revoked. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Missing key scope or an authorization or policy restriction. */
+            /** @description The API key does not have the scope this endpoint needs. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The requested project-owned resource was not found. */
+            /** @description No request with that id in this project. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description A bound request conflicts with this input, or the requested capability is unavailable. */
+            /** @description The request is still running. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Internal gateway failure. Recover by the original key before considering new source work. */
-            500: {
+            /** @description The content expired or was deleted. */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FetchResponse"];
-                };
-            };
-            /** @description Other gateway error. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FetchResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };
     };
-    prepareRender: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RenderPreparationRequest"];
-            };
-        };
-        responses: {
-            /** @description Preparation result. Inspect errors when ready is false. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderPreparation"];
-                };
-            };
-            /** @description Malformed request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Managed key required or scope missing */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-        };
-    };
-    render: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description JSON request, at most 96 KiB. Replace the example profile with the approved browser profile for the project. */
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RenderRequest"];
-            };
-        };
-        responses: {
-            /** @description The retained operation, including successful source results, source errors and incomplete operations. Check success, state and data.status. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description Invalid request or identifier. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description Missing or invalid project Bearer token. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description Missing key scope or an authorization or policy restriction. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description The requested project-owned resource was not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description A bound request conflicts with this input, or the requested capability is unavailable. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description The JSON request exceeds the gateway body limit. */
-            413: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description Unsupported request content type. */
-            415: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description A gateway limit, source cooldown or cost ceiling prevents admission. */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description Internal gateway failure. Recover by the original key before considering new source work. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description Gateway capacity, route availability or operator configuration prevents completion. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description The retained artifact quota prevents admission. */
-            507: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description Other gateway error. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-        };
-    };
-    lookupRender: {
+    getFetchScreenshot: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Original caller-supplied idempotency key. URL-encode it as a single path segment. */
-                key: components["schemas"]["Identifier"];
+                /** @description The request id returned by POST /v1/fetch. */
+                id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The retained operation, including successful source results, source errors and incomplete operations. Check success, state and data.status. */
+            /** @description The screenshot. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RenderResponse"];
+                    "image/jpeg": string;
                 };
             };
-            /** @description Invalid request or identifier. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description Missing or invalid project Bearer token. */
+            /** @description The API key is missing, wrong or revoked. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RenderResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Missing key scope or an authorization or policy restriction. */
+            /** @description The API key does not have the scope this endpoint needs. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RenderResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The requested project-owned resource was not found. */
+            /** @description No request with that id in this project. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RenderResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description A bound request conflicts with this input, or the requested capability is unavailable. */
+            /** @description The request is still running. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RenderResponse"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Internal gateway failure. Recover by the original key before considering new source work. */
-            500: {
+            /** @description The content expired or was deleted. */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-            /** @description Other gateway error. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RenderResponse"];
-                };
-            };
-        };
-    };
-    scrape: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description Replay with this key to recover the original capture. The gateway generates a key when omitted. */
-                "X-Idempotency-Key"?: components["schemas"]["Identifier"];
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScrapeRequest"];
-            };
-        };
-        responses: {
-            /** @description Rendered page and requested formats */
-            200: {
-                headers: {
-                    "X-Idempotency-Key": components["schemas"]["Identifier"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScrapeSuccess"];
-                };
-            };
-            /** @description Request rejected, source failure, or operation outcome unavailable */
-            default: {
-                headers: {
-                    "X-Idempotency-Key"?: components["schemas"]["Identifier"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScrapeFailure"];
-                };
-            };
-        };
-    };
-    getCapabilities: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Read gateway capabilities. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CapabilitiesResponse"];
-                };
-            };
-            /** @description Missing or invalid project Bearer token. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Missing key scope or an authorization or policy restriction. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Internal gateway failure. Recover by the original key before considering new source work. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Gateway capacity, route availability or operator configuration prevents completion. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Other gateway error. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-        };
-    };
-    listAccessProfiles: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description List approved access profiles. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessProfilesResponse"];
-                };
-            };
-            /** @description Missing or invalid project Bearer token. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Missing key scope or an authorization or policy restriction. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description A bound request conflicts with this input, or the requested capability is unavailable. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Internal gateway failure. Recover by the original key before considering new source work. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Gateway capacity, route availability or operator configuration prevents completion. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Other gateway error. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-        };
-    };
-    listRecipes: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description List approved native HTTP recipes. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecipesResponse"];
-                };
-            };
-            /** @description Invalid request or identifier. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Missing or invalid project Bearer token. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Missing key scope or an authorization or policy restriction. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description The requested project-owned resource was not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description A bound request conflicts with this input, or the requested capability is unavailable. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Internal gateway failure. Recover by the original key before considering new source work. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Gateway capacity, route availability or operator configuration prevents completion. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Other gateway error. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };
     };
     getUsage: {
         parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Read project usage. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UsageResponse"];
-                };
-            };
-            /** @description Missing or invalid project Bearer token. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Missing key scope or an authorization or policy restriction. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Internal gateway failure. Recover by the original key before considering new source work. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Gateway capacity, route availability or operator configuration prevents completion. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Other gateway error. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-        };
-    };
-    listOperations: {
-        parameters: {
             query?: {
-                /** @description Recent window size, from 1 to 50. The gateway returns the newest operations first. */
-                limit?: number;
+                period?: "day" | "month";
+                /** @description A custom range instead of period, up to 92 days. */
+                since?: string;
+                until?: string;
             };
             header?: never;
             path?: never;
@@ -2111,316 +867,40 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description List recent operations. */
+            /** @description Balance and usage. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecentOperationsResponse"];
+                    "application/json": components["schemas"]["Usage"];
                 };
             };
-            /** @description Invalid request or identifier. */
+            /** @description A query parameter is wrong. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["NativeError"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Missing or invalid project Bearer token. */
+            /** @description The API key is missing, wrong or revoked. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["NativeError"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Missing key scope or an authorization or policy restriction. */
+            /** @description The API key does not have the scope this endpoint needs. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Internal gateway failure. Recover by the original key before considering new source work. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Gateway capacity, route availability or operator configuration prevents completion. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Other gateway error. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-        };
-    };
-    lookupOperation: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Stored native operation key. For facade operations, recover using the caller key at /v2/fetch/{key} or /v2/render/{key}. */
-                key: components["schemas"]["Identifier"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Read a native operation by stored key. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Operation"];
-                };
-            };
-            /** @description Invalid request or identifier. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Missing or invalid project Bearer token. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Missing key scope or an authorization or policy restriction. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description The requested project-owned resource was not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Internal gateway failure. Recover by the original key before considering new source work. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Gateway capacity, route availability or operator configuration prevents completion. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Other gateway error. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-        };
-    };
-    getOperation: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Project-owned operation ID. */
-                id: components["schemas"]["ResourceId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Read an operation by ID. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Operation"];
-                };
-            };
-            /** @description Invalid request or identifier. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Missing or invalid project Bearer token. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Missing key scope or an authorization or policy restriction. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description The requested project-owned resource was not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Internal gateway failure. Recover by the original key before considering new source work. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Gateway capacity, route availability or operator configuration prevents completion. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Other gateway error. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-        };
-    };
-    getArtifact: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Project-owned artifact ID. */
-                id: components["schemas"]["ResourceId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Read a retained artifact. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Artifact"];
-                };
-            };
-            /** @description Invalid request or identifier. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Missing or invalid project Bearer token. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Missing key scope or an authorization or policy restriction. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description The requested project-owned resource was not found. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Internal gateway failure. Recover by the original key before considering new source work. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
-                };
-            };
-            /** @description Other gateway error. */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NativeError"];
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };

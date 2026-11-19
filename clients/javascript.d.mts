@@ -1,92 +1,70 @@
-import type {paths} from './openapi.js';
+import type {components} from './openapi.js';
 
-type JsonRequest<T extends {requestBody: {content: {'application/json': unknown}}}> =
-  T['requestBody']['content']['application/json'];
-type JsonSuccess<T extends {responses: {200: {content: {'application/json': unknown}}}}> =
-  T['responses'][200]['content']['application/json'];
+type Schemas = components['schemas'];
+export type FetchRequest = Schemas['FetchRequest'];
+export type FetchResult = Schemas['FetchResult'];
+export type FetchData = Schemas['FetchData'];
+export type FetchList = Schemas['FetchList'];
+export type Usage = Schemas['Usage'];
+export type Attempt = Schemas['Attempt'];
 
-export type FetchRequest = JsonRequest<paths['/v2/fetch']['post']>;
-export type FetchResponse = JsonSuccess<paths['/v2/fetch']['post']>;
-export type RenderRequest = JsonRequest<paths['/v2/render']['post']>;
-export type RenderResponse = JsonSuccess<paths['/v2/render']['post']>;
-export type RenderPreparationRequest = JsonRequest<paths['/v2/render/prepare']['post']>;
-export type RenderPreparation = JsonSuccess<paths['/v2/render/prepare']['post']>;
-export type ScrapeRequest = JsonRequest<paths['/v2/scrape']['post']>;
-export type ScrapeResponse = JsonSuccess<paths['/v2/scrape']['post']>;
+type Transport = (url: string, options: RequestInit) => Promise<Response>;
 
-type GatewayRecord = Record<string, unknown>;
-type IdempotentRequest = GatewayRecord & {idempotency_key: string};
-type FetchTransport = (url: string, options: RequestInit) => Promise<Response>;
+export interface FetchXClientOptions {
+  url: string;
+  token: string;
+  fetch?: Transport;
+  timeoutMs?: number;
+  /** How many times a lost, rate-limited or unavailable POST is resent with the same idempotency_key. */
+  retries?: number;
+}
 
-export interface GatewayErrorOptions {
+export interface FetchXErrorOptions {
   status?: number | null;
   details?: unknown;
-  workflow?: string | null;
-  idempotency_key?: string | null;
-  response?: GatewayRecord | null;
+  retryAfterSeconds?: number | null;
+  idempotencyKey?: string | null;
+  response?: unknown;
 }
 
-export class GatewayError extends Error {
-  constructor(code: string, options?: GatewayErrorOptions);
-  code: string;
-  status: number | null;
-  details?: unknown;
-  workflow: string | null;
-  idempotency_key: string | null;
-  response: GatewayRecord | null;
-  operation_id: string | null;
-  session_id: string | null;
-  retry: GatewayRecord | null;
-  diagnostics: GatewayRecord | null;
+export class FetchXError extends Error {
+  constructor(code: string, options?: FetchXErrorOptions);
+  readonly code: string;
+  readonly status: number | null;
+  readonly details?: unknown;
+  readonly retryAfterSeconds: number | null;
+  readonly idempotencyKey: string | null;
+  readonly response: unknown;
 }
 
-export interface GatewayClientOptions {
-  url: string;
-  token: string;
-  fetch?: FetchTransport;
+export interface ListQuery {
+  status?: 'pending' | 'succeeded' | 'failed';
+  tag?: string;
+  idempotency_key?: string;
+  since?: string;
+  limit?: number;
+  cursor?: string;
 }
 
-export class GatewayClient {
-  constructor(options: GatewayClientOptions);
-  url: string;
-  token: string;
-  fetch: FetchTransport;
-  call(path: string, body?: unknown, context?: GatewayErrorOptions, options?: {headers?: Record<string, string>}): Promise<GatewayRecord>;
-
-  fetchV2(input: FetchRequest): Promise<FetchResponse>;
-  lookupFetchV2(key: string): Promise<JsonSuccess<paths['/v2/fetch/{key}']['get']>>;
-  readFetchOperationV2(id: string): Promise<JsonSuccess<paths['/v2/fetch/operations/{id}']['get']>>;
-  renderV2(input: RenderRequest): Promise<RenderResponse>;
-  prepareRenderV2(input: RenderPreparationRequest): Promise<RenderPreparation>;
-  scrapeV2(input: ScrapeRequest, idempotencyKey: string): Promise<ScrapeResponse>;
-  lookupRenderV2(key: string): Promise<JsonSuccess<paths['/v2/render/{key}']['get']>>;
-  capabilitiesV2(): Promise<JsonSuccess<paths['/v2/capabilities']['get']>>;
-  accessProfilesV2(): Promise<JsonSuccess<paths['/v2/access-profiles']['get']>>;
-  recipesV2(): Promise<JsonSuccess<paths['/v2/recipes']['get']>>;
-  readOperationV2(id: string): Promise<JsonSuccess<paths['/v2/operations/{id}']['get']>>;
-  lookupOperationV2(key: string): Promise<JsonSuccess<paths['/v2/operations/by-key/{key}']['get']>>;
-  artifactV2(id: string): Promise<JsonSuccess<paths['/v2/artifacts/{id}']['get']>>;
-  usageV2(): Promise<JsonSuccess<paths['/v2/usage']['get']>>;
-  recentOperationsV2(limit?: number): Promise<JsonSuccess<paths['/v2/operations']['get']>>;
-
-  discoveryProfileV2(input: IdempotentRequest): Promise<GatewayRecord>;
-  sessionV2(input: IdempotentRequest): Promise<GatewayRecord>;
-  readSessionV2(id: string): Promise<GatewayRecord>;
-  operationV2(input: IdempotentRequest): Promise<GatewayRecord>;
-  browserProbeV2(input: IdempotentRequest): Promise<GatewayRecord>;
-
-  workflow(profile: string, key?: string, limits?: GatewayRecord): Promise<GatewayRecord>;
-  request(workflow: string, input: GatewayRecord): Promise<GatewayRecord>;
-  lookup(workflow: string, key: string): Promise<GatewayRecord>;
-  close(workflow: string): Promise<GatewayRecord>;
-  fetchPage(input: IdempotentRequest): Promise<GatewayRecord>;
-  lookupFetch(key: string): Promise<GatewayRecord>;
-  submitJob(input: IdempotentRequest): Promise<GatewayRecord>;
-  job(id: string): Promise<GatewayRecord>;
-  profiles(): Promise<GatewayRecord>;
-  status(): Promise<GatewayRecord>;
-  diagnostics(operation: string): Promise<GatewayRecord>;
-  outcome(operation: string, input: {accepted_records: number; rejected_records: number; reason_code: string}): Promise<GatewayRecord>;
+export interface UsageQuery {
+  period?: 'day' | 'month';
+  since?: string;
+  until?: string;
 }
 
-export {GatewayClient as FetchXClient};
+export interface Download {
+  body: Uint8Array;
+  contentType: string | null;
+}
+
+export class FetchXClient {
+  constructor(options: FetchXClientOptions);
+  fetch(input: FetchRequest): Promise<FetchResult>;
+  get(id: string, options?: {includeBody?: boolean}): Promise<FetchResult>;
+  wait(id: string, options?: {intervalMs?: number; timeoutMs?: number; includeBody?: boolean}): Promise<FetchResult>;
+  list(query?: ListQuery): Promise<FetchList>;
+  content(id: string): Promise<Download>;
+  screenshot(id: string): Promise<Download>;
+  delete(id: string): Promise<void>;
+  usage(query?: UsageQuery): Promise<Usage>;
+}

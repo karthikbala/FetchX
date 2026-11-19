@@ -1,61 +1,33 @@
-import {FetchXClient, GatewayError, type FetchRequest, type FetchResponse, type RenderResponse} from '../clients/javascript.mjs';
+import {FetchXClient, FetchXError, type FetchRequest, type FetchResult, type Usage} from '../clients/javascript.mjs';
 
 async function checkClientTypes() {
-  const client = new FetchXClient({url: 'https://gateway.example', token: 'fixture-token'});
-  const input = {
-    idempotency_key: 'saved-fetch',
-    access_profile: {id: 'example.http', version: 1},
-    url: 'https://source.example/',
-    proxy: {class: 'direct', country: null},
-  } satisfies FetchRequest;
-
-  const fetchResult: FetchResponse = await client.fetchV2(input);
-  const sourceStatus: number | null | undefined = fetchResult.data?.status;
-  const gatewayStatus: number = fetchResult.gateway_http_status;
-  const recoveredFetch: FetchResponse = await client.lookupFetchV2(input.idempotency_key);
-  if (recoveredFetch.operation_id) {
-    const operation: FetchResponse = await client.readFetchOperationV2(recoveredFetch.operation_id);
-    console.log(operation.retry.next_action);
-  }
-
-  const renderResult: RenderResponse = await client.renderV2({
-    ...input,
-    idempotency_key: 'saved-render',
-    access_profile: {id: 'example.browser', version: 1},
-    screenshot: true,
-  });
-  const recoveredRender: RenderResponse = await client.lookupRenderV2('saved-render');
-  const execution: 'browser' = recoveredRender.execution;
-  const renderAvailable: boolean = (await client.capabilitiesV2()).features.browser_render;
-  console.log(sourceStatus, gatewayStatus, renderResult.success, execution, renderAvailable);
-
-  const prepared = await client.prepareRenderV2({url: input.url, proxy: input.proxy});
-  if (prepared.ready && prepared.access_profile && prepared.url) {
-    await client.renderV2({idempotency_key: 'prepared-render', access_profile: prepared.access_profile, url: prepared.url, proxy: input.proxy});
-  }
-  const scraped = await client.scrapeV2({url: input.url, formats: ['markdown']}, 'saved-scrape');
-  const markdown: string | undefined = scraped.data.markdown;
-  const paid = await client.fetchV2({idempotency_key: 'paid-fetch', url: input.url, proxy: {class: 'datacenter', country: 'US'}, max_transfer_mb: 2.25, max_credits: 3});
-  const debit: number | null | undefined = paid.usage?.accounting.paid_credits?.used_credits;
-  console.log(markdown, debit);
-
+  const client = new FetchXClient({url: 'https://app.fetchx.ai', token: 'fxk_fixture'});
+  const input = {url: 'https://shop.example.com/', formats: ['markdown', 'metadata'], render: 'auto', max_credits: 60,
+    route: {class: 'residential', country: 'US'}} satisfies FetchRequest;
+  const result: FetchResult = await client.fetch(input);
+  const status: 'pending' | 'succeeded' | 'failed' = result.status;
+  const markdown: string | undefined = result.data?.markdown;
+  const charged: number = result.credits.charged;
+  const next: string | undefined = result.error?.next.action;
+  const finished: FetchResult = await client.wait(result.id, {intervalMs: 1000});
+  const page = await client.list({status: 'failed', limit: 10});
+  const cursor: string | null = page.next_cursor;
+  const usage: Usage = await client.usage({period: 'day'});
+  const download = await client.content(result.id);
+  const bytes: Uint8Array = download.body;
+  await client.delete(result.id);
   try {
-    await client.fetchPage({profile: 'example.http', url: input.url, idempotency_key: 'v1-key'});
+    await client.fetch({url: 'https://shop.example.com/', max_attempts: 3});
   } catch (error) {
-    if (error instanceof GatewayError) {
-      const key: string | null = error.idempotency_key;
-      console.log(error.code, key, error.retry?.next_action, error.response);
-    }
+    if (error instanceof FetchXError) console.log(error.code, error.status, error.retryAfterSeconds, error.idempotencyKey);
   }
-
-  const {idempotency_key: savedKey, ...missingKey} = input;
-  // @ts-expect-error New submissions require the caller's durable key.
-  await client.fetchV2(missingKey);
-  // @ts-expect-error Render accepts an approved GET navigation and no method option.
-  await client.renderV2({...input, method: 'POST'});
-  // @ts-expect-error Scrape submissions require the caller's durable key.
-  await client.scrapeV2({url: input.url});
-  // @ts-expect-error Direct proxy selection requires an explicit null country.
-  await client.fetchV2({...input, proxy: {class: 'direct', country: 'US'}});
-  await client.lookupOperationV2(savedKey);
+  console.log(status, markdown, charged, next, finished.status, cursor, usage.balance?.credits, bytes.length);
 }
+
+// @ts-expect-error: url is required.
+const missingUrl: FetchRequest = {formats: ['markdown']};
+// @ts-expect-error: only documented formats are accepted.
+const badFormat: FetchRequest = {url: 'https://shop.example.com/', formats: ['pdf']};
+void checkClientTypes;
+void missingUrl;
+void badFormat;

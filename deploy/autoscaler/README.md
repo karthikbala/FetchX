@@ -69,7 +69,7 @@ Docker tag and archives the browser-directory **contents**, without an outer
   "version": 1,
   "image": {"archive": "/private/assets/image.tar", "sha256": "64 hex", "ref": "fetchx-autoscaler-pinned:64hex", "rootfs_layers": ["sha256:64hex"]},
   "browser": {"archive": "/private/assets/browser.tar", "sha256": "64 hex", "executable": "/opt/gateway-browser/PINNED/PATH/chrome"},
-  "runtime_pin": {"engine": "chromium", "executablePath": "/opt/gateway-browser/PINNED/PATH/chrome", "version": "151.x.x.x", "sha256": "64 hex"},
+  "runtime_pin": {"engine": "camoufox", "executablePath": "/opt/gateway-browser/camoufox/camoufox-bin", "modelDir": "/opt/gateway-browser/camoufox-model", "version": "158.0.1-beta.41", "sha256": "64 hex"},
   "seccomp": {"path": "/private/assets/seccomp.json", "sha256": "64 hex"}
 }
 ```
@@ -81,7 +81,7 @@ their hashes. After loading on the VM, it validates the archive hash, Linux
 AMD64 and **ordered RootFS layer digests**; Docker config IDs can differ across
 classic/containerd stores. Browser executable health must match the exact
 manifest version/SHA and Linux/x64. Gateway qualification expiry remains enforced
-by the gateway. Bootstrap also runs a synthetic Chromium sandbox smoke test.
+by the gateway. Bootstrap also runs a synthetic Camoufox sandbox smoke test.
 
 Initialize the durable ledger explicitly with the disabled configuration:
 
@@ -122,7 +122,7 @@ python3.12 -B -m unittest discover -s test/autoscaler -p test_worker_driver.py -
 ```
 
 This does not establish live Ubuntu cloud-init, provider availability, SSH/systemd,
-AppArmor/Chromium sandbox, reconnect permissions through the running gateway,
+AppArmor/browser sandbox, reconnect permissions through the running gateway,
 synthetic scrape acceptance, or deletion/IPv4 cleanup. Those remain bounded
 rollout checks for the explicitly enabled deployment. A failed sandbox test
 retires the worker; it never disables the browser sandbox or host restrictions.

@@ -5,9 +5,8 @@
 // metadata only: the host name, never URLs, paths, queries, cookies, headers,
 // bodies, credentials or which project made the request.
 //
-// Phase 1 is observational. Nothing here dispatches or changes routing; auto
-// mode (a later phase) reads siteRoutes() to choose where to start its ladder.
-import {hasHtmlChallenge} from './source-challenge.mjs';
+// Auto mode (fetch/ladder.mjs) reads siteRoutes() to choose where to start and
+// which routes to skip; fetch/service.mjs records every attempt's outcome.
 
 const HOST=/^(?=.{1,253}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 export const SITE_OUTCOMES=Object.freeze(['success','blocked','rate_limited','unreachable']);
@@ -20,25 +19,6 @@ export function siteHost(value){
  host=host.toLowerCase().replace(/\.$/,'');
  // IP literals are not sites to learn about; a host name must end in a letter label.
  return HOST.test(host)&&!/\.\d+$/.test(host)?host:null;
-}
-
-const BLOCK_ERRORS=new Set(['source_challenge','source_denied','source_blocked']);
-const RATE_ERRORS=new Set(['source_rate_limited','source_cooldown','rate_limited']);
-const UNREACHABLE_ERRORS=new Set(['source_unreachable','source_timeout','source_connect_failed','source_tls_failed','dns_failed','destination_unreachable']);
-// Classifies one settled attempt for learning. Returns null for anything that
-// says nothing about the route's ability to reach the site: customer input
-// errors, quota/budget refusals, FetchX internal faults and uncertain results.
-export function siteOutcome({state,error,status,headers,body,challenge}={}){
- if(state==='unknown')return null;
- if(challenge===true||BLOCK_ERRORS.has(error))return 'blocked';
- if(status===429||RATE_ERRORS.has(error))return 'rate_limited';
- if(UNREACHABLE_ERRORS.has(error))return 'unreachable';
- if(Number.isInteger(status)){
-  if(body!==undefined&&hasHtmlChallenge({headers,body}))return 'blocked';
-  if(status===401||status===403)return 'blocked';
-  if(!error&&status>=200&&status<400)return 'success';
- }
- return null;
 }
 
 export async function initSiteKnowledge(pool){
@@ -148,13 +128,3 @@ export async function seedFromProbe(db,report,{config}={}){
  return seeded;
 }
 
-// Billing rule: a customer is billed only for an attempt that succeeded.
-// Returns true when the attempt must not be billed: it failed, the source
-// blocked or rate-limited it, or a GET/HEAD ended uncertain with no response
-// bytes (nothing stateful can have happened, so nothing is held).
-export function unbilledAttempt({state,error,status,headers,body,challenge,method='GET',responseBytes=null}){
- if(state==='unknown')return ['GET','HEAD'].includes(method)&&responseBytes===0;
- if(state==='failed'||error)return true;
- const outcome=siteOutcome({state,error,status,headers,body,challenge});
- return outcome==='blocked'||outcome==='rate_limited'||outcome==='unreachable';
-}

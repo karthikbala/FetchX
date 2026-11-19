@@ -4,12 +4,11 @@ import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import pg from 'pg';
 import {connectApiBase} from '../src/control-connect.mjs';
 import {Store} from '../src/store.mjs';
-import {Gateway} from '../src/gateway.mjs';
-import {server} from '../src/main.mjs';
+import {createGateway,server} from '../src/server.mjs';
 
 const ORIGIN='http://127.0.0.1:4434';
 const API='http://127.0.0.1:8789';
-const SCOPES=['fetch:read','fetch:write','profiles:read'];
+const SCOPES=['fetch:read','fetch:write','usage:read'];
 const sha256=value=>createHash('sha256').update(value,'utf8');
 const deriveKey=code=>'fxk_'+sha256('fetchx-connect-key-v1\0'+code).digest('base64url');
 
@@ -45,7 +44,7 @@ test('Connect requires account approval, issues once under concurrency, and hono
   projectTemplate:{id:'connect-test',v2_access_profiles:[],v2_entitlement:{mode:'metered',max_daily_operations:50}},
   creditPolicy:{reviewed:true,version:'connect-test',trialCredits:10,weights:{direct:1},maxEstimatedMicroUsdPerOperation:0}};
  const config={artifactKey:randomBytes(32).toString('hex'),projects:{},proxies:[],v2:{accessProfiles:{}},controlPlane};
- const gateway=new Gateway({store,config,profiles:{}});
+ const gateway=createGateway({store,config,deps:{runtime:null,browserPool:null}});
  app=server(gateway);
  const identity=gateway.controlIdentity;
  const bridge={origin:ORIGIN,'x-fetchx-control-secret':controlPlane.bridgeSecret};
@@ -109,7 +108,7 @@ test('Connect requires account approval, issues once under concurrency, and hono
  await error(review(flow,stranger),404,'connect_not_found');
  assert.equal((await review(flow,owner)).body.state,'approved');
  assert.equal(await count(project.id),0);
- assert.equal((await native('/v2/access-profiles',token)).statusCode,401);
+ assert.equal((await native('/v1/fetch',token)).statusCode,401);
  const receipts=await Promise.all(Array.from({length:8},()=>claim(flow)));
  const receipt=receipts[0].body;
  assert.match(receipt.key_id,/^[0-9a-f-]{36}$/);
@@ -121,14 +120,14 @@ test('Connect requires account approval, issues once under concurrency, and hono
  const persisted=(await store.pool.query('SELECT token_hash,scopes FROM control_keys WHERE id=$1',[receipt.key_id])).rows[0];
  assert.deepEqual(persisted,{token_hash:sha256(token).digest('hex'),scopes:SCOPES});
  assert.equal(await identity.isCredential(token),true);
- assert.equal((await native('/v2/access-profiles',token)).statusCode,200);
- assert.equal((await native('/v2/usage',token)).statusCode,403);
+ assert.equal((await native('/v1/fetch',token)).statusCode,200);
+ assert.equal((await native('/v1/usage',token)).statusCode,200);
  const rotated=await identity.rotateKey(owner.id,project.id,receipt.key_id);
  assert.deepEqual((await claim(flow)).body,{state:'denied'});
- assert.equal((await native('/v2/access-profiles',token)).statusCode,401);
- assert.equal((await native('/v2/access-profiles',rotated.token)).statusCode,200);
+ assert.equal((await native('/v1/fetch',token)).statusCode,401);
+ assert.equal((await native('/v1/fetch',rotated.token)).statusCode,200);
  await identity.revokeKey(owner.id,project.id,rotated.id);
- assert.equal((await native('/v2/access-profiles',rotated.token)).statusCode,401);
+ assert.equal((await native('/v1/fetch',rotated.token)).statusCode,401);
 
  await t.test('expired, denied, and exhausted user-code requests cannot issue a key',async()=>{
   const expired=await start();await approve(expired,owner,project.id);await expire(expired);
@@ -153,9 +152,9 @@ test('Connect requires account approval, issues once under concurrency, and hono
   assert.deepEqual((await claim(lost)).body,{state:'denied'});
   assert.equal(await count(project.id),0);
   await store.pool.query('INSERT INTO control_memberships(user_id,project) VALUES($1,$2)',[owner.id,project.id]);
-  for(let n=0;n<19;n++)await identity.createKey(owner.id,project.id,{name:'Manual key',scopes:['profiles:read']});
+  for(let n=0;n<19;n++)await identity.createKey(owner.id,project.id,{name:'Manual key',scopes:['usage:read']});
   const competing=await start();assert.equal((await approve(competing,owner,project.id)).body.state,'approved');
-  const [redemption,manual]=await Promise.allSettled([claim(competing),identity.createKey(owner.id,project.id,{name:'Manual key',scopes:['profiles:read']})]);
+  const [redemption,manual]=await Promise.allSettled([claim(competing),identity.createKey(owner.id,project.id,{name:'Manual key',scopes:['usage:read']})]);
   assert.equal(redemption.status,'fulfilled');assert.equal(redemption.value.status,200);
   if(manual.status==='fulfilled')assert.deepEqual(redemption.value.body,{state:'denied'});
   else{assert.equal(manual.reason.code,'key_limit');assert.equal(redemption.value.body.state,'connected');}

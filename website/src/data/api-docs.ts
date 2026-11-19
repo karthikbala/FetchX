@@ -1,3 +1,5 @@
+// The developer docs at /docs, built from docs/openapi.json wherever a field,
+// status or example exists there, so the docs cannot drift from the API.
 import {
   contractOperation, contractOperations, parameterRows, requestExample, requestRows, responseExample,
   responseRows, statusRows,
@@ -28,253 +30,145 @@ export type DocPage = {
   title: string;
   description: string;
   group: 'Getting started' | 'API reference' | 'Guides';
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'DELETE';
   endpoint?: string;
   sections: DocSection[];
 };
 
-const fetchOperation = contractOperation('fetch');
-const renderOperation = contractOperation('render');
-const lookupFetch = contractOperation('lookupFetch');
-const lookupRender = contractOperation('lookupRender');
-const listProfiles = contractOperation('listAccessProfiles');
-const getCapabilities = contractOperation('getCapabilities');
-const getFetchOperation = contractOperation('getFetchOperation');
+const createFetch = contractOperation('createFetch');
+const getUsage = contractOperation('getUsage');
+const hostedApi = 'https://app.fetchx.ai';
+const json = (value: unknown) => JSON.stringify(value, null, 2);
+const openApiLink: DocBlock = { kind: 'link', label: 'OpenAPI contract (JSON)', href: '/openapi.json' };
 
-const fetchInput = requestExample(fetchOperation);
-const fetchRequest = JSON.stringify(fetchInput, null, 2);
-const fetchLookupPath = lookupFetch.path.replace('{key}', encodeURIComponent(fetchInput.idempotency_key));
-const fetchLookupPrefix = lookupFetch.path.replace('{key}', '');
-const fetchResponse = JSON.stringify(responseExample(fetchOperation), null, 2);
-const renderLookupPath = lookupRender.path.replace('{key}', encodeURIComponent(requestExample(renderOperation).idempotency_key));
+const minimal = requestExample(createFetch, 'minimal');
+const markdownRequest = requestExample(createFetch, 'markdown');
+const succeeded = responseExample(createFetch, 'succeeded');
+const failed = responseExample(createFetch, 'failed');
+const pending = responseExample(createFetch, 'pending', '202');
 
-const hostedGateway = 'https://app.fetchx.ai';
-const agentFetchRequest = JSON.stringify({ ...fetchInput, idempotency_key: 'REPLACE_WITH_UNIQUE_KEY', method: 'GET' }, null, 2);
+function fetchSnippets(body: Record<string, unknown>): DocSnippet[] {
+  return [
+    { label: 'cURL', language: 'bash', code: `curl "$FETCHX_URL/v1/fetch" \\
+  -H "Authorization: Bearer $FETCHX_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '${JSON.stringify(body)}'` },
+    { label: 'JavaScript', language: 'javascript', code: `import {FetchXClient} from './clients/javascript.mjs';
 
-const endpoint = (operation: typeof fetchOperation) => ({
-  method: operation.method,
-  endpoint: operation.path,
-});
-const scopeRows = ['profiles:read', 'fetch:write', 'fetch:read', 'usage:read'].map(scope => [
+const fetchx = new FetchXClient({url: process.env.FETCHX_URL, token: process.env.FETCHX_TOKEN});
+const result = await fetchx.fetch(${JSON.stringify(body)});
+if (result.status === 'succeeded') console.log(result.data);
+else console.log(result.error.code, result.error.next);` },
+    { label: 'Python', language: 'python', code: `import os
+from clients.python import FetchXClient
+
+fetchx = FetchXClient(os.environ['FETCHX_URL'], os.environ['FETCHX_TOKEN'])
+result = fetchx.fetch(**${JSON.stringify(body)})
+print(result['status'], result['error'] or result['data'])` },
+  ];
+}
+
+const isJson = (operation: (typeof contractOperations)[number]) =>
+  Object.values(operation.responses).some(response => 'content' in response && !!response.content?.['application/json'] && 'schema' in response.content['application/json']);
+
+function operationSection(operation: (typeof contractOperations)[number]): DocSection {
+  const blocks: DocBlock[] = [{ kind: 'text', text: '`' + operation.method + ' ' + operation.path + '` · key scope `' + operation.scope + '`.' }];
+  if (operation.description) blocks.push({ kind: 'text', text: operation.description });
+  const parameters = parameterRows(operation);
+  if (parameters.length) blocks.push({ kind: 'table', headers: ['Parameter', 'In', 'Type', 'Required', 'Description'], rows: parameters });
+  if (operation.method !== 'DELETE' && isJson(operation) && operation.responses['200'] && 'content' in operation.responses['200']
+    && operation.responses['200'].content?.['application/json']) {
+    blocks.push({ kind: 'table', headers: ['Response field', 'Type', 'Description'], rows: responseRows(operation) });
+  }
+  blocks.push({ kind: 'table', headers: ['HTTP status', 'Meaning'], rows: statusRows(operation) });
+  return { id: operation.operationId, title: operation.summary, blocks };
+}
+
+const scopeRows = ['fetch:write', 'fetch:read', 'usage:read'].map(scope => [
   '`' + scope + '`',
-  contractOperations.filter(operation => operation.scope === scope)
-    .map(operation => '`' + operation.method + ' ' + operation.path + '`').join(', '),
+  contractOperations.filter(operation => operation.scope === scope).map(operation => '`' + operation.method + ' ' + operation.path + '`').join(', '),
 ]);
 
-const fetchSnippets: DocSnippet[] = [
-  {
-    label: 'cURL',
-    language: 'bash',
-    code: `curl --silent --show-error "$FETCHX_URL${fetchOperation.path}" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN" \\
-  -H 'Content-Type: application/json' \\
-  --data-binary @fetch-request.json`,
-  },
-  {
-    label: 'JavaScript',
-    language: 'javascript',
-    code: `import { readFile } from 'node:fs/promises';
-
-const body = await readFile('fetch-request.json', 'utf8');
-const response = await fetch(process.env.FETCHX_URL + '${fetchOperation.path}', {
-  method: 'POST',
-  headers: {
-    Authorization: 'Bearer ' + process.env.FETCHX_TOKEN,
-    'Content-Type': 'application/json',
-  },
-  body,
-});
-const result = await response.json();
-console.log(JSON.stringify(result, null, 2));
-
-if (!response.ok || !result.success) {
-  console.error(result.error?.code, result.retry?.next_action);
-  process.exitCode = 1;
-}`,
-  },
-  {
-    label: 'Python',
-    language: 'python',
-    code: `import json
-import os
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
-
-with open("fetch-request.json", "rb") as file:
-    body = file.read()
-
-request = Request(
-    os.environ["FETCHX_URL"] + "${fetchOperation.path}",
-    data=body,
-    headers={
-        "Authorization": "Bearer " + os.environ["FETCHX_TOKEN"],
-        "Content-Type": "application/json",
-    },
-    method="POST",
-)
-try:
-    response = urlopen(request, timeout=90)
-except HTTPError as error:
-    response = error
-
-with response:
-    result = json.load(response)
-print(json.dumps(result, indent=2))
-if not result.get("success"):
-    print(result.get("error"), result.get("retry"))`,
-  },
+const ladderRows = [
+  ['1', 'HTTP, direct', '1'],
+  ['2', 'HTTP, datacenter proxy', '1'],
+  ['3', 'HTTP, residential IP (a fresh IP after each 429)', '5'],
+  ['4', 'Browser (Camoufox), residential IP', '25'],
+  ['5', 'Browser, another residential IP', '25'],
+  ['6', 'Browser, datacenter proxy', '10'],
 ];
 
-const recoverySnippets: DocSnippet[] = [
-  {
-    label: 'cURL',
-    language: 'bash',
-    code: `curl --silent --show-error "$FETCHX_URL${fetchLookupPath}" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN"`,
-  },
-  {
-    label: 'JavaScript',
-    language: 'javascript',
-    code: `const key = ${JSON.stringify(fetchInput.idempotency_key)};
-const response = await fetch(
-  process.env.FETCHX_URL + '${fetchLookupPrefix}' + encodeURIComponent(key),
-  { headers: { Authorization: 'Bearer ' + process.env.FETCHX_TOKEN } },
-);
-const result = await response.json();
-console.log(JSON.stringify(result, null, 2));`,
-  },
-  {
-    label: 'Python',
-    language: 'python',
-    code: `import json
-import os
-from urllib.error import HTTPError
-from urllib.parse import quote
-from urllib.request import Request, urlopen
-
-key = ${JSON.stringify(fetchInput.idempotency_key)}
-request = Request(
-    os.environ["FETCHX_URL"] + "${fetchLookupPrefix}" + quote(key, safe=""),
-    headers={"Authorization": "Bearer " + os.environ["FETCHX_TOKEN"]},
-)
-try:
-    response = urlopen(request, timeout=90)
-except HTTPError as error:
-    response = error
-with response:
-    print(json.dumps(json.load(response), indent=2))`,
-  },
+const requestErrorRows = [
+  ['400', '`invalid_request`', 'A field is missing or wrong. `error.details.field` names it.'],
+  ['400', '`url_not_allowed`', 'The URL is not public http or https.'],
+  ['401', '`unauthorized`', 'The API key is missing, wrong or revoked.'],
+  ['402', '`insufficient_credits`', 'The balance is below the cheapest step this request could take. `error.details` has the balance and what is needed.'],
+  ['402', '`max_credits_too_low`', '`max_credits` is below the cheapest step. Raise it to at least `error.details.min_credits`.'],
+  ['402', '`payment_hold`', 'Spending is paused while a payment issue is resolved.'],
+  ['403', '`api_key_scope_forbidden`', 'The key does not have the scope this endpoint needs.'],
+  ['404', '`not_found`', 'No request with that id in this project.'],
+  ['409', '`idempotency_conflict`', 'The `idempotency_key` was used before with a different body. Use a new key.'],
+  ['413', '`request_too_large`', 'The request body is over 1 MB.'],
+  ['429', '`too_many_requests`', 'The project has too many requests running. Wait `retry_after_seconds`.'],
+  ['503', '`unavailable`', 'FetchX cannot take work right now. Wait and resend with the same key.'],
 ];
-
-const openApiLink: DocBlock = { kind: 'link', label: 'Download OpenAPI (JSON)', href: '/openapi.json' };
-
-function facadeRequest(operation: typeof fetchOperation): DocBlock[] {
-  return [
-    { kind: 'code', title: 'Example request body', snippets: [{
-      label: 'JSON', language: 'json', code: JSON.stringify(requestExample(operation), null, 2),
-    }] },
-    { kind: 'table', headers: ['Field', 'Type', 'Required', 'Description'], rows: requestRows(operation) },
-  ];
-}
-
-function facadeResponse(operation: typeof fetchOperation): DocBlock[] {
-  return [
-    { kind: 'code', title: 'Example retained response', snippets: [{
-      label: 'JSON', language: 'json', code: JSON.stringify(responseExample(operation), null, 2),
-    }] },
-    { kind: 'table', headers: ['Field', 'Type', 'Description'], rows: responseRows(operation, ['data', 'retry']) },
-    { kind: 'table', headers: ['Gateway HTTP status', 'Meaning'], rows: statusRows(operation) },
-    openApiLink,
-  ];
-}
-
-const readEndpointSections: DocSection[] = contractOperations
-  .filter(operation => operation.method === 'GET' && ![lookupFetch, lookupRender, getFetchOperation].includes(operation))
-  .map(operation => {
-    const parameters = parameterRows(operation);
-    const blocks: DocBlock[] = [
-      { kind: 'text', text: '`' + operation.method + ' ' + operation.path + '` · Managed-key scope `' + operation.scope + '`.' },
-    ];
-    if (operation.description) blocks.push({ kind: 'text', text: operation.description });
-    if (parameters.length) blocks.push({
-      kind: 'table', headers: ['Parameter', 'Location', 'Type', 'Required', 'Description'], rows: parameters,
-    });
-    blocks.push(
-      { kind: 'table', headers: ['Response field', 'Type', 'Description'], rows: responseRows(operation) },
-      { kind: 'table', headers: ['Gateway HTTP status', 'Meaning'], rows: statusRows(operation) },
-    );
-    return { id: operation.operationId, title: operation.summary, blocks };
-  });
+const fetchErrorRows = [
+  ['`blocked`', 'The site refused every route FetchX was allowed to try: a 403, a challenge page, or a captcha that could not be solved.', '`retry_later`, or `use_auto` when `route` was set'],
+  ['`rate_limited`', 'The site returned 429, even after fresh residential IPs.', '`retry_after`, with the site’s own wait'],
+  ['`login_required`', 'The site returned 401.', '`provide_credentials`: send its cookie or Authorization header'],
+  ['`site_error`', 'The site returned a 5xx error.', '`retry_later`'],
+  ['`unreachable`', 'DNS, connection or TLS failed on every route.', '`check_url`'],
+  ['`url_not_allowed`', 'The site resolves, or redirects, to a private or reserved address.', '`check_url`'],
+  ['`cooling_down`', 'Every route for this site is resting after recent failures, so nothing was sent.', '`retry_after`'],
+  ['`route_unavailable`', 'No allowed route can be used, for example `route` names one this service does not have.', '`use_auto`'],
+  ['`timeout`', '`timeout_ms` ran out.', '`raise_timeout`, or send with `async: true`'],
+  ['`too_large`', 'The response is over 10 MB, or the rendered page is over 5 MB.', '`render_never` for large files'],
+  ['`uncertain`', 'The outcome is unknown, for example the connection dropped after a POST was sent.', '`recover`: read the request; FetchX never resends it'],
+];
 
 export const docPages: DocPage[] = [
   {
     slug: '',
     title: 'Quickstart',
-    description: 'Fetch your first approved URL, read the response and recover a saved result.',
+    description: 'Get any public URL with one call. FetchX picks the route and charges only when it gets the data.',
     group: 'Getting started',
     sections: [
       {
-        id: 'before-you-start',
-        title: 'Start with your project',
+        id: 'set-up',
+        title: 'Set up',
         blocks: [
-          { kind: 'text', text: 'FetchX provides a project-scoped gateway for HTTP fetching and reviewed collection workflows. On a service with account access enabled, sign up or log in, verify your email with its one-time code, create a project, then create a scoped `fxk_` API key. Your service supplies its gateway URL and operator-approved source profiles.' },
-          { kind: 'note', title: 'Gateway availability', text: 'Confirm that account access and the v2 HTTP fetch API are enabled on your service. Use its supplied gateway endpoint for API calls. Existing provisioned project tokens remain usable with their approved API versions and profiles.' },
-          { kind: 'text', text: 'For this walkthrough, grant `profiles:read` to list approved profiles, `fetch:write` to submit native HTTP requests and `fetch:read` to recover saved results. Add `usage:read` if your integration reads usage. For browser navigation on a supported project, see the Render reference.' },
-          { kind: 'link', label: 'Quickstart for coding agents', href: codingAgentGuidePath },
-          { kind: 'link', label: 'Account access, key scopes and rotation', href: '/docs/authentication' },
-          { kind: 'link', label: 'v2 endpoints and API versions', href: '/docs/reference' },
-          { kind: 'link', label: 'Render a URL on an enabled project', href: '/docs/render' },
-          { kind: 'link', label: 'Using a v1 gateway? Start with workflow fetch', href: '/docs/workflow-fetch' },
-          { kind: 'code', title: 'Set your environment', snippets: [{ label: 'Shell', language: 'bash', code: `export FETCHX_URL='https://YOUR_PROVISIONED_ENDPOINT'
-export FETCHX_TOKEN='YOUR_PROJECT_API_KEY_OR_TOKEN'` }] },
-          { kind: 'text', text: 'Use the base URL without a trailing slash. `FETCHX_TOKEN` accepts your new API key or an existing provisioned project token. Copy a new key when it is revealed once, and keep it in your server environment or secret store. The examples use cURL, native Node.js fetch and the Python standard library.' },
+          { kind: 'text', text: 'Sign up, create a project (your first project gets trial credits), and create an API key under API keys. The key is shown once: keep it in your server environment.' },
+          { kind: 'link', label: 'Create an account', href: '/signup' },
+          { kind: 'code', title: 'Environment', snippets: [{ label: 'Shell', language: 'bash', code: `export FETCHX_URL='${hostedApi}'\nexport FETCHX_TOKEN='fxk_...'` }] },
         ],
       },
       {
-        id: 'find-a-profile',
-        title: '1. Find an approved profile',
+        id: 'fetch',
+        title: 'Fetch a URL',
         blocks: [
-          { kind: 'code', title: 'List access profiles', snippets: [{ label: 'cURL', language: 'bash', code: `curl --silent --show-error "$FETCHX_URL${listProfiles.path}" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN"` }] },
-          { kind: 'text', text: 'Choose an entry from `access_profiles`. Copy its exact `id` and `version`, then select a URL, method and route permitted by that profile. Account creation and key scopes do not grant additional source access. `route_reservations` shows the reviewed route combinations and their reservation estimates.' },
-          { kind: 'link', label: 'Read the access profile reference', href: '/docs/profiles' },
+          { kind: 'text', text: 'Only `url` is required. FetchX starts with the cheapest route, moves to a residential IP or a browser when the site blocks it, and remembers what worked for that site so the next request starts there.' },
+          { kind: 'code', title: 'POST /v1/fetch', snippets: fetchSnippets(minimal) },
+          { kind: 'text', text: 'Ask for `formats` to get markdown, plain text, links, page metadata, parsed JSON or a screenshot alongside the body.' },
+          { kind: 'code', title: 'Markdown from a page that needs a browser', snippets: fetchSnippets(markdownRequest) },
         ],
       },
       {
-        id: 'save-your-request',
-        title: '2. Save your request',
+        id: 'result',
+        title: 'Read the result',
         blocks: [
-          { kind: 'text', text: 'Save the following JSON as `fetch-request.json`. Replace the example profile ID, version and destination with values approved for your project. This example requires a profile that permits the `direct` route. For an approved proxy route, supply its class and uppercase country instead.' },
-          { kind: 'code', title: 'fetch-request.json', snippets: [{ label: 'JSON', language: 'json', code: fetchRequest }] },
-          { kind: 'text', text: 'Persist the request and its `idempotency_key` before dispatch. Use one key per intended source operation. Keep the same key and identical request to recover from a lost response. Save a distinct key when you deliberately create a new operation.' },
+          { kind: 'text', text: 'A fetch that ran answers HTTP 200 with `status: succeeded` or `status: failed`. `data` holds what the site answered, `attempts` lists every route tried, and `credits.charged` is what it cost: 0 unless it succeeded.' },
+          { kind: 'code', title: 'Succeeded', snippets: [{ label: 'JSON', language: 'json', code: json(succeeded) }] },
+          { kind: 'text', text: 'A failed fetch says what happened and what to do next, in `error.next`. It is never charged.' },
+          { kind: 'code', title: 'Failed', snippets: [{ label: 'JSON', language: 'json', code: json(failed) }] },
+          { kind: 'link', label: 'All request options', href: '/docs/fetch' },
+          { kind: 'link', label: 'Errors and next steps', href: '/docs/errors' },
         ],
       },
       {
-        id: 'send-the-request',
-        title: '3. Send the request',
+        id: 'retries',
+        title: 'Retry safely',
         blocks: [
-          { kind: 'text', text: 'Each example reads the saved JSON file and makes one request. Run the JavaScript example as an ES module, such as `fetch-example.mjs`.' },
-          { kind: 'code', title: fetchOperation.method + ' ' + fetchOperation.path, snippets: fetchSnippets },
-        ],
-      },
-      {
-        id: 'read-the-response',
-        title: '4. Check the result',
-        blocks: [
-          { kind: 'text', text: 'The example shows a retained response with source content and accounting. Check `success`, `state`, `data.status` and `error`, then validate the returned content against your application requirements.' },
-          { kind: 'code', title: 'Successful response', snippets: [{ label: 'JSON', language: 'json', code: fetchResponse }] },
-          { kind: 'note', title: 'Two status levels', text: '`gateway_http_status` describes the API response. `data.status` describes the source website. A retained source 403 can arrive in an API HTTP 200 response with `success: false`. `application_acceptance` remains `not_evaluated`.' },
-          { kind: 'link', label: 'Explore the fetch request and response fields', href: '/docs/fetch' },
-        ],
-      },
-      {
-        id: 'recover-your-result',
-        title: '5. Recover by key',
-        blocks: [
-          { kind: 'text', text: 'If your connection drops, read the saved result using the original idempotency key and an active credential for the same project. An account API key needs `fetch:read`. This lookup reads retained evidence without fetching the source again. Inspect the returned state and `retry.next_action` before considering further work.' },
-          { kind: 'note', title: 'Credits and uncertain outcomes', text: 'Account requests use conservative credit reservations within operator-approved limits. An unknown result retains its hold. Do not automatically retry unknown source work or submit a new operation key to bypass it; recover the original result first. Customer credits are separate from provider invoices.' },
-          { kind: 'code', title: lookupFetch.method + ' ' + lookupFetch.path, snippets: recoverySnippets },
-          { kind: 'link', label: 'Understand idempotency and recovery', href: '/docs/recovery' },
+          { kind: 'text', text: 'Send an `idempotency_key` with each request (the SDKs add one for you). If a response is lost, send the same body with the same key: FetchX returns the first result and charges once. The same key with a different body is refused with 409.' },
         ],
       },
     ],
@@ -282,703 +176,227 @@ export FETCHX_TOKEN='YOUR_PROJECT_API_KEY_OR_TOKEN'` }] },
   {
     slug: codingAgentGuideSlug,
     title: 'FetchX for coding agents',
-    description: 'Use a terminal or HTTP client to set up FetchX, make one approved HTTP fetch and verify the returned content.',
+    description: 'Give a coding agent a FetchX key with Connect, make one fetch and check the result.',
     group: 'Getting started',
     sections: [
       {
         id: 'copy-prompt',
         title: 'Copy the prompt into your coding agent',
         blocks: [
-          { kind: 'text', text: 'The browser version has a copyable prompt. Paste it into your agent and tell it the source URL and what you want back. If your agent already downloaded this guide, start at step 1.' },
+          { kind: 'text', text: 'Paste this into your agent and tell it the URL and what you want back. If your agent already downloaded this guide, start at step 1.' },
           { kind: 'code', title: 'FetchX onboarding prompt', snippets: [{ label: 'Plain text', language: 'text', code: codingAgentPrompt }], omitFromMarkdown: true },
         ],
       },
       {
-        id: 'set-up-the-agent',
-        title: '1. Confirm the task and set up access',
+        id: 'get-a-key',
+        title: '1. Get a key',
         blocks: [
-          { kind: 'text', text: 'If the user has not provided both an HTTPS source URL and the expected output, ask for them. If the agent runtime already has `FETCHX_URL` and `FETCHX_TOKEN` for the intended project, continue to step 2. Otherwise use FetchX Connect where enabled.' },
-          { kind: 'note', title: 'Connect availability', text: 'Connect requires both the website and gateway to support it and the operator to enable it. If Connect is unavailable or your runtime cannot keep a process open for approval, use the manual key setup below.' },
-          { kind: 'text', text: 'Download the dependency-free Node.js 24 helper from the official FetchX site. Continue only after the download succeeds and reports HTTP 200.' },
-          { kind: 'link', label: 'Get the FetchX Connect helper', href: '/connect-client.mjs' },
-          { kind: 'code', title: 'Download the Connect helper', snippets: [{ label: 'Shell', language: 'bash', code: `curl --disable --fail --silent --show-error --proto '=https' \\
-  --output connect-client.mjs --write-out 'HTTP %{http_code}\\n' \\
-  https://fetchx.ai/connect-client.mjs` }] },
-          { kind: 'text', text: 'Run the helper around a new Codex CLI session or use your existing DeepSeek harness command in place of `codex`. If an agent is already running, wrap its selected workload command and do steps 2–6 inside that same child process. Keep the command running while the user approves.' },
-          { kind: 'code', title: 'Start Connect and run Codex after approval', snippets: [{ label: 'Shell', language: 'bash', code: 'node ./connect-client.mjs -- codex' }] },
-          { kind: 'text', text: 'Show the user the displayed link and short Connect code. Codex can open the link in its in-app browser for the user. With a browserless agent, the user opens it in a regular browser. The user signs in, enters the code and selects a project to approve within ten minutes. Connect grants `profiles:read`, `fetch:write` and `fetch:read` on that project.' },
-          { kind: 'text', text: 'After approval the helper starts the command with `FETCHX_URL` and `FETCHX_TOKEN` in its environment. A Node.js integration can also import `connectFetchX` from the helper, use its `onApproval` callback to display `verificationUri` and `userCode`, and keep its returned `token` and `apiBaseUrl` in the process doing the work.' },
-          { kind: 'text', text: 'For a verified self-hosted deployment, set `--origin` to its site origin and `--api-origin` if the gateway has a different origin. Use HTTPS except for loopback development.' },
-          { kind: 'text', text: 'For manual setup, the user signs up or signs in to FetchX in their own browser, completes account verification and selects or creates a project. Under API keys, they create a key with `profiles:read`, `fetch:write` and `fetch:read`. FetchX shows the key once.' },
-          { kind: 'link', label: 'Create a FetchX account', href: '/signup' },
-          { kind: 'link', label: 'Sign in to FetchX', href: '/login' },
-          { kind: 'link', label: 'Open API keys', href: '/app/keys' },
-          { kind: 'text', text: 'Set `FETCHX_URL` to `' + hostedGateway + '` for hosted FetchX or the user’s provisioned HTTPS gateway. Leave off the trailing slash. Store the key as the runtime secret `FETCHX_TOKEN`. A CLI user can load it from a secret manager or enter it at a masked prompt, then launch the agent from that shell.' },
-          { kind: 'code', title: 'Set a manual key and then launch your CLI agent', snippets: [{ label: 'Bash (interactive)', language: 'bash', code: `set +x
-export FETCHX_URL='${hostedGateway}'
-read -r -s -p 'FetchX project API key: ' FETCHX_TOKEN
-printf '\\n'
-export FETCHX_TOKEN` }] },
-          { kind: 'note', title: 'Keep credentials private', text: 'Share only the Connect link and its short matching code. Keep the private device code, API key, passwords, session tokens and account verification codes out of chat, command arguments, files, logs and shell traces. Use `FETCHX_TOKEN` only for Bearer authentication to the configured FetchX gateway. Download documentation without credentials.' },
+          { kind: 'text', text: 'If `FETCHX_URL` and `FETCHX_TOKEN` are already set, go to step 2. Otherwise run the Connect helper (Node.js 24) around the agent command. It shows a link and a short code; the user signs in, enters the code and picks a project. The helper then starts the command with `FETCHX_URL` and `FETCHX_TOKEN` set. The key can send and read requests and read usage.' },
+          { kind: 'code', title: 'Download the helper and connect', snippets: [{ label: 'Shell', language: 'bash', code: `curl --fail --silent --show-error --proto '=https' --output connect-client.mjs https://fetchx.ai/connect-client.mjs
+node ./connect-client.mjs -- codex` }] },
+          { kind: 'text', text: 'Without Connect, the user creates a key under API keys and stores it as the secret `FETCHX_TOKEN`, with `FETCHX_URL` set to `' + hostedApi + '`.' },
+          { kind: 'note', title: 'Keep the key private', text: 'Share only the Connect link and its short code. Keep the key out of chat, command arguments, files and logs, and send it only to `FETCHX_URL`.' },
         ],
       },
       {
-        id: 'choose-an-approved-profile',
-        title: '2. Find an approved profile and route',
+        id: 'fetch',
+        title: '2. Fetch once',
         blocks: [
-          { kind: 'text', text: 'Call `GET /v2/access-profiles` on `FETCHX_URL` using the project token. Listing profiles does not fetch the source. Use the following Node.js examples in the workload process or use your existing HTTP client with redirects and automatic retries disabled.' },
-          { kind: 'code', title: 'List project access profiles', snippets: [{ label: 'Node.js', language: 'javascript', code: `const response = await fetch(process.env.FETCHX_URL + '/v2/access-profiles', {
-  headers: { Authorization: 'Bearer ' + process.env.FETCHX_TOKEN },
-  redirect: 'error',
-  signal: AbortSignal.timeout(30_000),
-});
-if (!response.ok) throw new Error('FetchX profile lookup failed (' + response.status + ')');
-const { access_profiles } = await response.json();` }] },
-          { kind: 'text', text: 'From `access_profiles`, choose the exact `id` and `version` that permit the HTTPS URL, the `GET` method and the intended route. Match the approved `proxy.class` and `proxy.country` exactly. For `direct`, set `country` to JSON `null`; for a proxy route use the approved uppercase country code. Review `route_reservations` for the approved combinations and reservation estimates. If no profile matches, tell the user what access is missing and stop.' },
-          { kind: 'link', label: 'Read the access profile reference', href: '/docs/profiles' },
-          { kind: 'link', label: 'Prepare a browser render if the task needs JavaScript', href: '/docs/profiles#browser-profiles' },
-        ],
-      },
-      {
-        id: 'prepare-the-request',
-        title: '3. Save the request and its key',
-        blocks: [
-          { kind: 'text', text: 'Generate a unique `idempotency_key` for the planned fetch, such as a UUID. Replace the example key, profile ID and version, URL and route with the generated key and approved values. Save the complete JSON as `fetch-request.json` in a private working directory before dispatch. Keep it out of version control and do not include credentials.' },
-          { kind: 'code', title: 'fetch-request.json', snippets: [{ label: 'JSON', language: 'json', code: agentFetchRequest }] },
-        ],
-      },
-      {
-        id: 'run-one-fetch',
-        title: '4. Authorize and send one live fetch',
-        blocks: [
-          { kind: 'text', text: 'Show the user the target URL, profile and route. One live fetch may use credits, so obtain authorization for that specific request before dispatch. Submit the saved JSON once to `POST /v2/fetch`. Record the gateway HTTP status and keep the response private.' },
-          { kind: 'code', title: 'Submit the saved Fetch request once', snippets: [{ label: 'Node.js', language: 'javascript', code: `import { readFile, writeFile } from 'node:fs/promises';
-
-const response = await fetch(process.env.FETCHX_URL + '/v2/fetch', {
+          { kind: 'text', text: 'A fetch can use credits, so confirm the URL with the user first. Send it once with an `idempotency_key` you keep.' },
+          { kind: 'code', title: 'POST /v1/fetch', snippets: [{ label: 'Node.js', language: 'javascript', code: `const key = crypto.randomUUID();
+const response = await fetch(process.env.FETCHX_URL + '/v1/fetch', {
   method: 'POST',
-  headers: {
-    Authorization: 'Bearer ' + process.env.FETCHX_TOKEN,
-    'Content-Type': 'application/json',
-  },
-  body: await readFile('fetch-request.json'),
-  redirect: 'error',
+  headers: {Authorization: 'Bearer ' + process.env.FETCHX_TOKEN, 'Content-Type': 'application/json'},
+  body: JSON.stringify({url: 'https://shop.example.com/p/42', formats: ['markdown'], idempotency_key: key}),
   signal: AbortSignal.timeout(90_000),
 });
-await writeFile('fetch-response.json', await response.text(), { mode: 0o600 });
-console.log('Gateway HTTP', response.status);` }] },
+const result = await response.json();
+console.log(response.status, result.status, result.error?.next ?? result.data?.markdown?.slice(0, 500));` }] },
         ],
       },
       {
-        id: 'validate-the-result',
-        title: '5. Check the gateway, source and content',
+        id: 'check',
+        title: '3. Check the result and report',
         blocks: [
-          { kind: 'text', text: 'Check the gateway HTTP status and `gateway_http_status` in the response, along with `state`, `success`, `error` and `retry.next_action`. `data.status` is the source website’s HTTP status. A gateway HTTP 200 can carry a source error. Inspect `data.final_url` and validate `data.text` or decoded `data.body_base64` against the user’s expected output. `application_acceptance` is `not_evaluated` by FetchX.' },
-          { kind: 'link', label: 'Read the Fetch response fields', href: '/docs/fetch' },
-        ],
-      },
-      {
-        id: 'recover-the-result',
-        title: '6. Recover uncertain work and report back',
-        blocks: [
-          { kind: 'text', text: 'If the connection drops or the outcome is uncertain, use `GET /v2/fetch/:idempotency_key` with the original key from `fetch-request.json` and the same project. This lookup only reads the saved operation. Apply the checks in step 5 to any retained result.' },
-          { kind: 'code', title: 'Recover using the original key', snippets: [{ label: 'Node.js', language: 'javascript', code: `import { readFile, writeFile } from 'node:fs/promises';
-
-const { idempotency_key } = JSON.parse(await readFile('fetch-request.json', 'utf8'));
-const response = await fetch(process.env.FETCHX_URL + '/v2/fetch/' + encodeURIComponent(idempotency_key), {
-  headers: { Authorization: 'Bearer ' + process.env.FETCHX_TOKEN },
-  redirect: 'error',
-  signal: AbortSignal.timeout(30_000),
-});
-await writeFile('fetch-recovery.json', await response.text(), { mode: 0o600 });
-console.log('Gateway HTTP', response.status);` }] },
-          { kind: 'text', text: 'If the result remains unresolved, report that uncertainty. Do not resubmit, change the key or switch routes. Tell the user the outcome and whether the content met their requirements. Wait for separate authorization before more source requests or batch work.' },
-          { kind: 'link', label: 'Read the recovery reference', href: '/docs/recovery' },
+          { kind: 'text', text: '`status: succeeded` means the site gave its real answer; check `data.markdown` or `data.body` against what the user asked for. `status: failed` comes with `error.next.action`: follow it rather than guessing. A lost response is resent with the same key and body, which returns the first result and is never charged twice. Report the outcome before doing more work.' },
+          { kind: 'link', label: 'Errors and next steps', href: '/docs/errors' },
         ],
       },
     ],
   },
   {
     slug: 'authentication',
-    title: 'Authentication',
-    description: 'Use verified account access and scoped API keys, or an existing provisioned project token.',
+    title: 'Authentication and keys',
+    description: 'Project API keys, their scopes, rotation, and the Connect flow for agents.',
     group: 'Getting started',
     sections: [
       {
-        id: 'base-url',
-        title: 'Your gateway URL',
+        id: 'bearer',
+        title: 'Send your key',
         blocks: [
-          { kind: 'text', text: 'Use the gateway base URL supplied by your service or FetchX operator and confirm its enabled API version. Set `FETCHX_URL` to that URL without a trailing slash. The examples use a placeholder hostname that you replace with your supplied endpoint.' },
-          { kind: 'note', title: 'Source access is approved per project', text: 'Your token identifies a project. Its profiles define the source URLs, methods, headers, routes, countries and usage limits available to you. Contact your FetchX operator to request an additional source or capability.' },
+          { kind: 'text', text: 'Every API call sends `Authorization: Bearer fxk_...`. A key belongs to one project; requests, results and credits are scoped to it. A missing or revoked key returns 401; a key without the endpoint’s scope returns 403.' },
+          { kind: 'table', headers: ['Scope', 'Endpoints'], rows: scopeRows },
         ],
       },
       {
-        id: 'account-access',
-        title: 'Verify your account and create a project',
+        id: 'lifecycle',
+        title: 'Create, rotate and revoke',
         blocks: [
-          { kind: 'text', text: 'On a service with account access enabled, signup and login use a one-time email verification code. Verify your email, create a project, then create an API key with the scopes your integration needs. Creating a project grants your verified account membership in it; project policies and source profiles come only from the operator-approved template.' },
-          { kind: 'text', text: 'The website uses an HttpOnly session cookie through its same-origin bridge. Website JavaScript does not receive the session token. Signing out revokes that session. API integrations authenticate separately with a project API key in the Bearer header.' },
-          { kind: 'note', title: 'Scoped v2 access', text: 'Managed `fxk_` keys with `fetch:write` can submit Fetch and, when enabled for the project, Render. Render requires a qualified browser runtime, approved playground profile and reviewed browser credit policy. Provisioned project credentials are required for v1 workflows and native v2 submissions such as browser probes.' },
+          { kind: 'text', text: 'Keys are created in the console under API keys and shown once; FetchX keeps only a hash. Rotating creates a new key and revokes the old one at once. Revoking stops a key immediately. Results stay with the project and can be read with any other key that has `fetch:read`.' },
+          { kind: 'text', text: 'Keep keys on your server. Never put one in browser code, a public repository, or a header sent to the site you fetch: FetchX refuses requests that contain its own keys.' },
         ],
       },
       {
-        id: 'bearer-token',
-        title: 'Send a Bearer token',
+        id: 'connect',
+        title: 'Connect for agents and CLIs',
         blocks: [
-          { kind: 'text', text: 'Authenticated API routes require the `Authorization` header on every request. Use TLS for remote access and keep tokens in a server environment or secret store.' },
-          { kind: 'code', title: 'Authenticated request', snippets: [{ label: 'cURL', language: 'bash', code: `curl --silent --show-error "$FETCHX_URL${listProfiles.path}" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN"` }] },
-          { kind: 'text', text: 'Set `FETCHX_TOKEN` to your scoped API key or existing provisioned project token. A missing, expired or revoked credential returns HTTP `401`; an account key without the required route scope returns HTTP `403` with `api_key_scope_forbidden`. Check the credential, project and gateway URL before resending.' },
-          { kind: 'table', headers: ['Account key scope', 'Endpoints'], rows: scopeRows },
-          { kind: 'text', text: 'Scopes limit API actions; they do not expand approved destinations, methods, routes or spending limits. Source website credentials have a separate approved header scope. Gateway API keys and session tokens are forbidden in source request headers or browser input values.' },
-        ],
-      },
-      {
-        id: 'key-lifecycle',
-        title: 'Create, rotate and revoke keys',
-        blocks: [
-          { kind: 'text', text: 'A new API key is revealed once at creation or rotation. Copy it into your server secret store; the service stores its hash and cannot reveal the token again. Key lists contain metadata and a short prefix.' },
-          { kind: 'text', text: 'Rotation atomically creates a replacement and revokes the previous key. Revocation removes further access immediately. Update your integration with the replacement token; saved results remain attached to the project and can be read with another active key that has `fetch:read`.' },
-          { kind: 'text', text: 'Customer credits are reserved conservatively and remain held for unknown source outcomes. Key rotation or revocation does not clear a hold or authorize a new source attempt. Recover the original operation rather than automatically retrying uncertain work.' },
-        ],
-      },
-      {
-        id: 'project-isolation',
-        title: 'Project isolation',
-        blocks: [
-          { kind: 'text', text: 'Profiles, source sessions, operations, idempotency keys, jobs and retained artifacts are scoped to the authenticated project. Website access requires membership in that project; API access requires an active credential for it. An identifier from another project grants no access to its data.' },
-          { kind: 'text', text: 'Keep API keys out of application browser bundles, web storage, public repositories, screenshots and source request headers. The website reveals a newly issued key only for copying into your secret store. The gateway manages source cookies through its separate source session state.' },
-          { kind: 'link', label: 'Choose an approved access profile', href: '/docs/profiles' },
-        ],
-      },
-    ],
-  },
-  {
-    slug: 'reference',
-    title: 'v2 API reference',
-    description: 'Browse the customer endpoints, managed-key scopes and API compatibility policy.',
-    group: 'API reference',
-    sections: [
-      {
-        id: 'endpoints',
-        title: 'Customer endpoints',
-        blocks: [
-          { kind: 'text', text: 'Use the gateway URL provisioned for your project. Every endpoint listed here requires a project Bearer credential. The scopes in the table apply to managed `fxk_` keys. Access profiles, available runtimes and project entitlements govern execution.' },
-          openApiLink,
-          { kind: 'table', headers: ['Method and path', 'Managed-key scope', 'Purpose'], rows: contractOperations.map(operation => [
-            '`' + operation.method + ' ' + operation.path + '`', '`' + operation.scope + '`', operation.summary,
-          ]) },
-          { kind: 'link', label: 'Fetch request and response fields', href: '/docs/fetch' },
-          { kind: 'link', label: 'Render request and response fields', href: '/docs/render' },
-          { kind: 'link', label: 'Read-only recovery', href: '/docs/recovery' },
-        ],
-      },
-      {
-        id: 'compatibility',
-        title: 'API versions and compatibility',
-        blocks: [
-          { kind: 'text', text: 'The URL prefix selects the API major. Compatible changes such as new endpoints, optional inputs and additional response fields stay under the same major. Clients should tolerate additional response fields and handle unfamiliar error codes conservatively. Incompatible contract changes use a new major.' },
-          { kind: 'text', text: 'Provisioned credentials retain their approved v1 workflow and native v2 access. Managed keys use the endpoints above. Before retiring a supported API major, FetchX will publish the affected endpoints, replacement guidance and retirement date. Keep recovering saved work through its original API and key during migration.' },
-          { kind: 'text', text: 'The service release from `/healthz`, immutable access profile and recipe references `{id, version}`, and browser engine versions track separate changes. Updating one does not by itself change the API major.' },
-          { kind: 'link', label: 'Existing v1 workflow fetch contract', href: '/docs/workflow-fetch' },
-        ],
-      },
-      ...readEndpointSections,
-    ],
-  },
-  {
-    slug: 'workflow-fetch',
-    title: 'Workflow fetch',
-    description: 'Fetch an approved source through the v1 API, including configured browser recipes.',
-    group: 'API reference',
-    method: 'POST',
-    endpoint: '/v1/fetch',
-    sections: [
-      {
-        id: 'choose-a-profile',
-        title: 'Choose a v1 source profile',
-        blocks: [
-          { kind: 'text', text: 'The v1 fetch API runs one operation through a reviewed source profile and closes its workflow after capture. The profile selects the HTTP or browser execution mode, country, routing and limits. Your provisioned gateway and approved profiles determine availability.' },
-          { kind: 'code', title: 'GET /v1/profiles', snippets: [{ label: 'cURL', language: 'bash', code: `curl --silent --show-error "$FETCHX_URL/v1/profiles" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN"` }] },
-          { kind: 'text', text: 'Read `profiles` in the response. Each entry includes `id`, `execution`, `country`, `methods`, `recipes`, `captcha` and `max_response_bytes`. Copy the approved string ID into the request `profile` field. The v2 access profile object belongs to the separate v2 API.' },
-        ],
-      },
-      {
-        id: 'request-body',
-        title: 'Request body',
-        blocks: [
-          { kind: 'text', text: 'Send your project Bearer token and JSON body. Replace the fictional profile and destination with approved project values, and persist the operation key before calling.' },
-          { kind: 'code', title: 'POST /v1/fetch', snippets: [{ label: 'cURL', language: 'bash', code: `curl --silent --show-error "$FETCHX_URL/v1/fetch" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN" \\
-  -H 'Content-Type: application/json' \\
-  --data '{
-    "profile": "source.http",
-    "url": "https://source.example/data",
-    "idempotency_key": "workflow-001"
-  }'` }] },
-          { kind: 'table', headers: ['Field', 'Required', 'Description'], rows: [
-            ['`profile`', 'Yes', 'Approved v1 source profile ID as a string.'],
-            ['`url`', 'Yes', 'HTTPS URL permitted by the selected source profile.'],
-            ['`idempotency_key`', 'Yes', 'Durable key of 1–160 letters, digits, `_`, `.`, `:` or `-`.'],
-            ['`method`', 'No', 'Defaults to `GET`. Must be approved by the profile.'],
-            ['`headers`', 'No', 'Approved source header names and string values.'],
-            ['`body_base64`', 'No', 'Canonical base64 body within the profile limit. GET and HEAD reject bodies.'],
-            ['`main_document`', 'No', 'Defaults to true in this facade. Browser captures require true and GET.'],
-            ['`resource_type`', 'No', 'Resource classification permitted by the reviewed workflow.'],
-            ['`browser`', 'No', 'Approved `{ "recipe": "name", "values": { ... } }` input for a browser profile.'],
-            ['`zipcode`', 'No', 'Six-digit postal value for explicitly configured legacy profiles that require it.'],
-          ] },
-        ],
-      },
-      {
-        id: 'read-the-capture',
-        title: 'Read the capture',
-        blocks: [
-          { kind: 'code', title: 'Illustrative response excerpt', snippets: [{ label: 'JSON', language: 'json', code: `{
-  "id": "00000000-0000-4000-8000-000000000004",
-  "workflow": "00000000-0000-4000-8000-000000000005",
-  "status": 200,
-  "provider_status": null,
-  "country": "US",
-  "headers": { "content-type": "text/plain; charset=utf-8" },
-  "body_base64": "b2s=",
-  "error": null,
-  "fallback_blocked": null
-}` }] },
-          { kind: 'text', text: 'The complete capture also contains provider, timestamp and accounting metadata, plus browser details where relevant. `status` is the source HTTP status. `error` is a code string or null. Decode `body_base64` and validate the source content before accepting a record. API HTTP 200 indicates a retained capture is available.' },
-          { kind: 'text', text: 'New residential captures can include `customer_traffic`, with an exact decimal `cost_usd` when measured. Failed attempts can consume traffic. Saved replay and lookup return the original capture and accounting.' },
-        ],
-      },
-      {
-        id: 'browser-recipes',
-        title: 'Reviewed browser recipes',
-        blocks: [
-          { kind: 'text', text: 'Rendering is selected by an approved browser profile. Select a recipe advertised by that profile and supply only its declared text variables. Your onboarding specifies the accepted variable names and required outputs.' },
-          { kind: 'code', title: 'Illustrative approved recipe input', snippets: [{ label: 'JSON', language: 'json', code: `{
-  "profile": "catalog.browser",
-  "url": "https://catalog.example/search",
-  "idempotency_key": "catalog-search-001",
-  "browser": {
-    "recipe": "search",
-    "values": { "query": "desk" }
-  }
-}` }] },
-          { kind: 'text', text: 'Configured recipes can fill, select, click, press, wait and scroll using reviewed selectors. Results may contain `extracted`, `screenshot`, `actions_completed` and `action_step`. Captured fields still need application validation.' },
-          { kind: 'note', title: 'Recover after browser uncertainty', text: 'Any recipe action other than waiting makes automatic provider replay unsafe. If a later response is denied, interrupted or uncertain, recover the original operation and review its progress before initiating new source work.' },
-          { kind: 'text', text: 'Profiles advertising `captcha.async_required` use the asynchronous job API.' },
-          { kind: 'link', label: 'Queue a reviewed v1 workflow', href: '/docs/jobs' },
-        ],
-      },
-      {
-        id: 'recover-by-key',
-        title: 'Recover by key',
-        blocks: [
-          { kind: 'code', title: 'GET /v1/fetch/:key', snippets: [{ label: 'cURL', language: 'bash', code: `curl --silent --show-error "$FETCHX_URL/v1/fetch/workflow-001" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN"` }] },
-          { kind: 'text', text: 'Identical requests with the same key return the original capture. Changed input under that key conflicts. Preserve the original key after a lost response and use this lookup. Keep distinct keys for synchronous fetches and queued jobs. Retention expiry requires review before any replacement source request.' },
-          { kind: 'text', text: 'For approved multi-operation sessions, the native workflow API creates a workflow with `POST /v1/workflows` and performs operations at `/v1/workflows/:id/operations`. Cookies and retained browser storage are restored across operations according to the reviewed profile. Coordinate the full workflow contract during onboarding.' },
+          { kind: 'text', text: 'Connect gives a tool a key after the user approves it in the browser, without copying secrets. See the coding agent guide.' },
+          { kind: 'link', label: 'FetchX for coding agents', href: codingAgentGuidePath },
         ],
       },
     ],
   },
   {
     slug: 'fetch',
-    title: 'Fetch a URL',
-    description: 'Make one native HTTP request with an explicit profile, route and durable key.',
+    title: 'POST /v1/fetch',
+    description: 'Every request option, how auto mode picks a route, and the response.',
     group: 'API reference',
-    ...endpoint(fetchOperation),
+    method: createFetch.method,
+    endpoint: createFetch.path,
     sections: [
       {
-        id: 'request',
-        title: 'Request body',
+        id: 'options',
+        title: 'Request options',
         blocks: [
-          { kind: 'text', text: 'Send JSON with `Content-Type: application/json` and your project Bearer token. Replace this synthetic profile and URL with approved project values. The gateway creates an internal HTTP session when you omit `session_id`.' },
-          ...facadeRequest(fetchOperation),
-          { kind: 'note', title: 'Native HTTP', text: 'This endpoint returns native source responses. Rendering, browser actions, screenshots, output `formats`, extraction options and arbitrary scripts return `capability_unsupported`. Unknown request fields are rejected.' },
-          { kind: 'link', label: 'Use the separate Render endpoint for browser navigation', href: '/docs/render' },
+          { kind: 'text', text: createFetch.description ?? '' },
+          { kind: 'table', headers: ['Field', 'Type', 'Required', 'Description'], rows: requestRows(createFetch) },
         ],
       },
       {
-        id: 'routing',
-        title: 'Proxy class and country',
+        id: 'auto-mode',
+        title: 'How auto mode picks a route',
         blocks: [
-          { kind: 'table', headers: ['Class', 'Country', 'Behavior'], rows: [
-            ['`direct`', '`null`', 'Direct gateway connection. Its source country is unverified.'],
-            ['`datacenter`', 'Approved uppercase code, such as `US`', 'Uses the configured datacenter pool for that country.'],
-            ['`residential`', 'Approved uppercase code, such as `US`', 'Uses an available approved residential provider at session creation.'],
-          ] },
-          { kind: 'text', text: 'Select a route returned by the profile. Proxy country is requested routing configuration. Each session pins its provider, class and country. Reuse `session_id` for a later cookie-dependent request with a new operation key and the same profile and route.' },
-          { kind: 'link', label: 'Inspect route reservations and profile limits', href: '/docs/profiles' },
-        ],
-      },
-      {
-        id: 'paid-public-urls',
-        title: 'Use prepaid credits for a public URL',
-        blocks: [
-          { kind: 'text', text: 'Use the version of `public-url-http` and the route and country advertised for your project by `GET /v2/access-profiles`. Use a scoped API key with `fetch:write` and keep the key on your server.' },
-          { kind: 'code', title: 'Residential GET', snippets: [{ label: 'cURL', language: 'bash', code: `curl --silent --show-error "$FETCHX_URL/v2/fetch" \\
-  -H "Authorization: Bearer $FETCHX_API_KEY" \\
-  -H 'Content-Type: application/json' \\
-  --data '{
-    "idempotency_key": "REPLACE_WITH_A_NEW_OPERATION_KEY",
-    "access_profile": {"id": "public-url-http", "version": 1},
-    "url": "https://example.com/",
-    "method": "GET",
-    "proxy": {"class": "residential", "country": "US"}
-  }'` }] },
-          { kind: 'text', text: 'This profile supports public HTTPS hostnames and GET or HEAD, with no request body, cookie, or source authorization. It follows at most two same-origin redirects. Use the route and country advertised by your project.' },
-          { kind: 'text', text: 'Datacenter uses 1 credit per started 1 MB. Residential uses 5 credits per started 250 KB. FetchX sizes the reservation within the available balance and service limits. After the request, `usage.accounting.paid_credits` reports billable bytes, billing blocks, and the credits used.' },
-          { kind: 'text', text: 'API callers can optionally set `max_credits` or an explicit `max_transfer_mb`. The resulting transfer ceiling applies separately to bidirectional wire traffic, total encoded response bytes, and total decoded response bytes across all hops. Each is capped at 20 MB. Decoding also has a separate 100× expansion limit. Credit settlement uses measured wire bytes.' },
-          { kind: 'note', title: 'Transfer limit and recovery', text: 'Wire, encoded-body, and decoded-body limits can return `max_transfer_bytes_exceeded`, `encoded_body_limit`, or `decoded_body_limit`. For paid public URLs, `error.details` includes `max_transfer_mb`, `max_allowed_transfer_mb`, and `reserved_credits`. A verified terminal outcome below 20 MB may include `next` with a suggested `max_transfer_mb`, `max_credits`, and `requires_new_idempotency_key: true`. An uncertain outcome omits the suggestion. Recover it using the original key.' },
-          { kind: 'link', label: 'Review your project’s credit balance', href: '/app/billing' },
+          { kind: 'text', text: 'Without `route`, FetchX climbs this ladder one step at a time until the site gives its real answer. It starts at the step that worked for this site in the last few days, skips steps that are resting after failures, and never goes past `max_attempts`, `max_credits` or `timeout_ms`. Only the step that got the data is charged, at the price shown.' },
+          { kind: 'table', headers: ['Step', 'Route', 'Credits'], rows: ladderRows },
+          { kind: 'text', text: 'A page that comes back as an empty JavaScript shell moves straight to a browser. A 429 moves to a fresh residential IP. In a browser, Turnstile, reCAPTCHA and hCaptcha challenges (and DataDome, where enabled) are solved when they appear, for 10 credits more. `render: always` (or `wait_for`, or a screenshot) starts at step 4; `render: never` stops at step 3.' },
+          { kind: 'text', text: 'Only GET and HEAD climb. Any other method gets one attempt on the first allowed route and is never resent, because it may change data on the site.' },
+          { kind: 'text', text: '`fix_headers` (on by default) replaces automation User-Agents such as curl or python-requests with a browser one and adds a missing Accept and Accept-Language. Your own cookies and Authorization header are sent as given.' },
         ],
       },
       {
         id: 'response',
-        title: 'Response fields',
+        title: 'The response',
         blocks: [
-          ...facadeResponse(fetchOperation),
-          { kind: 'text', text: 'The gateway can retain a completed source error such as HTTP 403 and return `success: false` with API HTTP 200. Inspect the JSON result even when your HTTP client reports a successful API request.' },
-        ],
-      },
-      {
-        id: 'cost-and-usage',
-        title: 'Cost ceilings and usage',
-        blocks: [
-          { kind: 'text', text: 'Read `route_reservations` on the approved profile before choosing a ceiling. An unavailable estimate returns `cost_estimate_unavailable` when a finite ceiling is supplied. A reservation above your ceiling returns `cost_ceiling_exceeded` before source dispatch.' },
-          { kind: 'text', text: 'For residential traffic, the ceiling must cover both the provider estimate and the maximum customer traffic reservation. Read `customer_traffic_reservation.max_cost_usd` and `max_estimated_micro_usd` in the route quote. Usage can include failed-attempt traffic and supporting proxied DNS.' },
-          { kind: 'text', text: 'Where present, `usage.accounting.customer_traffic.cost_usd` is an exact decimal string. `pending` or `unknown` charges retain a null cost. Reservation estimates, observed traffic and provider invoices have separate fields. Retained lookups and identical replays return the saved accounting for that operation.' },
-        ],
-      },
-      {
-        id: 'bounded-retries',
-        title: 'Optional bounded retries',
-        blocks: [
-          { kind: 'text', text: 'For an eligible fresh cacheable GET or HEAD, set `retry: true` and omit `session_id`. At most one extra attempt can use another verified dedicated IP and endpoint in the same approved fixed-fee datacenter pool, class and country. Both attempts share the operation deadline, quota, byte and cost controls.' },
-          { kind: 'text', text: 'Eligible failures are a proven proxy TCP refusal before a proxy request, an explicit CONNECT 502/503/504 rejection, or a complete source 502/503/504 response without cookies, a redirect, Retry-After or a recognized challenge. A distinct reviewed route and remaining allowance must be available.' },
-          { kind: 'text', text: 'Source 403/404/429 responses, challenges, uncertain outcomes, incomplete bodies, state-changing requests, source credentials and sessions with cookies or prior work stop rotation. Direct and residential requests execute their normal single attempt.' },
-          { kind: 'text', text: 'Opted-in results add `retry.requested`, `attempts`, `route_changed`, `effective_session_id` and `stop_reason`, plus `diagnostics.attempts`. Follow the saved recovery guidance after uncertainty.' },
-          { kind: 'link', label: 'Read recovery and deliberate retry guidance', href: '/docs/recovery' },
+          { kind: 'text', text: 'HTTP 200 when the fetch finished (`succeeded` or `failed`), HTTP 202 when it is still running: after 60 seconds, or at once with `async: true`. Poll `GET /v1/fetch/{id}` or pass `webhook_url`.' },
+          { kind: 'table', headers: ['Field', 'Type', 'Description'], rows: responseRows(createFetch, ['data', 'credits', 'error']) },
+          { kind: 'code', title: 'Pending', snippets: [{ label: 'JSON', language: 'json', code: json(pending) }] },
+          { kind: 'table', headers: ['HTTP status', 'Meaning'], rows: statusRows(createFetch) },
+          openApiLink,
         ],
       },
     ],
   },
   {
-    slug: 'render',
-    title: 'Render a URL',
-    description: renderOperation.summary,
+    slug: 'results',
+    title: 'Results, files and history',
+    description: 'Read a result, download its body or screenshot, list requests and delete stored content.',
     group: 'API reference',
-    ...endpoint(renderOperation),
     sections: [
+      ...contractOperations.filter(operation => operation !== createFetch && operation !== getUsage).map(operationSection),
       {
-        id: 'availability',
-        title: 'Check browser availability',
-        blocks: [
-          { kind: 'text', text: 'Render opens a dedicated browser session for a single GET navigation to an approved HTTPS destination. Send a project Bearer token. A managed key needs `' + renderOperation.scope + '` and the browser profile reference issued by the playground for the selected URL.' },
-          { kind: 'note', title: 'Render is gated', text: 'Check `features.browser_render` in `' + getCapabilities.method + ' ' + getCapabilities.path + '` with `' + getCapabilities.scope + '`. Rendering requires a qualified runtime and an approved profile and route. Managed projects also need a reviewed browser credit weight for that route. Capability discovery does not preapprove a particular request or its spending.' },
-        ],
-      },
-      {
-        id: 'request',
-        title: 'Request body',
-        blocks: [
-          { kind: 'text', text: 'Save the example as `render-request.json`. Replace the synthetic profile, URL and route with approved values. Persist the caller-generated key and request before dispatch. Treat an optional cost ceiling as a limit on the conservative reservation estimate, including maximum customer traffic reservation when applicable.' },
-          ...facadeRequest(renderOperation),
-          { kind: 'code', title: renderOperation.method + ' ' + renderOperation.path, snippets: [{ label: 'cURL', language: 'bash', code: `curl --silent --show-error "$FETCHX_URL${renderOperation.path}" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN" \\
-  -H 'Content-Type: application/json' \\
-  --data-binary @render-request.json` }] },
-        ],
-      },
-      {
-        id: 'response',
-        title: 'Response fields',
-        blocks: [
-          { kind: 'text', text: 'Read `data.status` for the source main document status, `data.text` for generated DOM when available, and `artifacts` for retained evidence. Treat returned HTML as inert text. A challenge can produce `success: false` even when the source returns HTTP 200. Validate the result in your application before accepting it.' },
-          ...facadeResponse(renderOperation),
-        ],
-      },
-      {
-        id: 'recovery',
-        title: 'Recover the original render',
-        blocks: [
-          { kind: 'text', text: 'Use the original key with `' + lookupRender.method + ' ' + lookupRender.path + '`. A managed key needs `' + lookupRender.scope + '`. Recovery reads retained evidence without another navigation. Follow the saved retry guidance after an uncertain outcome.' },
-          { kind: 'code', title: 'Read a saved render', snippets: [{ label: 'cURL', language: 'bash', code: `curl --silent --show-error "$FETCHX_URL${renderLookupPath}" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN"` }] },
-          { kind: 'link', label: 'Understand idempotency and recovery', href: '/docs/recovery' },
-        ],
-      },
-    ],
-  },
-  {
-    slug: 'profiles',
-    title: 'Access profiles',
-    description: 'Discover the source destinations, routes and limits approved for your project.',
-    group: 'API reference',
-    ...endpoint(listProfiles),
-    sections: [
-      {
-        id: 'list-profiles',
-        title: 'List approved profiles',
-        blocks: [
-          { kind: 'text', text: 'Call this endpoint with your project token to retrieve `access_profiles`. Use an exact profile ID and version in every fetch request. Profile selection controls the permitted source access.' },
-          { kind: 'code', title: 'Request', snippets: [{ label: 'cURL', language: 'bash', code: `curl --silent --show-error "$FETCHX_URL${listProfiles.path}" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN"` }] },
-          { kind: 'code', title: 'Illustrative response excerpt', snippets: [{ label: 'JSON', language: 'json', code: `{
-  "access_profiles": [
-    {
-      "id": "source.http",
-      "version": 1,
-      "origins": ["https://source.example"],
-      "paths": ["^/data$"],
-      "method_paths": null,
-      "methods": ["GET"],
-      "headers": ["accept"],
-      "proxy_classes": ["direct"],
-      "countries": [],
-      "route_reservations": [
-        {
-          "class": "direct",
-          "country": null,
-          "provider": "direct",
-          "reserved_tunnel_bytes": 0,
-          "estimated_micro_usd": 0
-        }
-      ]
-    }
-  ]
-}` }] },
-          { kind: 'text', text: 'The excerpt uses fictional values and omits the full `limits` object. Your authenticated response is the source of truth for your project.' },
-        ],
-      },
-      {
-        id: 'browser-profiles',
-        title: 'Prepare a browser render',
-        blocks: [
-          { kind: 'text', text: 'Use `GET /v2/access-profiles?execution=http` for HTTP profiles or `?execution=browser` for browser profiles. Managed keys receive `browser_preparation` in the browser response because their profiles are issued for a specific URL. Check `features.browser_render` in `GET /v2/capabilities` for project readiness.' },
-          { kind: 'code', title: 'Check a target and route with fetch:write', snippets: [{ label: 'cURL', language: 'bash', code: `curl --disable --silent --show-error "$FETCHX_URL/v2/render/prepare" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN" \\
-  -H 'Content-Type: application/json' \\
-  --data '{"url":"https://example.com/","proxy":{"class":"direct","country":null}}'` }] },
-          { kind: 'text', text: 'Preparation makes no source request and reserves no credits. If `ready` is true, send the returned `url` and `access_profile` with the same `proxy` and a new `idempotency_key` to `POST /v2/render` using `fetch:write`. Review `errors` if preparation reports `ready: false`. When the render outcome is uncertain, recover with `GET /v2/render/:key` and `fetch:read` using the saved original key.' },
-        ],
-      },
-      {
-        id: 'profile-fields',
-        title: 'Profile fields',
-        blocks: [
-          { kind: 'table', headers: ['Field', 'How to use it'], rows: [
-            ['`id`, `version`', 'Copy both values into the fetch `access_profile` reference.'],
-            ['`origins`', 'Choose an HTTPS destination within a listed origin.'],
-            ['`paths`', 'Shared allowed path expressions, when present.'],
-            ['`method_paths`', 'Additional per-method path restrictions, when present. A method without an entry is denied.'],
-            ['`methods`', 'Permitted source HTTP methods.'],
-            ['`headers`', 'Permitted source request header names, subject to credential restrictions.'],
-            ['`proxy_classes`, `countries`', 'Approved route classes and requested proxy countries. Direct uses null country.'],
-            ['`limits`', 'Request count, input/response size, tunnel bytes, timeout, redirects, pacing and session lifetime limits.'],
-            ['`route_reservations`', 'Reviewed route combinations, provider availability and conservative estimates.'],
-          ] },
-          { kind: 'text', text: 'Destination, method and path checks also apply to redirects. A profile limits each session and operation. Project quotas and current route availability apply in addition to profile limits.' },
-        ],
-      },
-      {
-        id: 'route-reservations',
-        title: 'Route reservations',
-        blocks: [
-          { kind: 'text', text: 'Each route quote includes `class`, `country`, `provider`, `reserved_tunnel_bytes` and `estimated_micro_usd`. Residential quotes can also include `customer_traffic_reservation`. Optional pricing metadata explains a saved traffic policy.' },
-          { kind: 'note', title: 'Unknown estimates', text: 'A null provider or estimate means availability or pricing is unknown. Request a route review before relying on it. A zero incremental traffic estimate can have a separate subscription or unknown invoice amount.' },
-          { kind: 'link', label: 'Use an approved profile in a fetch request', href: '/docs/fetch' },
-        ],
-      },
-    ],
-  },
-  {
-    slug: 'recovery',
-    title: 'Idempotency and recovery',
-    description: 'Recover retained work safely after a timeout, lost response or interrupted operation.',
-    group: 'Guides',
-    ...endpoint(lookupFetch),
-    sections: [
-      {
-        id: 'recover-by-key',
-        title: 'Recover the original operation',
-        blocks: [
-          { kind: 'text', text: 'Persist a caller-generated key before Fetch or Render. If the response is lost, call the matching lookup endpoint using an active credential for the same project and the original key. The lookup reconstructs the response from retained operations and captures without a new source request.' },
-          { kind: 'table', headers: ['Submission', 'Recovery'], rows: [
-            [fetchOperation, lookupFetch], [renderOperation, lookupRender],
-          ].map(pair => pair.map(operation => '`' + operation.method + ' ' + operation.path + '`')) },
-
-          { kind: 'code', title: 'Read a saved operation', snippets: recoverySnippets },
-          { kind: 'text', text: 'The response uses the same envelope as submission, including `state`, `data`, `error`, `retry` and `usage`. An active or uncertain operation can have `success: false` and `retry.next_action: "recover_first"`. Preserve its key while reviewing the saved state.' },
-        ],
-      },
-      {
-        id: 'key-contract',
-        title: 'The key binds the request',
-        blocks: [
-          { kind: 'text', text: 'Repeating the same normalized request against its original submission endpoint and key returns the existing operation, which may still be running. Concurrent identical submissions share the same durable operation.' },
-          { kind: 'text', text: 'Changing a bound request returns HTTP `409` with `idempotency_conflict`. Omitted `retry` and `retry: false` are equivalent on Fetch. Omitted `screenshot` and `screenshot: false` are equivalent on Render.' },
-          { kind: 'note', title: 'After an uncertain outcome', text: 'Recover the saved operation before creating any replacement request. A new key can cause new source work. Preserve the original key and request when transport or remote state is uncertain.' },
-        ],
-      },
-      {
-        id: 'retry-guidance',
-        title: 'Read the retry guidance',
-        blocks: [
-          { kind: 'table', headers: ['Field', 'Meaning'], rows: [
-            ['`lookup_url`', 'Relative gateway URL for the saved operation.'],
-            ['`same_key_replay_safe`', 'Exact replay or lookup preserves the existing operation.'],
-            ['`safe_to_retry`', 'Whether the saved guidance permits a deliberate new source attempt now.'],
-            ['`new_request_allowed`', 'Whether current guidance allows a new request, subject to approvals and budgets.'],
-            ['`next_action`', 'The recovery, review, wait or completion action to follow.'],
-          ] },
-          { kind: 'table', headers: ['Outcome', 'Next step'], rows: [
-            ['Active, unknown or incomplete work', 'Recover first and review retained evidence.'],
-            ['Source 429 or cooldown', 'Respect source Retry-After and the saved wait guidance.'],
-            ['Source 404', 'Check the intended URL.'],
-            ['Known datacenter GET 403 or challenge', 'When explicitly suggested and approved, consider residential with a new key and a fresh session.'],
-            ['Quota or budget rejection', 'Review the relevant allowance with your operator.'],
-            ['Profile, method or route rejection', 'Correct the approved request or have the configuration reviewed.'],
-          ] },
-          { kind: 'text', text: 'For a deliberate approved route change, use a new operation key and omit `session_id`. Existing sessions keep their profile, provider, proxy class and country. Follow the response guidance and project approvals before dispatch.' },
-        ],
-      },
-      {
-        id: 'recover-by-operation',
-        title: 'Look up an operation ID',
-        blocks: [
-          { kind: 'text', text: 'Read a project-owned HTTP operation in the Fetch envelope with `' + getFetchOperation.method + ' ' + getFetchOperation.path + '`. This includes HTTP operations created through the native v2 API. Use the returned `retry.lookup_url` for further recovery.' },
-          { kind: 'text', text: 'For native operations, `idempotency_key_scope` identifies the native key scope and `same_key_replay_safe` is false. The `GET` lookup remains read-only. The operation projection supports HTTP operations; browser evidence uses its separate API.' },
-          { kind: 'link', label: 'Interpret gateway and source errors', href: '/docs/errors' },
-        ],
+        id: 'retention',
+        title: 'Retention',
+        blocks: [{ kind: 'text', text: 'Everything the site sent (body, headers, cookies, formats, screenshot) is stored encrypted for 7 days, or until you DELETE it. The summary, attempts and credits stay for 90 days. Reading never contacts the site and is never charged.' }],
       },
     ],
   },
   {
     slug: 'errors',
-    title: 'Errors and status codes',
-    description: 'Distinguish gateway rejection, source HTTP errors and uncertain outcomes.',
+    title: 'Errors and next steps',
+    description: 'Refused calls (4xx) and failed fetches, each with a stable code and what to do next.',
     group: 'Guides',
     sections: [
       {
-        id: 'read-the-envelope',
-        title: 'Read the complete envelope',
+        id: 'request-errors',
+        title: 'Refused calls (4xx)',
         blocks: [
-          { kind: 'text', text: 'Fetch and Render return structured envelopes. Inspect `gateway_http_status`, `state`, `success`, `data.status`, `error.code` and `retry.next_action` together. Error messages are safe summaries; diagnostics can identify the failure stage.' },
-          { kind: 'code', title: 'Retained source error', snippets: [{
-            label: 'JSON', language: 'json', code: JSON.stringify(responseExample(fetchOperation, 'sourceDenied'), null, 2),
-          }] },
-          { kind: 'text', text: 'Admission failures can return a gateway error status with `state: "rejected"`. An unclassified error after possible dispatch can report `state: "unknown"` and recovery guidance. Other v2 routes use a top-level string `error` code with optional details and diagnostics.' },
+          { kind: 'text', text: 'The call itself was wrong, so nothing was sent to the site and nothing was charged. The body is `{error: {code, message, details?}}`.' },
+          { kind: 'table', headers: ['HTTP', 'Code', 'Meaning'], rows: requestErrorRows },
         ],
       },
       {
-        id: 'gateway-errors',
-        title: 'Common gateway errors',
+        id: 'fetch-errors',
+        title: 'Failed fetches (HTTP 200, status: failed)',
         blocks: [
-          { kind: 'table', headers: ['Code', 'Gateway status', 'Action'], rows: [
-            ['`unauthorized`', '401', 'Check the Bearer token and project gateway.'],
-            ['`request_invalid`', '400', 'Check JSON types, supported fields and request structure.'],
-            ['`idempotency_key_required`', '400', 'Supply a valid durable operation key.'],
-            ['`proxy_required`, `country_required`', '400', 'Specify the class and explicit approved country, or null for direct.'],
-            ['`access_profile_forbidden`', '403', 'Choose an exact profile version approved for this project.'],
-            ['`proxy_class_forbidden`, `country_forbidden`', '403', 'Select an approved route from the profile.'],
-            ['`idempotency_conflict`', '409', 'Recover the original request bound to this key.'],
-            ['`capability_unsupported`', '409', 'Use the native HTTP request fields supported by this endpoint.'],
-            ['`session_busy_or_unknown`', '409', 'Recover the active or uncertain session operation first.'],
-            ['`cost_estimate_unavailable`', '409', 'Ask for an available route estimate before using a finite ceiling.'],
-            ['`client_quota_exhausted`, `residential_budget_exhausted`', '429', 'Review the project quota or bandwidth reservation.'],
-            ['`cost_ceiling_exceeded`', '429', 'Review the conservative estimate and intended spending ceiling.'],
-            ['`operation_not_found`', '404', 'Check the original project, key or operation ID and retention.'],
-          ] },
-          { kind: 'text', text: 'Other profile and admission codes can be returned. Preserve the stable code, operation ID and safe diagnostics when asking your operator to review a failure.' },
-        ],
-      },
-      {
-        id: 'source-and-transport-errors',
-        title: 'Source and transport outcomes',
-        blocks: [
-          { kind: 'table', headers: ['Code', 'Meaning and next step'], rows: [
-            ['`source_forbidden`', 'Source returned 403. Follow saved guidance and approved source access.'],
-            ['`source_not_found`', 'Source returned 404. Check the URL.'],
-            ['`source_rate_limited`', 'Source returned 429. Respect `data.retry_after` and the saved wait guidance.'],
-            ['`source_challenge`', 'A bot-manager challenge page was retained, including pages served as HTTP 200, 403 or 429. `error.details` reports `vendor` and `http_status`. Follow `retry.next_action`; on Render it can suggest a residential route with `retry.suggested_proxy`.'],
-            ['`source_cooldown`', 'FetchX is holding new requests to this origin after a recent refusal. `error.details` reports `origin`, `cooldown_until` and `retry_after_seconds`; wait that long before a new request.'],
-            ['`source_http_error`', 'A retained source status falls outside the successful range.'],
-            ['`proxy_connect_rejected`', 'The proxy rejected the tunnel. Inspect safe provider status and stage.'],
-            ['`source_timeout_unknown`, `source_transport_unknown`', 'Transport outcome may be uncertain. Recover before new source work.'],
-            ['`source_body_incomplete`', 'The response body was incomplete. Recover and review retained evidence.'],
-            ['`operation_incomplete`', 'The operation is active, uncertain or incomplete. Use its lookup URL.'],
-          ] },
-          { kind: 'text', text: 'A proxy tunnel rejection has a separate provider status and stage. A source status is present only when a native response is available. Measured failed traffic can still appear in usage and accounting.' },
-          { kind: 'link', label: 'Recover a saved result', href: '/docs/recovery' },
+          { kind: 'text', text: 'The site was tried and did not give its answer. Nothing is charged. `error.next.action` is meant for programs: act on it rather than on the message. `data` holds what the site last answered, such as the block page.' },
+          { kind: 'table', headers: ['Code', 'What happened', 'next.action'], rows: fetchErrorRows },
+          { kind: 'text', text: 'With `route` set there is exactly one attempt, so the error is precise about that route and suggests auto mode.' },
         ],
       },
     ],
   },
   {
-    slug: 'jobs',
-    title: 'Asynchronous jobs',
-    description: 'Queue approved v1 collection work, poll its saved result and cancel queued jobs.',
+    slug: 'billing',
+    title: 'Credits and usage',
+    description: 'One balance, charged only when a request succeeds, at the price of the step that worked.',
     group: 'Guides',
-    method: 'POST',
-    endpoint: '/v1/jobs',
+    method: getUsage.method,
+    endpoint: getUsage.path,
     sections: [
       {
-        id: 'availability',
-        title: 'Use an enabled v1 job profile',
+        id: 'charging',
+        title: 'How charging works',
         blocks: [
-          { kind: 'note', title: 'v1 job contract', text: 'Jobs require an enabled queue and an approved v1 profile on your provisioned gateway. They use the `/v1/fetch` request schema with a string `profile`. The v2 HTTP fetch request has its own profile, route and response contract.' },
-          { kind: 'link', label: 'Read the v1 workflow fetch request contract', href: '/docs/workflow-fetch' },
-          { kind: 'text', text: 'List available job profiles with `GET /v1/profiles`. Profiles expose execution mode, country, methods, reviewed recipe names and response limit. A profile with `captcha.async_required` requires the job API.' },
-          { kind: 'code', title: 'Find a v1 profile', snippets: [{ label: 'cURL', language: 'bash', code: `curl --silent --show-error "$FETCHX_URL/v1/profiles" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN"` }] },
+          { kind: 'text', text: 'When a request is admitted, FetchX reserves up to `max_credits` or the price of the most expensive step it might use. If the balance cannot cover the cheapest step, the request is refused with 402 before anything is sent. On success it charges the price of the step that got the data, plus 10 for a solved captcha, plus 5 per MB of residential transfer beyond the first 1 MB (HTTP) or 5 MB (browser), and releases the rest. Failed requests, uncertain ones and every earlier failed step cost nothing.' },
+          { kind: 'text', text: 'Trial credits and purchased credits share one balance. Purchased credits do not expire.' },
         ],
       },
+      operationSection(getUsage),
+    ],
+  },
+  {
+    slug: 'webhooks',
+    title: 'Webhooks',
+    description: 'Get the result POSTed to your server when a request finishes.',
+    group: 'Guides',
+    sections: [
       {
-        id: 'submit-a-job',
-        title: 'Submit a job',
+        id: 'deliveries',
+        title: 'Deliveries',
         blocks: [
-          { kind: 'text', text: 'Save a distinct job key before submission. Replace the fictional profile and destination below with approved v1 values. Use each key for one submission mode. Identical queued submissions replay the same job, while changed payloads conflict.' },
-          { kind: 'code', title: 'POST /v1/jobs', snippets: [{ label: 'cURL', language: 'bash', code: `curl --silent --show-error "$FETCHX_URL/v1/jobs" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN" \\
-  -H 'Content-Type: application/json' \\
-  --data '{
-    "profile": "source.http",
-    "url": "https://source.example/data",
-    "idempotency_key": "job-001"
-  }'` }] },
-          { kind: 'code', title: 'HTTP 202 response excerpt', snippets: [{ label: 'JSON', language: 'json', code: `{
-  "id": "00000000-0000-4000-8000-000000000003",
-  "state": "queued",
-  "error": null,
-  "operation": null
+          { kind: 'text', text: 'Pass `webhook_url` (public https) with a request. When it finishes, FetchX POSTs the result object, without the body, to that URL, up to 3 times until it gets a 2xx. Read the body with `GET /v1/fetch/{id}` if you need it.' },
+          { kind: 'text', text: 'Each delivery carries `X-FetchX-Timestamp` and `X-FetchX-Signature: sha256=<hex>`, an HMAC-SHA256 over `<timestamp>.<raw body>` with your project’s webhook secret (in the console). Reject deliveries whose signature does not match or whose timestamp is more than 5 minutes old.' },
+          { kind: 'code', title: 'Verify a delivery', snippets: [{ label: 'Node.js', language: 'javascript', code: `import {createHmac, timingSafeEqual} from 'node:crypto';
+
+export function verify(rawBody, headers, secret) {
+  const timestamp = headers['x-fetchx-timestamp'];
+  const expected = 'sha256=' + createHmac('sha256', secret).update(timestamp + '.' + rawBody).digest('hex');
+  const given = String(headers['x-fetchx-signature'] ?? '');
+  const fresh = Math.abs(Date.now() / 1000 - Number(timestamp)) < 300;
+  return fresh && given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected));
 }` }] },
-          { kind: 'text', text: 'The complete response also includes `created_at` and `expires_at`. Save the job ID. Optional fields follow the approved v1 fetch contract, including reviewed browser recipe inputs where configured.' },
         ],
       },
+    ],
+  },
+  {
+    slug: 'reference',
+    title: 'API reference',
+    description: 'Every endpoint, its key scope, and the OpenAPI contract.',
+    group: 'API reference',
+    sections: [
       {
-        id: 'read-and-cancel',
-        title: 'Read or cancel a job',
+        id: 'endpoints',
+        title: 'Endpoints',
         blocks: [
-          { kind: 'table', headers: ['Method', 'Path', 'Behavior'], rows: [
-            ['`GET`', '`/v1/jobs/:id`', 'Returns state and, when retained, the nested source result.'],
-            ['`DELETE`', '`/v1/jobs/:id`', 'Cancels a queued job. Running work returns `job_not_cancellable`.'],
-          ] },
-          { kind: 'code', title: 'Read a job', snippets: [{ label: 'cURL', language: 'bash', code: `curl --silent --show-error \\
-  "$FETCHX_URL/v1/jobs/00000000-0000-4000-8000-000000000003" \\
-  -H "Authorization: Bearer $FETCHX_TOKEN"` }] },
-          { kind: 'text', text: 'Job states include `queued`, `running`, `completed`, `failed`, `unknown`, `cancelled` and `expired`. A completed job means processing finished. Inspect `result.status`, `result.error`, the returned body and any reviewed extraction before accepting application data.' },
-        ],
-      },
-      {
-        id: 'queue-and-recovery',
-        title: 'Queue limits and recovery',
-        blocks: [
-          { kind: 'text', text: 'Queued jobs expire after 30 minutes if execution has not started. The default pending/running limit is 20 per project and 100 globally, with project-specific limits set by your operator. A full queue returns `job_queue_full`; a disabled queue returns `jobs_disabled`.' },
-          { kind: 'text', text: 'Queued work survives restart. Interrupted running work becomes `unknown`; FetchX checks retained captures during job lookup. Preserve the original job and key while its result is uncertain. Source and bandwidth limits still apply when the worker dispatches the request.' },
-          { kind: 'link', label: 'Use the synchronous v1 workflow fetch API', href: '/docs/workflow-fetch' },
+          { kind: 'text', text: '`/v1` is the only version. Changes within it are additive; a breaking change would come as a new version with notice.' },
+          { kind: 'table', headers: ['Method and path', 'Key scope', 'Purpose'], rows: contractOperations.map(operation => [
+            '`' + operation.method + ' ' + operation.path + '`', '`' + operation.scope + '`', operation.summary]) },
+          openApiLink,
+          { kind: 'link', label: 'JavaScript and Python clients', href: 'https://github.com/karthikbala/FetchX/tree/main/clients' },
         ],
       },
     ],
   },
 ];
+

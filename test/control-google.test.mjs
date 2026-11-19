@@ -109,8 +109,8 @@ test('real Google identity routes reuse the verified account and atomically bind
  const existing=await identity.verifyCode({email:'builder@workspace.example',challenge_id:mailChallenge.challenge_id,code:sent[0].code,ip:'127.0.0.1'});
  const project=await identity.createProject(existing.user.id,{name:'Existing project'}),apiKey=await identity.createKey(existing.user.id,project.id,{name:'Existing key',scopes:['fetch:read']});
  await store.init();assert.equal((await identity.session(existing.session.token)).user.id,existing.user.id);
- const app=Fastify();app.decorate('v2',{});app.decorate('publicFetch',{});
- registerControl(app,{config:settings},{identity,credits:{usage:async()=>({})}});await app.ready();
+ const app=Fastify();
+ registerControl(app,{config:settings},{identity,ledger:{prices:{},metered:()=>true,balance:async()=>null,usage:async()=>({credits:0,by_step:[],daily:[]})},service:{}});await app.ready();
  const send=(method,path,payload,cookie='',extra={})=>app.inject({method,url:'/control'+path,headers:{origin,'x-fetchx-control-secret':secret,cookie,...extra},...(payload===undefined?{}:{payload})});
  const start=async(cookie='',ip='127.0.0.2')=>{
   const response=await send('POST','/auth/google/challenge',{},cookie,{'x-fetchx-client-ip':ip});assert.equal(response.statusCode,200,response.body);

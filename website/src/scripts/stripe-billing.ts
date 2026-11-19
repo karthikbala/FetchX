@@ -42,11 +42,11 @@ const checkoutMessages = new Map([
   ['awaiting_webhook', 'Payment confirmation is processing. FetchX will update this project when the payment is verified.'],
   ['complete', 'Checkout has completed. FetchX is still verifying payment for this project.'],
   ['expired', 'The saved checkout has expired. You can start a new checkout when billing is available.'],
-  ['paid', 'Payment confirmed. Your paid credit balance has been updated.'],
-  ['test_paid_unapplied', 'Test payment confirmed. Your paid credit balance is unchanged.'],
+  ['paid', 'Payment confirmed. Your balance has been updated.'],
+  ['test_paid_unapplied', 'Test payment confirmed. Your balance is unchanged.'],
   ['payment_failed', 'Stripe reports a payment failure. Check the saved checkout status before continuing.'],
   ['failed', 'Payment failed. No credits were added. You can start a new checkout when billing is available.'],
-  ['reversed', 'Stripe reports a payment reversal. Review your paid credit balance and purchase history.'],
+  ['reversed', 'Stripe reports a payment reversal. Review your balance and purchase history.'],
   ['payment_hold', 'Billing is on hold. Contact FetchX to review the payment before starting another checkout.'],
   ['reconciliation_required', 'This checkout needs review before it can be resumed. Check its saved status or contact FetchX.'],
   ['missing', 'The saved checkout is still unconfirmed. Check its status again before starting another purchase.'],
@@ -137,9 +137,7 @@ export function mountStripeBilling(root: HTMLElement, options: Options) {
   }
   const readinessMessages = new Map([
     ['stripe_currency_unavailable', 'INR checkout is currently unavailable. Please check back before starting a purchase.'],
-    ['paid_credit_route_unavailable', 'Checkout will open when a paid route is ready for this project.'],
-    ['paid_credit_capacity_unavailable', 'Paid route capacity is currently unavailable for this project. Check back before starting another checkout.'],
-    ['paid_credit_payment_hold', 'Billing is on hold. Contact FetchX to review this project’s paid credits.'],
+    ['paid_credit_payment_hold', 'Billing is on hold. Contact FetchX to review this project’s payments.'],
   ]);
   function render(context: Context) {
     const { pending, stripe, busy } = context;
@@ -157,16 +155,16 @@ export function mountStripeBilling(root: HTMLElement, options: Options) {
       readinessMessages.get(stripe.checkout_unavailable_reason || '') ||
       (pending && checkoutMessages.get(pending.state || '')) ||
       (pending ? 'A checkout key is saved. Check its status to continue.' : canStart ? 'Choose a package to continue to Stripe Checkout.' :
-        'Paid credit checkout is currently unavailable for this project.');
+        'Buying credits is currently unavailable for this project.');
   }
   function configure(context: Context) {
     const stripe = context.stripe;
     mode.textContent = stripe.mode === 'test' ? 'STRIPE SANDBOX' : 'LIVE BILLING';
     modeHelp.textContent = stripe.mode === 'test'
-      ? 'Sandbox payments use Stripe test payment details and leave project paid credits unchanged.'
+      ? 'Sandbox payments use Stripe test payment details and leave the project balance unchanged.'
       : stripe.currency === 'inr'
-        ? 'Prices and payment are in INR. Pay with UPI in Stripe Checkout. Paid credits have no scheduled expiration.'
-        : 'Prices and payment are in USD. Pay by card in Stripe Checkout. Paid credits have no scheduled expiration.';
+        ? 'Prices and payment are in INR. Pay with UPI in Stripe Checkout. Purchased credits do not expire.'
+        : 'Prices and payment are in USD. Pay by card in Stripe Checkout. Purchased credits do not expire.';
     purchases.replaceChildren();
     const savedPurchases = Array.isArray(stripe.purchases) ? stripe.purchases : [];
     for (const purchase of savedPurchases) {
@@ -314,7 +312,7 @@ export function mountStripeBilling(root: HTMLElement, options: Options) {
       try { result = await options.request(`${path(context)}/checkout`, { method: 'POST', body: { plan_id: planId, idempotency_key: key }, timeout: 40_000 }); }
       catch (error) {
         if (!active(context)) return;
-        if (['stripe_currency_unavailable', 'stripe_checkout_currency_mismatch', 'paid_credit_route_unavailable', 'paid_credit_capacity_unavailable', 'paid_credit_payment_hold'].includes(String(errorCode(error)))) {
+        if (['stripe_currency_unavailable', 'stripe_checkout_currency_mismatch', 'paid_credit_payment_hold'].includes(String(errorCode(error)))) {
           await refresh(context);
           return;
         }

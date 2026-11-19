@@ -1,83 +1,119 @@
-import {randomUUID} from 'node:crypto';
+// FetchX API client (Node.js 20+, Deno, Bun and browsers with fetch).
+//
+//   const fetchx = new FetchXClient({url: process.env.FETCHX_URL, token: process.env.FETCHX_TOKEN});
+//   const result = await fetchx.fetch({url: 'https://example.com', formats: ['markdown']});
+//
+// Every POST carries an idempotency_key (generated when you leave it out), so
+// the client can safely resend the same request after a lost response, a 429
+// or a 503: FetchX returns the first result and never charges twice.
 
-const isObject=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
-const stringOrNull=value=>typeof value==='string'?value:null;
+const RETRYABLE = new Set(['network_error', 'too_many_requests', 'unavailable']);
+const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-export class GatewayError extends Error {
- constructor(code,{status=null,details,workflow=null,idempotency_key=null,response=null}={}){
-  super(code);this.name='GatewayError';this.code=code;this.status=status;
-  this.workflow=workflow;
-  this.idempotency_key=idempotency_key??stringOrNull(response?.idempotency_key);
-  this.response=response;
-  this.operation_id=stringOrNull(response?.operation_id);
-  this.session_id=stringOrNull(response?.session_id);
-  this.retry=isObject(response?.retry)?response.retry:null;
-  this.diagnostics=isObject(response?.diagnostics)?response.diagnostics:null;
-  if(details!==undefined)this.details=details;
- }
-}
-export class GatewayClient {
- constructor({url,token,fetch:request=globalThis.fetch}){if(!url||!token)throw Error('gateway_config_missing');this.url=url.replace(/\/$/,'');this.token=token;this.fetch=request;}
- async call(path,body,context={},{headers={}}={}){
-  let response;
-  try{
-   response=await this.fetch(this.url+path,{
-    method:body===undefined?'GET':'POST',
-    headers:{...headers,authorization:'Bearer '+this.token,'content-type':'application/json'},
-    body:body===undefined?undefined:JSON.stringify(body),
-    signal:AbortSignal.timeout(85000),
-    ...(path.startsWith('/v2/')?{redirect:'manual'}:{})
-   });
-  }catch{throw new GatewayError('gateway_unavailable',context);}
-  let data;try{data=await response.json();}catch{throw new GatewayError('gateway_invalid_response',{...context,status:response.status});}
-  if(!isObject(data))throw new GatewayError('gateway_invalid_response',{...context,status:response.status});
-  if(!response.ok){
-   const error=data.error;
-   // Scrape failures carry {code, error: message}; other APIs carry the code in error.
-   const code=stringOrNull(error?.code)??stringOrNull(data.code)??stringOrNull(error)??'gateway_failed';
-   throw new GatewayError(code,{...context,status:response.status,details:data.details,response:data});
+export class FetchXError extends Error {
+  constructor(code, {status = null, details, retryAfterSeconds = null, idempotencyKey = null, response = null} = {}) {
+    super(code);
+    this.name = 'FetchXError';
+    this.code = code;
+    this.status = status;
+    if (details !== undefined) this.details = details;
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.idempotencyKey = idempotencyKey;
+    this.response = response;
   }
-  return data;
- }
- async #submitV2(path,input){
-  if(!input?.idempotency_key)throw new GatewayError('idempotency_key_required');
-  return this.call(path,input,{idempotency_key:input.idempotency_key});
- }
- async workflow(profile,key=randomUUID(),limits={}){const body={profile,idempotency_key:key,...limits};return this.call('/v1/workflows',body,{idempotency_key:body.idempotency_key});}
- async request(workflow,input){const body={idempotency_key:randomUUID(),...input};return this.call('/v1/workflows/'+workflow+'/operations',body,{workflow,idempotency_key:body.idempotency_key});}
- async lookup(workflow,key){return this.call('/v1/workflows/'+workflow+'/operations/'+encodeURIComponent(key),undefined,{workflow,idempotency_key:key});}
- async close(workflow){return this.call('/v1/workflows/'+workflow+'/close',{}, {workflow});}
- async fetchPage(input){if(!input?.idempotency_key)throw new GatewayError('idempotency_key_required');return this.call('/v1/fetch',input,{idempotency_key:input.idempotency_key});}
- async lookupFetch(key){return this.call('/v1/fetch/'+encodeURIComponent(key),undefined,{idempotency_key:key});}
- async submitJob(input){if(!input?.idempotency_key)throw new GatewayError('idempotency_key_required');return this.call('/v1/jobs',input,{idempotency_key:input.idempotency_key});}
- async job(id){return this.call('/v1/jobs/'+id);}
- async profiles(){return this.call('/v1/profiles');}
- async status(){return this.call('/v1/status');}
- async diagnostics(operation){return this.call('/v1/operations/'+operation+'/diagnostics');}
- async outcome(operation,{accepted_records,rejected_records,reason_code}){return this.call('/v1/operations/'+operation+'/outcome',{accepted_records,rejected_records,reason_code});}
- async fetchV2(input){return this.#submitV2('/v2/fetch',input);}
- async lookupFetchV2(key){return this.call('/v2/fetch/'+encodeURIComponent(key),undefined,{idempotency_key:key});}
- async readFetchOperationV2(id){return this.call('/v2/fetch/operations/'+encodeURIComponent(id));}
- async renderV2(input){return this.#submitV2('/v2/render',input);}
- async prepareRenderV2(input){return this.call('/v2/render/prepare',input);}
- async scrapeV2(input,idempotencyKey){
-  if(!idempotencyKey)throw new GatewayError('idempotency_key_required');
-  return this.call('/v2/scrape',input,{idempotency_key:idempotencyKey},{headers:{'x-idempotency-key':idempotencyKey}});
- }
- async lookupRenderV2(key){return this.call('/v2/render/'+encodeURIComponent(key),undefined,{idempotency_key:key});}
- async capabilitiesV2(){return this.call('/v2/capabilities');}
- async accessProfilesV2(){return this.call('/v2/access-profiles');}
- async discoveryProfileV2(input){return this.#submitV2('/v2/discovery-profiles',input);}
- async recipesV2(){return this.call('/v2/recipes');}
- async sessionV2(input){return this.#submitV2('/v2/sessions',input);}
- async readSessionV2(id){return this.call('/v2/sessions/'+encodeURIComponent(id));}
- async operationV2(input){return this.#submitV2('/v2/operations',input);}
- async browserProbeV2(input){return this.#submitV2('/v2/browser-probes',input);}
- async readOperationV2(id){return this.call('/v2/operations/'+encodeURIComponent(id));}
- async lookupOperationV2(key){return this.call('/v2/operations/by-key/'+encodeURIComponent(key),undefined,{idempotency_key:key});}
- async artifactV2(id){return this.call('/v2/artifacts/'+encodeURIComponent(id));}
- async usageV2(){return this.call('/v2/usage');}
- async recentOperationsV2(limit=25){return this.call('/v2/operations?limit='+encodeURIComponent(limit));}
 }
 
-export {GatewayClient as FetchXClient};
+export class FetchXClient {
+  // retries: how many times a lost, rate-limited or unavailable POST is resent
+  // with the same idempotency_key.
+  constructor({url, token, fetch: transport = globalThis.fetch, timeoutMs = 130_000, retries = 2} = {}) {
+    if (!url || !token) throw new FetchXError('client_config_missing');
+    this.url = String(url).replace(/\/+$/, '');
+    this.token = token;
+    this.transport = transport;
+    this.timeoutMs = timeoutMs;
+    this.retries = retries;
+  }
+
+  async #send(method, path, {body, raw = false, idempotencyKey = null} = {}) {
+    let response;
+    try {
+      response = await this.transport(this.url + path, {
+        method,
+        headers: {authorization: `Bearer ${this.token}`, ...(body === undefined ? {} : {'content-type': 'application/json'})},
+        body: body === undefined ? undefined : JSON.stringify(body),
+        redirect: 'error',
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch {
+      throw new FetchXError('network_error', {idempotencyKey});
+    }
+    if (response.status === 204) return null;
+    if (raw && response.ok) {
+      return {body: new Uint8Array(await response.arrayBuffer()), contentType: response.headers.get('content-type')};
+    }
+    let data;
+    try { data = await response.json(); } catch { data = null; }
+    if (!isObject(data)) throw new FetchXError('invalid_response', {status: response.status, idempotencyKey});
+    if (!response.ok) {
+      const error = isObject(data.error) ? data.error : {};
+      const retryAfter = Number(error.retry_after_seconds ?? response.headers.get('retry-after')) || null;
+      throw new FetchXError(typeof error.code === 'string' ? error.code : 'request_failed',
+        {status: response.status, details: error.details, retryAfterSeconds: retryAfter, idempotencyKey, response: data});
+    }
+    return data;
+  }
+
+  // POST /v1/fetch. Resolves with the result: status is succeeded or failed,
+  // or pending (HTTP 202) when it is still running; use wait() for those.
+  async fetch(input) {
+    if (!isObject(input) || typeof input.url !== 'string') throw new FetchXError('url_required');
+    const body = {...input, idempotency_key: input.idempotency_key ?? globalThis.crypto.randomUUID()};
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.#send('POST', '/v1/fetch', {body, idempotencyKey: body.idempotency_key});
+      } catch (error) {
+        if (!(error instanceof FetchXError) || !RETRYABLE.has(error.code) || attempt >= this.retries) throw error;
+        await sleep(Math.min(30, error.retryAfterSeconds ?? 2 ** attempt) * 1000);
+      }
+    }
+  }
+
+  // GET /v1/fetch/{id}
+  get(id, {includeBody = true} = {}) {
+    return this.#send('GET', `/v1/fetch/${encodeURIComponent(id)}${includeBody ? '' : '?include_body=false'}`);
+  }
+
+  // Polls a request until it is no longer pending.
+  async wait(id, {intervalMs = 2000, timeoutMs = 300_000, includeBody = true} = {}) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const result = await this.get(id, {includeBody: false});
+      if (result.status !== 'pending') return includeBody ? this.get(id) : result;
+      if (Date.now() + intervalMs > deadline) throw new FetchXError('wait_timeout', {response: result});
+      await sleep(intervalMs);
+    }
+  }
+
+  // GET /v1/fetch: {status, tag, idempotency_key, since, limit, cursor}
+  list(query = {}) {
+    const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null));
+    return this.#send('GET', '/v1/fetch' + (params.size ? `?${params}` : ''));
+  }
+
+  // GET /v1/fetch/{id}/content: {body: Uint8Array, contentType}
+  content(id) { return this.#send('GET', `/v1/fetch/${encodeURIComponent(id)}/content`, {raw: true}); }
+
+  // GET /v1/fetch/{id}/screenshot: {body: Uint8Array, contentType: 'image/jpeg'}
+  screenshot(id) { return this.#send('GET', `/v1/fetch/${encodeURIComponent(id)}/screenshot`, {raw: true}); }
+
+  // DELETE /v1/fetch/{id}
+  async delete(id) { await this.#send('DELETE', `/v1/fetch/${encodeURIComponent(id)}`); }
+
+  // GET /v1/usage: {period: 'day' | 'month'} or {since, until}
+  usage(query = {}) {
+    const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null));
+    return this.#send('GET', '/v1/usage' + (params.size ? `?${params}` : ''));
+  }
+}

@@ -13,13 +13,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-  init-storage:
-    image: fetchx:local
-    build: .
-    user: "0:0"
-    entrypoint: [sh, -c, "chown 10001:10001 /data/artifacts && chmod 700 /data/artifacts"]
-    volumes: [fetchx-artifacts:/data/artifacts]
-    network_mode: none
   gateway:
     image: fetchx:local
     build: .
@@ -27,7 +20,6 @@ services:
     init: true
     depends_on:
       db: {condition: service_healthy}
-      init-storage: {condition: service_completed_successfully}
     ports: [127.0.0.1:8788:8788]
     environment:
       DATABASE_URL: postgresql://fetchx:${FETCHX_DB_PASSWORD}@db/fetchx
@@ -35,7 +27,6 @@ services:
     volumes:
       - ${FETCHX_HOME:?required}/secrets/gateway.json:/run/secrets/gateway.json:ro
       - ${FETCHX_HOME:?required}/browser:/opt/gateway-browser:ro
-      - fetchx-artifacts:/data/artifacts
     read_only: true
     tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=512m"]
     cap_drop: [ALL]
@@ -51,4 +42,3 @@ services:
     logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
 volumes:
   fetchx-db:
-  fetchx-artifacts:

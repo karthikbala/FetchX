@@ -1,12 +1,9 @@
 # Site knowledge
 
 FetchX learns, for each destination host, which route has reached it: execution
-(`http` or `browser`), proxy class, provider, country and browser engine, plus
-what a success cost. Auto mode (next phase) reads this to start its escalation
-ladder at the cheapest route known to work, instead of rediscovering it.
-
-This first phase only observes. It never dispatches a request, changes a route,
-or touches billing.
+(`http` or `browser`), proxy class, provider, country and browser engine. Auto
+mode reads this to start its ladder at the route known to work, skip routes that
+are resting, and pick the exit country, instead of rediscovering them.
 
 ## What is stored
 
@@ -21,12 +18,11 @@ success teaches the route for everyone.
 
 ## Where it learns from
 
-- Settled v2 HTTP operations and v2 browser operations.
-- v1 workflow attempts on main documents (datacenter and residential routes).
+- Every attempt of every request (`FetchService.#learn`), as soon as it has a result.
 - Completed admin reachability probes (`http` routes only).
 
-Recording runs after settlement, with short lock and statement timeouts, and a
-failure to record is logged and ignored.
+Recording runs with short lock and statement timeouts, and a failure to record
+is logged and ignored; it never delays or fails a request.
 
 ## How outcomes are classified
 
@@ -58,64 +54,15 @@ Tunable with `siteKnowledge` in config: `freshMs`, `demoteAfter`,
 - `DELETE /control/admin/sites/:host` forgets a host so it is relearned. This is
   written to the routing audit log as `site:<host>`.
 
-## Auto mode (`POST /v2/fetch` with `proxy.class: "auto"`)
+The admin portal's Site knowledge tab shows the same.
 
-```json
-{"idempotency_key": "k1", "url": "https://example.com/page", "proxy": {"class": "auto"}, "max_attempts": 5}
-```
+## How auto mode uses it
 
-`proxy.country` is optional. `max_attempts` runs from 1 to 5 and defaults to 5.
+`planLadder` in `src/fetch/ladder.mjs` builds the steps a request may use, in this order: HTTP direct, HTTP datacenter, HTTP residential (plus two fresh-IP rotations used only after a 429), browser residential, browser residential on a fresh IP, browser datacenter. Then:
 
-- **Ladder, cheapest first:** HTTP direct, HTTP datacenter, HTTP residential,
-  a rendered browser on residential, the same on a fresh residential session
-  (a new IP), then a browser on datacenter. It is limited to what the access
-  profile allows. Routes proven for the host (either transport) come first.
-  Routes that are cooling, or excluded by a provider rule (such as Oxylabs for
-  `.gov`), are skipped. A step the profile cannot use (for example, no browser)
-  is refused at admission. It costs nothing and does not count as an attempt.
-- **Each attempt** is an ordinary fetch or render under a derived key, so admission, cost
-  ceilings, budgets and provider rules all apply. The route for each attempt is
-  recorded before dispatch. A same-key replay or `GET /v2/fetch/:key` returns
-  the same final attempt without new source work.
-- **Stops** on success, a real 404, an uncertain result (never retried), a
-  genuine rate limit (429 with Retry-After), or a caller limit (credits, quota,
-  cost ceiling). A challenge page served with a 429 counts as a block and
-  escalates. A short site cooldown (20 seconds or less) is waited out once
-  inside the request.
-- **Only GET and HEAD escalate.** Browser steps are GET only. Other methods
-  make one attempt.
-- **Fixing client mistakes:** an automation or missing User-Agent is replaced
-  with a browser one (or removed if the profile does not allow the header), and
-  missing `accept` and `accept-language` headers are added when allowed. All
-  other headers are sent as given.
-- **Billing:** only the successful attempt is billed. Failed attempts are released.
+- A **proven** step moves to the front, keeping the cheapest proven first.
+- A **cooling** step is skipped and listed in `skipped` with `cooling`, except that a residential step cooling only because of a rate limit stays (a fresh IP gets a fresh limit).
+- The **country** is the request's `country`, else the country of the host's proven routes, else US.
+- Steps excluded by a provider rule, over `max_credits`, or not allowed by `render` are skipped and listed.
 
-The response is the final attempt's normal response (render-shaped when the
-final attempt was a browser) plus an `auto` object. It holds `attempts`, `max_attempts`, `routes_tried` (class, country and
-result; never providers), `routes_skipped`, `billed_attempt`,
-`headers_adjusted` and `next`. `next` is null on success, and otherwise one of:
-
-- `{"action": "retry_after", "retry_after_seconds": N}` when the site is rate limiting.
-- `{"action": "retry_later", "retry_after_seconds": N}` when every allowed route was blocked.
-- `{"action": "recover"}` when the outcome is uncertain: look up the same key first.
-- `{"action": "retry_later", "retry_after_seconds": N}` when the site was unreachable.
-
-If every allowed route is cooling, the request is refused with no dispatch. It
-returns HTTP 429 with `source_cooldown`, and `error.details.auto.next` gives
-the wait.
-
-Explicit routes (`direct`, `datacenter`, `residential`) never escalate. Their
-error codes report exactly what happened, as before.
-
-- **Residential providers:** after a residential attempt fails or is rate
-  limited, the next residential attempt uses the other provider (Evomi and
-  DataImpulse alternate), when it is enabled and allowed.
-- **CAPTCHA:** browser steps in auto mode may solve one Turnstile or reCAPTCHA v2
-  widget per attempt through 2captcha. See `docs/captcha.md`. Explicit
-  `/v2/render` calls never solve.
-
-The browser steps run on the v2 render pool's qualified engine (pinned Chromium
-or keyless CloakBrowser, as configured), not Camoufox. Camoufox is used only in
-v1 residential workflows. CloakBrowser as a separate last-resort step stays out
-of auto mode until there is evidence of a challenge Camoufox cannot pass and
-CloakBrowser can.
+If every step is cooling, the request fails with `cooling_down` and the remaining wait, without sending anything.

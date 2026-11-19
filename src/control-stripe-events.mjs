@@ -33,7 +33,7 @@ export function checkoutMatches(session,row,customer,config){
 }
 
 export class StripeEvents{
- constructor({store,provider,paidCredits}){this.store=store;this.provider=provider;this.paidCredits=paidCredits;}
+ constructor({store,provider,purchases}){this.store=store;this.provider=provider;this.purchases=purchases;}
  async drain(config,{eventId}={}){
   const scope=[config.mode,config.accountId];
   const inbox=(await this.store.pool.query(`SELECT * FROM control_stripe_events WHERE mode=$1 AND account_id=$2
@@ -150,12 +150,11 @@ export class StripeEvents{
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [...scope,order.id,order.project,payment.intent.id,payment.charge.id,state,new Date(payment.charge.created*1000)]);
    const binding={project:order.project,mode:config.mode,accountId:config.accountId};
-   if(state==='paid')await this.paidCredits.grantPaidCredits(c,{...binding,checkoutSessionId:id,paymentIntentId:payment.intent.id,
+   if(state==='paid')await this.purchases.grantPaidCredits(c,{...binding,checkoutSessionId:id,paymentIntentId:payment.intent.id,
     credits:order.plan.credits,amountMinor:order.plan.amountMinor,currency:order.plan.currency});
    if(config.mode==='live'&&payment.charge.disputed===true){
-    await this.paidCredits.setPaymentHold(c,{...binding,holdId:'charge:'+payment.charge.id,active:true});
+    await this.purchases.setPaymentHold(c,{...binding,holdId:'charge:'+payment.charge.id,active:true});
    }
-   if(state==='paid')await this.paidCredits.upgradeEligibleProject(c,order.project);
   });
  }
  async payment(config,session,order){
@@ -226,9 +225,9 @@ export class StripeEvents{
       AND control_stripe_credit_reversals.payment_intent_id=EXCLUDED.payment_intent_id`,[...scope,sessionId,charge.payment_intent,project]);
     if(!reversal.rowCount)fail('stripe_payment_conflict',409);
     await c.query("UPDATE control_stripe_purchases SET state='reversed' WHERE mode=$1 AND account_id=$2 AND charge_id=$3",scope);
-    if(config.mode==='live')await this.paidCredits.revokePaidCredits(c,{...binding,checkoutSessionId:sessionId,paymentIntentId:charge.payment_intent});
+    if(config.mode==='live')await this.purchases.revokePaidCredits(c,{...binding,checkoutSessionId:sessionId,paymentIntentId:charge.payment_intent});
    }
-   if(config.mode==='live')await this.paidCredits.setPaymentHold(c,{...binding,holdId:'refund:'+refund.id,
+   if(config.mode==='live')await this.purchases.setPaymentHold(c,{...binding,holdId:'refund:'+refund.id,
     active:['pending','requires_action'].includes(refund.status)});
   });
  }
@@ -258,11 +257,11 @@ export class StripeEvents{
      [...scope,sessionId,charge.payment_intent,project,isRefunded?'refund':'dispute_lost']);
     if(!reversal.rowCount)fail('stripe_payment_conflict',409);
     await c.query("UPDATE control_stripe_purchases SET state='reversed' WHERE mode=$1 AND account_id=$2 AND charge_id=$3",scope);
-    if(config.mode==='live')await this.paidCredits.revokePaidCredits(c,{...binding,checkoutSessionId:sessionId,paymentIntentId:charge.payment_intent});
+    if(config.mode==='live')await this.purchases.revokePaidCredits(c,{...binding,checkoutSessionId:sessionId,paymentIntentId:charge.payment_intent});
    }
    if(config.mode==='live'&&dispute){
-    await this.paidCredits.setPaymentHold(c,{...binding,holdId:'charge:'+charge.id,active:!resolved});
-    await this.paidCredits.setPaymentHold(c,{...binding,holdId:'dispute:'+id,active:!resolved});
+    await this.purchases.setPaymentHold(c,{...binding,holdId:'charge:'+charge.id,active:!resolved});
+    await this.purchases.setPaymentHold(c,{...binding,holdId:'dispute:'+id,active:!resolved});
    }
   });
  }

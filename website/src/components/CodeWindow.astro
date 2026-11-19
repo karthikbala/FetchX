@@ -1,8 +1,7 @@
 ---
 import Icon from './Icon.astro';
-const code = `<span class="c-comment">// Endpoint provisioned during onboarding.</span>
-<span class="c-purple">const</span> response = <span class="c-purple">await</span> fetch(
-  <span class="c-green">'https://YOUR_PROVISIONED_ENDPOINT/v1/fetch'</span>,
+const code = `<span class="c-purple">const</span> response = <span class="c-purple">await</span> fetch(
+  <span class="c-green">'https://app.fetchx.ai/v1/fetch'</span>,
   {
     method: <span class="c-green">'POST'</span>,
     headers: {
@@ -10,11 +9,10 @@ const code = `<span class="c-comment">// Endpoint provisioned during onboarding.
       <span class="c-green">'Content-Type'</span>: <span class="c-green">'application/json'</span>
     },
     body: JSON.stringify({
-      profile: <span class="c-green">'example.http'</span>,
-      idempotency_key: <span class="c-green">'example-read-001'</span>,
-      url: <span class="c-green">'https://your-source.example'</span>
+      url: <span class="c-green">'https://your-source.example'</span>,
+      formats: [<span class="c-green">'markdown'</span>]
     })
   }
 );`;
 ---
-<div class="code-window"><div class="code-titlebar"><div class="code-dots"><i></i><i></i><i></i></div><span class="mono">your-workflow.ts</span><span class="mono code-badge">ILLUSTRATIVE</span></div><pre><code set:html={code}/></pre><div class="code-footer"><span><span class="tiny-dot"></span> SCOPED TO YOUR WORKFLOW</span><Icon name="code" size={20}/></div></div>
+<div class="code-window"><div class="code-titlebar"><div class="code-dots"><i></i><i></i><i></i></div><span class="mono">your-workflow.ts</span><span class="mono code-badge">ILLUSTRATIVE</span></div><pre><code set:html={code}/></pre><div class="code-footer"><span><span class="tiny-dot"></span> ONE CALL</span><Icon name="code" size={20}/></div></div>
