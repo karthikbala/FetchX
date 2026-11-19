@@ -324,7 +324,9 @@ export class FetchService {
         captcha: response?.captcha?.length ? response.captcha.map(s => `${s.type}:${s.outcome}`) : undefined});
       await this.#recordAttempt(row.id, n, {...step, provider: route.provider}, {result, code, status_code: response?.status ?? null,
         wire_bytes: response?.wire_bytes ?? null, captcha: response?.captcha?.length ? response.captcha : null, started});
-      this.#learn(url.hostname, step, route, result, response, retryAfter);
+      // An attempt cut short by this request's own deadline says nothing about the route.
+      const cutShort = !Number.isInteger(response?.status) && Date.now() >= deadline;
+      if (!cutShort) this.#learn(url.hostname, step, route, result, response, retryAfter);
       lastResult = result;
       if (Number.isInteger(response?.status) && response.body) seen = {step, response};
       if (result === 'success' || result === 'answered') success = {step, route, response, captchaSolved};

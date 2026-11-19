@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {databaseUrl, openStore, gatewayFor, testConfig, fakeBrowser, html, PROJECT, UNMETERED_TOKEN} from './helpers.mjs';
-import {recordSiteOutcome} from '../src/site-knowledge.mjs';
+import {recordSiteOutcome, siteRoutes} from '../src/site-knowledge.mjs';
+import {GatewayError} from '../src/policy.mjs';
 
 const skip = !databaseUrl;
 const balance = async store => (await (await import('../src/billing/ledger.mjs')).Ledger.prototype.balance.call(
@@ -157,6 +158,22 @@ test('cooling sites are refused without sending anything; admission checks credi
   assert.equal(free.body.credits.charged, 0);
   assert.equal((await call('POST', '/v1/fetch', {token: 'wrong', body: {url: 'https://shop.example.com/'}})).status, 401);
   assert.equal((await call('POST', '/v1/fetch', {body: {url: 'https://10.0.0.1/'}})).body.error.code, 'url_not_allowed');
+});
+
+test('an attempt cut off by the request deadline is not held against the route', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  // The site (or a slow captcha solve) is still busy when the request's own time is up.
+  const {call} = await gatewayFor(store, {site: async () => {
+    await new Promise(resolve => setTimeout(resolve, 5300));
+    return Object.assign(new GatewayError('source_timeout', 504), {dispatched: true});
+  }});
+  const result = await call('POST', '/v1/fetch', {body: {url: 'https://slow.example.com/', timeout_ms: 5000}});
+  assert.equal(result.body.status, 'failed');
+  assert.equal(result.body.error.code, 'timeout');
+  assert.deepEqual(result.body.attempts.map(a => [a.transport, a.result]), [['http', 'unreachable']]);
+  await new Promise(resolve => setTimeout(resolve, 200)); // learning runs after the response
+  assert.deepEqual(await siteRoutes(store.pool, 'slow.example.com'), [], 'the route is not marked failing');
 });
 
 test('a JavaScript shell moves to the browser; the rendered page is returned and charged as a browser step', {skip}, async t => {

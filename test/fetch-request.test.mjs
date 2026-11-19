@@ -15,7 +15,7 @@ test('a bare URL gets every default', () => {
   assert.deepEqual({method: request.method, render: request.render, formats: request.formats, include_body: request.include_body,
     max_attempts: request.max_attempts, fix_headers: request.fix_headers, timeout_ms: request.timeout_ms, async: request.async,
     route: request.route, country: request.country, max_credits: request.max_credits},
-  {method: 'GET', render: 'auto', formats: [], include_body: true, max_attempts: 5, fix_headers: true, timeout_ms: 60000,
+  {method: 'GET', render: 'auto', formats: [], include_body: true, max_attempts: 5, fix_headers: true, timeout_ms: 120000,
     async: false, route: null, country: null, max_credits: null});
   assert.ok(generatedKey && idempotencyKey.startsWith('auto_'));
   assert.match(hash, /^[a-f0-9]{64}$/);
@@ -48,6 +48,8 @@ test('every field is validated and refusals name the field', () => {
   refused({url: 'https://example.com/', max_attempts: 6}, 'max_attempts');
   refused({url: 'https://example.com/', max_credits: 0}, 'max_credits');
   refused({url: 'https://example.com/', timeout_ms: 1000}, 'timeout_ms');
+  refused({url: 'https://example.com/', timeout_ms: 180_001}, 'timeout_ms');
+  assert.equal(parseFetchRequest({url: 'https://example.com/', timeout_ms: 180_000}).request.timeout_ms, 180_000);
   refused({url: 'https://example.com/', webhook_url: 'http://hooks.example.com/'}, 'webhook_url');
   refused({url: 'https://example.com/', webhook_url: 'https://127.0.0.1/'}, 'webhook_url');
   refused({url: 'https://example.com/', tags: ['a b']}, 'tags');
