@@ -3,10 +3,11 @@
 const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
 const integer = (value, min, max) => Number.isSafeInteger(value) && value >= min && value <= max;
 const FIELDS = ['url', 'deadline', 'runtime', 'limits', 'settle_ms', 'wait_for', 'screenshot', 'captcha', 'headers', 'cookies',
-  'locale', 'timezone', 'geolocation', 'fingerprint', 'warmup', 'self_clear_ms'];
+  'locale', 'timezone', 'geolocation', 'fingerprint', 'warmup', 'self_clear_ms', 'content_wait_ms'];
 // A device identity Camoufox draws (fpgen) is about 360 KB of JSON; the whole
 // capture input may be 2 MiB (wire.mjs OUTPUT_LIMIT).
 export const FINGERPRINT_MAX_BYTES = 1_048_576;
+export const CONTENT_WAIT_MAX_MS = 30_000;
 const coordinate = (value, max) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= max;
 // Whether a device identity can be sent with a capture. The gateway keeps only
 // identities that pass, so a kept session never carries one a worker refuses.
@@ -35,9 +36,10 @@ export function checkCaptureInput(value) {
       && coordinate(value.geolocation.longitude, 180)))
     && fingerprintOk(value.fingerprint)
     && (value.warmup === undefined || typeof value.warmup === 'boolean')
-    && integer(value.self_clear_ms ?? 0, 0, 60_000);
+    && integer(value.self_clear_ms ?? 0, 0, 60_000)
+    && integer(value.content_wait_ms ?? 0, 0, CONTENT_WAIT_MAX_MS);
   if (!ok) throw new Error('invalid capture input');
   return {...value, settle_ms: value.settle_ms ?? 0, wait_for: value.wait_for ?? null, headers: value.headers ?? {},
     cookies: value.cookies ?? [], geolocation: value.geolocation ?? null, fingerprint: value.fingerprint ?? null,
-    warmup: value.warmup === true, self_clear_ms: value.self_clear_ms ?? 0};
+    warmup: value.warmup === true, self_clear_ms: value.self_clear_ms ?? 0, content_wait_ms: value.content_wait_ms ?? 0};
 }

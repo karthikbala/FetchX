@@ -1943,6 +1943,11 @@
       "type": "string",
       "enum": ["cleared", "stayed"],
       "description": "A bot check on the page itself: whether it cleared by itself before any captcha was solved."
+     },
+     "content": {
+      "type": "string",
+      "enum": ["settled", "still_loading"],
+      "description": "Browser steps on pages that answered: settled when the page had stopped filling itself in (results, listings loaded by script) before it was read; still_loading when FetchX's wait ran out first, so the page may be missing content that loads late. Pass wait_for with a selector for what you need to wait longer."
      }
     }
    },

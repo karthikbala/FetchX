@@ -125,6 +125,22 @@ export function isJavaScriptShell({headers = {}, body = null} = {}) {
   return prose >= 500 && prose > 3 * text;
 }
 
+// A page a browser rendered that shows next to nothing: its scripts never drew
+// it (an app that did not start, often a quiet block served to that exit IP).
+// Only the body's text counts, so a title alone is not content. Pages with
+// custom elements are left alone: their text may live in shadow DOM, which a
+// saved page does not show.
+const EMPTY_RENDER_TEXT = 20;
+export function isEmptyRender({headers = {}, body = null} = {}) {
+  if (!isHtml(headers)) return false;
+  const html = Buffer.isBuffer(body) ? body.toString('utf8') : typeof body === 'string' ? body : '';
+  if (!/<script\b/i.test(html)) return false;
+  const start = html.search(/<body\b/i);
+  const page = start >= 0 ? html.slice(start) : html;
+  if (/<[a-z][a-z0-9]*-[a-z0-9-]*[\s>]/i.test(page.replace(/<(script|style|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' '))) return false;
+  return visibleText(page).length < EMPTY_RENDER_TEXT;
+}
+
 // Classifies a site response. `answered` is a real 404/410: the site's answer,
 // charged like a success. `needs_browser` is a 200 whose content is drawn by
 // JavaScript; it is a success over HTTP if no browser step is allowed.
@@ -138,6 +154,8 @@ export function classifyResponse({status, headers, body}, {transport = 'http'} =
   if (status >= 500) return {outcome: 'site_error'};
   if (status >= 400) return {outcome: 'site_error'};
   if (transport === 'http' && status >= 200 && status < 300 && isJavaScriptShell({headers, body})) return {outcome: 'needs_browser'};
+  // Not a success, and never billed: the next step tries a fresh IP.
+  if (transport === 'browser' && status >= 200 && status < 300 && isEmptyRender({headers, body})) return {outcome: 'blocked', challenge: null};
   return {outcome: 'success'};
 }
 

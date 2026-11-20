@@ -141,12 +141,18 @@ test('cooling sites are refused without sending anything; admission checks credi
       for (let i = 0; i < walls; i++) await recordSiteOutcome(store.pool, {host: 'https://cold.example.com/', execution, route, outcome: 'blocked'});
     }
   }
-  const {call, calls} = await gatewayFor(store);
-  const cold = await call('POST', '/v1/fetch', {body: {url: 'https://cold.example.com/'}});
+  // Without residential IPs to draw, every route is resting and nothing is sent.
+  const {call: callNoResidential, calls} = await gatewayFor(store, {config: testConfig({residential: {providers: {}}})});
+  const cold = await callNoResidential('POST', '/v1/fetch', {body: {url: 'https://cold.example.com/'}});
   assert.equal(cold.body.status, 'failed');
   assert.equal(cold.body.error.code, 'cooling_down');
   assert.ok(cold.body.error.retry_after_seconds > 600 && cold.body.error.retry_after_seconds <= 900, 'a route cools for 15 minutes');
   assert.equal(calls.length, 0);
+  // Residential browsers never rest: each step draws a fresh IP, so walls on
+  // earlier IPs do not keep the next request from trying.
+  const {call} = await gatewayFor(store);
+  const fresh = await call('POST', '/v1/fetch', {body: {url: 'https://cold.example.com/'}});
+  assert.deepEqual(fresh.body.attempts.map(a => [a.transport, a.class]), Array(5).fill(['browser', 'residential']));
   const low = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/', render: 'always', max_credits: 5}});
   assert.equal(low.status, 402);
   assert.equal(low.body.error.code, 'max_credits_too_low');
@@ -240,7 +246,8 @@ test('a JavaScript shell moves to the browser; the rendered page is returned and
   const browser = fakeBrowser(async (input, hooks) => {
     await hooks.artifact({kind: 'dom', content_type: 'text/html', body_base64: Buffer.from(html('rendered price $5')).toString('base64')});
     await hooks.artifact({kind: 'screenshot', content_type: 'image/jpeg', body_base64: Buffer.from('jpeg').toString('base64')});
-    return {status: 200, final_url: input.url, headers: {'content-type': 'text/html'}, cookies: [{name: 'sid', value: 'x', domain: 'app.example.com', path: '/'}], captcha: []};
+    return {status: 200, final_url: input.url, headers: {'content-type': 'text/html'}, cookies: [{name: 'sid', value: 'x', domain: 'app.example.com', path: '/'}], captcha: [],
+      content: {settled: !input.url.endsWith('/other'), ms: 1500}};
   });
   const {call} = await gatewayFor(store, {site: () => ({body: shell}), browser});
   const result = await call('POST', '/v1/fetch', {body: {url: 'https://app.example.com/dash', formats: ['text'],
@@ -254,6 +261,9 @@ test('a JavaScript shell moves to the browser; the rendered page is returned and
   // A screenshot needs a browser, so it starts there.
   const shot = await call('POST', '/v1/fetch', {body: {url: 'https://app.example.com/other', formats: ['screenshot']}});
   assert.deepEqual(shot.body.attempts.map(a => a.transport), ['browser']);
+  // Each browser step says whether the page had stopped filling itself in when it was read.
+  assert.equal(result.body.attempts[1].content, 'settled');
+  assert.equal(shot.body.attempts[0].content, 'still_loading');
   assert.equal(shot.body.data.screenshot, Buffer.from('jpeg').toString('base64'));
   assert.equal((await call('GET', `/v1/fetch/${shot.body.id}/screenshot`)).raw.toString(), 'jpeg');
   assert.deepEqual(result.body.data.cookies, [{name: 'sid', value: 'x', domain: 'app.example.com', path: '/'}]);
@@ -264,6 +274,7 @@ test('a JavaScript shell moves to the browser; the rendered page is returned and
   assert.deepEqual(run.headers, {authorization: 'Bearer site'}, 'the browser keeps its own user agent and accept headers');
   assert.equal(run.locale, 'en-US');
   assert.equal(run.captcha, false, 'no solver configured');
+  assert.equal(run.content_wait_ms, 20_000, 'the browser waits for a page that fills itself in');
 });
 
 test('browser captchas are solved through the gateway and add their price', {skip}, async t => {
@@ -431,4 +442,84 @@ test('a device identity too large to send is never kept, so the next step draws 
     assert.equal(done.body.status, 'succeeded', JSON.stringify(done.body).slice(0, 400));
   }
   assert.equal(browser.runs[1].fingerprint, undefined, 'the session is reused without the identity a worker would refuse');
+});
+
+test('walls on residential browsers draw fresh IPs, alternating providers; the next request starts where a session got through', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  // The site walls the first three browser visits and lets the rest through.
+  let visits = 0;
+  const wall = '<html><head><title>Bot or Not?</title></head><body></body></html>';
+  const browser = fakeBrowser(async (input, hooks) => {
+    if (++visits <= 3) {
+      await hooks.artifact({kind: 'dom', content_type: 'text/html', body_base64: Buffer.from(wall).toString('base64')});
+      return {status: 429, final_url: input.url, headers: {'content-type': 'text/html'}, cookies: [], captcha: []};
+    }
+    await hooks.artifact({kind: 'dom', content_type: 'text/html', body_base64: Buffer.from(html('results')).toString('base64')});
+    return {status: 200, final_url: input.url, headers: {'content-type': 'text/html'}, cookies: [], captcha: [], fingerprint: {navigator: {}}};
+  });
+  const site = ({url}) => (url === 'https://ipinfo.io/json'
+    ? {headers: {'content-type': 'application/json'}, body: JSON.stringify({ip: '203.0.113.9', country: 'US', timezone: 'America/Chicago'})}
+    : {status: 429, body: wall});
+  const config = testConfig({browser: {sessions: {sessionGapMs: 0, hostGapMs: 0}}});
+  const {call} = await gatewayFor(store, {config, site, browser});
+  const providers = async id => (await store.pool.query(
+    "SELECT provider FROM fetch_attempts WHERE request = $1 AND transport = 'browser' ORDER BY n", [id])).rows.map(r => r.provider);
+
+  const first = await call('POST', '/v1/fetch', {body: {url: 'https://guarded.example.com/search?q=1'}});
+  assert.equal(first.body.status, 'succeeded', JSON.stringify({attempts: first.body.attempts, skipped: first.body.skipped, error: first.body.error}));
+  assert.deepEqual(first.body.attempts.map(a => [a.transport, a.class, a.result]), [['http', 'direct', 'blocked'],
+    ['browser', 'residential', 'blocked'], ['browser', 'residential', 'blocked'], ['browser', 'residential', 'blocked'],
+    ['browser', 'residential', 'success']], 'each wall is followed by a fresh IP, not a rest');
+  assert.deepEqual(await providers(first.body.id), ['evomi', 'dataimpulse', 'evomi', 'dataimpulse']);
+
+  // The session that got through is where the next request starts, though walls just came from the other provider.
+  const second = await call('POST', '/v1/fetch', {body: {url: 'https://guarded.example.com/search?q=2'}});
+  assert.deepEqual(second.body.attempts.map(a => [a.transport, a.result]), [['browser', 'success']]);
+  assert.deepEqual(await providers(second.body.id), ['dataimpulse']);
+  assert.deepEqual(browser.runs.at(-1).fingerprint, {navigator: {}}, 'on the kept session, with its identity');
+});
+
+test('a request every fresh residential IP was walled on can be retried soon', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const wall = '<html><head><title>Bot or Not?</title></head><body></body></html>';
+  const browser = fakeBrowser(async (input, hooks) => {
+    await hooks.artifact({kind: 'dom', content_type: 'text/html', body_base64: Buffer.from(wall).toString('base64')});
+    return {status: 403, final_url: input.url, headers: {'content-type': 'text/html'}, cookies: [], captcha: []};
+  });
+  const site = ({url}) => (url === 'https://ipinfo.io/json'
+    ? {headers: {'content-type': 'application/json'}, body: JSON.stringify({ip: '203.0.113.9', country: 'US', timezone: 'America/Chicago'})}
+    : {status: 403, body: wall});
+  // The datacenter browser has rested for hours; that is no reason to wait.
+  await recordSiteOutcome(store.pool, {host: 'https://walled.example.com/', execution: 'browser',
+    route: {class: 'datacenter', provider: 'oxylabs', country: 'US'}, outcome: 'blocked'});
+  const config = testConfig({browser: {sessions: {sessionGapMs: 0, hostGapMs: 0}}});
+  const {call} = await gatewayFor(store, {config, site, browser});
+  const done = await call('POST', '/v1/fetch', {body: {url: 'https://walled.example.com/'}});
+  assert.equal(done.body.error.code, 'blocked');
+  assert.equal(done.body.error.retry_after_seconds, 30);
+});
+
+test('an app that never rendered in the browser is not billed; the next step draws a fresh IP', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const shell = '<html><head><title>Hotel Search Results</title></head><body><div id="app"></div><script src="/app.js"></script></body></html>';
+  let visits = 0;
+  const browser = fakeBrowser(async (input, hooks) => {
+    const page = ++visits === 1 ? shell : html('Hotel Per La, from $189 a night');
+    await hooks.artifact({kind: 'dom', content_type: 'text/html', body_base64: Buffer.from(page).toString('base64')});
+    return {status: 200, final_url: input.url, headers: {'content-type': 'text/html'}, cookies: [], captcha: []};
+  });
+  const site = ({url}) => (url === 'https://ipinfo.io/json'
+    ? {headers: {'content-type': 'application/json'}, body: JSON.stringify({ip: '203.0.113.9', country: 'US', timezone: 'America/Chicago'})}
+    : {body: shell});
+  const config = testConfig({browser: {sessions: {sessionGapMs: 0, hostGapMs: 0}}});
+  const {call} = await gatewayFor(store, {config, site, browser});
+  const done = await call('POST', '/v1/fetch', {body: {url: 'https://shell.example.com/search', render: 'always'}});
+  assert.equal(done.body.status, 'succeeded', JSON.stringify(done.body.attempts));
+  assert.deepEqual(done.body.attempts.map(a => [a.transport, a.class, a.result]),
+    [['browser', 'residential', 'blocked'], ['browser', 'residential', 'success']]);
+  assert.match(done.body.data.body, /Hotel Per La/);
+  assert.equal(done.body.credits.charged, 25, 'only the step that returned the page is billed');
 });

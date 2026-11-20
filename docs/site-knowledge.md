@@ -44,10 +44,10 @@ cut off by the request's own deadline, and 404/5xx responses teach nothing.
 - **cooling**: `retry_not_before` is in the future. Two consecutive blocks cool a
   route for 15 minutes, and two consecutive unreachable results for 10 minutes;
   each further failure doubles that, up to 6 hours. A residential browser route
-  cools only after six in a row: each of its attempts is a fresh exit IP, and a
-  wall there is mostly that IP's reputation, which the next draw does not share
-  (Expedia passed 5 of 12 fresh draws on 2026-11-19), so two walls in a row are
-  common and say little about the route.
+  is shown as cooling only after six in a row, and auto mode never skips it for
+  that: each of its attempts is a fresh exit IP, and a wall there is mostly that
+  IP's reputation, which the next draw does not share (Expedia passed 5 of 12
+  fresh draws on 2026-11-19).
 - **stale**: worked before, but more than 7 days ago.
 - **failing**: recent failures below the threshold, or never succeeded.
 
@@ -65,11 +65,13 @@ The admin portal's Site knowledge tab shows the same.
 
 ## How auto mode uses it
 
-`planLadder` in `src/fetch/ladder.mjs` builds the steps a request may use, in this order: HTTP direct, HTTP datacenter, HTTP residential (plus two fresh-IP rotations used only after a 429), browser residential, browser residential on a fresh IP, browser datacenter. Then:
+`planLadder` in `src/fetch/ladder.mjs` builds the steps a request may use, in this order: HTTP direct, HTTP datacenter, HTTP residential (plus two fresh-IP rotations used only after a 429), browser residential, four more browser residential steps each on a fresh IP, browser datacenter. The request's attempt limit (at most 5) decides how far down it goes. Then:
 
 - A **proven** step moves to the front, keeping the cheapest proven first.
-- A **cooling** step is skipped and listed in `skipped` with `cooling`, with two exceptions. A residential step cooling only because of a rate limit stays, since a fresh IP gets a fresh limit. A step that has worked for this host before stays, last in line: knowledge is per host, so blocks on one kind of page (a search, say) must not lock out pages that still work on that route.
+- A **cooling** step is skipped and listed in `skipped` with `cooling`, with three exceptions. Residential browser steps are never skipped: every one draws a fresh IP, so walls on earlier IPs are no reason to rest. A residential step cooling only because of a rate limit stays, since a fresh IP gets a fresh limit. A step that has worked for this host before stays, last in line: knowledge is per host, so blocks on one kind of page (a search, say) must not lock out pages that still work on that route.
 - After a **bot challenge** on an HTTP step (a challenge page, whatever its status), the next step is the first browser step: no HTTP client can pass it, and browsers solve challenges.
+- After a **wall or rate limit on a residential browser**, the next step is a residential browser on a fresh IP, from the other provider. A request's first residential browser step starts on the provider holding a session that got through to the host before ([kept sessions](browser.md)). A request refused on residential browsers reports `retry_after_seconds: 30`: a retry draws fresh IPs, so there is no rest to wait out.
+- A browser page that answered 2xx but **shows nothing** (scripts and under 20 characters of text in its body, so its app never started, often a quiet block) counts as `blocked`: it is not billed, and the next step draws a fresh IP.
 - The **country** is the request's `country`, else the country of the host's proven routes, else US.
 - Steps excluded by a provider rule, over `max_credits`, or not allowed by `render` are skipped and listed.
 

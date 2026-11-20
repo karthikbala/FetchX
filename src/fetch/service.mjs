@@ -8,7 +8,7 @@ import {observeSiteOutcome} from '../site-knowledge.mjs';
 import {prices as priceTable, priceOf, stepFor, worstCaseOf} from '../billing/ledger.mjs';
 import {parseFetchRequest, needsBrowser} from './request.mjs';
 import {blockedHosts, checkAddresses, checkUrl} from './destination.mjs';
-import {createResolver, pickResidentialProvider, proxyFor} from './routes.mjs';
+import {createResolver, pickResidentialProvider, proxyFor, RESIDENTIAL_PROVIDERS} from './routes.mjs';
 import {StickySessions} from './sessions.mjs';
 import {ExitGeo} from './exit-geo.mjs';
 import {createDoh, dohSettings} from './doh.mjs';
@@ -28,12 +28,17 @@ export const DEFAULT_LIMITS = Object.freeze({
   settleMs: 750,
   // A wall on a browser page may take this long to clear by itself before a captcha is solved.
   selfClearMs: 45_000,
+  // A browser page that fills itself in after loading, or as it is scrolled
+  // (search results, listings), is read once it stops changing, waiting and
+  // scrolling at most this long.
+  contentWaitMs: 20_000,
   syncWaitMs: 60_000,
   contentDays: 7,
   metadataDays: 90,
   inlineBodyBytes: 10_000_000,
 });
 const OTHER_PROVIDER = {evomi: 'dataimpulse', dataimpulse: 'evomi'};
+const FRESH_RETRY_SECONDS = 30;
 const TEXTUAL = /^(?:text\/|application\/(?:json|[a-z0-9.+-]+\+json|xml|[a-z0-9.+-]+\+xml|javascript|x-javascript|x-www-form-urlencoded))/i;
 const RESPONSE_HEADERS = new Set(['content-type', 'content-length', 'content-language', 'content-disposition', 'content-encoding',
   'cache-control', 'date', 'etag', 'expires', 'last-modified', 'location', 'retry-after', 'vary', 'server', 'x-robots-tag']);
@@ -284,7 +289,7 @@ export class FetchService {
       max_body_bytes: this.limits.maxBodyBytes, max_wire_bytes: this.limits.maxWireBytes,
     }, waitFor: request.wait_for, screenshot: request.formats.includes('screenshot'),
     captcha: step.transport === 'browser' && !!this.solver?.settings, settleMs: this.limits.settleMs,
-    selfClearMs: this.limits.selfClearMs});
+    selfClearMs: this.limits.selfClearMs, contentWaitMs: this.limits.contentWaitMs});
 
     if (!plan.steps.length) failure = plan.retryAfterSeconds ? 'cooling_down' : 'route_unavailable';
     while (!failure && !success && dispatchedAttempts < maxAttempts) {
@@ -309,6 +314,7 @@ export class FetchService {
       let resolved;
       try {
         if (sticky) {
+          preferProvider ??= this.sessions.keptProvider({host: url.hostname, country: step.country}, RESIDENTIAL_PROVIDERS);
           preferProvider = pickResidentialProvider(this.config, step.country, url.hostname, {prefer: preferProvider}) ?? preferProvider;
           lease = preferProvider ? this.sessions.lease({host: url.hostname, provider: preferProvider, country: step.country}) : null;
         }
@@ -381,7 +387,8 @@ export class FetchService {
       const captchaSolved = (response?.captcha ?? []).some(solve => solve.outcome === 'passed');
       tried.push({...step, result, code, status_code: response?.status ?? null, ms: Date.now() - started.getTime(),
         captcha: response?.captcha?.length ? response.captcha.map(s => `${s.type}:${s.outcome}`) : undefined,
-        warmup: response?.warmup ?? undefined, wall: response?.wall ? (response.wall.cleared ? 'cleared' : 'stayed') : undefined});
+        warmup: response?.warmup ?? undefined, wall: response?.wall ? (response.wall.cleared ? 'cleared' : 'stayed') : undefined,
+        content: response?.content ? (response.content.settled ? 'settled' : 'still_loading') : undefined});
       await this.#recordAttempt(row.id, n, {...step, provider: route.provider}, {result, code, status_code: response?.status ?? null,
         wire_bytes: response?.wire_bytes ?? null, captcha: response?.captcha?.length ? response.captcha : null, started});
       // An attempt cut short by this request's own deadline says nothing about the route.
@@ -401,7 +408,13 @@ export class FetchService {
           : Date.now() >= deadline ? 'timeout'
             : strongest === 'failed' ? 'unreachable' : strongest ?? 'blocked';
     }
-    await this.#finish(row, request, {plan, tried, success, seen, failure, retryAfter: retryAfter ?? plan.retryAfterSeconds,
+    // Walls on residential browsers are per exit IP, and a retry draws fresh ones,
+    // so a request they refused can be sent again soon; other routes' rest
+    // periods say nothing about it.
+    const freshRetry = failure === 'blocked' && tried.some(t => t.transport === 'browser' && t.class === 'residential'
+      && !['not_admitted', 'skipped'].includes(t.result));
+    await this.#finish(row, request, {plan, tried, success, seen, failure,
+      retryAfter: freshRetry ? FRESH_RETRY_SECONDS : retryAfter ?? plan.retryAfterSeconds,
       fixes: request.fix_headers ? fixed.fixed : [], table, reservation});
   }
 
@@ -431,7 +444,7 @@ export class FetchService {
       transport: t.transport, class: t.class, country: t.country ?? null, ...(t.rotation ? {rotation: t.rotation} : {}),
       result: t.result, ...(t.code && ['not_admitted', 'failed'].includes(t.result) ? {code: t.code} : {}),
       status_code: t.status_code ?? null, ms: t.ms ?? null, ...(t.captcha ? {captcha: t.captcha} : {}),
-      ...(t.warmup ? {warmup: t.warmup} : {}), ...(t.wall ? {wall: t.wall} : {}),
+      ...(t.warmup ? {warmup: t.warmup} : {}), ...(t.wall ? {wall: t.wall} : {}), ...(t.content ? {content: t.content} : {}),
     }));
     const skipped = [...plan.skipped, ...tried.filter(t => t.result === 'skipped')].map(s => ({
       transport: s.transport, class: s.class, country: s.country ?? null, reason: s.reason ?? s.code}));

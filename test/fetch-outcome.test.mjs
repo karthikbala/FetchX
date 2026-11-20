@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {classifyResponse, detectChallenge, isJavaScriptShell, retryAfterSeconds} from '../src/fetch/outcome.mjs';
+import {classifyResponse, detectChallenge, isEmptyRender, isJavaScriptShell, retryAfterSeconds} from '../src/fetch/outcome.mjs';
 import {deriveOutputs} from '../src/fetch/outputs.mjs';
 import {fixHeaders, checkHeaders, BROWSER_USER_AGENT} from '../src/fetch/http-attempt.mjs';
 
@@ -39,7 +39,8 @@ test('a JavaScript shell over HTTP asks for a browser', () => {
   const shell = '<html><head><script src="/app.js"></script></head><body><div id="root"></div></body></html>';
   assert.equal(isJavaScriptShell({headers: html, body: shell}), true);
   assert.equal(classifyResponse({status: 200, headers: html, body: Buffer.from(shell)}).outcome, 'needs_browser');
-  assert.equal(classifyResponse({status: 200, headers: html, body: Buffer.from(shell)}, {transport: 'browser'}).outcome, 'success');
+  // The same shell from a browser means its app never started: not a success.
+  assert.equal(classifyResponse({status: 200, headers: html, body: Buffer.from(shell)}, {transport: 'browser'}).outcome, 'blocked');
   assert.equal(isJavaScriptShell({headers: html, body: '<html><body><div id="root"><h1>Real content</h1>' + 'words '.repeat(80) + '</div><script></script></body></html>'}), false);
 });
 
@@ -101,4 +102,21 @@ test('client mistakes are fixed; caller headers otherwise pass through', () => {
   assert.equal(headers.authorization, 'Bearer site-token');
   assert.deepEqual(fixed, ['user-agent', 'accept', 'accept-language']);
   assert.deepEqual(fixHeaders({'user-agent': 'MyApp/1.0 (contact@example.com)', accept: '*/*', 'accept-language': 'fr'}).fixed, []);
+});
+
+test('a rendered page that shows nothing is a failed browser step, not a success', () => {
+  const headers = {'content-type': 'text/html; charset=utf-8'};
+  // An app that never started: a big head, a title, and an empty body.
+  const shell = `<html><head><title>Los Angeles Hotel Search Results</title><style>${'.a{color:red}'.repeat(5000)}</style>
+    <script>window.__STATE__ = ${JSON.stringify({text: 'lots of data '.repeat(500)})}</script></head>
+    <body><div id="app"></div><script src="/bundle.js"></script></body></html>`;
+  assert.equal(isEmptyRender({headers, body: Buffer.from(shell)}), true);
+  assert.deepEqual(classifyResponse({status: 200, headers, body: Buffer.from(shell)}, {transport: 'browser'}), {outcome: 'blocked', challenge: null});
+  assert.equal(classifyResponse({status: 200, headers, body: Buffer.from(shell)}, {transport: 'http'}).outcome, 'needs_browser');
+  // Real content, a page with no scripts, and text in custom elements' shadow DOM are left alone.
+  const rendered = shell.replace('<div id="app"></div>', '<div id="app"><h1>Hotels</h1><p>Hotel Per La, from $189 a night</p></div>');
+  assert.equal(isEmptyRender({headers, body: Buffer.from(rendered)}), false);
+  assert.equal(isEmptyRender({headers, body: '<html><body><img src="/a.png"></body></html>'}), false);
+  assert.equal(isEmptyRender({headers, body: '<html><body><hotel-list></hotel-list><script src="/wc.js"></script></body></html>'}), false);
+  assert.equal(isEmptyRender({headers: {'content-type': 'application/json'}, body: '{}'}), false);
 });
