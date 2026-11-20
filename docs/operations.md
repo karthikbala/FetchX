@@ -18,6 +18,10 @@ Deploy only from a tag on `main`, after the full test suite passes.
 4. **Recreate the gateway** with every Compose file its container was created with (read the `com.docker.compose.project.config_files` label; the production gateway uses the base file plus the browser-pool overlay). Wait for `healthy` with no restarts; roll back to the previous image if it is not healthy within two minutes.
 5. **Website.** Build and deploy `website/` to Pages after the gateway, since the console needs the new API.
 
+## Checking the browser path against a live site
+
+`scripts/browser-live-check.mjs` runs the real browser path (pinned Camoufox, capture, warm-up, self-clear wait, exit-IP placement, kept identity) through one residential session against live URLs, without the gateway, and prints one JSON line per page. Use it to qualify a release's browser and to see how a protected site answers before and after a change; the header of the script has the `docker run` line. It spends residential bandwidth but no customer credits, and does not touch site knowledge or cooldowns. `--fonts` adds one line per draw listing the fonts a page can detect: only the `windows` list may be non-empty. Each page has a hard limit of 150 s; still run it under `timeout` with a named container, and remove the container afterwards, because a timeout stops only the docker client.
+
 ## Rollback
 
 A release that changed no tables rolls back to the previous image. One that changed tables needs the pre-release backup restored into the database first, then the previous image; requests made in between are lost, and purchases made in between are re-applied from Stripe (`node src/stripe-reconcile-cli.mjs`).

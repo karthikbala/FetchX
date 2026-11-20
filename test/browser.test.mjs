@@ -310,3 +310,103 @@ test('browser slots report queue metrics for the autoscaler', async () => {
   second.release();
   assert.equal(slots.metrics().active, 0);
 });
+
+test('a warm-up visits the home page first and arrives at the page from it', {skip: !executable}, async t => {
+  const visits = [];
+  const server = http.createServer((req, res) => {
+    visits.push({path: new URL(req.url, 'http://x').pathname, referer: req.headers.referer ?? null});
+    res.writeHead(200, {'content-type': 'text/html'}).end(req.url === '/' ? '<title>Home</title><main>home</main>' : '<main>deep page</main>');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  await withBrowser(async browser => {
+    const base = `http://127.0.0.1:${port}`;
+    const artifacts = {};
+    const result = await capturePage(browser, {...baseInput(`${base}/hotel/42`), warmup: true, self_clear_ms: 10_000},
+      {admit: async () => {}, artifact: async data => { artifacts[data.kind] = Buffer.from(data.body_base64, 'base64'); }});
+    assert.equal(result.warmup, 'passed');
+    assert.equal(result.status, 200);
+    assert.equal(result.final_url, `${base}/hotel/42`);
+    assert.match(artifacts.dom.toString(), /deep page/);
+    const pages = visits.filter(v => !v.path.startsWith('/favicon'));
+    assert.deepEqual(pages.map(v => v.path), ['/', '/hotel/42']);
+    assert.equal(pages[1].referer, `${base}/`, 'the page is reached from the home page');
+    // No warm-up for the home page itself.
+    visits.length = 0;
+    const home = await capturePage(browser, {...baseInput(`${base}/`), warmup: true}, {admit: async () => {}, artifact: async () => {}});
+    assert.equal(home.warmup, null);
+    assert.deepEqual(visits.filter(v => !v.path.startsWith('/favicon')).map(v => v.path), ['/']);
+  });
+});
+
+test('a wall that clears itself is waited out; one on the warm-up that stays ends the capture there', {skip: !executable}, async t => {
+  let deepVisits = 0;
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://x');
+    const passed = (req.headers.cookie ?? '').includes('checked=1');
+    if (url.pathname === '/') return res.writeHead(200, {'content-type': 'text/html'}).end('<title>Home</title>');
+    if (passed) return res.writeHead(200, {'content-type': 'text/html'}).end('<title>Results</title><main>results</main>');
+    // A device check: a challenge page whose script passes after two seconds and reloads.
+    res.writeHead(429, {'content-type': 'text/html'}).end(`<title>Just a moment...</title><script>
+      setTimeout(() => { document.cookie = 'checked=1; path=/'; location.reload(); }, 2000)</script>`);
+  });
+  // A site whose home page is a wall that never clears.
+  const walled = http.createServer((req, res) => {
+    if (new URL(req.url, 'http://x').pathname === '/') return res.writeHead(403, {'content-type': 'text/html'}).end('<title>Access Denied</title>');
+    deepVisits++;
+    res.writeHead(200).end('never');
+  });
+  const port = await listen(server);
+  const walledPort = await listen(walled);
+  t.after(() => Promise.all([close(server), close(walled)]));
+  await withBrowser(async browser => {
+    const base = `http://127.0.0.1:${port}`;
+    const artifacts = {};
+    const hooks = {admit: async () => {}, artifact: async data => { artifacts[data.kind] = Buffer.from(data.body_base64, 'base64'); }};
+    const cleared = await capturePage(browser, {...baseInput(`${base}/search`), self_clear_ms: 15_000}, hooks);
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.wall.cleared, true);
+    assert.ok(cleared.wall.after_ms >= 1000 && cleared.wall.after_ms < 15_000, String(cleared.wall.after_ms));
+    assert.match(artifacts.dom.toString(), /results/);
+    // Without a self-clear budget, the wall is what comes back.
+    const impatient = await capturePage(browser, baseInput(`${base}/search`), hooks);
+    assert.equal(impatient.status, 429);
+    assert.equal(impatient.wall, null);
+    // A wall on the home page that does not clear: the deep page is never requested.
+    const stuck = await capturePage(browser, {...baseInput(`http://127.0.0.1:${walledPort}/deep/page`), warmup: true,
+      deadline: Date.now() + 40_000}, hooks);
+    assert.equal(stuck.warmup, 'challenged');
+    assert.equal(stuck.status, 403);
+    assert.equal(deepVisits, 0);
+  });
+});
+
+test('a DataDome blocked-visitor frame is not waited on', {skip: !executable}, async t => {
+  const server = site({'/page': {status: 403, body: `<title>example.com</title>
+    <iframe src="https://geo.captcha-delivery.com/captcha/?initialCid=1&t=bv"></iframe>`}});
+  const port = await listen(server);
+  t.after(() => close(server));
+  await withBrowser(async browser => {
+    const started = Date.now();
+    const result = await capturePage(browser, {...baseInput(`http://127.0.0.1:${port}/page`), self_clear_ms: 30_000},
+      {admit: async meta => { if (!meta.url.startsWith('http://127.0.0.1')) throw Object.assign(new Error('x'), {code: 'url_not_allowed'}); },
+        artifact: async () => {}});
+    assert.deepEqual({cleared: result.wall.cleared, hard: result.wall.hard}, {cleared: false, hard: true});
+    assert.ok(Date.now() - started < 10_000);
+  });
+});
+
+test('a captcha frame, which waits for a person, gets only a short wait', {skip: !executable}, async t => {
+  const server = site({'/page': {status: 403, body: `<title>Bot or Not?</title>
+    <iframe src="https://geo.captcha-delivery.com/captcha/?initialCid=1&t=fe"></iframe>`}});
+  const port = await listen(server);
+  t.after(() => close(server));
+  await withBrowser(async browser => {
+    const started = Date.now();
+    const result = await capturePage(browser, {...baseInput(`http://127.0.0.1:${port}/page`), self_clear_ms: 40_000, deadline: Date.now() + 60_000},
+      {admit: async meta => { if (!meta.url.startsWith('http://127.0.0.1')) throw Object.assign(new Error('x'), {code: 'url_not_allowed'}); },
+        artifact: async () => {}});
+    assert.deepEqual({cleared: result.wall.cleared, interactive: result.wall.interactive}, {cleared: false, interactive: true});
+    assert.ok(Date.now() - started < 20_000, String(Date.now() - started));
+  });
+});

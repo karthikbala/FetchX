@@ -55,14 +55,18 @@ try {
   for (const method of ['log', 'warn', 'info', 'debug', 'error']) console[method] = () => {};
   // The pinned model is installed already; never download at request time.
   globalThis.fetch = async () => { throw Object.assign(new Error('offline'), {code: 'browser_download_disabled'}); };
-  ({server, browser} = await launchCamoufox(input.runtime, {relay: input.relay, cacheDir: input.cache_dir,
-    locale: input.locale, timezone: input.timezone}));
+  let fingerprint;
+  ({server, browser, fingerprint} = await launchCamoufox(input.runtime, {relay: input.relay, cacheDir: input.cache_dir,
+    locale: input.locale, timezone: input.timezone, geolocation: input.geolocation ?? null, fingerprint: input.fingerprint ?? null}));
   await rpc('browser_started', {pid: server.process().pid});
   output = await capturePage(browser, input, {
     admit: data => rpc('admit', data),
     artifact: data => rpc('artifact', data),
     captcha: data => rpc('captcha', data),
   });
+  // A freshly drawn identity goes back to the gateway, which keeps it with the
+  // session if the page passed.
+  if (fingerprint && !input.fingerprint) output.fingerprint = fingerprint;
 } catch (error) {
   output = {error: ['browser_build_mismatch', 'browser_model_unavailable', 'browser_runtime_unavailable'].includes(error.code)
     ? error.code : 'browser_interrupted', status: null, requests: 0, blocked: 0, captcha: [], cookies: []};

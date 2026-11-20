@@ -21,6 +21,10 @@ const MODEL_FILES = Object.freeze({
   'values.dat': '9ce7d16630e91654e73988f7d37e8c99987c09b9c779a7bb9dc7ad6355dcc2f0',
 });
 
+// The device persona. Camoufox ships this OS's fonts in its bundle and points
+// fontconfig at them only, so the fonts a page can measure match the persona.
+export const PERSONA_OS = 'windows';
+
 export async function fileSha256(path) {
   const hash = createHash('sha256');
   for await (const part of createReadStream(path)) hash.update(part);
@@ -61,8 +65,12 @@ export async function verifyCamoufox(runtime) {
 }
 
 // Launch options for one capture. The relay is the only proxy; DNS, prefetch,
-// HTTP/3, WebRTC and telemetry are off so nothing leaves around it.
-export function camoufoxOptions(runtime, {relay, cacheDir, locale = 'en-US', timezone = 'America/New_York'}) {
+// HTTP/3, WebRTC and telemetry are off so nothing leaves around it. Timezone,
+// position and locale are the exit IP's (see fetch/exit-geo.mjs), so the
+// browser is where its IP says it is. `fingerprint` reuses a device identity
+// (a kept session); without one Camoufox draws a fresh one.
+export function camoufoxOptions(runtime, {relay, cacheDir, locale = 'en-US', timezone = 'America/New_York', geolocation = null,
+  fingerprint = null}) {
   let proxy;
   try { proxy = new URL(relay); } catch { fail('browser_proxy_required', 503); }
   if (proxy.protocol !== 'http:' || proxy.hostname !== '127.0.0.1' || !proxy.port || proxy.username || proxy.pathname !== '/') {
@@ -75,9 +83,11 @@ export function camoufoxOptions(runtime, {relay, cacheDir, locale = 'en-US', tim
     block_webrtc: true,
     canvas_noise: true,
     humanize: true,
-    os: 'windows',
+    os: PERSONA_OS,
     locale,
-    config: {timezone},
+    config: {timezone, ...(geolocation ? {'geolocation:latitude': geolocation.latitude,
+      'geolocation:longitude': geolocation.longitude, 'geolocation:accuracy': 100} : {})},
+    ...(fingerprint ? {fingerprint, i_know_what_im_doing: true} : {}),
     proxy: {server: relay, bypass: ''},
     timeout: 20_000,
     exclude_addons: ['UBO'],
@@ -113,16 +123,30 @@ export function camoufoxOptions(runtime, {relay, cacheDir, locale = 'en-US', tim
   };
 }
 
+// A fresh device identity for the persona, drawn from the pinned model the
+// same way Camoufox draws one at launch, so it can be kept and reused.
+export async function drawFingerprint() {
+  const {ensureModel} = await import('fpgen-js');
+  await ensureModel();
+  const {generateFingerprint} = await import('camoufox/dist/fingerprints.js');
+  return generateFingerprint({os: PERSONA_OS});
+}
+
 // Starts a Camoufox browser server (so the runner can kill its process group)
-// and connects to it. Used only inside the worker process.
+// and connects to it. Used only inside the worker process. Returns the device
+// identity it used, so a session that passes can keep it.
 export async function launchCamoufox(runtime, options) {
   await verifyCamoufox(runtime);
   process.env.CAMOUFOX_FPGEN_DATA = runtime.modelDir;
   const {setModelDir} = await import('fpgen-js');
   setModelDir(runtime.modelDir);
+  let fingerprint = options.fingerprint ?? null;
+  if (!fingerprint) {
+    try { fingerprint = await drawFingerprint(); } catch { fingerprint = null; }
+  }
   const {launchServer} = await import('camoufox');
-  const server = await launchServer(camoufoxOptions(runtime, options));
+  const server = await launchServer(camoufoxOptions(runtime, {...options, fingerprint}));
   const {firefox} = await import('playwright-core');
   const browser = await firefox.connect(server.wsEndpoint());
-  return {server, browser};
+  return {server, browser, fingerprint};
 }

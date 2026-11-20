@@ -21,6 +21,10 @@ test('route state ages, demotes and cools down',()=>{
  assert.equal(routeState({last_success_at:new Date(now-day),consecutive_failures:0,retry_not_before:new Date(now+1000)},now),'cooling');
  assert.equal(routeState({consecutive_failures:1},now),'failing');
  assert.equal(routeState({last_success_at:new Date(now-2*day),consecutive_failures:0},now,{siteKnowledge:{freshMs:day}}),'stale');
+ const residentialBrowser={execution:'browser',proxy_class:'residential',last_success_at:new Date(now-day)};
+ assert.equal(routeState({...residentialBrowser,consecutive_failures:5},now),'proven','a residential browser route is judged on six draws');
+ assert.equal(routeState({...residentialBrowser,consecutive_failures:6},now),'failing');
+ assert.equal(routeState({...residentialBrowser,execution:'http',consecutive_failures:2},now),'failing','residential HTTP keeps the default');
 });
 
 async function fixture(run){
@@ -68,6 +72,21 @@ test('cooldowns start short and double with each further failure, up to a cap',{
  assert.ok(Math.abs(await wait()-30)<1,'then 30');
  for(let i=0;i<10;i++)await recordSiteOutcome(db,{host,execution:'http',route:dc,outcome:'blocked'});
  assert.ok(Math.abs(await wait()-360)<1,'capped at 6 hours');
+}));
+
+test('a residential browser route cools only after six walls in a row, since each is a fresh exit IP',{skip:!enabled},()=>fixture(async store=>{
+ const db=store.pool,host='https://guarded.example.com/';
+ const state=async execution=>(await siteRoutes(db,host,{execution}))[0];
+ for(let i=0;i<5;i++)await recordSiteOutcome(db,{host,execution:'browser',route:res,outcome:'blocked'});
+ assert.equal((await state('browser')).retry_not_before,null,'five walls on fresh IPs');
+ await recordSiteOutcome(db,{host,execution:'browser',route:res,outcome:'blocked'});
+ const row=await state('browser');assert.equal(row.state,'cooling');
+ assert.ok(Math.abs((Date.parse(row.retry_not_before)-Date.now())/60000-15)<1,'then the usual 15 minutes');
+ for(let i=0;i<2;i++)await recordSiteOutcome(db,{host,execution:'http',route:res,outcome:'blocked'});
+ assert.equal((await state('http')).state,'cooling','residential HTTP still cools after two');
+ await recordSiteOutcome(db,{host,execution:'browser',route:dc,outcome:'blocked'});
+ await recordSiteOutcome(db,{host,execution:'browser',route:dc,outcome:'blocked'});
+ assert.ok((await siteRoutes(db,host,{execution:'browser'})).some(r=>r.proxy_class==='datacenter'&&r.state==='cooling'),'datacenter browser after two');
 }));
 
 test('each transport is its own route; invalid input is ignored',{skip:!enabled},()=>fixture(async store=>{

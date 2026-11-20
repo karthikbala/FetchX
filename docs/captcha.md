@@ -11,6 +11,10 @@ Browser steps solve the captchas they meet, through [2Captcha](https://2captcha.
 
 2Captcha no longer offers a dedicated hCaptcha token task, so hCaptcha is solved as image grids. DataDome requires solving from the same IP as the page, so the task carries the login of the attempt's residential proxy session (one exit IP, 30-minute lifetime) to 2Captcha. That is why it needs `captcha.datadome: true` (approved for production on 2026-11-19), and why it never runs on a datacenter step: datacenter credentials are never sent, and auto mode moves on instead. A DataDome captcha URL with `t=bv` means the IP is banned: the step fails with `captcha_ip_banned` without a task, and auto mode moves on.
 
+## Waiting first
+
+A wall that is a device check, not a captcha, passes by itself in a real browser on a clean IP. So a browser page that is a wall gets up to 45 seconds to clear by itself before anything is solved ([browser](browser.md#sessions-warm-up-and-walls)); a solve starts only if a captcha is still there afterwards. For DataDome, prefer a fresh IP over a solve: a long DataDome crawl measured that 2Captcha's DataDome cookie was refused because its workers solve from their own IPs, and on Expedia (2026-11-19) the cookie did not clear the page either. Setting `captcha.datadome: false` stops paying for those solves; auto mode then moves to a fresh IP instead.
+
 ## Where it happens
 
 Detection and the page work run in the browser (`src/browser/page-captcha.mjs`), reading only public widget attributes. Solving runs in the gateway (`src/captcha/solver.mjs`), so the 2Captcha key never reaches a worker or a page. A capture asks the gateway for each solve through the `captcha` callback.

@@ -8,7 +8,9 @@ import {observeSiteOutcome} from '../site-knowledge.mjs';
 import {prices as priceTable, priceOf, stepFor, worstCaseOf} from '../billing/ledger.mjs';
 import {parseFetchRequest, needsBrowser} from './request.mjs';
 import {blockedHosts, checkAddresses, checkUrl} from './destination.mjs';
-import {createResolver, proxyFor} from './routes.mjs';
+import {createResolver, pickResidentialProvider, proxyFor} from './routes.mjs';
+import {StickySessions} from './sessions.mjs';
+import {ExitGeo} from './exit-geo.mjs';
 import {createDoh, dohSettings} from './doh.mjs';
 import {planLadder, nextStep, sameStep} from './ladder.mjs';
 import {httpAttempt, fixHeaders} from './http-attempt.mjs';
@@ -24,6 +26,8 @@ export const DEFAULT_LIMITS = Object.freeze({
   maxDomBytes: 5_000_000,
   browserRequests: 250,
   settleMs: 750,
+  // A wall on a browser page may take this long to clear by itself before a captcha is solved.
+  selfClearMs: 45_000,
   syncWaitMs: 60_000,
   contentDays: 7,
   metadataDays: 90,
@@ -169,12 +173,14 @@ const MESSAGES = {
 
 export class FetchService {
   // resolve and exchangeImpl replace DNS and the network in tests.
-  constructor({store, config, ledger, solver = null, slots = null, runtime = null, resolve, exchangeImpl, limits = {}}) {
+  constructor({store, config, ledger, solver = null, slots = null, runtime = null, resolve, exchangeImpl, limits = {}, sessions, exitGeo}) {
     Object.assign(this, {store, config, ledger, solver, slots, runtime, exchangeImpl});
     this.sealer = new Sealer(config.artifactKey);
     this.limits = {...DEFAULT_LIMITS, ...config.fetchLimits, ...limits};
     const doh = dohSettings(config);
     this.resolve = resolve ?? createResolver(config, {doh: doh ? createDoh(doh, exchangeImpl ? {exchangeImpl} : {}) : undefined});
+    this.sessions = sessions ?? new StickySessions(config);
+    this.exitGeo = exitGeo ?? new ExitGeo(config, {resolve: this.resolve, ...(exchangeImpl ? {exchangeImpl} : {})});
     this.blocked = blockedHosts(config);
     this.running = new Map();
   }
@@ -277,7 +283,8 @@ export class FetchService {
       max_requests: this.limits.browserRequests, max_dom_bytes: this.limits.maxDomBytes,
       max_body_bytes: this.limits.maxBodyBytes, max_wire_bytes: this.limits.maxWireBytes,
     }, waitFor: request.wait_for, screenshot: request.formats.includes('screenshot'),
-    captcha: step.transport === 'browser' && !!this.solver?.settings, settleMs: this.limits.settleMs});
+    captcha: step.transport === 'browser' && !!this.solver?.settings, settleMs: this.limits.settleMs,
+    selfClearMs: this.limits.selfClearMs});
 
     if (!plan.steps.length) failure = plan.retryAfterSeconds ? 'cooling_down' : 'route_unavailable';
     while (!failure && !success && dispatchedAttempts < maxAttempts) {
@@ -294,16 +301,27 @@ export class FetchService {
       }
       n++;
       const started = new Date();
-      const preferProvider = step.class === 'residential' && lastResidential ? OTHER_PROVIDER[lastResidential] : null;
+      let preferProvider = step.class === 'residential' && lastResidential ? OTHER_PROVIDER[lastResidential] : null;
+      // A browser step on a residential route reuses a session (exit IP and
+      // device identity) that got a browser through to this host before.
+      const sticky = step.transport === 'browser' && step.class === 'residential';
+      let lease = null;
       let resolved;
       try {
-        resolved = proxyFor(this.config, step, url.hostname, {preferProvider});
+        if (sticky) {
+          preferProvider = pickResidentialProvider(this.config, step.country, url.hostname, {prefer: preferProvider}) ?? preferProvider;
+          lease = preferProvider ? this.sessions.lease({host: url.hostname, provider: preferProvider, country: step.country}) : null;
+        }
+        resolved = proxyFor(this.config, step, url.hostname, {preferProvider, session: lease?.session});
       } catch (error) {
+        if (lease) this.sessions.settle({host: url.hostname, provider: preferProvider, country: step.country}, lease, 'neutral');
         tried.push({...step, result: 'not_admitted', code: error.code});
         await this.#recordAttempt(row.id, n, step, {result: 'not_admitted', code: error.code, started});
         continue;
       }
       const {route, proxy} = resolved;
+      const where = () => ({host: url.hostname, provider: route.provider, country: route.country});
+      let geo = null;
       let response = null;
       let result;
       let code = null;
@@ -316,10 +334,22 @@ export class FetchService {
           {deadline, maxBodyBytes: this.limits.maxBodyBytes, maxWireBytes: this.limits.maxWireBytes},
           this.exchangeImpl ? {exchangeImpl: this.exchangeImpl} : {});
         } else {
+          // Hosts that have refused FetchX get paced browser visits that start
+          // at the home page; the browser is placed where its exit IP is.
+          const guarded = !!plan.guarded || !!lastChallenge || ['blocked', 'rate_limited'].includes(lastResult);
+          await this.sessions.pace({host: url.hostname, guarded, lease, deadline});
+          geo = proxy ? await this.exitGeo.lookup(proxy) : null;
+          if (lease && geo?.ip && lease.ip && geo.ip !== lease.ip) {
+            // The provider moved the session to another IP: its standing and its
+            // identity belonged to the old one.
+            this.sessions.settle(where(), lease, 'moved');
+            lease = null;
+          }
           response = await browserAttempt({url, headers: request.headers}, {
             config: this.config, route, proxy, resolve: this.resolve, blocked: this.blocked, slots: this.slots,
             runtime: this.runtime, solver: this.solver, ids: {request: row.id, project: row.project},
-          }, attemptOptions(step));
+            geo, fingerprint: lease?.identity ?? null,
+          }, {...attemptOptions(step), warmup: guarded});
         }
         const classified = classifyResponse({status: response.status, headers: response.headers, body: response.body},
           {transport: step.transport});
@@ -331,17 +361,27 @@ export class FetchService {
           result = 'success';
         }
       } catch (error) {
-        if (!(error instanceof GatewayError)) throw error;
+        if (!(error instanceof GatewayError)) {
+          if (lease) this.sessions.settle(where(), lease, 'neutral');
+          throw error;
+        }
         code = error.code;
         result = attemptFailure(error, readOnly);
-        response = {wire_bytes: error.wire_bytes ?? null, captcha: error.captcha ?? [], dispatched: error.dispatched};
+        response = {wire_bytes: error.wire_bytes ?? null, captcha: error.captcha ?? [], dispatched: error.dispatched,
+          warmup: error.warmup ?? null};
+      }
+      if (sticky && proxy?.session) {
+        const kept = ['success', 'answered'].includes(result) ? 'passed' : ['blocked', 'rate_limited'].includes(result) ? 'burned' : 'neutral';
+        this.sessions.settle(where(), {session: proxy.session, ip: geo?.ip ?? null,
+          identity: lease?.identity ?? response?.fingerprint ?? null}, kept);
       }
       const counted = !['not_admitted', 'skipped', 'url_not_allowed'].includes(result);
       if (counted) dispatchedAttempts++;
       if (route.class === 'residential' && counted) lastResidential = route.provider;
       const captchaSolved = (response?.captcha ?? []).some(solve => solve.outcome === 'passed');
       tried.push({...step, result, code, status_code: response?.status ?? null, ms: Date.now() - started.getTime(),
-        captcha: response?.captcha?.length ? response.captcha.map(s => `${s.type}:${s.outcome}`) : undefined});
+        captcha: response?.captcha?.length ? response.captcha.map(s => `${s.type}:${s.outcome}`) : undefined,
+        warmup: response?.warmup ?? undefined, wall: response?.wall ? (response.wall.cleared ? 'cleared' : 'stayed') : undefined});
       await this.#recordAttempt(row.id, n, {...step, provider: route.provider}, {result, code, status_code: response?.status ?? null,
         wire_bytes: response?.wire_bytes ?? null, captcha: response?.captcha?.length ? response.captcha : null, started});
       // An attempt cut short by this request's own deadline says nothing about the route.
@@ -391,6 +431,7 @@ export class FetchService {
       transport: t.transport, class: t.class, country: t.country ?? null, ...(t.rotation ? {rotation: t.rotation} : {}),
       result: t.result, ...(t.code && ['not_admitted', 'failed'].includes(t.result) ? {code: t.code} : {}),
       status_code: t.status_code ?? null, ms: t.ms ?? null, ...(t.captcha ? {captcha: t.captcha} : {}),
+      ...(t.warmup ? {warmup: t.warmup} : {}), ...(t.wall ? {wall: t.wall} : {}),
     }));
     const skipped = [...plan.skipped, ...tried.filter(t => t.result === 'skipped')].map(s => ({
       transport: s.transport, class: s.class, country: s.country ?? null, reason: s.reason ?? s.code}));

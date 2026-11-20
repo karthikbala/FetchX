@@ -45,7 +45,8 @@ export async function planLadder({config, pool, request, host, prices, reservati
   // An explicit route is one attempt on exactly that route.
   if (request.route) {
     const fixed = step(request.route.render ? 'browser' : 'http', request.route.class, request.route.country);
-    return {steps: [fixed], skipped, country: fixed.country, explicit: true};
+    return {steps: [fixed], skipped, country: fixed.country, explicit: true,
+      guarded: knowledge.some(row => row.failures > 0 || ['blocked', 'rate_limited'].includes(row.last_outcome))};
   }
 
   const browserOnly = needsBrowser(request);
@@ -110,6 +111,9 @@ export async function planLadder({config, pool, request, host, prices, reservati
   usable.sort((a, b) => rank[a.known] - rank[b.known] || a.order - b.order);
   const cooling = knowledge.filter(row => row.state === 'cooling').map(row => Date.parse(row.retry_not_before));
   return {
+    // The host has refused or rate-limited FetchX before: browser steps visit
+    // its home page first and are paced (fetch/sessions.mjs).
+    guarded: knowledge.some(row => row.failures > 0 || ['blocked', 'rate_limited'].includes(row.last_outcome)),
     steps: usable.map(({known, order, ...rest}) => rest),
     skipped: skipped.map(({afterRateLimit, ...rest}) => rest),
     country,
