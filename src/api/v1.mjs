@@ -1,6 +1,7 @@
-// The public API: seven endpoints, one version. `service` is the FetchFront
+// The public API: eight endpoints, one version. `service` is the FetchFront
 // (src/fetch/front.mjs): it bills, and the engine does the fetching.
 //   POST   /v1/fetch                  get a URL
+//   POST   /v1/fetch/:id/next         get the page after request :id's (a new request)
 //   GET    /v1/fetch                  list recent requests
 //   GET    /v1/fetch/:id              one request's result (poll a pending one)
 //   GET    /v1/fetch/:id/content      the raw body, as received
@@ -26,11 +27,12 @@ const MESSAGES = {
   unavailable: 'FetchX cannot take work right now; wait and retry.',
   pending: 'The request is still running.',
   content_expired: 'The stored content has expired or was deleted.',
+  no_next_page: 'That request has no next page to open; error.details.reason says why.',
   credit_account_unavailable: 'The project has no credit account.',
 };
 const STATUS = {invalid_request: 400, url_not_allowed: 400, unauthorized: 401, api_key_scope_forbidden: 403, insufficient_credits: 402,
   max_credits_too_low: 402, payment_hold: 402, not_found: 404, idempotency_conflict: 409, request_too_large: 413, too_many_requests: 429,
-  pending: 409, content_expired: 410};
+  pending: 409, content_expired: 410, no_next_page: 409};
 
 export function apiError(error) {
   const known = error instanceof GatewayError;
@@ -86,6 +88,10 @@ export function registerApi(app, {service, ledger}) {
   const guard = scope => async req => app.authenticate(req, scope);
   app.post('/v1/fetch', {preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
     const view = await service.submit(req.project, req.body, {keyId: req.keyId});
+    return reply.code(view.status === 'pending' ? 202 : 200).send(view);
+  });
+  app.post('/v1/fetch/:id/next', {...idParams, preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
+    const view = await service.submitNext(req.project, req.params.id, req.body ?? {}, {keyId: req.keyId});
     return reply.code(view.status === 'pending' ? 202 : 200).send(view);
   });
   app.get('/v1/fetch', {preHandler: guard(API_SCOPES.read)}, req => service.list(req.project, req.query ?? {}));
