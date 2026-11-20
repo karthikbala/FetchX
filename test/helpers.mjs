@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {sha} from '../src/crypto.mjs';
 import {Store} from '../src/store.mjs';
 import {createGateway, server} from '../src/server.mjs';
+import {checkCaptureInput} from '../src/browser/capture-input.mjs';
 
 export const databaseUrl = process.env.TEST_DATABASE_URL;
 export const TOKEN = 'test-token-metered';
@@ -63,6 +64,9 @@ export function fakeBrowser(script) {
       acquire: async () => ({
         release() {},
         run: async (input, hooks) => {
+          // What a real worker would accept (the pool sends everything but the relay).
+          const {relay: _relay, ...sent} = input;
+          checkCaptureInput(sent);
           runs.push(input);
           await hooks.admit({url: input.url, method: 'GET', resource_type: 'document', frame: 'main', navigation: true, body_bytes: 0});
           return script(input, hooks);

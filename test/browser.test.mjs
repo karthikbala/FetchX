@@ -5,7 +5,8 @@ import net from 'node:net';
 import {chmod, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {capturePage} from '../src/browser/capture.mjs';
+import {captureErrorCode, capturePage} from '../src/browser/capture.mjs';
+import {codePattern} from '../src/browser/wire.mjs';
 import {detectCaptcha, looksChallenged, solvePageCaptchas} from '../src/browser/page-captcha.mjs';
 import {startRelay} from '../src/browser/relay.mjs';
 import {BrowserWorkerPool} from '../src/browser/pool.mjs';
@@ -408,5 +409,40 @@ test('a captcha frame, which waits for a person, gets only a short wait', {skip:
         artifact: async () => {}});
     assert.deepEqual({cleared: result.wall.cleared, interactive: result.wall.interactive}, {cleared: false, interactive: true});
     assert.ok(Date.now() - started < 20_000, String(Date.now() - started));
+  });
+});
+
+test('a failed step reports a lowercase code the pool accepts, never an engine\'s own error name', () => {
+  const cases = [
+    [Object.assign(new Error('page.goto: Timeout 30000ms exceeded.'), {name: 'TimeoutError'}), 'browser_timeout'],
+    [new Error('page.goto: NS_ERROR_NET_TIMEOUT'), 'browser_ns_error_net_timeout'],
+    [new Error('page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://shop.example.com/'), 'browser_err_tunnel_connection_failed'],
+    [Object.assign(new Error('callback'), {code: 'browser_worker_transport_failed'}), 'browser_worker_transport_failed'],
+    [Object.assign(new Error('reset'), {code: 'ECONNRESET'}), 'browser_capture_error'],
+    [new Error('Target page, context or browser has been closed'), 'browser_capture_error'],
+    [undefined, 'browser_capture_error'],
+  ];
+  for (const [error, code] of cases) {
+    assert.equal(captureErrorCode(error), code);
+    assert.match(code, codePattern);
+  }
+});
+
+test('a page that never finishes loading keeps its status and DOM, with a code the pool accepts', {skip: !executable}, async t => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, {'content-type': 'text/html; charset=utf-8'});
+    res.write(`<html><head><title>Slow</title></head><body><p id="data">rates</p>${' '.repeat(4096)}`);
+  });
+  const port = await listen(server);
+  t.after(() => { server.closeAllConnections(); return close(server); });
+  await withBrowser(async browser => {
+    const artifacts = [];
+    const result = await capturePage(browser, {...baseInput(`http://127.0.0.1:${port}/slow`), deadline: Date.now() + 4000},
+      {admit: async () => {}, artifact: async data => { artifacts.push(data); }});
+    assert.equal(result.status, 200);
+    assert.equal(result.error, 'browser_timeout');
+    assert.match(result.error, codePattern);
+    assert.equal(artifacts[0]?.kind, 'dom');
+    assert.match(Buffer.from(artifacts[0].body_base64, 'base64').toString(), /rates/);
   });
 });

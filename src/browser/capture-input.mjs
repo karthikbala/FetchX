@@ -4,13 +4,17 @@ const plain = value => !!value && typeof value === 'object' && !Array.isArray(va
 const integer = (value, min, max) => Number.isSafeInteger(value) && value >= min && value <= max;
 const FIELDS = ['url', 'deadline', 'runtime', 'limits', 'settle_ms', 'wait_for', 'screenshot', 'captcha', 'headers', 'cookies',
   'locale', 'timezone', 'geolocation', 'fingerprint', 'warmup', 'self_clear_ms'];
-const FINGERPRINT_MAX_BYTES = 262_144;
+// A device identity Camoufox draws (fpgen) is about 360 KB of JSON; the whole
+// capture input may be 2 MiB (wire.mjs OUTPUT_LIMIT).
+export const FINGERPRINT_MAX_BYTES = 1_048_576;
 const coordinate = (value, max) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= max;
-const fingerprintOk = value => {
-  if (value == null) return true;
+// Whether a device identity can be sent with a capture. The gateway keeps only
+// identities that pass, so a kept session never carries one a worker refuses.
+export function fingerprintFits(value) {
   if (!plain(value)) return false;
   try { return Buffer.byteLength(JSON.stringify(value)) <= FINGERPRINT_MAX_BYTES; } catch { return false; }
-};
+}
+const fingerprintOk = value => value == null || fingerprintFits(value);
 
 export function checkCaptureInput(value) {
   const ok = plain(value) && Object.keys(value).every(key => FIELDS.includes(key))

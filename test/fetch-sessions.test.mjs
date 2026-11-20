@@ -110,10 +110,13 @@ test('capture input carries the place, a kept identity, warm-up and the self-cle
   assert.equal(input.warmup, true);
   assert.equal(input.self_clear_ms, 45_000);
   assert.deepEqual(input.geolocation, {latitude: 39.7, longitude: -86.1});
+  const drawnSize = {navigator: {userAgent: 'Mozilla/5.0'}, fonts: Array.from({length: 14000}, (_, i) => `Font Family ${i} Regular`)};
+  assert.ok(Buffer.byteLength(JSON.stringify(drawnSize)) > 300_000, 'about the size Camoufox draws');
+  assert.deepEqual(checkCaptureInput({...base, fingerprint: drawnSize}).fingerprint, drawnSize, 'a real-size identity is accepted');
   const plain = checkCaptureInput(base);
   assert.deepEqual([plain.warmup, plain.self_clear_ms, plain.geolocation, plain.fingerprint], [false, 0, null, null]);
   for (const bad of [{geolocation: {latitude: 91, longitude: 0}}, {geolocation: 'here'}, {self_clear_ms: 120_000},
-    {warmup: 'yes'}, {fingerprint: ['x']}, {fingerprint: {blob: 'x'.repeat(300_000)}}, {timezone: '../etc'}]) {
+    {warmup: 'yes'}, {fingerprint: ['x']}, {fingerprint: {blob: 'x'.repeat(1_100_000)}}, {timezone: '../etc'}]) {
     assert.throws(() => checkCaptureInput({...base, ...bad}), /invalid capture input/, JSON.stringify(bad).slice(0, 60));
   }
 });

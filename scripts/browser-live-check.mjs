@@ -36,6 +36,7 @@ import {ExitGeo} from '../src/fetch/exit-geo.mjs';
 import {residentialProxy} from '../src/fetch/routes.mjs';
 import {browserPlace} from '../src/fetch/browser-attempt.mjs';
 import {checkAddresses} from '../src/fetch/destination.mjs';
+import {checkCaptureInput} from '../src/browser/capture-input.mjs';
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -154,9 +155,13 @@ async function visit(url, {proxy, geo, fingerprint, fonts = false}) {
     ({server, browser, fingerprint: drawn} = await launchCamoufox(runtime, {relay: relay.url, cacheDir: process.env.HOME ?? '/tmp',
       locale: place.locale, timezone: place.timezone, geolocation: place.geolocation, fingerprint}));
     const rendered = fonts ? await renderableFonts(browser).catch(error => ({error: error.message.slice(0, 120)})) : null;
-    const result = await capturePage(browser, {url, deadline: Date.now() + PAGE_DEADLINE_MS, warmup, self_clear_ms: 45_000, settle_ms: 750,
+    const input = {url, deadline: Date.now() + PAGE_DEADLINE_MS, warmup, self_clear_ms: 45_000, settle_ms: 750,
       limits: {max_requests: 500, max_dom_bytes: 10_000_000, max_body_bytes: 10_000_000}, screenshot: false, captcha: false,
-      headers: {}, cookies: [], locale: place.locale, timezone: place.timezone},
+      headers: {}, cookies: [], locale: place.locale, timezone: place.timezone};
+    // What a pool worker would be sent for this page, kept identity included: it must pass the worker's check.
+    checkCaptureInput({...input, runtime: {engine: 'camoufox'}, ...(place.geolocation ? {geolocation: place.geolocation} : {}),
+      ...(fingerprint ? {fingerprint} : {})});
+    const result = await capturePage(browser, input,
     {admit: async meta => {
       if (!/^https:/.test(meta.url)) throw Object.assign(new Error('x'), {code: 'insecure_request'});
       if (!['GET', 'HEAD', 'POST'].includes(meta.method)) throw Object.assign(new Error('x'), {code: 'method_refused'});

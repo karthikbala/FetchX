@@ -17,10 +17,15 @@ const pause = (page, input, min, spread) => page.waitForTimeout(Math.min(min + M
   .catch(() => {});
 
 const remainingMs = input => Math.max(1, input.deadline - Date.now());
-const safeCode = error => {
+// The code a failed step reports. The pool accepts only lowercase codes
+// (wire.mjs codePattern) and drops any result that carries another, page and
+// all, so an engine's own error names are mapped into that form.
+export const captureErrorCode = error => {
+  if (/^[a-z][a-z0-9_]{1,100}$/.test(error?.code ?? '')) return error.code;
   const message = String(error?.message ?? '');
-  return /net::(ERR_[A-Z_]+)/.exec(message)?.[1] ?? /\b(NS_ERROR_[A-Z_]+)\b/.exec(message)?.[1]
-    ?? (error?.name === 'TimeoutError' ? 'TIMEOUT' : 'CAPTURE_ERROR');
+  const engine = /net::(ERR_[A-Z0-9_]+)/.exec(message)?.[1] ?? /\b(NS_ERROR_[A-Z0-9_]+)\b/.exec(message)?.[1];
+  if (engine) return `browser_${engine.toLowerCase()}`.slice(0, 100);
+  return error?.name === 'TimeoutError' ? 'browser_timeout' : 'browser_capture_error';
 };
 const sameOrigin = (a, b) => {
   try { return new URL(a).origin === new URL(b).origin; } catch { return false; }
@@ -150,7 +155,7 @@ export async function capturePage(browser, input, hooks) {
         await page.goto(input.url, {waitUntil: 'domcontentloaded', timeout: Math.min(NAVIGATION_TIMEOUT_MS, remainingMs(input)),
           ...(referer ? {referer} : {})});
       } catch (error) {
-        result.error = safeCode(error);
+        result.error = captureErrorCode(error);
       }
       if (!page.isClosed() && input.settle_ms) await page.waitForTimeout(Math.min(input.settle_ms, remainingMs(input)));
       if (!page.isClosed() && input.self_clear_ms && (await wallState(page, status())).wall) {
@@ -209,7 +214,7 @@ export async function capturePage(browser, input, hooks) {
     }
     return result;
   } catch (error) {
-    result.error ??= safeCode(error);
+    result.error ??= captureErrorCode(error);
     return result;
   } finally {
     await context?.close().catch(() => {});
