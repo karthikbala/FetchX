@@ -162,7 +162,7 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
     job.deleted = true;
     return reply.code(204).send();
   });
-  app.get('/internal/v1/status', async () => ({service: 'FetchX engine', release: 'fake', contract: '1.1', browser: {}, captcha: {},
+  app.get('/internal/v1/status', async () => ({service: 'FetchX engine', release: 'fake', contract: '1.2', browser: {}, captcha: {},
     events: {undelivered: outbox.length, oldest_undelivered: null}}));
   // Admin: every call is recorded. Budgets (one engine budget) and the audit
   // trail are kept in memory, enough for the platform's merged list and log;

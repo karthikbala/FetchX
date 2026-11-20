@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FetchX engine private API",
-    "version": "1.1",
+    "version": "1.2",
     "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). info.version is the contract version; GET /internal/v1/status and /healthz report it."
   },
   "security": [
@@ -1875,6 +1875,24 @@
               "type": "string"
             },
             "description": "Captchas met on this step, as type:outcome."
+          },
+          "warmup": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "cleared",
+              "challenged",
+              "failed"
+            ],
+            "description": "Browser steps on sites that have refused FetchX before start at the site's home page. passed: it loaded; cleared: a bot check there cleared by itself; challenged: the check stayed, so this step ended there and the next one used a fresh IP; failed: the home page did not load, and the page was visited directly."
+          },
+          "wall": {
+            "type": "string",
+            "enum": [
+              "cleared",
+              "stayed"
+            ],
+            "description": "A bot check on the page itself: whether it cleared by itself before any captcha was solved."
           }
         }
       },
