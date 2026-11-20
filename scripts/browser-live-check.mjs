@@ -164,7 +164,7 @@ async function within(promise, ms) {
 }
 
 // --probe: how the page fills itself in over time and as it is scrolled.
-async function probePage(browser, url, place, relay) {
+async function probePage(browser, url, place, relay, log) {
   const context = await browser.newContext({serviceWorkers: 'block', locale: place.locale, timezoneId: place.timezone, viewport: null});
   try {
     await context.routeWebSocket?.('**/*', ws => ws.close());
@@ -204,10 +204,18 @@ async function probePage(browser, url, place, relay) {
         open: [...open.values()].filter(at => now - at < 5000).length, open_long: [...open.values()].filter(at => now - at >= 5000).length,
         started, kb: Math.round(relay.stats.bytes / 1024)};
     };
-    const samples = [await sample('loaded')];
+    // Each sample is printed as it is taken: a page cut off by the hard limit still leaves its data.
+    const samples = [];
+    const take = async label => {
+      const taken = await sample(label);
+      samples.push(taken);
+      log(taken);
+      return taken;
+    };
+    await take('loaded');
     for (let second = 1; second <= probeSeconds; second++) {
       await page.waitForTimeout(1000);
-      samples.push(await sample('wait'));
+      await take('wait');
     }
     const title = await within(page.title(), 3000);
     const walledPage = !response || response.status() >= 400 || /^(bot or not|just a moment|access denied)/i.test(title ?? '');
@@ -215,17 +223,16 @@ async function probePage(browser, url, place, relay) {
       const box = samples.at(-1);
       await page.mouse.move(Math.round((box.view ?? 800) * 0.6), Math.round((box.view ?? 800) * 0.5), {steps: 4}).catch(() => {});
       let still = 0;
-      for (let screen = 1; screen <= 40 && still < 3; screen++) {
+      for (let screen = 1; screen <= PROBE_MAX_SCREENS && still < 3; screen++) {
         const before = samples.at(-1);
         await page.mouse.wheel(0, Math.round((before.view ?? 800) * (0.75 + Math.random() * 0.2))).catch(() => {});
         await page.waitForTimeout(1500);
-        const after = await sample(`screen ${screen}`);
-        samples.push(after);
+        const after = await take(`screen ${screen}`);
         const atBottom = after.y + (after.view ?? 0) >= (after.height ?? 0) - 2;
         still = atBottom && after.height === before.height ? still + 1 : 0;
       }
     }
-    return {status: response?.status() ?? null, title, samples,
+    return {status: response?.status() ?? null, title, samples: samples.length,
       data_hosts: Object.fromEntries([...hosts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12))};
   } finally {
     await context.close().catch(() => {});
@@ -233,9 +240,26 @@ async function probePage(browser, url, place, relay) {
 }
 
 const PAGE_DEADLINE_MS = 120_000;
-const HARD_LIMIT_MS = PAGE_DEADLINE_MS + 30_000;
+const PROBE_MAX_SCREENS = 30;
+// A probe loads two pages, watches for probeSeconds and scrolls up to PROBE_MAX_SCREENS (each up to 4.5 s).
+const HARD_LIMIT_MS = probe ? 90_000 + probeSeconds * 4000 + PROBE_MAX_SCREENS * 4500 : PAGE_DEADLINE_MS + 30_000;
 
-async function visit(url, {proxy, geo, fingerprint, fonts = false}) {
+async function visit(url, options) {
+  // A browser call can stay pending after the browser is gone (Camoufox), with
+  // nothing left to keep Node running; the race and the timer end the page instead.
+  let limit;
+  const cutOff = new Promise(done => {
+    limit = setTimeout(done, HARD_LIMIT_MS + 15_000, {summary: {status: null, error: 'hung', secs: Math.round((HARD_LIMIT_MS + 15_000) / 1000)},
+      links: [], fingerprint: null, rendered: null});
+  });
+  try {
+    return await Promise.race([visitPage(url, options), cutOff]);
+  } finally {
+    clearTimeout(limit);
+  }
+}
+
+async function visitPage(url, {proxy, geo, fingerprint, fonts = false, log = () => {}}) {
   const relay = await startRelay(proxy.url);
   const place = browserPlace({country}, geo);
   const started = Date.now();
@@ -254,7 +278,7 @@ async function visit(url, {proxy, geo, fingerprint, fonts = false}) {
       locale: place.locale, timezone: place.timezone, geolocation: place.geolocation, fingerprint}));
     const rendered = fonts ? await renderableFonts(browser).catch(error => ({error: error.message.slice(0, 120)})) : null;
     if (probe) {
-      const report = await probePage(browser, url, place, relay);
+      const report = await probePage(browser, url, place, relay, log);
       return {summary: {...report, error: hung ? 'hung' : null, secs: Math.round((Date.now() - started) / 1000)}, links: [], fingerprint: drawn, rendered};
     }
     const input = {url, deadline: Date.now() + PAGE_DEADLINE_MS, warmup, self_clear_ms: 45_000, settle_ms: 750,
@@ -300,7 +324,8 @@ for (let draw = 1; draw <= draws; draw++) {
   while (queue.length) {
     const url = queue.shift();
     const kept = !!fingerprint;
-    const {summary, links, fingerprint: drawn, rendered} = await visit(url, {proxy, geo, fingerprint, fonts: fontCheck && !kept});
+    const {summary, links, fingerprint: drawn, rendered} = await visit(url, {proxy, geo, fingerprint, fonts: fontCheck && !kept,
+      log: sample => console.log(JSON.stringify({draw, url: url.slice(0, 100), sample}))});
     fingerprint ??= drawn;
     if (rendered) console.log(JSON.stringify({draw, fonts: rendered}));
     console.log(JSON.stringify({draw, url: url.slice(0, 100), kept_identity: kept, ...summary, followable: links.length}));
