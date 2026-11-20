@@ -32,8 +32,12 @@
 // scroll position, text length, the page's open and started data requests
 // (XHR, fetch), proxy kilobytes so far, and how many elements match each
 // --count selector. It also lists the hosts the page's data requests went to
-// (host names only). For deciding how capture should wait for, and scroll,
-// pages that load their content by script.
+// (host names only). Before scrolling it prints the page's layout (what is
+// under the pointer, the root's overflow, open dialogs, its scroll boxes); it
+// scrolls three screens by mouse wheel, then by script if the window did not
+// move, and prints where each scroll went. It ends with how the page closed.
+// For deciding how capture should wait for, and scroll, pages that load their
+// content by script.
 import http from 'node:http';
 import net from 'node:net';
 import {readFile} from 'node:fs/promises';
@@ -219,24 +223,87 @@ async function probePage(browser, url, place, relay, log) {
     }
     const title = await within(page.title(), 3000);
     const walledPage = !response || response.status() >= 400 || /^(bot or not|just a moment|access denied)/i.test(title ?? '');
+    let layout = null;
+    let modes = null;
     if (!walledPage) {
-      const box = samples.at(-1);
-      await page.mouse.move(Math.round((box.view ?? 800) * 0.6), Math.round((box.view ?? 800) * 0.5), {steps: 4}).catch(() => {});
+      // What a scroll has to get past: the element under the pointer, the root's
+      // overflow, open dialogs and the page's own scroll boxes. A wheel or scroll
+      // listener (passive, so the page is not changed) shows where each one went.
+      layout = await within(page.evaluate(() => {
+        const describe = element => element ? [element.tagName.toLowerCase(), element.id ? `#${element.id}` : '',
+          element.getAttribute('data-stid') ? `[data-stid=${element.getAttribute('data-stid')}]` : '',
+          element.getAttribute('role') ? `[role=${element.getAttribute('role')}]` : '',
+          typeof element.className === 'string' && element.className.trim() ? `.${element.className.trim().split(/\s+/)[0]}` : ''].join('') : null;
+        const scrollable = element => {
+          const style = getComputedStyle(element);
+          return /(auto|scroll|overlay)/.test(style.overflowY) && element.scrollHeight > element.clientHeight + 100;
+        };
+        const boxes = [...document.querySelectorAll('body *')].filter(scrollable)
+          .sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight).slice(0, 3);
+        window.__fxBoxes = boxes;
+        const x = Math.round(innerWidth / 2);
+        const y = Math.round(innerHeight / 2);
+        const under = document.elementFromPoint(x, y);
+        const chain = [];
+        for (let element = under; element && chain.length < 8; element = element.parentElement) chain.push(describe(element));
+        const seen = window.__fxSeen = {wheel_capture: 0, wheel_bubble: 0, wheel_prevented: 0, scrolls: 0, scroll_target: null};
+        addEventListener('wheel', () => { seen.wheel_capture++; }, {capture: true, passive: true});
+        addEventListener('wheel', event => { seen.wheel_bubble++; if (event.defaultPrevented) seen.wheel_prevented++; }, {passive: true});
+        document.addEventListener('scroll', event => {
+          seen.scrolls++;
+          seen.scroll_target = event.target === document ? 'document' : describe(event.target);
+        }, {capture: true, passive: true});
+        const root = document.scrollingElement;
+        return {width: innerWidth, height: innerHeight, pointer: [x, y], under: chain,
+          root: root ? {tag: root.tagName.toLowerCase(), scroll_height: root.scrollHeight, client_height: root.clientHeight} : null,
+          overflow: {html: getComputedStyle(document.documentElement).overflowY, body: document.body ? getComputedStyle(document.body).overflowY : null},
+          dialogs: document.querySelectorAll('dialog[open], [aria-modal="true"]').length,
+          boxes: boxes.map(box => ({box: describe(box), width: box.clientWidth, height: box.clientHeight, scroll_height: box.scrollHeight}))};
+      }).catch(error => ({error: String(error?.message ?? error).slice(0, 120)})), 5000);
+      log({label: 'layout', ...(layout ?? {unanswered: true})});
+      const where = async () => within(page.evaluate(() => ({y: Math.round(scrollY),
+        box: window.__fxBoxes?.[0] ? Math.round(window.__fxBoxes[0].scrollTop) : null, ...window.__fxSeen})).catch(() => null), 3000);
+      const pointer = layout?.pointer ?? [400, 300];
+      await page.mouse.move(pointer[0], pointer[1], {steps: 4}).catch(() => {});
+      // A screen at a time: three by mouse wheel; if the window has not moved by
+      // then, by script (window.scrollBy), and if that does not move it either,
+      // the page's largest scroll box by script.
+      let mode = 'wheel';
+      modes = {wheel: 0, script: 0, box: 0};
       let still = 0;
       for (let screen = 1; screen <= PROBE_MAX_SCREENS && still < 3; screen++) {
         const before = samples.at(-1);
-        await page.mouse.wheel(0, Math.round((before.view ?? 800) * (0.75 + Math.random() * 0.2))).catch(() => {});
+        const dy = Math.round((before.view ?? 800) * (0.75 + Math.random() * 0.2));
+        const from = await where();
+        if (mode === 'wheel') await within(page.mouse.wheel(0, dy).then(() => 'ok', error => String(error?.message ?? error).slice(0, 80)), 5000);
+        else if (mode === 'script') await within(page.evaluate(by => scrollBy(0, by), dy).catch(() => null), 3000);
+        else await within(page.evaluate(by => window.__fxBoxes?.[0]?.scrollBy(0, by), dy).catch(() => null), 3000);
+        modes[mode]++;
         await page.waitForTimeout(1500);
-        const after = await take(`screen ${screen}`);
+        const after = await take(`${mode} ${screen}`);
+        const to = await where();
+        log({label: `moved ${mode} ${screen}`, from, to});
+        if (mode === 'wheel' && screen >= 3 && (to?.y ?? 0) === 0) mode = 'script';
+        else if (mode === 'script' && (to?.y ?? 0) === (from?.y ?? 0) && layout?.boxes?.length) mode = 'box';
+        const moved = mode === 'box' ? (to?.box ?? 0) !== (from?.box ?? 0) : (to?.y ?? 0) !== (from?.y ?? 0);
         const atBottom = after.y + (after.view ?? 0) >= (after.height ?? 0) - 2;
-        still = atBottom && after.height === before.height ? still + 1 : 0;
+        still = (atBottom || !moved) && after.height === before.height && screen > 3 ? still + 1 : 0;
       }
     }
-    return {status: response?.status() ?? null, title, samples: samples.length,
-      data_hosts: Object.fromEntries([...hosts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12))};
+    return {status: response?.status() ?? null, title, samples: samples.length, modes,
+      data_hosts: Object.fromEntries([...hosts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12)),
+      close: await closeWithin(page, context)};
   } finally {
-    await context.close().catch(() => {});
+    await within(context.close().catch(() => {}), 10_000);
   }
+}
+
+// How the page and its context close, each given 10 s: 'ok', 'hung' or the error.
+async function closeWithin(page, context) {
+  const step = promise => within(promise.then(() => 'ok', error => String(error?.message ?? error).slice(0, 80)), 10_000)
+    .then(outcome => outcome ?? 'hung');
+  const pageClose = await step(page.close({runBeforeUnload: false}));
+  return {page: pageClose, context: await step(context.close())};
 }
 
 const PAGE_DEADLINE_MS = 120_000;
@@ -334,5 +401,6 @@ for (let draw = 1; draw <= draws; draw++) {
     if (queue.length) await sleep(4000 + Math.floor(Math.random() * 2000));
   }
   if (!burned) break;
-  if (draw < draws) await sleep(30_000);
+  // A walled draw is not waited out: the next one starts on a fresh exit IP.
+  if (draw < draws) await sleep(3000 + Math.floor(Math.random() * 2000));
 }
