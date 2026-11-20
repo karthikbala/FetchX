@@ -9,7 +9,8 @@
 //     -v <browser bundle>:/opt/gateway-browser:ro -v <pin dir>:/run/fx/pin:ro \
 //     -v <gateway.json>:/run/secrets/gateway.json:ro <image> \
 //     node scripts/browser-live-check.mjs [--provider dataimpulse] [--country US] [--draws 3] \
-//       [--follow <regex of links to visit next>] [--follow-max 3] [--no-warmup] [--fonts] <url> [<url> ...]
+//       [--follow <regex of links to visit next>] [--follow-max 3] [--no-warmup] [--fonts]
+//       [--probe [--probe-seconds 20] [--count <css selector>]...] <url> [<url> ...]
 //
 // Visits each URL in order on one session (one exit IP, one device identity),
 // a fresh browser per page and 4-6 s apart, as consecutive requests to FetchX
@@ -24,6 +25,15 @@
 // a fontconfig alias counts as present, as it does for them). The persona's
 // Windows fonts should be there; fonts that exist only in the gateway image or
 // in another OS's bundle should not, and the control must read as absent.
+//
+// --probe watches how a page fills itself in instead of capturing it: once a
+// second for --probe-seconds after the document loads, then a screen at a time
+// as it is scrolled to the bottom, it prints the element count, page height,
+// scroll position, text length, the page's open and started data requests
+// (XHR, fetch), proxy kilobytes so far, and how many elements match each
+// --count selector. It also lists the hosts the page's data requests went to
+// (host names only). For deciding how capture should wait for, and scroll,
+// pages that load their content by script.
 import http from 'node:http';
 import net from 'node:net';
 import {readFile} from 'node:fs/promises';
@@ -57,6 +67,10 @@ const follow = option('--follow', null);
 const followMax = Number(option('--follow-max', '3'));
 const warmup = !flag('--no-warmup');
 const fontCheck = flag('--fonts');
+const probe = flag('--probe');
+const probeSeconds = Number(option('--probe-seconds', '20'));
+const counts = [];
+for (let selector = option('--count', null); selector !== null; selector = option('--count', null)) counts.push(selector);
 const urls = args.filter(arg => /^https:\/\//.test(arg));
 if (!urls.length) {
   console.error('usage: node scripts/browser-live-check.mjs [options] <https url> [...]');
@@ -72,6 +86,8 @@ const exitGeo = new ExitGeo(config, {resolve});
 // loopback proxy, as in production.
 function startRelay(upstream) {
   const target = new URL(upstream);
+  const stats = {bytes: 0};
+  const count = chunk => { stats.bytes += chunk.length; };
   const auth = 'Basic ' + Buffer.from(`${decodeURIComponent(target.username)}:${decodeURIComponent(target.password)}`).toString('base64');
   const server = http.createServer((_req, res) => res.writeHead(403).end());
   server.on('connect', (req, client, head) => {
@@ -92,6 +108,9 @@ function startRelay(upstream) {
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       if (reply.length > end + 4) client.write(reply.subarray(end + 4));
       if (head.length) remote.write(head);
+      stats.bytes += reply.length - end - 4 + head.length;
+      remote.on('data', count);
+      client.on('data', count);
       remote.pipe(client).on('error', () => {});
       client.pipe(remote).on('error', () => {});
     };
@@ -99,7 +118,7 @@ function startRelay(upstream) {
     remote.on('error', () => client.destroy());
     client.on('error', () => remote.destroy());
   });
-  return new Promise(done => server.listen(0, '127.0.0.1', () => done({url: `http://127.0.0.1:${server.address().port}/`,
+  return new Promise(done => server.listen(0, '127.0.0.1', () => done({url: `http://127.0.0.1:${server.address().port}/`, stats,
     close: () => new Promise(closed => { server.closeAllConnections?.(); server.close(closed); })})));
 }
 
@@ -134,6 +153,85 @@ async function renderableFonts(browser) {
   }
 }
 
+// The promise's value, or null if it takes longer than ms (page.evaluate has no timeout).
+async function within(promise, ms) {
+  let timer;
+  try {
+    return await Promise.race([promise.catch(() => null), new Promise(done => { timer = setTimeout(done, ms, null); })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// --probe: how the page fills itself in over time and as it is scrolled.
+async function probePage(browser, url, place, relay) {
+  const context = await browser.newContext({serviceWorkers: 'block', locale: place.locale, timezoneId: place.timezone, viewport: null});
+  try {
+    await context.routeWebSocket?.('**/*', ws => ws.close());
+    const page = await context.newPage();
+    const open = new Map();
+    const hosts = new Map();
+    let started = 0;
+    page.on('request', request => {
+      try {
+        if (!['xhr', 'fetch'].includes(request.resourceType())) return;
+        open.set(request, Date.now());
+        started++;
+        const host = new URL(request.url()).hostname;
+        hosts.set(host, (hosts.get(host) ?? 0) + 1);
+      } catch { /* closed */ }
+    });
+    const done = request => open.delete(request);
+    page.on('requestfinished', done);
+    page.on('requestfailed', done);
+    const target = new URL(url);
+    let referer;
+    if (warmup && (target.pathname !== '/' || target.search)) {
+      await page.goto(new URL('/', target).href, {waitUntil: 'domcontentloaded', timeout: 30_000}).catch(() => null);
+      await page.waitForTimeout(3000 + Math.floor(Math.random() * 2000));
+      referer = page.url();
+    }
+    const response = await page.goto(url, {waitUntil: 'domcontentloaded', timeout: 30_000, ...(referer ? {referer} : {})}).catch(() => null);
+    const loadedAt = Date.now();
+    const sample = async label => {
+      const seen = await within(page.evaluate(selectors => ({
+        elements: document.getElementsByTagName('*').length, height: document.documentElement.scrollHeight,
+        view: innerHeight, y: Math.round(scrollY), text: document.body?.innerText.length ?? 0,
+        counts: selectors.map(selector => { try { return document.querySelectorAll(selector).length; } catch { return -1; } }),
+      }), counts), 3000);
+      const now = Date.now();
+      return {t: Math.round((now - loadedAt) / 100) / 10, label, ...(seen ?? {unanswered: true}),
+        open: [...open.values()].filter(at => now - at < 5000).length, open_long: [...open.values()].filter(at => now - at >= 5000).length,
+        started, kb: Math.round(relay.stats.bytes / 1024)};
+    };
+    const samples = [await sample('loaded')];
+    for (let second = 1; second <= probeSeconds; second++) {
+      await page.waitForTimeout(1000);
+      samples.push(await sample('wait'));
+    }
+    const title = await within(page.title(), 3000);
+    const walledPage = !response || response.status() >= 400 || /^(bot or not|just a moment|access denied)/i.test(title ?? '');
+    if (!walledPage) {
+      const box = samples.at(-1);
+      await page.mouse.move(Math.round((box.view ?? 800) * 0.6), Math.round((box.view ?? 800) * 0.5), {steps: 4}).catch(() => {});
+      let still = 0;
+      for (let screen = 1; screen <= 40 && still < 3; screen++) {
+        const before = samples.at(-1);
+        await page.mouse.wheel(0, Math.round((before.view ?? 800) * (0.75 + Math.random() * 0.2))).catch(() => {});
+        await page.waitForTimeout(1500);
+        const after = await sample(`screen ${screen}`);
+        samples.push(after);
+        const atBottom = after.y + (after.view ?? 0) >= (after.height ?? 0) - 2;
+        still = atBottom && after.height === before.height ? still + 1 : 0;
+      }
+    }
+    return {status: response?.status() ?? null, title, samples,
+      data_hosts: Object.fromEntries([...hosts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12))};
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
 const PAGE_DEADLINE_MS = 120_000;
 const HARD_LIMIT_MS = PAGE_DEADLINE_MS + 30_000;
 
@@ -155,6 +253,10 @@ async function visit(url, {proxy, geo, fingerprint, fonts = false}) {
     ({server, browser, fingerprint: drawn} = await launchCamoufox(runtime, {relay: relay.url, cacheDir: process.env.HOME ?? '/tmp',
       locale: place.locale, timezone: place.timezone, geolocation: place.geolocation, fingerprint}));
     const rendered = fonts ? await renderableFonts(browser).catch(error => ({error: error.message.slice(0, 120)})) : null;
+    if (probe) {
+      const report = await probePage(browser, url, place, relay);
+      return {summary: {...report, error: hung ? 'hung' : null, secs: Math.round((Date.now() - started) / 1000)}, links: [], fingerprint: drawn, rendered};
+    }
     const input = {url, deadline: Date.now() + PAGE_DEADLINE_MS, warmup, self_clear_ms: 45_000, settle_ms: 750,
       limits: {max_requests: 500, max_dom_bytes: 10_000_000, max_body_bytes: 10_000_000}, screenshot: false, captcha: false,
       headers: {}, cookies: [], locale: place.locale, timezone: place.timezone};
