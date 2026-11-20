@@ -7,6 +7,7 @@ import {GatewayError, fail} from '../policy.mjs';
 import {providerRule} from '../provider-rules.mjs';
 import {checkAddresses, checkUrl} from './destination.mjs';
 import {startRelay, TUNNEL_FAILURES} from '../browser/relay.mjs';
+import {fingerprintFits} from '../browser/capture-input.mjs';
 
 const PAGE_POST_MAX_BYTES = 64 * 1024;
 const PAGE_POST_TYPES = new Set(['xhr', 'fetch']);
@@ -180,6 +181,6 @@ export async function browserAttempt(request, context, options) {
     warmup: output.warmup ?? null,
     wall: output.wall ?? null,
     // The device identity the browser used, when it drew a fresh one.
-    fingerprint: output.fingerprint && typeof output.fingerprint === 'object' ? output.fingerprint : null,
+    fingerprint: fingerprintFits(output.fingerprint) ? output.fingerprint : null,
   };
 }

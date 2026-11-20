@@ -375,7 +375,10 @@ test('deleting a request removes everything the site sent; the summary and charg
 test('a residential browser session that passed is reused with its device identity, placed where its IP is', {skip}, async t => {
   const store = await openStore();
   t.after(() => store.close());
-  const identity = {navigator: {userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0'}};
+  // As large as a real drawn identity (about 360 KB of JSON): a kept one must still pass a worker's input check.
+  const identity = {navigator: {userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0'},
+    fonts: Array.from({length: 9000}, (_, i) => `Font Family ${i} Regular Condensed Extra`)};
+  assert.ok(Buffer.byteLength(JSON.stringify(identity)) > 300_000);
   const browser = fakeBrowser(async (input, hooks) => {
     await hooks.artifact({kind: 'dom', content_type: 'text/html', body_base64: Buffer.from(html('hotel')).toString('base64')});
     return {status: 200, final_url: input.url, headers: {'content-type': 'text/html'}, cookies: [], captcha: [],
@@ -407,4 +410,25 @@ test('a residential browser session that passed is reused with its device identi
   assert.deepEqual(browser.runs[1].fingerprint, identity, 'the kept session brings its identity');
   assert.equal(browser.runs[1].warmup, true, 'the host has refused FetchX before');
   assert.equal(calls.filter(c => c.url === 'https://ipinfo.io/json').length, 1, 'same session: its exit was already looked up');
+});
+
+test('a device identity too large to send is never kept, so the next step draws a fresh one', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const huge = {navigator: {userAgent: 'Mozilla/5.0'}, blob: 'x'.repeat(1_100_000)};
+  const browser = fakeBrowser(async (input, hooks) => {
+    await hooks.artifact({kind: 'dom', content_type: 'text/html', body_base64: Buffer.from(html('hotel')).toString('base64')});
+    return {status: 200, final_url: input.url, headers: {'content-type': 'text/html'}, cookies: [], captcha: [],
+      ...(input.fingerprint ? {} : {fingerprint: huge})};
+  });
+  const site = ({url}) => (url === 'https://ipinfo.io/json'
+    ? {headers: {'content-type': 'application/json'}, body: JSON.stringify({ip: '203.0.113.9', country: 'US', timezone: 'America/Chicago'})}
+    : {status: 429, body: '<html><head><title>Bot or Not?</title></head><body></body></html>'});
+  const config = testConfig({browser: {sessions: {sessionGapMs: 0, hostGapMs: 0}}});
+  const {call} = await gatewayFor(store, {config, site, browser});
+  for (const path of ['/h/1', '/h/2']) {
+    const done = await call('POST', '/v1/fetch', {body: {url: `https://big.example.com${path}`}});
+    assert.equal(done.body.status, 'succeeded', JSON.stringify(done.body).slice(0, 400));
+  }
+  assert.equal(browser.runs[1].fingerprint, undefined, 'the session is reused without the identity a worker would refuse');
 });
