@@ -353,6 +353,11 @@ export interface components {
              * @enum {string}
              */
             wall?: "cleared" | "stayed";
+            /**
+             * @description Browser steps on pages that answered: settled when the page had stopped filling itself in (results, listings loaded by script) before it was read; still_loading when FetchX's wait ran out first, so the page may be missing content that loads late. Pass wait_for with a selector for what you need to wait longer.
+             * @enum {string}
+             */
+            content?: "settled" | "still_loading";
         };
         SkippedStep: {
             /** @enum {string} */
