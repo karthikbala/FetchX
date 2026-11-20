@@ -277,8 +277,9 @@ test('pool and worker host carry a capture and its callbacks end to end', async 
 test('capture input and Camoufox launch options are strict', () => {
   const runtime = {engine: 'camoufox', version: CAMOUFOX_PIN.version, sha256: 'a'.repeat(64)};
   assert.ok(checkCaptureInput({...baseInput('https://a.example.com/'), runtime}));
+  assert.equal(checkCaptureInput({...baseInput('https://a.example.com/'), runtime, content_wait_ms: 30_000}).content_wait_ms, 30_000);
   for (const bad of [{url: 'http://a.example.com/'}, {deadline: Date.now() - 1}, {limits: {max_requests: 0, max_dom_bytes: 1024, max_body_bytes: 1024}},
-    {runtime: {engine: 'chromium'}}, {wait_for: {ms: 99_999}}, {extra: true}, {locale: 'english'}]) {
+    {runtime: {engine: 'chromium'}}, {wait_for: {ms: 99_999}}, {extra: true}, {locale: 'english'}, {content_wait_ms: 30_001}]) {
     assert.throws(() => checkCaptureInput({...baseInput('https://a.example.com/'), runtime, ...bad}), /invalid capture input/, JSON.stringify(bad));
   }
   const options = camoufoxOptions({executablePath: '/opt/camoufox/camoufox', modelDir: '/opt/camoufox/model'},
@@ -444,5 +445,65 @@ test('a page that never finishes loading keeps its status and DOM, with a code t
     assert.match(result.error, codePattern);
     assert.equal(artifacts[0]?.kind, 'dom');
     assert.match(Buffer.from(artifacts[0].body_base64, 'base64').toString(), /rates/);
+  });
+});
+
+test('a page that fills itself in after loading, or as it is scrolled, is read once it stops changing, without a selector', {skip: !executable}, async t => {
+  // Like a search page: a skeleton first, then results fetched by script.
+  const filling = `<html><body><main id="list"><div class="skeleton">loading</div></main><script>
+    setTimeout(() => fetch('/results').then(r => r.json()).then(items => {
+      document.getElementById('list').innerHTML = items.map(n => '<a class="card" href="/h' + n + '">Hotel ' + n + '</a>').join('');
+    }), 1200);
+  </script></body></html>`;
+  // A page that keeps polling never settles; the wait stops at its cap.
+  const polling = `<html><body><p>rates</p><script>setInterval(() => fetch('/ping'), 300);</script></body></html>`;
+  // A list that loads ten more each time its end scrolls into view, up to 40.
+  const scrolling = `<html><body style="margin:0"><main id="list"></main><div id="end">more</div><script>
+    let loaded = 0;
+    const more = () => fetch('/results').then(r => r.json()).then(items => {
+      document.getElementById('list').insertAdjacentHTML('beforeend', items.slice(0, 10).map(n =>
+        '<a style="display:block;height:100px" href="/h' + (loaded + n) + '">Hotel</a>').join(''));
+      loaded += 10;
+    });
+    new IntersectionObserver(entries => { if (entries[0].isIntersecting && loaded < 40) more(); }).observe(document.getElementById('end'));
+  </script></body></html>`;
+  const server = site({
+    '/search': filling, '/scrolling': scrolling, '/static': '<html><body><p>done</p></body></html>', '/polling': polling,
+    '/ping': {type: 'application/json', body: '{}'},
+    '/results': () => ({type: 'application/json', body: JSON.stringify(Array.from({length: 30}, (_, n) => n))}),
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const base = `http://127.0.0.1:${port}`;
+  const capture = async (browser, path, extra = {}) => {
+    const artifacts = {};
+    const result = await capturePage(browser, {...baseInput(base + path), deadline: Date.now() + 60_000, ...extra},
+      {admit: async () => {}, artifact: async data => { artifacts[data.kind] = Buffer.from(data.body_base64, 'base64').toString(); }});
+    return {result, dom: artifacts.dom ?? ''};
+  };
+  await withBrowser(async browser => {
+    const early = await capture(browser, '/search');
+    assert.equal((early.dom.match(/href="\/h\d+"/g) ?? []).length, 0, 'without the wait the page is read half-filled');
+    assert.equal(early.result.content, null);
+
+    const waited = await capture(browser, '/search', {content_wait_ms: 10_000});
+    assert.equal((waited.dom.match(/href="\/h\d+"/g) ?? []).length, 30);
+    assert.equal(waited.result.content.settled, true);
+
+    const scrolled = await capture(browser, '/scrolling', {content_wait_ms: 20_000});
+    assert.equal(new Set(scrolled.dom.match(/href="\/h\d+"/g)).size, 40, 'a list that loads as it is scrolled is read to its end');
+    assert.ok(scrolled.result.content.screens >= 3, String(scrolled.result.content.screens));
+    assert.equal(scrolled.result.content.settled, true);
+
+    const started = Date.now();
+    const plain = await capture(browser, '/static', {content_wait_ms: 10_000});
+    assert.equal(plain.result.content.settled, true);
+    assert.equal(plain.result.content.screens, 0, 'a page that fits on one screen is not scrolled');
+    assert.ok(Date.now() - started < 5000, 'a page that is already complete is not held');
+
+    const busy = await capture(browser, '/polling', {content_wait_ms: 3000});
+    assert.equal(busy.result.content.settled, false);
+    assert.ok(busy.result.content.ms >= 3000 && busy.result.content.ms < 5000, String(busy.result.content.ms));
+    assert.match(busy.dom, /rates/);
   });
 });

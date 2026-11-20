@@ -7,7 +7,7 @@ import {GatewayError, fail} from '../policy.mjs';
 import {providerRule} from '../provider-rules.mjs';
 import {checkAddresses, checkUrl} from './destination.mjs';
 import {startRelay, TUNNEL_FAILURES} from '../browser/relay.mjs';
-import {fingerprintFits} from '../browser/capture-input.mjs';
+import {CONTENT_WAIT_MAX_MS, fingerprintFits} from '../browser/capture-input.mjs';
 
 const PAGE_POST_MAX_BYTES = 64 * 1024;
 const PAGE_POST_TYPES = new Set(['xhr', 'fetch']);
@@ -40,7 +40,7 @@ export function browserPlace(route, geo) {
 // request: {url (URL), headers}
 // context: {config, route, proxy, resolve, blocked, slots, runtime, solver, ids: {request, project},
 //           geo (the exit's place, or null), fingerprint (a kept device identity, or null)}
-// options: {deadline, waitFor, screenshot, captcha, settleMs, limits, warmup, selfClearMs}
+// options: {deadline, waitFor, screenshot, captcha, settleMs, limits, warmup, selfClearMs, contentWaitMs}
 export async function browserAttempt(request, context, options) {
   const {config, route, proxy, resolve, blocked, slots, runtime, solver, ids, geo = null, fingerprint = null} = context;
   // A warm-up visit loads a second page, so it gets a second page's requests.
@@ -147,6 +147,7 @@ export async function browserAttempt(request, context, options) {
       ...(fingerprint ? {fingerprint} : {}),
       ...(options.warmup ? {warmup: true} : {}),
       ...(options.selfClearMs ? {self_clear_ms: options.selfClearMs} : {}),
+      ...(options.contentWaitMs ? {content_wait_ms: Math.min(options.contentWaitMs, CONTENT_WAIT_MAX_MS)} : {}),
     }, {admit, artifact, captcha});
   } finally {
     slot.release();
@@ -180,6 +181,8 @@ export async function browserAttempt(request, context, options) {
     error: output.error ?? null,
     warmup: output.warmup ?? null,
     wall: output.wall ?? null,
+    // Whether the page stopped filling itself in before it was read.
+    content: output.content ? {settled: output.content.settled === true} : null,
     // The device identity the browser used, when it drew a fresh one.
     fingerprint: fingerprintFits(output.fingerprint) ? output.fingerprint : null,
   };

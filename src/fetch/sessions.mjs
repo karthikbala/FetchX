@@ -60,6 +60,20 @@ export class StickySessions {
     return {session: free.session, ip: free.ip, identity: free.identity, pages: free.pages, lastUsedAt: free.lastUsedAt};
   }
 
+  // Of `providers`, the one holding a free known-good session for this host
+  // (the most recently used), or null. The first browser step of a request
+  // starts there, so a session that got through is not passed over for a
+  // fresh draw on another provider.
+  keptProvider({host, country}, providers) {
+    let best = null;
+    for (const provider of providers) {
+      for (const kept of this.#live(keyOf({host, provider, country}))) {
+        if (!kept.busy && (!best || kept.lastUsedAt > best.at)) best = {provider, at: kept.lastUsedAt};
+      }
+    }
+    return best?.provider ?? null;
+  }
+
   // Records the step's outcome on its session. `passed` keeps (or adds) the
   // session; anything the site said against it drops the session.
   // `neutral` (nothing reached the site) only frees it.

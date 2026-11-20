@@ -25,7 +25,7 @@ The gateway reads one JSON file, `GATEWAY_CONFIG` (default `/run/secrets/gateway
 | `release` | Shown by `/healthz`. |
 | `artifactKey` | 64 hex characters. Seals stored requests and results (AES-256-GCM). Changing it makes stored results unreadable. |
 | `projects` | Projects provisioned here instead of in the console: `{id: {tokenHash, maxConcurrentRequests?}}`. They are unmetered. |
-| `fetchLimits` | Overrides for `DEFAULT_LIMITS` in `src/fetch/service.mjs`: body and wire caps, `contentDays` (7), `metadataDays` (90), `syncWaitMs` (60 s), `selfClearMs` (45 s: how long a bot check on a browser page may take to clear by itself before a captcha is solved). Budgets: `maxConcurrentPerProject` (10), `maxAttempts` (5), `maxCreditsPerRequest` (100,000). |
+| `fetchLimits` | Overrides for `DEFAULT_LIMITS` in `src/fetch/service.mjs`: body and wire caps, `contentDays` (7), `metadataDays` (90), `syncWaitMs` (60 s), `selfClearMs` (45 s: how long a bot check on a browser page may take to clear by itself before a captcha is solved), `contentWaitMs` (20 s, at most 30 s: how long a browser page that is still filling itself in, or loads more as it is scrolled, is waited on and scrolled before it is read; 0 turns it off). Budgets: `maxConcurrentPerProject` (10), `maxAttempts` (5), `maxCreditsPerRequest` (100,000). |
 | `destinations.blockedHosts` | Extra host names never fetched. `fetchx.ai` and the console origins are always blocked. |
 
 ## Routes
@@ -37,7 +37,7 @@ The gateway reads one JSON file, `GATEWAY_CONFIG` (default `/run/secrets/gateway
 | `residential.providers.evomi`, `.dataimpulse` | `{enabled, username, password, countries?, maxDailyMb?, maxMonthlyMb?}`. The two caps are budgets (no cap by default). The exit countries offered are `countries`, else `residential.countries`, else US. Requests alternate between the two after a rate limit. |
 | `dns` | `{endpoint, address, timeoutMs?}`: resolve names for proxied requests over DNS-over-HTTPS (`/resolve` or `/dns-query`) through the same proxy, so the exit country's answer is used. Without it, the gateway's resolver is used. |
 | `providerRules` | Extra provider rules; see [provider rules](provider-rules.md). Rules saved in the admin portal are loaded from the database every `providerRulesRefreshMs` (30 s). |
-| `siteKnowledge` | Overrides for `SITE_KNOWLEDGE_DEFAULTS`: `freshMs` (7 days), `demoteAfter` (2), `residentialBrowserDemoteAfter` (6: each attempt is a fresh exit IP), `blockedRetryMs` (15 min), `unreachableRetryMs` (10 min), `maxRetryMs` (6 h); cooldowns double with each further failure up to the maximum. |
+| `siteKnowledge` | Overrides for `SITE_KNOWLEDGE_DEFAULTS`: `freshMs` (7 days), `demoteAfter` (2), `residentialBrowserDemoteAfter` (6: each attempt is a fresh exit IP; auto mode never skips a residential browser route for cooling), `blockedRetryMs` (15 min), `unreachableRetryMs` (10 min), `maxRetryMs` (6 h); cooldowns double with each further failure up to the maximum. |
 
 ## Browser
 
