@@ -343,6 +343,16 @@ export interface components {
             ms?: number | null;
             /** @description Captchas met on this step, as type:outcome. */
             captcha?: string[];
+            /**
+             * @description Browser steps on sites that have refused FetchX before start at the site's home page. passed: it loaded; cleared: a bot check there cleared by itself; challenged: the check stayed, so this step ended there and the next one used a fresh IP; failed: the home page did not load, and the page was visited directly.
+             * @enum {string}
+             */
+            warmup?: "passed" | "cleared" | "challenged" | "failed";
+            /**
+             * @description A bot check on the page itself: whether it cleared by itself before any captcha was solved.
+             * @enum {string}
+             */
+            wall?: "cleared" | "stayed";
         };
         SkippedStep: {
             /** @enum {string} */
