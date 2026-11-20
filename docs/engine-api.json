@@ -2070,6 +2070,37 @@
               "still_loading"
             ],
             "description": "Browser steps on pages that answered: settled when the page had stopped filling itself in (results, listings loaded by script) before it was read; still_loading when the engine's wait ran out first, so the page may be missing content that loads late. wait_for with a selector waits longer for what is needed."
+          },
+          "content_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Browser steps on pages that answered: how long the engine waited for the page to fill itself in, scrolling included."
+          },
+          "screens": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Browser steps on pages that answered: the screens scrolled after the page filled in, to load what appears as a reader scrolls. 0 when it was not scrolled: the page fit on one screen, or the wait used up its time first."
+          },
+          "scroll": {
+            "type": "string",
+            "enum": [
+              "wheel",
+              "script"
+            ],
+            "description": "How the page was scrolled, when screens is above 0: by mouse wheel, or by script when a wheel did not move the page (a sheet that locks the page takes the wheel)."
+          },
+          "requests": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Browser steps that answered: the requests the page made that FetchX let through (the page, its scripts, images and data)."
+          },
+          "refused": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "Browser steps that answered: the page's requests that FetchX did not let through, by reason (for example url_not_allowed, insecure_request, request_limit, source_dns_failed). Absent when there were none."
           }
         }
       },
