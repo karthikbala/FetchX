@@ -13,21 +13,33 @@ const NAVIGATION_TIMEOUT_MS = 30_000;
 const WARMUP_WALL_MS = 20_000;
 // Time kept back for reading the page after a self-clear wait.
 const AFTER_WALL_RESERVE_MS = 15_000;
+const CONTEXT_CLOSE_MS = 10_000;
 const pause = (page, input, min, spread) => page.waitForTimeout(Math.min(min + Math.floor(Math.random() * spread), remainingMs(input)))
   .catch(() => {});
 
 const remainingMs = input => Math.max(1, input.deadline - Date.now());
 // Pages that fill themselves in after the document loads (search results, feeds,
-// listings) are read once they stop changing: the page's element count steady
-// and none of its data requests (XHR, fetch) started, finished or open for
-// CONTENT_QUIET_MS, or when content_wait_ms runs out.
+// listings) are read once they stop changing. A page has settled when its
+// element count has held (within CONTENT_JITTER) for CONTENT_QUIET_MS with none
+// of its data requests (XHR, fetch) open or finishing in that time. Many pages
+// never go fully quiet: analytics and beacon requests keep starting every few
+// seconds after the content is in. So a page whose element count has held for
+// the longer CONTENT_STEADY_MS has settled too, unless a data request has been
+// open for over CONTENT_SLOW_REQUEST_MS (content still on its way). Either way
+// the wait ends when content_wait_ms runs out.
 const CONTENT_QUIET_MS = 1500;
-// After a scroll, lazy content starts loading at once, so a shorter quiet spell will do.
+const CONTENT_STEADY_MS = 3000;
+// After a scroll, lazy content starts loading at once, so shorter spells will do.
 const SCROLL_QUIET_MS = 600;
+const SCROLL_STEADY_MS = 1200;
 const CONTENT_POLL_MS = 250;
+// Element counts drift by a few as banners, timers and carousels redraw; a
+// change smaller than this is not new content.
+const contentJitter = count => Math.max(10, Math.ceil(count * 0.005));
 // Lists that load more as the reader scrolls are scrolled through a screen at a
 // time, at most this many screens.
 const CONTENT_MAX_SCREENS = 20;
+const CONTENT_SLOW_REQUEST_MS = 1000;
 // A data request open this long is a long poll or a stream, not content on its way.
 const CONTENT_LONG_REQUEST_MS = 5000;
 const DATA_REQUESTS = new Set(['xhr', 'fetch']);
@@ -41,18 +53,17 @@ async function within(promise, ms) {
   }
 }
 
-// Watches the page's data requests for waitForContent.
+// Watches the page's data requests for waitForContent: the open ones, with the
+// time each started, and when one last finished.
 function watchDataRequests(page) {
   const open = new Map();
-  const state = {open, lastActivity: Date.now()};
+  const state = {open, lastDone: 0};
   const done = request => {
-    if (open.delete(request)) state.lastActivity = Date.now();
+    if (open.delete(request)) state.lastDone = Date.now();
   };
   page.on('request', request => {
     try {
-      if (!DATA_REQUESTS.has(request.resourceType())) return;
-      open.set(request, Date.now());
-      state.lastActivity = Date.now();
+      if (DATA_REQUESTS.has(request.resourceType())) open.set(request, Date.now());
     } catch { /* closed */ }
   });
   page.on('requestfinished', done);
@@ -64,54 +75,92 @@ function watchDataRequests(page) {
 // (page.evaluate has no timeout of its own).
 const elementCount = page => within(page.evaluate(() => document.getElementsByTagName('*').length).catch(() => null), 2000);
 
-// Waits until the page has stopped filling itself in, up to maxMs. Returns
-// {settled, count}: settled is false when maxMs ran out first, count is the
-// last element count seen (null if the page stopped answering).
-async function waitForContent(page, requests, maxMs, quietMs) {
+// Waits until the page has stopped filling itself in, up to maxMs, with
+// {quietMs, steadyMs} as described above. Returns {settled, count}: settled is
+// false when maxMs ran out first, count is the last element count seen (null
+// if the page stopped answering).
+async function waitForContent(page, requests, maxMs, {quietMs, steadyMs}) {
   const started = Date.now();
+  let anchor = null;
   let count = null;
   let changed = started;
+  let busy = 0;
   while (!page.isClosed()) {
     const now = Date.now();
     const next = await elementCount(page);
     if (next === null) return {settled: false, count};
-    if (next !== count) {
-      count = next;
+    count = next;
+    if (anchor === null || Math.abs(count - anchor) >= contentJitter(anchor)) {
+      anchor = count;
       changed = now;
     }
-    let busy = false;
-    for (const opened of requests.open.values()) if (now - opened < CONTENT_LONG_REQUEST_MS) busy = true;
-    const quietSince = Math.max(changed, busy ? now : requests.lastActivity);
-    if (now - quietSince >= quietMs) return {settled: true, count};
+    let slow = false;
+    for (const opened of requests.open.values()) {
+      const age = now - opened;
+      if (age >= CONTENT_LONG_REQUEST_MS) continue;
+      busy = now;
+      if (age >= CONTENT_SLOW_REQUEST_MS) slow = true;
+    }
+    const quiet = now - Math.max(changed, busy, requests.lastDone) >= quietMs;
+    const steady = now - changed >= steadyMs && !slow;
+    if (quiet || steady) return {settled: true, count};
     if (now - started >= maxMs) return {settled: false, count};
     await page.waitForTimeout(Math.min(CONTENT_POLL_MS, Math.max(1, maxMs - (now - started)))).catch(() => {});
   }
   return {settled: false, count};
 }
 
-// Reads a page the way a reader does: once it has settled, scrolls down a screen
-// at a time with the mouse wheel and waits for what each screen loads. Stops at
-// the bottom of the page once reaching it loads nothing more, after
-// CONTENT_MAX_SCREENS, or when maxMs runs out. Returns {settled, ms, screens}.
+const scrollState = page => within(page.evaluate(() => ({y: Math.round(scrollY), height: innerHeight, width: innerWidth,
+  total: document.documentElement.scrollHeight})).catch(() => null), 2000);
+
+// Reads a page the way a reader does: once it has settled (or the first wait
+// ran out), scrolls down a screen at a time and waits for what each screen
+// loads. The mouse wheel goes first; if a wheel does not move the window (the
+// event can land on an element that keeps it, or not be turned into a scroll
+// at all), the page is scrolled by script from then on. Stops at the bottom of
+// the page once a full wait there loads nothing more, when a scroll does not
+// move the page, after CONTENT_MAX_SCREENS, or when maxMs runs out. Returns
+// {settled, ms, screens, scroll}: scroll is how it scrolled ('wheel', 'script',
+// or null when it did not).
 async function readContent(page, requests, maxMs) {
   const started = Date.now();
   const left = () => maxMs - (Date.now() - started);
-  let {settled} = await waitForContent(page, requests, maxMs, CONTENT_QUIET_MS);
+  let {settled} = await waitForContent(page, requests, left(), {quietMs: CONTENT_QUIET_MS, steadyMs: CONTENT_STEADY_MS});
   let screens = 0;
-  while (settled && screens < CONTENT_MAX_SCREENS && left() > SCROLL_QUIET_MS && !page.isClosed()) {
-    const view = await within(page.evaluate(() => ({y: scrollY, height: innerHeight, width: innerWidth,
-      total: document.documentElement.scrollHeight})).catch(() => null), 2000);
-    if (!view || view.y + view.height >= view.total - 2) break;
+  let scroll = null;
+  let lastLook = false;
+  while (screens < CONTENT_MAX_SCREENS && left() > SCROLL_QUIET_MS && !page.isClosed()) {
+    const view = await scrollState(page);
+    if (!view) break;
+    if (view.y + view.height >= view.total - 2) {
+      // At the bottom: one full wait for what reaching it loads, then done
+      // unless the page grew.
+      if (!screens || lastLook) break;
+      lastLook = true;
+      ({settled} = await waitForContent(page, requests, left(), {quietMs: CONTENT_QUIET_MS, steadyMs: CONTENT_STEADY_MS}));
+      continue;
+    }
+    lastLook = false;
+    const by = Math.round(view.height * (0.75 + Math.random() * 0.2));
     try {
-      if (!screens) await page.mouse.move(Math.round(view.width * (0.3 + Math.random() * 0.4)),
-        Math.round(view.height * (0.3 + Math.random() * 0.4)), {steps: 4});
-      await page.mouse.wheel(0, Math.round(view.height * (0.75 + Math.random() * 0.2)));
+      if (scroll !== 'script') {
+        if (!screens) await page.mouse.move(Math.round(view.width * (0.35 + Math.random() * 0.3)),
+          Math.round(view.height * (0.3 + Math.random() * 0.4)), {steps: 4});
+        await within(page.mouse.wheel(0, by).catch(() => null), 2000);
+        // A wheel scroll is animated; give it a moment before checking it moved.
+        await page.waitForTimeout(300);
+        scroll = 'wheel';
+        if ((await scrollState(page))?.y === view.y) scroll = 'script';
+      }
+      if (scroll === 'script') await within(page.evaluate(distance => scrollBy(0, distance), by).catch(() => null), 2000);
     } catch { break; }
+    const moved = await scrollState(page);
+    if (!moved || moved.y === view.y) break;
     screens++;
-    ({settled} = await waitForContent(page, requests, left(), SCROLL_QUIET_MS));
+    ({settled} = await waitForContent(page, requests, left(), {quietMs: SCROLL_QUIET_MS, steadyMs: SCROLL_STEADY_MS}));
   }
   if (screens) await within(page.evaluate(() => scrollTo(0, 0)).catch(() => null), 2000);
-  return {settled, ms: Date.now() - started, screens};
+  return {settled, ms: Date.now() - started, screens, scroll: screens ? scroll : null};
 }
 
 // The code a failed step reports. The pool accepts only lowercase codes
@@ -321,6 +370,8 @@ export async function capturePage(browser, input, hooks) {
     result.error ??= captureErrorCode(error);
     return result;
   } finally {
-    await context?.close().catch(() => {});
+    // A context can stay closing for good after some pages (seen with Camoufox);
+    // the capture is done either way, and the browser is closed after it.
+    if (context) await within(context.close().catch(() => {}), CONTEXT_CLOSE_MS);
   }
 }

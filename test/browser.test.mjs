@@ -455,8 +455,19 @@ test('a page that fills itself in after loading, or as it is scrolled, is read o
       document.getElementById('list').innerHTML = items.map(n => '<a class="card" href="/h' + n + '">Hotel ' + n + '</a>').join('');
     }), 1200);
   </script></body></html>`;
-  // A page that keeps polling never settles; the wait stops at its cap.
+  // A page that keeps sending small requests (analytics, beacons) once it is
+  // complete is read after its content has held for the longer spell.
   const polling = `<html><body><p>rates</p><script>setInterval(() => fetch('/ping'), 300);</script></body></html>`;
+  // A page that keeps adding content never settles; the wait stops at its cap.
+  const ticker = `<html><body><main id="feed"></main><script>
+    setInterval(() => document.getElementById('feed').insertAdjacentHTML('beforeend', '<p>tick</p>'.repeat(20)), 300);
+  </script></body></html>`;
+  // Results from a slow API: the page holds still for seconds while they are on their way.
+  const slow = `<html><body><main id="list"><div class="skeleton">loading</div></main><script>
+    fetch('/slow-results').then(r => r.json()).then(items => {
+      document.getElementById('list').innerHTML = items.map(n => '<a class="card" href="/h' + n + '">Hotel ' + n + '</a>').join('');
+    });
+  </script></body></html>`;
   // A list that loads ten more each time its end scrolls into view, up to 40.
   const scrolling = `<html><body style="margin:0"><main id="list"></main><div id="end">more</div><script>
     let loaded = 0;
@@ -467,10 +478,22 @@ test('a page that fills itself in after loading, or as it is scrolled, is read o
     });
     new IntersectionObserver(entries => { if (entries[0].isIntersecting && loaded < 40) more(); }).observe(document.getElementById('end'));
   </script></body></html>`;
+  // The same list on a page that keeps the mouse wheel to itself (as a map or a
+  // custom scroller does): it is scrolled by script instead.
+  const wheelKept = scrolling.replace('<script>', `<script>addEventListener('wheel', event => event.preventDefault(), {passive: false});`);
   const server = site({
     '/search': filling, '/scrolling': scrolling, '/static': '<html><body><p>done</p></body></html>', '/polling': polling,
+    '/ticker': ticker, '/slow': slow, '/wheel-kept': wheelKept,
     '/ping': {type: 'application/json', body: '{}'},
     '/results': () => ({type: 'application/json', body: JSON.stringify(Array.from({length: 30}, (_, n) => n))}),
+  });
+  // The slow API answers after 4 s.
+  const answer = server.listeners('request')[0];
+  server.removeAllListeners('request');
+  server.on('request', (req, res) => {
+    if (req.url !== '/slow-results') return answer(req, res);
+    setTimeout(() => res.writeHead(200, {'content-type': 'application/json'})
+      .end(JSON.stringify(Array.from({length: 30}, (_, n) => n))), 4000);
   });
   const port = await listen(server);
   t.after(() => close(server));
@@ -494,6 +517,15 @@ test('a page that fills itself in after loading, or as it is scrolled, is read o
     assert.equal(new Set(scrolled.dom.match(/href="\/h\d+"/g)).size, 40, 'a list that loads as it is scrolled is read to its end');
     assert.ok(scrolled.result.content.screens >= 3, String(scrolled.result.content.screens));
     assert.equal(scrolled.result.content.settled, true);
+    assert.equal(scrolled.result.content.scroll, 'wheel');
+
+    const kept = await capture(browser, '/wheel-kept', {content_wait_ms: 20_000});
+    assert.equal(new Set(kept.dom.match(/href="\/h\d+"/g)).size, 40, 'a page that keeps the wheel is scrolled by script');
+    assert.equal(kept.result.content.scroll, 'script');
+
+    const slowly = await capture(browser, '/slow', {content_wait_ms: 10_000});
+    assert.equal((slowly.dom.match(/href="\/h\d+"/g) ?? []).length, 30, 'results on their way are waited for');
+    assert.equal(slowly.result.content.settled, true);
 
     const started = Date.now();
     const plain = await capture(browser, '/static', {content_wait_ms: 10_000});
@@ -501,9 +533,14 @@ test('a page that fills itself in after loading, or as it is scrolled, is read o
     assert.equal(plain.result.content.screens, 0, 'a page that fits on one screen is not scrolled');
     assert.ok(Date.now() - started < 5000, 'a page that is already complete is not held');
 
-    const busy = await capture(browser, '/polling', {content_wait_ms: 3000});
+    const chatty = await capture(browser, '/polling', {content_wait_ms: 10_000});
+    assert.equal(chatty.result.content.settled, true);
+    assert.ok(chatty.result.content.ms >= 3000 && chatty.result.content.ms < 5000, String(chatty.result.content.ms));
+    assert.match(chatty.dom, /rates/);
+
+    const busy = await capture(browser, '/ticker', {content_wait_ms: 3000});
     assert.equal(busy.result.content.settled, false);
     assert.ok(busy.result.content.ms >= 3000 && busy.result.content.ms < 5000, String(busy.result.content.ms));
-    assert.match(busy.dom, /rates/);
+    assert.match(busy.dom, /tick/);
   });
 });
