@@ -7,7 +7,7 @@ import Fastify from 'fastify';
 import Ajv2020 from 'ajv/dist/2020.js';
 import spec from '../docs/openapi.json' with {type: 'json'};
 import {registerApi, API_SCOPES} from '../src/api/v1.mjs';
-import {databaseUrl, fakeBrowser, gatewayFor, html, openStore} from './helpers.mjs';
+import {databaseUrl, html, openStore, platformFor} from './helpers.mjs';
 
 const ajv = new Ajv2020({allErrors: true, strict: false, validateFormats: false});
 const schemaId = 'urn:fetchx:contract';
@@ -82,14 +82,9 @@ test('every documented example matches its schema', () => {
 test('real responses from the gateway match the contract', {skip: !databaseUrl}, async t => {
   const store = await openStore();
   t.after(() => store.close());
-  const browser = fakeBrowser(async (input, hooks) => {
-    await hooks.artifact({kind: 'dom', content_type: 'text/html', body_base64: Buffer.from(html('rendered')).toString('base64')});
-    await hooks.artifact({kind: 'screenshot', content_type: 'image/jpeg', body_base64: Buffer.from('jpeg').toString('base64')});
-    return {status: 200, final_url: input.url, headers: {'content-type': 'text/html'}, cookies: [], captcha: []};
-  });
-  const {call, gateway} = await gatewayFor(store, {browser, site: c => c.url.includes('/wall') ? {status: 403, body: 'denied'}
-    : c.url.includes('/pdf') ? {headers: {'content-type': 'application/pdf'}, body: '%PDF-1.4'}
-      : {body: html('hello'), headers: {'set-cookie': 'sid=1; Path=/'}}});
+  const {call, engine} = await platformFor(store, {script: request => request.url.includes('/wall') ? {status: 'failed', body: 'denied'}
+    : request.url.includes('/pdf') ? {content_type: 'application/pdf', body: '%PDF-1.4'}
+      : {body: html('hello'), data: {headers: {'set-cookie': 'sid=1; Path=/'}, cookies: [{name: 'sid', value: '1', domain: 'shop.example.com', path: '/'}]}}});
   const expect = async (method, path, status, request, specUrl = path.split('?')[0]) => {
     const response = await call(method.toUpperCase(), path, request);
     assert.equal(response.status, status, `${method} ${path}: ${JSON.stringify(response.body)}`);
@@ -105,7 +100,7 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   const failed = await expect('post', '/v1/fetch', 200, {body: {url: 'https://shop.example.com/wall', render: 'never', max_attempts: 2}});
   assert.equal(failed.status, 'failed');
   const pending = await expect('post', '/v1/fetch', 202, {body: {url: 'https://shop.example.com/a', async: true}});
-  await gateway.service.running.get(pending.id);
+  await engine.jobs.get(pending.id).done;
   await expect('get', `/v1/fetch/${ok.id}`, 200, undefined, one);
   await expect('get', `/v1/fetch/${ok.id}?include_body=false`, 200, undefined, one);
   await expect('get', '/v1/fetch?limit=2', 200);

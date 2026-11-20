@@ -1,20 +1,14 @@
-// Admin portal step 2: an operator role on control-plane users and an admin API
-// for provider routing rules. Disabled unless controlPlane.admin.enabled is
-// true. Operators are granted out of band with the operator CLI; a project
-// member cannot reach these routes. Every rule change goes through the
-// provider-rules data layer (validated, versioned, audited) and is applied to
-// the running gateway immediately. Responses never contain secrets.
+// The admin portal: an operator role on control-plane users, and the admin
+// API. Disabled unless controlPlane.admin.enabled is true. Operators are
+// granted out of band with the operator CLI; a project member cannot reach
+// these routes. Provider rules, reachability probes, site knowledge and the
+// engine's spend budgets live in the engine: these routes check the operator
+// and forward to the engine's /internal/v1/admin with the operator's email as
+// the actor, and pass the engine's answer (or refusal) back unchanged. The
+// platform's own budgets (src/budgets.mjs) are kept here, and the budget list
+// and the audit log show both sides together. Responses never contain secrets.
 import {fail} from './policy.mjs';
-import {startProbe,listProbes,readProbe,applyProbe} from './admin-ops.mjs';
-import {siteKnowledgeOverview,siteRoutes,forgetSite,siteHost} from './site-knowledge.mjs';
-import {RULE_PROVIDERS,loadProviderRules,providerRule,providerRuleSources,saveProviderRule,setProviderRuleEnabled,deleteProviderRule,providerRuleAudit} from './provider-rules.mjs';
-import {budgetAudit,budgetDefinition,budgetUsage,listBudgets,loadBudgets,resetBudget,setBudget} from './budgets.mjs';
-
-const BUDGET_KEY=/^[a-z][A-Za-z0-9.]{1,80}$/;
-// A budget change as an audit-log row, in the shape of rule rows.
-const budgetEntry=e=>({id:'budget-'+e.id,rule_id:'budget:'+e.key,action:e.action,before:e.before,after:e.after,note:e.reason,actor:e.actor,at:e.at});
-const RULE_ID=/^[a-z0-9][a-z0-9._-]{0,63}$/,HOST=/^(?=.{1,253}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
-const plain=v=>!!v&&typeof v==='object'&&!Array.isArray(v);
+import {BUDGET_KEYS,budgetAudit,listBudgets,loadBudgets,resetBudget,setBudget} from './budgets.mjs';
 
 export async function initControlAdmin(pool){await pool.query(`
  CREATE TABLE IF NOT EXISTS control_operators(user_id uuid PRIMARY KEY REFERENCES control_users(id),granted_by text NOT NULL,granted_at timestamptz NOT NULL DEFAULT now());
@@ -49,7 +43,25 @@ export async function listOperators(pool){
 
 // Registers /control/admin/* on the control-plane Fastify scope. `authenticated`
 // is the control plane's session + CSRF check; `body` and `noQuery` are its
-// exact-input helpers.
+// exact-input helpers. Each entry is [method, path, sends a body].
+export const ADMIN_ROUTES = Object.freeze([
+ ['GET','/admin/rules',false],['POST','/admin/rules',true],['POST','/admin/rules/test',true],['PUT','/admin/rules/:id',true],
+ ['POST','/admin/rules/:id/enable',true],['POST','/admin/rules/:id/disable',true],['DELETE','/admin/rules/:id',false],
+ ['GET','/admin/rules/:id/audit',false],
+ ['GET','/admin/probes',false],['POST','/admin/probes',true],['GET','/admin/probes/:pid',false],['POST','/admin/probes/:pid/apply',true],
+ ['GET','/admin/sites',false],['GET','/admin/sites/:host',false],['DELETE','/admin/sites/:host',false],
+]);
+// Routes that also reach the engine, but merge in the platform's own budgets:
+// a key the platform owns is answered here, any other goes to the engine.
+export const MERGED_ADMIN_ROUTES = Object.freeze([
+ ['GET','/admin/audit',false],['GET','/admin/budgets',false],['PUT','/admin/budgets/:key',true],
+ ['POST','/admin/budgets/:key/reset',true],['GET','/admin/budgets/:key/audit',false],
+]);
+const PARAM=/^[A-Za-z0-9._-]{1,253}$/;
+// A budget change as an audit-log row, in the shape of the engine's rows.
+const budgetEntry=e=>({id:'budget-'+e.id,rule_id:'budget:'+e.key,action:e.action,before:e.before,after:e.after,note:e.reason,actor:e.actor,at:e.at});
+const newestFirst=(a,b)=>new Date(b.at)-new Date(a.at);
+
 export function registerAdminRoutes(route,{gateway,config,authenticated,body,noQuery}){
  const store=gateway.store;
  async function operator(req){
@@ -58,107 +70,51 @@ export function registerAdminRoutes(route,{gateway,config,authenticated,body,noQ
   if(!await isOperator(store.pool,auth.user.id))fail('operator_required',403);
   return auth;
  }
- const actorOf=auth=>auth.user.email;
- const ruleId=value=>{if(typeof value!=='string'||!RULE_ID.test(value))fail('rule_id_invalid',400);return value;};
- // Writes take effect at once; the periodic refresh covers other gateways.
- const refresh=()=>loadProviderRules(store.pool,gateway.config);
- const rules=async()=>{await refresh();return {rules:providerRuleSources(gateway.config),providers:RULE_PROVIDERS};};
-
  route('GET','/admin/session',async req=>{noQuery(req);const auth=await operator(req);return {operator:true,email:auth.user.email};});
- route('GET','/admin/rules',async req=>{noQuery(req);await operator(req);return rules();});
- route('POST','/admin/rules',async req=>{
-  noQuery(req);const auth=await operator(req),input=body(req,['rule']);
-  const saved=await saveProviderRule(store,input.rule,{actor:actorOf(auth),expectedVersion:null});
-  await refresh();return {rule:saved};
+ for(const [method,path,sendsBody] of ADMIN_ROUTES)route(method,path,async req=>{
+  noQuery(req);const auth=await operator(req);
+  // Path values are checked here only for shape; the engine validates them.
+  const target=path.slice('/admin'.length).replace(/:([a-z]+)/g,(_,name)=>{
+   const value=req.params?.[name];if(typeof value!=='string'||!PARAM.test(value))fail(name==='host'?'host_invalid':name==='pid'?'probe_id_invalid':'rule_id_invalid',400);
+   return encodeURIComponent(value);
+  });
+  const input=sendsBody?body(req,Object.keys(req.body??{})):undefined;
+  return gateway.engine.admin(method,target,{body:input,actor:method==='GET'?undefined:auth.user.email});
  });
- // Read-only check: would this provider be used for this host?
- route('POST','/admin/rules/test',async req=>{
-  noQuery(req);await operator(req);const input=body(req,['provider','host']);
-  if(!RULE_PROVIDERS.includes(input.provider))fail('rule_provider_invalid',400);
-  const host=typeof input.host==='string'?input.host.trim().toLowerCase().replace(/\.$/,''):'';
-  if(!HOST.test(host))fail('rule_host_invalid',400);
-  await refresh();const rule=providerRule(gateway.config,input.provider,host);
-  return {provider:input.provider,host,excluded:!!rule,rule:rule?rule.id:null,reason:rule?rule.reason:null};
- });
- route('PUT','/admin/rules/:id',async req=>{
-  noQuery(req);const auth=await operator(req),id=ruleId(req.params.id),input=body(req,['rule','version']);
-  if(!plain(input.rule)||input.rule.id!==id)fail('rule_id_mismatch',400);
-  if(!Number.isSafeInteger(input.version)||input.version<1)fail('rule_version_required',400);
-  const saved=await saveProviderRule(store,input.rule,{actor:actorOf(auth),expectedVersion:input.version});
-  await refresh();return {rule:saved};
- });
- for(const action of ['enable','disable'])route('POST',`/admin/rules/:id/${action}`,async req=>{
-  noQuery(req);const auth=await operator(req),id=ruleId(req.params.id),input=body(req,['reason']);
-  const saved=await setProviderRuleEnabled(store,gateway.config,id,action==='enable',{actor:actorOf(auth),reason:input.reason});
-  await refresh();return {rule:saved};
- });
- route('DELETE','/admin/rules/:id',async req=>{
-  noQuery(req);const auth=await operator(req),id=ruleId(req.params.id);
-  const result=await deleteProviderRule(store,id,{actor:actorOf(auth)});
-  await refresh();return result;
- });
- route('GET','/admin/rules/:id/audit',async req=>{noQuery(req);await operator(req);return {entries:await providerRuleAudit(store.pool,{ruleId:ruleId(req.params.id),limit:200})};});
- // One audit log: rule changes, forgotten sites and budget changes, newest first.
+
+ // ---- One audit log and one budget list across the platform and the engine ----
  route('GET','/admin/audit',async req=>{
   noQuery(req);await operator(req);
-  const [rules,budgets]=await Promise.all([providerRuleAudit(store.pool,{limit:200}),budgetAudit(store.pool,{limit:200})]);
-  const entries=[...rules,...budgets.map(budgetEntry)].sort((a,b)=>new Date(b.at)-new Date(a.at)).slice(0,200);
-  return {entries};
+  const [engine,own]=await Promise.all([gateway.engine.admin('GET','/audit'),budgetAudit(store.pool,{limit:200})]);
+  return {entries:[...(engine.entries??[]),...own.map(budgetEntry)].sort(newestFirst).slice(0,200)};
  });
-
- // ---- Step 3: reachability probes (background jobs) ----
- route('GET','/admin/probes',async req=>{noQuery(req);await operator(req);return {probes:await listProbes(store.pool)};});
- route('POST','/admin/probes',async req=>{
-  noQuery(req);const auth=await operator(req),input=body(req,['host','countries','include_excluded']);
-  const {job,...started}=await startProbe(store,gateway,input,{actor:actorOf(auth),run:gateway.adminProbeRunner});job.catch(()=>{});return {probe:started};
- });
- route('GET','/admin/probes/:pid',async req=>{noQuery(req);await operator(req);return {probe:await readProbe(store.pool,req.params.pid)};});
- route('POST','/admin/probes/:pid/apply',async req=>{
-  noQuery(req);const auth=await operator(req),input=body(req,['rules']);
-  const applied=await applyProbe(store,gateway,req.params.pid,input,{actor:actorOf(auth)});
-  await refresh();return {applied};
- });
-
- // ---- Site knowledge: what has worked per host (read, and forget to relearn) ----
- const siteParam=value=>{const host=siteHost('https://'+String(value??'')+'/');if(!host||host!==String(value).toLowerCase())fail('host_invalid',400);return host;};
- route('GET','/admin/sites',async req=>{noQuery(req);await operator(req);return {sites:await siteKnowledgeOverview(store.pool,{config:gateway.config})};});
- route('GET','/admin/sites/:host',async req=>{noQuery(req);await operator(req);const host=siteParam(req.params.host);return {host,routes:await siteRoutes(store.pool,host,{config:gateway.config})};});
- // ---- Budgets: spend caps and limits, adjustable without a redeploy ----
- const budgetKey=value=>{if(typeof value!=='string'||!BUDGET_KEY.test(value))fail('budget_unknown',404);budgetDefinition(value);return value;};
- const budgetView=async key=>{
-  const [entry]=listBudgets(gateway.config).filter(b=>b.key===key);
-  const used=await budgetUsage(store.pool).catch(()=>({}));
-  return {...entry,used:used[key]??null};
- };
+ const budgetKey=value=>{if(typeof value!=='string'||!PARAM.test(value))fail('budget_unknown',404);return value;};
+ const own=key=>BUDGET_KEYS.includes(key);
+ const ownView=key=>({budget:{...listBudgets(gateway.config).find(b=>b.key===key),used:null}});
  route('GET','/admin/budgets',async req=>{
   noQuery(req);await operator(req);
+  const engine=await gateway.engine.admin('GET','/budgets');
   await loadBudgets(store.pool,gateway.config);
-  // Usage is shown when it can be read; the budgets are listed either way.
-  const used=await budgetUsage(store.pool).catch(()=>null);
-  return {budgets:listBudgets(gateway.config).map(b=>({...b,used:used?.[b.key]??null})),
-   autoscaler:gateway.browserPool?.autoscalerStatus?.()??null};
+  return {budgets:[...(engine.budgets??[]),...listBudgets(gateway.config).map(b=>({...b,used:null}))],autoscaler:engine.autoscaler??null};
  });
  route('PUT','/admin/budgets/:key',async req=>{
-  noQuery(req);const auth=await operator(req),key=budgetKey(req.params.key),input=body(req,['value','version','reason']);
+  noQuery(req);const auth=await operator(req),key=budgetKey(req.params.key),input=body(req,Object.keys(req.body??{}));
+  if(!own(key))return gateway.engine.admin('PUT','/budgets/'+encodeURIComponent(key),{body:input,actor:auth.user.email});
+  body(req,['value','version','reason']);
   if(!Object.hasOwn(input,'value'))fail('budget_value_invalid',400);
-  await setBudget(store,gateway.config,key,{value:input.value,expectedVersion:input.version,actor:actorOf(auth),reason:input.reason});
-  return {budget:await budgetView(key)};
+  await setBudget(store,gateway.config,key,{value:input.value,expectedVersion:input.version,actor:auth.user.email,reason:input.reason});
+  return ownView(key);
  });
  route('POST','/admin/budgets/:key/reset',async req=>{
-  noQuery(req);const auth=await operator(req),key=budgetKey(req.params.key),input=body(req,['version','reason']);
-  await resetBudget(store,gateway.config,key,{expectedVersion:input.version,actor:actorOf(auth),reason:input.reason});
-  return {budget:await budgetView(key)};
+  noQuery(req);const auth=await operator(req),key=budgetKey(req.params.key),input=body(req,Object.keys(req.body??{}));
+  if(!own(key))return gateway.engine.admin('POST','/budgets/'+encodeURIComponent(key)+'/reset',{body:input,actor:auth.user.email});
+  body(req,['version','reason']);
+  await resetBudget(store,gateway.config,key,{expectedVersion:input.version,actor:auth.user.email,reason:input.reason});
+  return ownView(key);
  });
  route('GET','/admin/budgets/:key/audit',async req=>{
   noQuery(req);await operator(req);const key=budgetKey(req.params.key);
+  if(!own(key))return gateway.engine.admin('GET','/budgets/'+encodeURIComponent(key)+'/audit');
   return {entries:(await budgetAudit(store.pool,{key,limit:200})).map(budgetEntry)};
  });
-
- route('DELETE','/admin/sites/:host',async req=>{
-  noQuery(req);const auth=await operator(req),host=siteParam(req.params.host);
-  const removed=await forgetSite(store.pool,host);
-  await store.pool.query("INSERT INTO routing_rule_audit(rule_id,action,before,after,actor) VALUES($1,'forget_site',$2,NULL,$3)",['site:'+host,{routes:removed},actorOf(auth)]);
-  return {host,forgotten_routes:removed};
- });
-
 }

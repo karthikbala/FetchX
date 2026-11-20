@@ -1,5 +1,7 @@
-// FetchX gateway: builds the HTTP app (public API, console API, Stripe webhook)
-// and, when run directly, starts the process.
+// FetchX platform: builds the public HTTP app (the /v1 API, the console API,
+// the Stripe webhook) and the private engine-events listener, and, when run
+// directly, starts the process. Fetching itself is the engine's
+// (karthikbala/fetchx-engine), reached over a private network.
 import Fastify from 'fastify';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -9,46 +11,36 @@ import {sha} from './crypto.mjs';
 import {Store} from './store.mjs';
 import {Ledger} from './billing/ledger.mjs';
 import {Purchases} from './billing/purchases.mjs';
-import {CaptchaSolver} from './captcha/solver.mjs';
-import {FetchService} from './fetch/service.mjs';
-import {BrowserSlots} from './browser/queue.mjs';
-import {BrowserWorkerPool} from './browser/pool.mjs';
-import {browserRuntime} from './browser/engine.mjs';
+import {EngineClient} from './engine/client.mjs';
+import {eventsServer} from './engine/events.mjs';
+import {FetchFront} from './fetch/front.mjs';
+import {WebhookSender} from './fetch/webhooks.mjs';
 import {registerApi, apiError} from './api/v1.mjs';
 import {ControlIdentity} from './control-identity.mjs';
 import {isControlRequest, registerControl} from './control.mjs';
 import {ControlStripe, isStripeWebhookRequest, registerStripeWebhook} from './control-stripe.mjs';
-import {loadProviderRules} from './provider-rules.mjs';
-import {interruptProbes} from './admin-ops.mjs';
-import {autoscalerLimits, loadBudgets} from './budgets.mjs';
+import {loadBudgets} from './budgets.mjs';
 
-// Wires the services for one gateway. Tests pass their own fakes in `deps`.
-export function createGateway({store, config, deps = {}}) {
-  const gateway = {store, config};
-  if (config.controlPlane?.enabled === true) gateway.controlIdentity = deps.identity ?? new ControlIdentity({store, config, mail: deps.mail});
-  gateway.ledger = deps.ledger ?? new Ledger({store, config});
-  gateway.purchases = deps.purchases ?? new Purchases({store});
-  gateway.captchaSolver = deps.solver ?? new CaptchaSolver(store, config, deps.solverOptions);
-  const runtime = deps.runtime !== undefined ? deps.runtime : (browserRuntime(config).runtime ?? null);
-  // The pool serves the autoscaler its queue metrics from the slots below,
-  // and the worker budget set in the admin portal.
-  const pool = deps.browserPool !== undefined ? deps.browserPool
-    : config.browser?.pool ? new BrowserWorkerPool(config.browser.pool, {runtime: async () => browserRuntime(config),
-      metrics: async () => ({queue: gateway.slots.metrics(), max_concurrent_requests: config.browser.maxConcurrentRequests ?? 64,
-        limits: autoscalerLimits(config)})}) : null;
-  gateway.browserPool = pool;
-  gateway.slots = deps.slots ?? new BrowserSlots({pool, localConcurrency: config.browser?.maxConcurrent ?? 1, runner: deps.browserRunner});
-  gateway.service = deps.service ?? new FetchService({store, config, ledger: gateway.ledger, solver: gateway.captchaSolver,
-    slots: gateway.slots, runtime, resolve: deps.resolve, exchangeImpl: deps.exchange});
-  return gateway;
+// Wires the services for one platform. Tests pass their own fakes in `deps`.
+export function createPlatform({store, config, deps = {}}) {
+  const platform = {store, config};
+  if (config.controlPlane?.enabled === true) platform.controlIdentity = deps.identity ?? new ControlIdentity({store, config, mail: deps.mail});
+  platform.ledger = deps.ledger ?? new Ledger({store, config});
+  platform.purchases = deps.purchases ?? new Purchases({store});
+  platform.engine = deps.engine ?? new EngineClient(config.engine, {fetchImpl: deps.engineFetch});
+  platform.front = new FetchFront({store, config, ledger: platform.ledger, engine: platform.engine,
+    onSettled: () => platform.webhooks?.kick()});
+  platform.webhooks = new WebhookSender({store, front: platform.front, config, intervalMs: deps.webhookIntervalMs,
+    ...(deps.webhookResolve ? {resolve: deps.webhookResolve} : {}), ...(deps.webhookPost ? {post: deps.webhookPost} : {})});
+  return platform;
 }
 
-export function server(gateway, {stripeFetch, stripeAutoProcess = true} = {}) {
-  const {config} = gateway;
+export function server(platform, {stripeFetch, stripeAutoProcess = true} = {}) {
+  const {config} = platform;
   const app = Fastify({logger: false, bodyLimit: 2 * 1024 * 1024, requestTimeout: 150_000});
-  const stripe = new ControlStripe({store: gateway.store, config, purchases: gateway.purchases, fetchStripe: stripeFetch});
+  const stripe = new ControlStripe({store: platform.store, config, purchases: platform.purchases, fetchStripe: stripeFetch});
   app.decorate('stripe', stripe);
-  app.decorate('gateway', gateway);
+  app.decorate('gateway', platform);
 
   // API keys: console keys (fxk_...) carry scopes; keys provisioned in config
   // (config.projects[id].tokenHash) may call everything.
@@ -56,8 +48,8 @@ export function server(gateway, {stripeFetch, stripeAutoProcess = true} = {}) {
     const token = /^Bearer (\S+)$/i.exec(req.headers.authorization ?? '')?.[1];
     if (!token) throw new GatewayError('unauthorized', 401);
     if (token.startsWith('fxk_')) {
-      if (!gateway.controlIdentity) throw new GatewayError('unauthorized', 401);
-      const principal = await gateway.controlIdentity.authenticateKey(token);
+      if (!platform.controlIdentity) throw new GatewayError('unauthorized', 401);
+      const principal = await platform.controlIdentity.authenticateKey(token);
       if (!principal.scopes.includes(scope)) throw new GatewayError('api_key_scope_forbidden', 403);
       req.project = principal.project;
       req.keyId = principal.key_id;
@@ -79,67 +71,73 @@ export function server(gateway, {stripeFetch, stripeAutoProcess = true} = {}) {
     if (!(error instanceof GatewayError) && !error.validation && !(error.statusCode < 500)) {
       process.stderr.write(JSON.stringify({event: 'request_failed', path: req.routeOptions?.url ?? null, name: error?.name ?? null}) + '\n');
     }
+    if (error?.code === 'unavailable' && error.engineCause) {
+      process.stderr.write(JSON.stringify({event: 'engine_unavailable', cause: error.engineCause}) + '\n');
+    }
     const {status, body} = apiError(error);
     if (body.error.retry_after_seconds) reply.header('retry-after', String(body.error.retry_after_seconds));
     reply.code(status).send(body);
   });
   app.get('/healthz', async () => {
-    await gateway.store.pool.query('SELECT 1');
+    await platform.store.pool.query('SELECT 1');
     return {ok: true, service: 'FetchX', release: config.release ?? null};
   });
-  registerApi(app, {service: gateway.service, ledger: gateway.ledger});
-  registerControl(app, gateway, {identity: gateway.controlIdentity, ledger: gateway.ledger, service: gateway.service, stripe});
+  registerApi(app, {service: platform.front, ledger: platform.ledger});
+  registerControl(app, platform, {identity: platform.controlIdentity, ledger: platform.ledger, service: platform.front, stripe});
   registerStripeWebhook(app, stripe, {autoProcess: stripeAutoProcess});
   app.addHook('onClose', async () => {
-    await gateway.service.close();
-    await gateway.browserPool?.close();
+    await platform.webhooks.close();
   });
   return app;
 }
 
-export {isControlRequest, isStripeWebhookRequest};
+export {isControlRequest, isStripeWebhookRequest, eventsServer};
 
 async function main() {
-  const config = JSON.parse(await readFile(process.env.GATEWAY_CONFIG ?? '/run/secrets/gateway.json', 'utf8'));
+  const config = JSON.parse(await readFile(process.env.PLATFORM_CONFIG ?? '/run/secrets/platform.json', 'utf8'));
   const store = new Store(process.env.DATABASE_URL);
   await store.acquireRunnerLock(() => {
-    process.stderr.write('gateway_ownership_lost\n');
+    process.stderr.write('platform_ownership_lost\n');
     process.exit(1);
   });
   await store.init();
-  const rules = await loadProviderRules(store.pool, config);
-  if (rules.rejected.length) process.stderr.write(`provider_rules_rejected:${rules.rejected.length}\n`);
   const budgets = await loadBudgets(store.pool, config);
   if (budgets.rejected.length) process.stderr.write(`budgets_rejected:${budgets.rejected.join(',')}\n`);
-  await interruptProbes(store.pool);
-  const gateway = createGateway({store, config});
-  await gateway.captchaSolver.recover();
-  const recovered = await gateway.service.recover();
-  if (recovered) process.stderr.write(`fetch_requests_recovered_uncertain:${recovered}\n`);
-  await gateway.browserPool?.start();
-  const app = server(gateway);
-  const refreshMs = config.providerRulesRefreshMs ?? 30_000;
-  const refresh = setInterval(() => {
-    loadProviderRules(store.pool, config).catch(() => process.stderr.write('provider_rules_refresh_failed\n'));
-    loadBudgets(store.pool, config).catch(() => process.stderr.write('budgets_refresh_failed\n'));
-  }, refreshMs);
+  const platform = createPlatform({store, config});
+  if (!platform.engine.configured) process.stderr.write('engine_not_configured\n');
+  const app = server(platform);
+  const events = eventsServer(platform);
+  platform.webhooks.start();
+  // Jobs whose event never came are settled from the engine; jobs it never
+  // started are released.
+  let reconciling = null;
+  const reconcile = setInterval(async () => {
+    if (reconciling) return;
+    reconciling = platform.front.reconcile().catch(() => process.stderr.write('reconcile_failed\n'));
+    try { await reconciling; } finally { reconciling = null; }
+  }, 30_000);
+  reconcile.unref();
+  // Budgets saved in the admin portal by another process.
+  const refresh = setInterval(() => loadBudgets(store.pool, config).catch(() => process.stderr.write('budgets_refresh_failed\n')),
+    30_000);
   refresh.unref();
-  let pruning = null;
-  const retention = setInterval(async () => {
-    if (pruning) return;
-    pruning = gateway.service.prune().catch(() => process.stderr.write('retention_failed\n'));
-    try { await pruning; } finally { pruning = null; }
-  }, 300_000);
+  const retention = setInterval(() => platform.front.prune().catch(() => process.stderr.write('retention_failed\n')), 3_600_000);
   retention.unref();
-  const port = process.env.GATEWAY_PORT === undefined ? 8788 : Number(process.env.GATEWAY_PORT);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('gateway_port_invalid');
-  await app.listen({host: process.env.GATEWAY_HOST ?? '0.0.0.0', port});
+  const port = (name, fallback) => {
+    const value = process.env[name] === undefined ? fallback : Number(process.env[name]);
+    if (!Number.isInteger(value) || value < 1 || value > 65535) throw new Error(`${name.toLowerCase()}_invalid`);
+    return value;
+  };
+  await app.listen({host: process.env.PLATFORM_HOST ?? '0.0.0.0', port: port('PLATFORM_PORT', 8788)});
+  await events.listen({host: process.env.PLATFORM_EVENTS_HOST ?? '0.0.0.0', port: port('PLATFORM_EVENTS_PORT', 8789)});
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, async () => {
+      clearInterval(reconcile);
       clearInterval(refresh);
       clearInterval(retention);
+      await events.close();
       await app.close();
-      await pruning;
+      await reconciling;
       await store.close();
       process.exit(0);
     });

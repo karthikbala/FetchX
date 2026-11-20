@@ -8,7 +8,7 @@ The console at fetchx.ai/app (sign-in, projects, API keys, the playground, reque
 - `src/control.mjs`: the console API. Every project route checks membership; every write checks the session-bound CSRF token.
 - `src/control-connect.mjs`: the Connect device flow that gives an agent a key after the user approves it.
 - `src/control-stripe*.mjs`: Checkout and the webhook inbox ([Stripe payments](stripe-payments.md)).
-- `src/control-admin.mjs`: the operator portal: provider rules, reachability probes and site knowledge ([provider rules](provider-rules.md), [site knowledge](site-knowledge.md)).
+- `src/control-admin.mjs`: the operator portal: provider rules, reachability probes and site knowledge, forwarded to the engine's admin API with the operator as actor.
 
 ## Console API
 
@@ -71,7 +71,7 @@ Codes have eight digits, expire after ten minutes and allow five attempts. Reque
 
 ## Local review
 
-`scripts/control-preview.mjs` runs the real gateway on `127.0.0.1:8789` against a disposable `gateway_test_*` database, with sign-in codes written to `.local/console-preview/mailbox.jsonl` instead of email. `--fixture` answers every fetch from an offline fake site (`/success`, `/forbidden`, `/not-found`, `/unknown`, `/slow` on any host).
+`scripts/control-preview.mjs` runs the real platform on `127.0.0.1:8789` against a disposable `gateway_test_*` database, with sign-in codes written to `.local/console-preview/mailbox.jsonl` instead of email. `--fixture` answers every fetch from an in-process fake engine (`/success`, `/forbidden`, `/not-found`, `/unknown`, `/slow` on any host); `--engine-url http://127.0.0.1:8790` uses an engine you run locally instead, with its service token in `CONTROL_PREVIEW_ENGINE_TOKEN`.
 
 ```sh
 node scripts/control-preview.mjs --fixture --database-url postgresql://127.0.0.1:5432/gateway_test_console_preview

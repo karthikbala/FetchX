@@ -3,14 +3,10 @@
 import pg from 'pg';
 import {initControlIdentity} from './control-identity.mjs';
 import {initControlAdmin} from './control-admin.mjs';
-import {initAdminOps} from './admin-ops.mjs';
 import {initControlStripe} from './control-stripe.mjs';
 import {initPurchases} from './billing/purchases.mjs';
 import {initLedger} from './billing/ledger.mjs';
-import {initProviderRules} from './provider-rules.mjs';
-import {initSiteKnowledge} from './site-knowledge.mjs';
-import {initCaptchaSolves} from './captcha/solver.mjs';
-import {initFetchStore} from './fetch/service.mjs';
+import {initFetchFront} from './fetch/front.mjs';
 import {initBudgets} from './budgets.mjs';
 
 export class Store {
@@ -19,8 +15,8 @@ export class Store {
     this.pool = new pg.Pool({connectionString: url, max: 12});
   }
 
-  // Only one gateway process runs at a time: it owns pending requests and
-  // browser slots. Losing the lock stops the process.
+  // Only one platform process runs at a time: it owns settlement and webhook
+  // delivery. Losing the lock stops the process.
   async acquireRunnerLock(onLost) {
     if (this.runner) throw new Error('gateway_runner_lock_already_acquired');
     const client = new pg.Client({connectionString: this.url});
@@ -67,12 +63,8 @@ export class Store {
     await initPurchases(this.pool);
     await initLedger(this.pool);
     await initControlAdmin(this.pool);
-    await initAdminOps(this.pool);
     await initControlStripe(this.pool);
-    await initProviderRules(this.pool);
-    await initSiteKnowledge(this.pool);
-    await initCaptchaSolves(this.pool);
-    await initFetchStore(this.pool);
+    await initFetchFront(this.pool);
     await initBudgets(this.pool);
   }
 

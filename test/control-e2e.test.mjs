@@ -1,14 +1,15 @@
 // Self-service end to end, through the real app: sign in, create projects,
-// fetch from the console and with API keys, and check that credits move only
-// when a fetch succeeds. Every table lives in a fresh schema.
+// fetch from the console and with API keys (against the in-memory engine), and
+// check that credits move only when a fetch succeeds. Every table lives in a
+// fresh schema.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes, randomUUID} from 'node:crypto';
 import pg from 'pg';
 import {Store} from '../src/store.mjs';
-import {createGateway, server} from '../src/server.mjs';
-import {GatewayError} from '../src/policy.mjs';
-import {fakeExchange, html, PUBLIC_ADDRESS} from './helpers.mjs';
+import {createPlatform, server} from '../src/server.mjs';
+import {fakeEngine} from './fake-engine.mjs';
+import {SERVICE_TOKEN} from './helpers.mjs';
 
 const ORIGIN = 'http://127.0.0.1:4331';
 const SCOPES = ['fetch:read', 'fetch:write', 'usage:read'];
@@ -24,22 +25,27 @@ test('self-service: identity, isolation, keys, idempotency and success-only cred
   const store = new Store(url.href);
   await store.init();
   const config = {
-    release: 'control-e2e', artifactKey: randomBytes(32).toString('hex'), projects: {}, proxies: [],
+    release: 'control-e2e', sealingKey: randomBytes(32).toString('hex'), projects: {},
+    engine: {url: 'http://engine.test:8790', serviceToken: SERVICE_TOKEN, eventKey: 'e'.repeat(40)},
     controlPlane: {enabled: true, origins: [ORIGIN], bridgeSecret: randomBytes(32).toString('hex'), sessionSecure: false,
       allowLoopbackDevelopment: true, apiBaseUrl: 'http://127.0.0.1:8789', creditPolicy: {trialCredits: TRIAL}},
   };
-  // The site: answers 200 unless told otherwise; `hold` parks a request until released.
+  // The engine: succeeds unless told otherwise; `hold` parks a job until released;
+  // `privateAnswer` makes the site's name resolve to a private address.
   let mode = 'ok';
   let hold = null;
-  let resolveAddress = PUBLIC_ADDRESS;
-  const {exchange, calls} = fakeExchange(async () => {
-    if (hold) await hold.promise;
-    if (mode === 'forbidden') return {status: 403, body: 'Forbidden'};
-    if (mode === 'timeout') return new GatewayError('source_timeout', 504);
-    return {body: html('fixture value 42')};
-  });
+  let privateAnswer = false;
+  const engine = fakeEngine({token: SERVICE_TOKEN, script: async () => {
+    const parked = hold?.promise;
+    if (privateAnswer) return {status: 'failed', error_code: 'url_not_allowed'};
+    if (mode === 'forbidden') return {status: 'failed', error_code: 'blocked', hold: parked};
+    if (mode === 'timeout') return {status: 'failed', error_code: 'timeout', hold: parked};
+    return {step: 'http', hold: parked, data: {markdown: '# Data\n\nfixture value 42'}};
+  }});
+  // What reached the site: every job the engine started.
+  const calls = {get length() { return engine.jobs.size; }};
   const mailbox = [];
-  const gateway = createGateway({store, config, deps: {exchange, resolve: async () => resolveAddress, runtime: null, browserPool: null,
+  const gateway = createPlatform({store, config, deps: {engineFetch: engine.fetchImpl,
     mail: {configured: true, sendCode: async message => { mailbox.push(message); }}}});
   const app = server(gateway, {stripeAutoProcess: false});
   t.after(async () => {
@@ -201,22 +207,22 @@ test('self-service: identity, isolation, keys, idempotency and success-only cred
     assert.equal((await balance(projectB.id, b)).available, TRIAL - 1, 'charged once');
   });
 
-  await t.test('private destinations and leaked credentials are refused before anything is sent or reserved', async () => {
+  await t.test('private destinations and leaked credentials are refused, and nothing is charged for them', async () => {
     const before = await balance(projectA.id, a);
     await noDispatch(async () => {
       for (const target of ['https://127.0.0.1/', 'https://user@shop.example.com/', 'ftp://shop.example.com/', 'https://shop.example.com/?k=' + keyB.token]) {
         const denied = await console_('POST', `/projects/${projectA.id}/fetch`, {url: target}, a);
         assert.equal(denied.status, 400, target);
       }
-      resolveAddress = [{address: '10.0.0.8', family: 4}];
-      try {
-        const ssrf = await console_('POST', `/projects/${projectA.id}/fetch`, {url: 'https://internal.example.com/'}, a);
-        assert.equal(ssrf.body.status, 'failed');
-        assert.equal(ssrf.body.error.code, 'url_not_allowed');
-      } finally {
-        resolveAddress = PUBLIC_ADDRESS;
-      }
     });
+    privateAnswer = true;
+    try {
+      const ssrf = await console_('POST', `/projects/${projectA.id}/fetch`, {url: 'https://internal.example.com/'}, a);
+      assert.equal(ssrf.body.status, 'failed');
+      assert.equal(ssrf.body.error.code, 'url_not_allowed');
+    } finally {
+      privateAnswer = false;
+    }
     assert.deepEqual(await balance(projectA.id, a), before);
   });
 

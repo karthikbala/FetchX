@@ -20,7 +20,7 @@ async function fixture({fetchResult=null,...options}={}){
   get:async(id,rid,options)=>{calls.push(['get',id,rid,options]);return view;},
   remove:async(id,rid)=>{calls.push(['remove',id,rid]);},
   webhookSecret:async(id,options)=>options?.rotate?'whsec_rotated':'whsec_current',
-  store:{pool:{query:async()=>({rows:[{succeeded:3,failed:1}]})}},
+  counts:async()=>({succeeded:3,failed:1}),
  };
  const ledger={prices:{http:1},metered:()=>true,balance:async()=>({credits:9,available:9,reserved:0,trial:10,purchased:0,held:false}),
   usage:async()=>({credits:1,by_step:[{step:'http',requests:1,credits:1}],captcha_solved:0,daily:[]})};

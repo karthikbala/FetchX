@@ -2,7 +2,7 @@ import {createCipheriv,createDecipheriv,randomBytes,createHash} from 'node:crypt
 import {gzipSync,gunzipSync} from 'node:zlib';
 export const sha=value=>createHash('sha256').update(value).digest('hex');
 export class Sealer {
- // key: 64 hex characters (config.artifactKey).
+ // key: 64 hex characters (config.sealingKey).
  constructor(key){if(typeof key!=='string'||!/^[0-9a-f]{64}$/i.test(key))throw Error('invalid_artifact_key');this.key=Buffer.from(key,'hex');}
  // The codec marker is inside the authenticated payload. Existing raw JSON captures
  // remain readable; request inputs stay raw so their durable comparison is unchanged.

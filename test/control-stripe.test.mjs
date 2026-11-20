@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash,createHmac,generateKeyPairSync,randomBytes,randomUUID} from 'node:crypto';
 import pg from 'pg';
 import {TRIAL_CREDITS_PER_ACCOUNT} from '../src/billing/trial.mjs';
-import {createGateway,server} from '../src/server.mjs';
+import {createPlatform,server} from '../src/server.mjs';
 import {Store} from '../src/store.mjs';
 import {paymentWorker} from '../payments-worker/worker.mjs';
 import {BROKER_PATH,RELAY_PATH} from '../src/control-stripe-broker-protocol.mjs';
@@ -20,7 +20,7 @@ const signature=(raw,time=ts())=>`t=${time},v1=${createHmac('sha256',SECRET).upd
 
 function configForTest(){
  return {
-  release:'stripe-offline',artifactKey:randomBytes(32).toString('hex'),projects:{},
+  release:'stripe-offline',sealingKey:randomBytes(32).toString('hex'),projects:{},
   controlPlane:{enabled:true,origins:[ORIGIN],bridgeSecret:randomBytes(32).toString('hex'),sessionSecure:false,allowLoopbackDevelopment:true},
  };
 }
@@ -38,7 +38,7 @@ test('Stripe prepaid checkout and signed reconciliation through the gateway',{sk
  url.searchParams.set('options',`-csearch_path=${schema}`);
  store=new Store(url.href);await store.init();await store.init();
  const config=configForTest(),mailbox=new Map();
- const gateway=createGateway({store,config,deps:{runtime:null,browserPool:null,mail:{configured:true,sendCode:async message=>mailbox.set(message.email,message)}}});
+ const gateway=createPlatform({store,config,deps:{mail:{configured:true,sendCode:async message=>mailbox.set(message.email,message)}}});
  const calls=[],byRequest=new Map(),objects=new Map(),sessions=[];
  let brokerRuntime,omitCheckoutResponse=false,wrongAccount=false;
  const count=async(table,where='true')=>Number((await store.pool.query(`SELECT count(*) AS n FROM ${table} WHERE ${where}`)).rows[0].n);
