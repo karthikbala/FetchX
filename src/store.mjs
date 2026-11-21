@@ -7,6 +7,7 @@ import {initControlStripe} from './control-stripe.mjs';
 import {initPurchases} from './billing/purchases.mjs';
 import {initLedger} from './billing/ledger.mjs';
 import {initFetchFront} from './fetch/front.mjs';
+import {initBatches} from './fetch/batches.mjs';
 import {initBudgets} from './budgets.mjs';
 
 export class Store {
@@ -65,6 +66,7 @@ export class Store {
     await initControlAdmin(this.pool);
     await initControlStripe(this.pool);
     await initFetchFront(this.pool);
+    await initBatches(this.pool);
     await initBudgets(this.pool);
   }
 

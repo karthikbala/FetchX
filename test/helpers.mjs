@@ -30,7 +30,7 @@ export async function openStore() {
   const store = new Store(databaseUrl);
   await store.init();
   await store.pool.query(`TRUNCATE fetch_settlements, webhook_deliveries, webhook_secrets, credit_reservations, credit_charges, credit_adjustments,
-    paid_credit_payment_holds, budget_overrides, budget_audit CASCADE`);
+    paid_credit_payment_holds, budget_overrides, budget_audit, fetch_batches, fetch_batch_items, batch_webhook_deliveries CASCADE`);
   await store.pool.query('DELETE FROM paid_credit_grants');
   await store.pool.query('DELETE FROM control_credit_accounts WHERE project = $1', [PROJECT]);
   await store.pool.query('INSERT INTO control_credit_accounts (project, granted_credits) VALUES ($1, $2)', [PROJECT, 100]);
@@ -40,8 +40,9 @@ export async function openStore() {
 // The platform with a fake engine. `script` decides each job's outcome (see
 // fake-engine.mjs); `webhooks` records customer webhook posts; `wrapEngineFetch`
 // can watch the client's calls to the engine.
-export async function platformFor(store, {config = testConfig(), script, webhookAnswer = () => 200, wrapEngineFetch = fetch => fetch, deps = {}} = {}) {
-  const engine = fakeEngine({script, token: config.engine?.serviceToken, eventKey: config.engine?.eventKey});
+export async function platformFor(store, {config = testConfig(), script, pace, webhookAnswer = () => 200, wrapEngineFetch = fetch => fetch,
+  deps = {}} = {}) {
+  const engine = fakeEngine({script, token: config.engine?.serviceToken, eventKey: config.engine?.eventKey, ...(pace ? {pace} : {})});
   const webhooks = [];
   const platform = createPlatform({store, config, deps: {engineFetch: wrapEngineFetch(engine.fetchImpl), webhookIntervalMs: 60_000,
     webhookResolve: async () => PUBLIC_ADDRESS,

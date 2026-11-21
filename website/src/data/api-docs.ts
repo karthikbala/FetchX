@@ -39,6 +39,8 @@ const createFetch = contractOperation('createFetch');
 const createNextPage = contractOperation('createNextPage');
 const getUsage = contractOperation('getUsage');
 const getBalance = contractOperation('getBalance');
+const createBatch = contractOperation('createBatch');
+const batchOperations = contractOperations.filter(operation => operation.path.startsWith('/v1/batches'));
 const hostedApi = 'https://app.fetchx.ai';
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 const openApiLink: DocBlock = { kind: 'link', label: 'OpenAPI contract (JSON)', href: '/openapi.json' };
@@ -48,6 +50,8 @@ const markdownRequest = requestExample(createFetch, 'markdown');
 const succeeded = responseExample(createFetch, 'succeeded');
 const failed = responseExample(createFetch, 'failed');
 const pending = responseExample(createFetch, 'pending', '202');
+const batchRequest = requestExample(createBatch, 'urls');
+const batchQueued = responseExample(createBatch, 'queued', '202');
 
 function fetchSnippets(body: Record<string, unknown>): DocSnippet[] {
   return [
@@ -333,12 +337,72 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
     ],
   },
   {
+    slug: 'batches',
+    title: 'Batches',
+    description: 'Many URLs in one job, run at the pace each site can take, with results by webhook or page by page.',
+    group: 'API reference',
+    method: createBatch.method,
+    endpoint: createBatch.path,
+    sections: [
+      {
+        id: 'how-it-runs',
+        title: 'How a batch runs',
+        blocks: [
+          { kind: 'text', text: 'Send up to 1000 URLs, or `POST /v1/fetch` bodies, in one call. FetchX checks every item first: one bad item refuses the whole batch with 400 and names it (`items[3].formats`, or `defaults.formats` when the default is at fault), and nothing is queued.' },
+          { kind: 'text', text: 'FetchX then starts the items itself, at the pace it has learned each site can take. A site that has never refused FetchX gets up to 4 requests at once; a site that has refused or rate-limited it gets 2 at once, 4 seconds apart; a site that rate-limited it in the last 10 minutes gets 1 at a time, 15 seconds apart. Different sites run side by side, and batches waiting on the same site take turns.' },
+          { kind: 'text', text: 'Each item is a request of its own, with its own id, run in auto mode like any other: up to `max_attempts` steps, and a fresh residential IP when a site walls one off. It is charged only if it succeeds, at the price of the step that got it. Failed items are free.' },
+          { kind: 'text', text: 'While an item runs it holds credits for the most it could cost, like a single request. Items wait for credits your running requests hold, and a batch always leaves one of your project’s requests-at-once for single requests. When the balance cannot cover the next item, the batch pauses (`status: paused`, with `paused_reason`) and starts again by itself once you add credits.' },
+          { kind: 'text', text: 'Canceling stops the items that have not started. Items already running finish, and are charged if they succeed.' },
+        ],
+      },
+      {
+        id: 'submit',
+        title: 'Submit a batch',
+        blocks: [
+          { kind: 'table', headers: ['Field', 'Type', 'Required', 'Description'], rows: requestRows(createBatch) },
+          { kind: 'code', title: 'POST /v1/batches', snippets: [
+            { label: 'cURL', language: 'bash', code: `curl "$FETCHX_URL/v1/batches" \\
+  -H "Authorization: Bearer $FETCHX_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '${JSON.stringify(batchRequest)}'` },
+            { label: 'JavaScript', language: 'javascript', code: `import {FetchXClient} from './clients/javascript.mjs';
+
+const fetchx = new FetchXClient({url: process.env.FETCHX_URL, token: process.env.FETCHX_TOKEN});
+const batch = await fetchx.submitBatch(${JSON.stringify(batchRequest)});
+for await (const item of fetchx.batchResults(batch.id)) {
+  console.log(item.index, item.status, item.result?.data?.markdown?.slice(0, 200));
+}` },
+            { label: 'Python', language: 'python', code: `import os
+from clients.python import FetchXClient
+
+fetchx = FetchXClient(os.environ['FETCHX_URL'], os.environ['FETCHX_TOKEN'])
+batch = fetchx.submit_batch(${JSON.stringify(batchRequest.items)}, defaults=${JSON.stringify(batchRequest.defaults)})
+for item in fetchx.batch_results(batch['id']):
+    print(item['index'], item['status'])` },
+          ] },
+          { kind: 'code', title: 'Queued', snippets: [{ label: 'JSON', language: 'json', code: json(batchQueued) }] },
+        ],
+      },
+      {
+        id: 'results',
+        title: 'Get the results',
+        blocks: [
+          { kind: 'text', text: 'With `webhook_url`, FetchX POSTs each item’s result as it finishes (the result without its body, with `batch: {id, index}`, and the header `X-FetchX-Event: fetch.finished`), then the batch itself when it ends (`batch.finished`) or pauses (`batch.paused`). Deliveries are signed like every webhook.' },
+          { kind: 'text', text: 'Without a webhook, read `GET /v1/batches/{id}/items?order=finished` and keep `next_cursor`: each read returns only what finished since the last one, and `next_cursor` is null once the batch is over and everything was read. The default order is the order you sent the items in. An item’s body is at `GET /v1/fetch/{request_id}/content`, kept 7 days like any result.' },
+          { kind: 'link', label: 'Webhooks', href: '/docs/webhooks' },
+        ],
+      },
+      ...batchOperations.map(operationSection),
+    ],
+  },
+  {
     slug: 'results',
     title: 'Results, files and history',
     description: 'Read a result, download its body or screenshot, list requests and delete stored content.',
     group: 'API reference',
     sections: [
-      ...contractOperations.filter(operation => ![createFetch, createNextPage, getUsage, getBalance].includes(operation)).map(operationSection),
+      ...contractOperations.filter(operation => ![createFetch, createNextPage, getUsage, getBalance, ...batchOperations].includes(operation))
+        .map(operationSection),
       {
         id: 'retention',
         title: 'Retention',
@@ -387,7 +451,7 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         blocks: [
           { kind: 'text', text: 'When a request is admitted, FetchX reserves up to `max_credits` or the price of the most expensive step it might use. If the balance cannot cover the cheapest step, the request is refused with 402 before anything is sent. On success it charges the price of the step that got the data, plus 10 for a solved captcha, plus 5 per MB of residential transfer beyond the first 1 MB (HTTP) or 5 MB (browser), and releases the rest. Failed requests, uncertain ones, pages without what `expect` asked for and every earlier failed step cost nothing.' },
           { kind: 'text', text: 'Every answer carries `credits`: `charged`, `max` (what was reserved), `balance` (what the project has left) and, on success, a `breakdown` of the step price, captcha credits, traffic in MB, the MB included and the traffic credits. A browser page that costs far more than its step is paying for traffic: `block_resources` (on by default) cuts the images, video and fonts out of it.' },
-          { kind: 'text', text: 'Scrolling within a page has no fee, but what it loads counts as transfer. Each next page (`POST /v1/fetch/{id}/next`) is a request of its own, charged the same way: only when it succeeds, at the price of the step that got it.' },
+          { kind: 'text', text: 'Scrolling within a page has no fee, but what it loads counts as transfer. Each next page (`POST /v1/fetch/{id}/next`) and each item of a batch is a request of its own, charged the same way: only when it succeeds, at the price of the step that got it.' },
           { kind: 'text', text: 'Trial credits and purchased credits share one balance. Purchased credits do not expire.' },
         ],
       },
@@ -406,6 +470,7 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         title: 'Deliveries',
         blocks: [
           { kind: 'text', text: 'Pass `webhook_url` (public https) with a request. When it finishes, FetchX POSTs the result object, without the body, to that URL, up to 3 times until it gets a 2xx. Read the body with `GET /v1/fetch/{id}` if you need it.' },
+          { kind: 'text', text: 'A batch’s `webhook_url` gets each item’s result the same way, then the batch when it ends or pauses. `X-FetchX-Event` says which: `fetch.finished`, `batch.finished` or `batch.paused`.' },
           { kind: 'text', text: 'Each delivery carries `X-FetchX-Timestamp` and `X-FetchX-Signature: sha256=<hex>`, an HMAC-SHA256 over `<timestamp>.<raw body>` with your project’s webhook secret (in the console). Reject deliveries whose signature does not match or whose timestamp is more than 5 minutes old.' },
           { kind: 'code', title: 'Verify a delivery', snippets: [{ label: 'Node.js', language: 'javascript', code: `import {createHmac, timingSafeEqual} from 'node:crypto';
 

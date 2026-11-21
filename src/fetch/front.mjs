@@ -12,6 +12,8 @@
 //            reservation) or release; queue the customer webhook.
 //   reconcile   settle jobs whose event never came, and release reservations
 //            for jobs the engine never started.
+//   startBatchItem   the same as submit for one item of a batch (fetch/batches.mjs):
+//            claimed in the reservation's transaction, started paced.
 //
 // The engine never sees prices, credits or users: only the project id as an
 // opaque tenant, and allowed_steps.
@@ -40,6 +42,13 @@ export const DEFAULT_LIMITS = Object.freeze({
 // the reservation covers it.
 export const PAGE_DEPTH = Object.freeze({screens: 10, wireBytes: 2_500_000, maxWireBytes: 150_000_000});
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// Batch items' own idempotency keys (fetch/batches.mjs); refused on single requests.
+const ITEM_KEY_PREFIX = 'batch.';
+// A batch item taken (or its batch stopped) between the runner's pick and its claim.
+const CLAIM_LOST = Symbol('claim_lost');
+// A batch item whose full reservation the balance cannot cover while the
+// project's other requests hold credits: it waits for them to settle.
+const CREDITS_WAIT = Symbol('credits_wait');
 
 export async function initFetchFront(pool) {
   await pool.query(`
@@ -87,8 +96,10 @@ const plain = value => value !== null && typeof value === 'object' && !Array.isA
 
 export class FetchFront {
   // engine: an EngineClient. onSettled(id) runs after a settlement that queued a webhook.
+  // batches: the BatchService, whose hooks run inside settlement transactions (set after construction).
   constructor({store, config, ledger, engine, limits = {}, onSettled = () => {}}) {
     Object.assign(this, {store, config, ledger, engine, onSettled});
+    this.batches = null;
     this.limits = {...DEFAULT_LIMITS, ...config.fetchLimits, ...limits};
     this.sealer = new Sealer(config.sealingKey);
   }
@@ -111,6 +122,10 @@ export class FetchFront {
 
   #deepestWireBytes() { return Math.max(this.limits.maxWireBytes, PAGE_DEPTH.maxWireBytes); }
 
+  // The platform's own checks on one request body (what it bills from), for
+  // a batch's items before they are queued.
+  billingCheck(raw) { this.#billingInput(raw); }
+
   // The most any step could cost this request: the ceiling of its reservation.
   #ceiling({maxCredits, method, maxWireBytes}) {
     const table = this.ledger.prices;
@@ -120,8 +135,26 @@ export class FetchFront {
 
   async submit(project, raw, {keyId = null} = {}) {
     const billing = this.#billingInput(raw);
+    if (typeof raw.idempotency_key === 'string' && raw.idempotency_key.startsWith(ITEM_KEY_PREFIX)) {
+      throw invalid('idempotency_key', `keys starting with ${ITEM_KEY_PREFIX} belong to batch items`);
+    }
     return this.#start(project, billing, {keyId},
       (id, allowed) => this.engine.startJob({id, tenant: project, request: raw, allowed_steps: allowed}));
+  }
+
+  // One batch item: a fetch like submit's, but claimed (marked running) in
+  // the transaction that reserves for it, and started paced, so the engine
+  // refuses it with host_busy when its host has no free slot. Returns the
+  // view, or null when the item was no longer queued.
+  async startBatchItem(project, raw, {keyId = null, batch, index}) {
+    const billing = this.#billingInput(raw);
+    let replayed = null;
+    const view = await this.#start(project, billing, {keyId, claim: (client, id) => this.batches.claim(client, {batch, index}, id),
+      waitForCredits: true, onReplay: envelope => { replayed = envelope.job.id; }},
+    (id, allowed) => this.engine.startJob({id, tenant: project, request: raw, allowed_steps: allowed, paced: true, wait_ms: 0}));
+    // The key already had a job (a restart after an uncertain start): the item is that job.
+    if (replayed) await this.batches.linkExisting({batch, index}, replayed);
+    return view;
   }
 
   // The page after request `previous` (POST /v1/fetch/{id}/next). The engine
@@ -134,7 +167,12 @@ export class FetchFront {
   }
 
   // Reserves for a new job, then send(id, allowed_steps) starts it on the engine.
-  async #start(project, billing, {keyId}, send) {
+  // claim(client, id), when given, runs in the reservation's transaction; when
+  // it returns false the job is dropped before anything is held or sent (null).
+  // waitForCredits: rather than start with less than its full reservation while
+  // other requests of the project hold credits, refuse with credits_busy (a
+  // batch item waits for them; it never runs with fewer steps than it could).
+  async #start(project, billing, {keyId, claim = null, waitForCredits = false, onReplay = null}, send) {
     const id = randomUUID();
     const table = this.ledger.prices;
     const metered = this.ledger.metered(project);
@@ -143,12 +181,13 @@ export class FetchFront {
     // stop idempotent replays of finished jobs from returning their results.
     const admission = {reserved: null, available: null, held: false, busy: null};
     let allowed = null;
-    await this.store.tx(async client => {
+    const reserved = await this.store.tx(async client => {
       await this.ledger.lock(client, project);
       const running = (await client.query(`SELECT count(*)::int AS n FROM fetch_settlements WHERE project = $1 AND status = 'pending'`,
         [project])).rows[0].n;
       await client.query(`INSERT INTO fetch_settlements (request, project, key_id, deadline) VALUES ($1, $2, $3, clock_timestamp() + make_interval(secs => $4))`,
         [id, project, keyId, this.limits.provisionalDeadlineMs / 1000]);
+      if (claim && !(await claim(client, id))) throw CLAIM_LOST;
       const cap = this.config.projects?.[project]?.maxConcurrentRequests ?? budget(this.config, 'fetch.maxConcurrentPerProject');
       if (running >= cap) {
         admission.busy = running;
@@ -163,14 +202,21 @@ export class FetchFront {
         allowed = [];
         return;
       }
-      const credits = Math.min(this.#ceiling(billing), balance.available);
+      const ceiling = this.#ceiling(billing);
+      if (waitForCredits && running > 0 && balance.available < ceiling) throw CREDITS_WAIT;
+      const credits = Math.min(ceiling, balance.available);
       if (credits >= 1) {
         await this.ledger.hold(client, {project, request: id, credits});
         await client.query('UPDATE fetch_settlements SET credits_max = $2 WHERE request = $1', [id, credits]);
         admission.reserved = credits;
       }
       allowed = STEPS.filter(step => table[step] <= (admission.reserved ?? 0));
+    }).then(() => true, error => {
+      if (error === CLAIM_LOST) return false;
+      if (error === CREDITS_WAIT) throw new GatewayError('credits_busy', 429);
+      throw error;
     });
+    if (!reserved) return null;
 
     let answer;
     try {
@@ -187,6 +233,7 @@ export class FetchFront {
     if (envelope.created === false) {
       // The idempotency key already has a job: show that one, start nothing.
       await this.#discard(id);
+      onReplay?.(envelope);
       return this.#viewOf(project, envelope);
     }
     await this.store.pool.query('UPDATE fetch_settlements SET deadline = $2 WHERE request = $1 AND status = $3',
@@ -207,12 +254,16 @@ export class FetchFront {
     return Object.assign(new GatewayError('insufficient_credits', 402), {details: {available: available ?? 0, needed: minimum}});
   }
 
-  // Drops a job that never started: its reservation and its settlement row.
+  // Drops a job that never started: its reservation and its settlement row,
+  // and puts a batch item back in its queue.
   async #discard(id) {
+    let queued = false;
     await this.store.tx(async client => {
       await this.ledger.release(client, {request: id});
-      await client.query(`DELETE FROM fetch_settlements WHERE request = $1 AND status = 'pending'`, [id]);
+      const deleted = await client.query(`DELETE FROM fetch_settlements WHERE request = $1 AND status = 'pending'`, [id]);
+      if (deleted.rowCount === 1 && this.batches) queued = await this.batches.discarded(client, id);
     });
+    if (queued) this.onSettled(id);
   }
 
   // ---------- settlement ----------
@@ -223,6 +274,7 @@ export class FetchFront {
   async settle(id, {tenant, status, error_code: errorCode = null, usage = null, webhook_url: webhookUrl = null}) {
     if (!UUID.test(id ?? '') || !['succeeded', 'failed'].includes(status)) return null;
     let queued = false;
+    let item = false;
     const row = await this.store.tx(async client => {
       const current = (await client.query('SELECT * FROM fetch_settlements WHERE request = $1 FOR UPDATE', [id])).rows[0];
       if (!current || (tenant !== undefined && current.project !== tenant)) return null;
@@ -246,9 +298,14 @@ export class FetchFront {
           [id, current.project, this.sealer.seal(webhookUrl)]);
         queued = true;
       }
+      // A batch item takes the job's outcome; its batch may be done.
+      const batch = await this.batches?.settled(client, updated);
+      if (batch?.webhook) queued = true;
+      item = !!batch?.item;
       return updated;
     });
     if (queued) this.onSettled(id);
+    if (item) this.batches.kickRunner();
     return row;
   }
 
@@ -281,9 +338,11 @@ export class FetchFront {
 
   // ---------- reading ----------
 
+  // Settlements by job id, with the batch item each job is (batch_id, batch_index), if any.
   async #settlementsFor(ids) {
     if (!ids.length) return new Map();
-    const rows = (await this.store.pool.query('SELECT * FROM fetch_settlements WHERE request = ANY($1::uuid[])', [ids])).rows;
+    const rows = (await this.store.pool.query(`SELECT s.*, i.batch AS batch_id, i.n AS batch_index FROM fetch_settlements s
+      LEFT JOIN fetch_batch_items i ON i.request = s.request WHERE s.request = ANY($1::uuid[])`, [ids])).rows;
     return new Map(rows.map(row => [row.request, row]));
   }
 
@@ -293,8 +352,9 @@ export class FetchFront {
     const {job} = envelope;
     let settlement = (await this.#settlementsFor([job.id])).get(job.id) ?? null;
     if (settlement?.status === 'pending' && job.status !== 'pending') {
-      settlement = await this.settle(job.id, {tenant: project, status: job.status, error_code: job.error?.code ?? null,
-        usage: envelope.usage, webhook_url: envelope.webhook_url}) ?? settlement;
+      await this.settle(job.id, {tenant: project, status: job.status, error_code: job.error?.code ?? null,
+        usage: envelope.usage, webhook_url: envelope.webhook_url});
+      settlement = (await this.#settlementsFor([job.id])).get(job.id) ?? settlement;
     }
     const credits = {charged: Number(settlement?.credits_charged ?? 0),
       max: settlement?.credits_max === null || settlement?.credits_max === undefined ? null : Number(settlement.credits_max),
@@ -302,8 +362,9 @@ export class FetchFront {
       breakdown: this.#breakdownOf(settlement)};
     const {id, status, page_status: pageStatus = null, idempotency_key: key, url, created_at: createdAt, finished_at: finishedAt, tags, data,
       challenge = null, attempts, skipped, fixes, error, ...extra} = job;
+    const batch = settlement?.batch_id ? {id: settlement.batch_id, index: settlement.batch_index} : null;
     return {id, status, page_status: pageStatus, idempotency_key: key, url, created_at: createdAt, finished_at: finishedAt, tags, data,
-      credits, challenge, attempts, skipped, fixes, error, ...extra};
+      credits, challenge, attempts, skipped, fixes, error, batch, ...extra};
   }
 
   // How the price of the step that got the data adds up (shown for unmetered

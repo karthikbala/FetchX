@@ -3,6 +3,8 @@
 //   const fetchx = new FetchXClient({url: process.env.FETCHX_URL, token: process.env.FETCHX_TOKEN});
 //   const result = await fetchx.fetch({url: 'https://example.com', formats: ['markdown']});
 //   const page2 = result.data?.next_page ? await fetchx.nextPage(result.id) : null;
+//   const batch = await fetchx.submitBatch({items: ['https://example.com/a', 'https://example.com/b'], defaults: {formats: ['markdown']}});
+//   for await (const item of fetchx.batchResults(batch.id)) console.log(item.index, item.result?.status);
 //
 // Every POST carries an idempotency_key (generated when you leave it out), so
 // the client can safely resend the same request after a lost response, a 429
@@ -124,6 +126,44 @@ export class FetchXClient {
 
   // DELETE /v1/fetch/{id}
   async delete(id) { await this.#send('DELETE', `/v1/fetch/${encodeURIComponent(id)}`); }
+
+  // POST /v1/batches: {items, defaults, webhook_url, idempotency_key, tags}.
+  // Resolves with the batch at once; FetchX runs the items at each site's pace.
+  async submitBatch(input) {
+    if (!isObject(input) || !Array.isArray(input.items)) throw new FetchXError('items_required');
+    return this.#start('/v1/batches', input);
+  }
+
+  // GET /v1/batches/{id}
+  getBatch(id) { return this.#send('GET', `/v1/batches/${encodeURIComponent(id)}`); }
+
+  // GET /v1/batches: {status, limit, cursor}
+  listBatches(query = {}) {
+    const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null));
+    return this.#send('GET', '/v1/batches' + (params.size ? `?${params}` : ''));
+  }
+
+  // GET /v1/batches/{id}/items: {status, order, results, limit, cursor}
+  batchItems(id, query = {}) {
+    const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null));
+    return this.#send('GET', `/v1/batches/${encodeURIComponent(id)}/items` + (params.size ? `?${params}` : ''));
+  }
+
+  // POST /v1/batches/{id}/cancel
+  cancelBatch(id) { return this.#send('POST', `/v1/batches/${encodeURIComponent(id)}/cancel`); }
+
+  // Yields each item of a batch once it has finished, with its result, as
+  // items finish, until the batch is over (the polling alternative to a webhook).
+  async *batchResults(id, {intervalMs = 5000, limit = 100, results = true} = {}) {
+    let cursor = null;
+    for (;;) {
+      const page = await this.batchItems(id, {order: 'finished', limit, results, ...(cursor ? {cursor} : {})});
+      for (const item of page.items) yield item;
+      if (page.next_cursor === null) return;
+      cursor = page.next_cursor;
+      if (page.items.length < limit) await sleep(intervalMs);
+    }
+  }
 
   // GET /v1/balance: {credits, reserved, trial, purchased, payment_hold}
   balance() { return this.#send('GET', '/v1/balance'); }

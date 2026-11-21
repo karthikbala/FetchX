@@ -1,4 +1,5 @@
-import {FetchXClient, FetchXError, type FetchRequest, type FetchResult, type Usage, type Balance} from '../clients/javascript.mjs';
+import {FetchXClient, FetchXError, type FetchRequest, type FetchResult, type Usage, type Balance, type Batch, type BatchItem,
+  type BatchRequest} from '../clients/javascript.mjs';
 
 async function checkClientTypes() {
   const client = new FetchXClient({url: 'https://app.fetchx.ai', token: 'fxk_fixture'});
@@ -25,12 +26,24 @@ async function checkClientTypes() {
   const download = await client.content(result.id);
   const bytes: Uint8Array = download.body;
   await client.delete(result.id);
+  const batchInput = {items: ['https://shop.example.com/a', {url: 'https://shop.example.com/b', formats: ['text']}],
+    defaults: {formats: ['markdown'], render: 'auto'}, webhook_url: 'https://hooks.example.com/fetchx', tags: ['nightly']} satisfies BatchRequest;
+  const batch: Batch = await client.submitBatch(batchInput);
+  const batchStatus: 'running' | 'paused' | 'finished' | 'canceled' = batch.status;
+  const queued: number = batch.items.queued;
+  const items = await client.batchItems(batch.id, {order: 'finished', status: 'succeeded', results: false, limit: 50});
+  for await (const item of client.batchResults(batch.id, {intervalMs: 2000})) {
+    const done: BatchItem = item;
+    console.log(done.index, done.result?.data?.markdown, done.result?.batch?.index);
+  }
+  await client.cancelBatch((await client.listBatches({status: 'paused'})).items[0].id);
   try {
     await client.fetch({url: 'https://shop.example.com/', max_attempts: 3});
   } catch (error) {
     if (error instanceof FetchXError) console.log(error.code, error.status, error.retryAfterSeconds, error.idempotencyKey);
   }
-  console.log(status, markdown, charged, next, finished.status, cursor, usage.balance?.credits, available, pageStatus, traffic, bytes.length, how, pageNumber);
+  console.log(status, markdown, charged, next, finished.status, cursor, usage.balance?.credits, available, pageStatus, traffic, bytes.length, how, pageNumber,
+    batchStatus, queued, items.next_cursor);
 }
 
 // @ts-expect-error: url is required.
@@ -39,7 +52,13 @@ const missingUrl: FetchRequest = {formats: ['markdown']};
 const badScroll: FetchRequest = {url: 'https://shop.example.com/', scroll: 'all'};
 // @ts-expect-error: only documented formats are accepted.
 const badFormat: FetchRequest = {url: 'https://shop.example.com/', formats: ['pdf']};
+// @ts-expect-error: a batch's items are owned by the batch: no async or webhook of their own.
+const ownWebhook: BatchRequest = {items: [{url: 'https://shop.example.com/', webhook_url: 'https://hooks.example.com/'}]};
+// @ts-expect-error: defaults never carry a url; each item has its own.
+const defaultUrl: BatchRequest = {items: ['https://shop.example.com/'], defaults: {url: 'https://shop.example.com/'}};
 void checkClientTypes;
+void ownWebhook;
+void defaultUrl;
 void missingUrl;
 void badFormat;
 void badScroll;

@@ -52,6 +52,43 @@ class ClientTests(unittest.TestCase):
             ('GET', base + '/v1/usage?period=day'), ('POST', base + '/v1/fetch/' + RESULT['id'] + '/next')])
         self.assertTrue(all(auth == 'Bearer fxk_fixture' for _, _, auth in calls))
 
+    def test_batches_use_the_documented_methods_and_paths_and_follow_results_to_the_end(self):
+        calls = []
+        batch_id = '9b2f6a1c-3d4e-4f50-8a6b-7c8d9e0f1a2b'
+        pages = [{'items': [{'index': 1, 'status': 'succeeded'}], 'next_cursor': 'c1'},
+                 {'items': [], 'next_cursor': 'c1'},
+                 {'items': [{'index': 0, 'status': 'failed'}], 'next_cursor': None}]
+
+        def handler(request):
+            calls.append((request.method, str(request.url)))
+            if request.method == 'POST' and request.url.path == '/v1/batches':
+                body = json.loads(request.content)
+                self.assertEqual(body['items'], ['https://shop.example.com/a', {'url': 'https://shop.example.com/b', 'formats': ['text']}])
+                self.assertEqual(body['defaults'], {'formats': ['markdown']})
+                self.assertTrue(body['idempotency_key'], 'the client sets a key so retries are safe')
+                return httpx.Response(202, json={'id': batch_id, 'status': 'running'})
+            if request.url.path.endswith('/items') and request.url.params.get('order') == 'finished':
+                return httpx.Response(200, json=pages.pop(0))
+            return httpx.Response(200, json={'id': batch_id, 'status': 'running', 'items': [], 'next_cursor': None})
+
+        module.time.sleep = lambda _seconds: None
+        client = client_for(handler)
+        batch = client.submit_batch(['https://shop.example.com/a', {'url': 'https://shop.example.com/b', 'formats': ['text']}],
+                                    defaults={'formats': ['markdown']})
+        self.assertEqual(batch['id'], batch_id)
+        client.get_batch(batch_id)
+        client.list_batches(status='paused', limit=5)
+        client.batch_items(batch_id, status='failed', results=False)
+        client.cancel_batch(batch_id)
+        self.assertEqual([item['index'] for item in client.batch_results(batch_id, interval=0)], [1, 0])
+        base = 'https://api.fetchx.test/v1/batches'
+        self.assertEqual(calls, [
+            ('POST', base), ('GET', base + '/' + batch_id), ('GET', base + '?status=paused&limit=5'),
+            ('GET', base + '/' + batch_id + '/items?status=failed&results=false'), ('POST', base + '/' + batch_id + '/cancel'),
+            ('GET', base + '/' + batch_id + '/items?order=finished&results=true&limit=100'),
+            ('GET', base + '/' + batch_id + '/items?order=finished&results=true&limit=100&cursor=c1'),
+            ('GET', base + '/' + batch_id + '/items?order=finished&results=true&limit=100&cursor=c1')])
+
     def test_a_lost_reply_is_resent_with_the_same_key(self):
         keys = []
 

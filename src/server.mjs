@@ -15,6 +15,7 @@ import {EngineClient} from './engine/client.mjs';
 import {eventsServer} from './engine/events.mjs';
 import {FetchFront} from './fetch/front.mjs';
 import {WebhookSender} from './fetch/webhooks.mjs';
+import {BatchRunner, BatchService} from './fetch/batches.mjs';
 import {registerApi, apiError} from './api/v1.mjs';
 import {ControlIdentity} from './control-identity.mjs';
 import {isControlRequest, registerControl} from './control.mjs';
@@ -30,7 +31,12 @@ export function createPlatform({store, config, deps = {}}) {
   platform.engine = deps.engine ?? new EngineClient(config.engine, {fetchImpl: deps.engineFetch});
   platform.front = new FetchFront({store, config, ledger: platform.ledger, engine: platform.engine,
     onSettled: () => platform.webhooks?.kick()});
-  platform.webhooks = new WebhookSender({store, front: platform.front, config, intervalMs: deps.webhookIntervalMs,
+  // Batches: their items are FetchFront jobs, started by the runner at each site's pace.
+  platform.batches = new BatchService({store, config, front: platform.front, engine: platform.engine, ledger: platform.ledger});
+  platform.front.batches = platform.batches;
+  platform.batchRunner = new BatchRunner({batches: platform.batches, engine: platform.engine, intervalMs: deps.batchIntervalMs});
+  platform.batches.kickRunner = () => { if (platform.batchRunner.timer) void platform.batchRunner.kick(); };
+  platform.webhooks = new WebhookSender({store, front: platform.front, batches: platform.batches, config, intervalMs: deps.webhookIntervalMs,
     ...(deps.webhookResolve ? {resolve: deps.webhookResolve} : {}), ...(deps.webhookPost ? {post: deps.webhookPost} : {})});
   return platform;
 }
@@ -82,10 +88,11 @@ export function server(platform, {stripeFetch, stripeAutoProcess = true} = {}) {
     await platform.store.pool.query('SELECT 1');
     return {ok: true, service: 'FetchX', release: config.release ?? null};
   });
-  registerApi(app, {service: platform.front, ledger: platform.ledger});
+  registerApi(app, {service: platform.front, ledger: platform.ledger, batches: platform.batches});
   registerControl(app, platform, {identity: platform.controlIdentity, ledger: platform.ledger, service: platform.front, stripe});
   registerStripeWebhook(app, stripe, {autoProcess: stripeAutoProcess});
   app.addHook('onClose', async () => {
+    await platform.batchRunner.close();
     await platform.webhooks.close();
   });
   return app;
@@ -108,6 +115,7 @@ async function main() {
   const app = server(platform);
   const events = eventsServer(platform);
   platform.webhooks.start();
+  platform.batchRunner.start();
   // Jobs whose event never came are settled from the engine; jobs it never
   // started are released.
   let reconciling = null;
@@ -121,7 +129,8 @@ async function main() {
   const refresh = setInterval(() => loadBudgets(store.pool, config).catch(() => process.stderr.write('budgets_refresh_failed\n')),
     30_000);
   refresh.unref();
-  const retention = setInterval(() => platform.front.prune().catch(() => process.stderr.write('retention_failed\n')), 3_600_000);
+  const retention = setInterval(() => Promise.all([platform.front.prune(), platform.batches.prune()])
+    .catch(() => process.stderr.write('retention_failed\n')), 3_600_000);
   retention.unref();
   const port = (name, fallback) => {
     const value = process.env[name] === undefined ? fallback : Number(process.env[name]);

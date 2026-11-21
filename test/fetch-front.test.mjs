@@ -24,7 +24,8 @@ test('a successful fetch is charged once, at the price of the step the engine re
   assert.deepEqual(first.body.credits, {charged: 1, max: 100, balance: 99, breakdown: {step: 'http', step_credits: 1, captcha_credits: 0,
     traffic_mb: 0, included_mb: null, traffic_credits: 0}});
   assert.deepEqual(Object.keys(first.body), ['id', 'status', 'page_status', 'idempotency_key', 'url', 'created_at', 'finished_at', 'tags', 'data',
-    'credits', 'challenge', 'attempts', 'skipped', 'fixes', 'error']);
+    'credits', 'challenge', 'attempts', 'skipped', 'fixes', 'error', 'batch']);
+  assert.equal(first.body.batch, null, 'a single request is not a batch item');
   assert.equal(await balance(store), 99);
   assert.equal(await reservations(store), 0);
   // What the engine was sent: the job id, the project as tenant, every tier the reservation covers.
