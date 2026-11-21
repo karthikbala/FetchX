@@ -110,12 +110,16 @@ export class Estimator {
         notes.push({code: 'balance_may_run_out', message: `The balance (${available} credits) covers the expected ${credits.expected} credits but not the high estimate of ${credits.high}.`});
       }
     }
+    const slots = this.#slots(estimated, metered ? available : null);
+    if (kind === 'batch' && slots.limited) {
+      notes.push({code: 'balance_limits_pace', message: `A running request holds up to ${slots.hold} credits until it finishes, so the balance (${available} credits) lets ${slots.count} run at once. A larger balance runs the batch faster; unused holds are released.`});
+    }
     return {
       kind,
       requests: items.length,
       estimated: estimated.length,
       credits,
-      seconds: kind === 'batch' ? this.#batchSeconds(estimated, engine.hosts ?? {}) : estimated[0]?.seconds ?? {typical: 0, high: 0},
+      seconds: kind === 'batch' ? this.#batchSeconds(estimated, engine.hosts ?? {}, slots.count) : estimated[0]?.seconds ?? {typical: 0, high: 0},
       balance: {credits: available, covers_expected: !metered || available >= credits.expected, covers_high: !metered || available >= credits.high},
       ...(kind === 'batch' ? {hosts: this.#hosts(estimated, engine.hosts ?? {})} : {}),
       items: results,
@@ -219,9 +223,18 @@ export class Estimator {
   // A batch runs hosts side by side, within the project's requests-at-once
   // budget (one slot kept for single requests); one host's items start at
   // most max_running at once and start_gap_ms apart.
-  #batchSeconds(items, hosts) {
+  // How many of a batch's requests can run at once: the project's limit less the one kept free for single
+  // requests, and no more than the balance can hold, since each running request holds its worst-case reservation.
+  #slots(items, available) {
+    const limit = Math.max(1, budget(this.config, 'fetch.maxConcurrentPerProject') - 1);
+    const hold = items.reduce((most, item) => Math.max(most, item.credits.hold), 0);
+    if (available == null || !hold) return {count: limit, limited: false, hold};
+    const count = Math.max(1, Math.min(limit, Math.floor(available / hold)));
+    return {count, limited: count < limit, hold};
+  }
+
+  #batchSeconds(items, hosts, slots) {
     if (!items.length) return {typical: 0, high: 0};
-    const slots = Math.max(1, budget(this.config, 'fetch.maxConcurrentPerProject') - 1);
     const of = key => {
       const perHost = new Map();
       for (const item of items) perHost.set(item.host, [...(perHost.get(item.host) ?? []), item.seconds[key]]);

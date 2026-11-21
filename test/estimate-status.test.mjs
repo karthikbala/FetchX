@@ -112,12 +112,20 @@ test('estimates price each request from site history, the price table, max_credi
   assert.equal(answer.body.requests, 5);
   assert.equal(answer.body.estimated, 4);
   assert.deepEqual(answer.body.credits, {expected: 68 * 3 + 1, typical: 75 * 3 + 1, high: 125 * 3 + 1});
-  assert.deepEqual(answer.body.seconds, {typical: 75, high: 120}, 'three 50 s pages two at a time on the slowest site');
+  // 100 credits cannot hold two 160-credit reservations at once, so the batch runs one request at a time.
+  assert.deepEqual(answer.body.seconds, {typical: 151.5, high: 244}, 'one at a time: 3 x 50 s + 1.5 s');
   assert.deepEqual(answer.body.hosts['shop.example.com'], {requests: 3, pace: ESTIMATES.pace['shop.example.com'],
     credits: {expected: 204, high: 375}});
-  assert.deepEqual(answer.body.notes.map(note => note.code), ['insufficient_credits']);
+  assert.deepEqual(answer.body.notes.map(note => note.code), ['insufficient_credits', 'balance_limits_pace']);
   assert.equal(answer.body.items[4].error.code, 'url_not_allowed');
   assert.equal(answer.body.balance.covers_expected, false);
+
+  // With credits to hold them, the site's pace (two at once) sets the time.
+  await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 5000 WHERE project = $1', [PROJECT]);
+  answer = await estimate({items: ['https://shop.example.com/1', 'https://shop.example.com/2', 'https://shop.example.com/3',
+    {url: 'https://new.example.org/', render: 'never'}]});
+  assert.deepEqual(answer.body.seconds, {typical: 75, high: 120}, 'three 50 s pages two at a time on the slowest site');
+  assert.deepEqual(answer.body.notes, []);
 
   // A project that is not metered still sees prices, but no balance.
   answer = await estimate({url: 'https://shop.example.com/search'}, {token: UNMETERED_TOKEN});

@@ -692,7 +692,7 @@ export interface components {
             high: number;
         };
         EstimateNote: {
-            /** @description no_history, likely_needs_more_credits, likely_needs_other_options, max_credits_too_low, insufficient_credits, balance_may_run_out, cooling_down, low_success_rate or no_route. */
+            /** @description no_history, likely_needs_more_credits, likely_needs_other_options, max_credits_too_low, insufficient_credits, balance_may_run_out, balance_limits_pace (a batch), cooling_down, low_success_rate or no_route. */
             code: string;
             /** @description What it means and what to change. */
             message: string;

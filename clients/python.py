@@ -14,7 +14,7 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
-RETRYABLE = {'network_error', 'too_many_requests', 'unavailable'}
+RETRYABLE = {'network_error', 'too_many_requests', 'unavailable', 'maintenance'}
 
 
 class FetchXError(RuntimeError):

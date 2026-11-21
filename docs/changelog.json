@@ -15,7 +15,9 @@
         {"type": "added", "text": "During maintenance that pauses the API, every /v1 route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url. Wait and retry; nothing was sent or charged."},
         {"type": "added", "text": "Routes that have been retired answer 410 Gone with error.code route_retired and error.details.replacement, and unknown routes answer 404 route_not_found with links to the docs, this changelog and the status page, instead of a bare 404."},
         {"type": "added", "text": "Deprecated routes carry Deprecation, Sunset and Link headers (RFC 9745, RFC 8594) until they are retired. None are deprecated today."},
-        {"type": "added", "text": "This changelog, also as JSON at https://fetchx.ai/changelog.json and as an Atom feed at https://fetchx.ai/changelog.xml."}
+        {"type": "added", "text": "This changelog, also as JSON at https://fetchx.ai/changelog.json and as an Atom feed at https://fetchx.ai/changelog.xml."},
+        {"type": "changed", "text": "While FetchX restarts, the API answers 503 with error.code unavailable and a Retry-After header instead of an HTML error page. Resend with the same idempotency_key."},
+        {"type": "changed", "text": "The JavaScript and Python clients wait out 503 maintenance like any other 503, up to retries times."}
       ]
     },
     {

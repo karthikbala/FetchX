@@ -8,7 +8,7 @@
 // the client can safely resend the same request after a lost response, a 429
 // or a 503: FetchX returns the first result and never charges twice.
 
-const RETRYABLE = new Set(['network_error', 'too_many_requests', 'unavailable']);
+const RETRYABLE = new Set(['network_error', 'too_many_requests', 'unavailable', 'maintenance']);
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 

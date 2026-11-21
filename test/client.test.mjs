@@ -84,6 +84,13 @@ test('429 and 503 wait and resend; other errors and bad replies do not', async (
   assert.equal(seen.length, 2);
   assert.equal(seen[0], seen[1], 'the resend reuses the key');
 
+  // Maintenance (from the gateway) and nginx's fallback while the gateway restarts are both waited out.
+  const paused = [Response.json({error: {code: 'maintenance', message: 'paused', retry_after_seconds: 0, details: {status_url: 'https://fetchx.ai/status'}}}, {status: 503}),
+    Response.json({error: {code: 'unavailable', message: 'restarting', retry_after_seconds: 0}}, {status: 503}),
+    Response.json({id: 'r2', status: 'succeeded'})];
+  const waiting = new FetchXClient({url: 'https://api.fetchx.test', token: 'fxk_x', retries: 2, fetch: async () => paused.shift()});
+  assert.equal((await waiting.fetch({url: 'https://shop.example.com/'})).id, 'r2');
+
   let posts = 0;
   const conflicted = new FetchXClient({url: 'https://api.fetchx.test', token: 'fxk_x', fetch: async () => {
     posts++;

@@ -69,6 +69,14 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(len(keys), 2)
         self.assertEqual(keys[0], keys[1])
 
+    def test_maintenance_and_a_restarting_gateway_are_waited_out(self):
+        replies = [httpx.Response(503, json={'error': {'code': 'maintenance', 'message': 'paused', 'retry_after_seconds': 0}}),
+                   httpx.Response(503, json={'error': {'code': 'unavailable', 'message': 'restarting', 'retry_after_seconds': 0}}),
+                   httpx.Response(200, json=RESULT)]
+        module.time.sleep = lambda _seconds: None
+        self.assertEqual(client_for(lambda _request: replies.pop(0)).fetch(url='https://shop.example.com/')['id'], RESULT['id'])
+        self.assertEqual(replies, [])
+
     def test_errors_carry_code_status_details_and_never_the_body_or_token(self):
         def refused(_request):
             return httpx.Response(400, json={'error': {'code': 'invalid_request', 'message': 'bad', 'details': {'field': 'url'}}})
