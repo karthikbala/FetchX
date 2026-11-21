@@ -42,9 +42,18 @@ Planned maintenance:
 
 Incidents: post an incident notice with its impact (`minor` shows degraded, `major` an outage) and the components affected, add updates, and resolve it when it is over. Resolved notices stay on the status page for 90 days.
 
+## Cloudflare in front of the API
+
+Cloudflare proxies both `fetchx.ai` (the website and console, on Pages) and `app.fetchx.ai` (the API, through host nginx). The zone's Browser Integrity Check refuses some user agents outright with `403` and the body `error code: 1010`, among them Python's built-in `urllib` and Perl's LWP, so a customer's plain script never reached FetchX. FetchX accepts whatever client a customer uses, so `app.fetchx.ai`, which serves only the API, has that check turned off by a configuration rule; `fetchx.ai` keeps it.
+
+The rule lives in [`ops/cloudflare/zone-rules.json`](../ops/cloudflare/zone-rules.json) and is applied with [`ops/cloudflare/zone_rules.py`](../ops/cloudflare/zone_rules.py), run as root on porttrack from a checkout of `main` (`sudo fx-git snapshot platform main /var/tmp/fx-main.tar.gz`, unpack it, then `sudo python3 -I ops/cloudflare/zone_rules.py plan` from there): `plan` shows what would change, `apply` adds or updates the file's rules, `remove` takes them out again. It only touches rules whose `ref` is in the file and keeps every other rule in the phase, including ones made in the dashboard. It uses the same token as `fx-cloudflare`, which needs **Zone > Zone > Read** and **Zone > Config Rules > Edit** on `fetchx.ai` for this. Change Cloudflare's zone settings here rather than in the dashboard, so the repository says what is live.
+
+After any change in front of the API, run `python3 -I ops/cloudflare/check_api_clients.py` from anywhere. It needs no API key and charges nothing: each common client (urllib, requests, httpx, curl, Node, Go, Java, Perl, no user agent at all) calls `GET /healthz` and a keyless `POST /v1/fetch`, and it exits 1 if Cloudflare answers any of them instead of FetchX.
+
 ## Incidents
 
 - **Every call answers 503 `maintenance`:** a maintenance notice that pauses the API is active. Resolve it in the admin portal's Status tab, or wait for its planned end.
+- **A client gets `403` with `error code: 10xx` (plain text, not JSON):** Cloudflare refused it before FetchX saw it. Run `ops/cloudflare/check_api_clients.py` to see which clients, and `zone_rules.py plan` to check the rules in [Cloudflare in front of the API](#cloudflare-in-front-of-the-api) are still live.
 - **Every fetch answers 503 `unavailable`:** the engine is down, unreachable on `fetchx-internal`, or refuses the service token. `operator.mjs status` shows which; the platform logs `engine_unavailable` with the cause.
 - **Charges lag behind results:** events are not arriving. Check `overdue_settlements` in `operator.mjs status`, the engine's `events.undelivered`, and that both sides hold the same event key. The reconciler settles overdue jobs from the engine meanwhile.
 - **A site that suddenly fails, browser or captcha problems:** these are engine incidents; see the engine's operations guide and the admin portal's site and rule pages.

@@ -1,0 +1,15 @@
+{
+  "zone": "fetchx.ai",
+  "phases": {
+    "http_config_settings": [
+      {
+        "ref": "fetchx_api_no_browser_integrity_check",
+        "description": "FetchX API host: Browser Integrity Check off, so plain HTTP clients (Python urllib, Perl LWP) are not refused with error 1010. fetchx.ai keeps it. Source: FetchX ops/cloudflare/zone-rules.json",
+        "expression": "(http.host eq \"app.fetchx.ai\")",
+        "action": "set_config",
+        "action_parameters": {"bic": false},
+        "enabled": true
+      }
+    ]
+  }
+}
