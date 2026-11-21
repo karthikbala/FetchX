@@ -60,8 +60,10 @@ else:
 | `GET /v1/fetch/{id}/content` | `content(id)` | `content(id)` | `fetch:read` |
 | `GET /v1/fetch/{id}/screenshot` | `screenshot(id)` | `screenshot(id)` | `fetch:read` |
 | `DELETE /v1/fetch/{id}` | `delete(id)` | `delete(id)` | `fetch:read` |
+| `POST /v1/estimate` | `estimate(input)` | `estimate(**input)` | `fetch:write` |
 | `GET /v1/balance` | `balance()` | `balance()` | `usage:read` |
 | `GET /v1/usage` | `usage(query)` | `usage(...)` | `usage:read` |
+| `GET /v1/status` | `status()` | `status()` | none |
 
 ## Scrolling and next pages
 
@@ -80,10 +82,19 @@ while (result.status === 'succeeded' && result.data.next_page && pages.length < 
 
 Each next page is billed like any request: only when it succeeds, at the price of the step that got it.
 
+## Estimates before you send
+
+`estimate(input)` takes the body you would send to `fetch`, or a batch (`{items: [url, {url, ...}], defaults: {...}}`), and says what it would cost and take without sending or reserving anything: `credits.typical` and `credits.high` for a success, `credits.expected` counting only the share of requests that usually succeed (failures are free), `credits.hold` reserved while a request runs, and `seconds`. Each item's `basis` says whether the figures come from that site's recent requests (`history`) or are typical ones, and `notes` say what to change when a request would be refused or is likely to fail (for example a `max_credits` below the step the site needs).
+
+```js
+const estimate = await fetchx.estimate({items: urls, defaults: {formats: ['markdown']}});
+if (!estimate.balance.covers_expected) console.log(estimate.notes);
+```
+
 ## Outcomes, errors and retries
 
 A fetch that ran returns its result whether it succeeded or not: check `status`. A failed result has `error.code`, a one-line `error.message` and `error.next` (an `action` and a `detail`) that an agent can act on, and `data` holds what the site last answered. A pending result (`async: true`, or longer than 60 seconds) comes back with `status: 'pending'`; `wait(id)` polls until it finishes.
 
-A refused call (4xx) throws `FetchXError` with `code`, `status`, `details` and `retryAfterSeconds` (`retry_after_seconds` in Python). Nothing was sent to the site and nothing was charged.
+A refused call (4xx) throws `FetchXError` with `code`, `status`, `details` and `retryAfterSeconds` (`retry_after_seconds` in Python). Nothing was sent to the site and nothing was charged. During maintenance every call except `status()` throws `maintenance` (HTTP 503) with `retryAfterSeconds` and `details.status_url`: wait and retry. A route that was retired throws `route_retired` (410) with `details.replacement`. Changes to the API are listed at https://fetchx.ai/changelog.
 
 `fetch` and `nextPage` always send an `idempotency_key`, generated when you leave it out. After a lost response, a `429` or a `503` it resends the same body with the same key up to `retries` times (default 2). FetchX returns the first result for a key and never charges twice, so a resend is safe. Keep the key with your own record of the request if you need to find it later with `list({idempotency_key})`.

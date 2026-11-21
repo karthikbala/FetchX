@@ -48,6 +48,10 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   assert.equal((await client.get(page.id)).data.content_expired, true);
   assert.equal((await client.usage({period: 'day'})).used.succeeded, 5);
   assert.equal((await client.balance()).credits, (await new Ledger({store, config: {}}).balance(PROJECT)).available);
+  const estimate = await client.estimate({items: ['https://shop.example.com/a', 'https://shop.example.com/b'], defaults: {render: 'never'}});
+  assert.equal(estimate.kind, 'batch');
+  assert.equal(estimate.estimated, 2);
+  assert.equal((await client.status()).status, 'operational');
   await assert.rejects(client.fetch({url: 'https://shop.example.com/', max_attempts: 9}),
     error => error instanceof FetchXError && error.code === 'invalid_request' && error.status === 400 && error.details.field === 'max_attempts');
   const stranger = new FetchXClient({url: 'https://api.fetchx.test', token: 'fxk_wrong', fetch: transportFor(app)});

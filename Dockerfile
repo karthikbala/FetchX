@@ -4,6 +4,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 COPY src ./src
+COPY docs/changelog.json ./docs/changelog.json
 ENV NODE_ENV=production
 RUN groupadd --gid 10001 fetchx \
  && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --no-log-init fetchx

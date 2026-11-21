@@ -9,6 +9,9 @@ export type FetchData = Schemas['FetchData'];
 export type FetchList = Schemas['FetchList'];
 export type Usage = Schemas['Usage'];
 export type Balance = Schemas['Balance'];
+export type EstimateRequest = Schemas['EstimateRequest'];
+export type Estimate = Schemas['Estimate'];
+export type ServiceStatus = Schemas['ServiceStatus'];
 export type Attempt = Schemas['Attempt'];
 
 type Transport = (url: string, options: RequestInit) => Promise<Response>;
@@ -71,6 +74,10 @@ export class FetchXClient {
   content(id: string): Promise<Download>;
   screenshot(id: string): Promise<Download>;
   delete(id: string): Promise<void>;
+  /** What a request, or a batch ({items, defaults}), would cost and take. Nothing is sent or reserved. */
+  estimate(input: EstimateRequest): Promise<Estimate>;
+  /** Service status and notices. */
+  status(): Promise<ServiceStatus>;
   balance(): Promise<Balance>;
   usage(query?: UsageQuery): Promise<Usage>;
 }

@@ -125,6 +125,13 @@ export class FetchXClient {
   // DELETE /v1/fetch/{id}
   async delete(id) { await this.#send('DELETE', `/v1/fetch/${encodeURIComponent(id)}`); }
 
+  // POST /v1/estimate: what one POST /v1/fetch body, or a batch body
+  // ({items, defaults}), would cost and take. Nothing is sent or reserved.
+  estimate(input) { return this.#send('POST', '/v1/estimate', {body: input}); }
+
+  // GET /v1/status: service status and notices (needs no key, but sends it).
+  status() { return this.#send('GET', '/v1/status'); }
+
   // GET /v1/balance: {credits, reserved, trial, purchased, payment_hold}
   balance() { return this.#send('GET', '/v1/balance'); }
 

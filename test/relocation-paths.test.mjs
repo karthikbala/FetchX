@@ -13,6 +13,8 @@ let root,checkout;
 before(async()=>{
  root=await realpath(await mkdtemp(join(tmpdir(),'fetchx relocation space ')));checkout=join(root,'FetchX # percent%');await mkdir(checkout);
  await cp(join(repository,'src'),join(checkout,'src'),{recursive:true});await mkdir(join(checkout,'scripts'));
+ // The image's layout (Dockerfile): src, plus the changelog the API reads its version and retired routes from.
+ await mkdir(join(checkout,'docs'));await cp(join(repository,'docs','changelog.json'),join(checkout,'docs','changelog.json'));
  for(const name of ['init-config.mjs'])await cp(join(repository,'scripts',name),join(checkout,'scripts',name));
  await symlink(join(repository,'node_modules'),join(checkout,'node_modules'),'dir');
 });

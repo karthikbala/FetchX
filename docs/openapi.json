@@ -2,8 +2,8 @@
  "openapi": "3.1.0",
  "info": {
   "title": "FetchX API",
-  "version": "1.0.0",
-  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one; the other endpoints read results, download files, list, delete and report credits.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data. Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for. Every result says what it cost in `credits`, with a breakdown."
+  "version": "1.4.0",
+  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one; POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. GET /v1/status needs no key.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data. Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
  },
  "servers": [
   {
@@ -29,6 +29,10 @@
   {
    "name": "Usage",
    "description": "Credits and usage."
+  },
+  {
+   "name": "Service",
+   "description": "Service status, without an API key."
   }
  ],
  "paths": {
@@ -585,7 +589,7 @@
       }
      },
      "503": {
-      "description": "FetchX cannot take work right now. Nothing was charged.",
+      "description": "FetchX cannot take work right now. Nothing was charged. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url.",
       "content": {
        "application/json": {
         "schema": {
@@ -597,6 +601,21 @@
            "error": {
             "code": "unavailable",
             "message": "FetchX cannot take work right now; wait and retry."
+           }
+          }
+         },
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
            }
           }
          }
@@ -737,6 +756,33 @@
            "error": {
             "code": "api_key_scope_forbidden",
             "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
            }
           }
          }
@@ -981,6 +1027,33 @@
         }
        }
       }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
      }
     }
    },
@@ -1081,6 +1154,33 @@
            "error": {
             "code": "pending",
             "message": "The request is still running."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
            }
           }
          }
@@ -1515,7 +1615,7 @@
       }
      },
      "503": {
-      "description": "FetchX cannot take work right now. Nothing was charged.",
+      "description": "FetchX cannot take work right now. Nothing was charged. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url.",
       "content": {
        "application/json": {
         "schema": {
@@ -1527,6 +1627,21 @@
            "error": {
             "code": "unavailable",
             "message": "FetchX cannot take work right now; wait and retry."
+           }
+          }
+         },
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
            }
           }
          }
@@ -1669,6 +1784,33 @@
         }
        }
       }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
      }
     }
    }
@@ -1805,6 +1947,418 @@
         }
        }
       }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/estimate": {
+   "post": {
+    "operationId": "createEstimate",
+    "tags": [
+     "Usage"
+    ],
+    "summary": "Estimate cost and time before sending",
+    "description": "What one request, or a batch of up to 1000, would cost and how long it would take, before anything is sent, reserved or charged. Send the body you would send to POST /v1/fetch, or a batch body ({items, defaults}: each item a URL or a request, merged over defaults). For each request FetchX plans the steps it would try and prices them with what recent requests to the same site took (the step that got the data, its traffic, captcha solves and time: learned from every customer's requests by host name only), its price table, your max_credits and your balance. credits.typical is what one success usually costs and credits.high a high-end cost (90th percentile); credits.expected counts only the share of requests that usually succeed, since failures are free; credits.hold is what the request reserves while it runs. basis says where the figures come from: history (this site's recent requests), routes (a route known to work, priced from other sites), defaults (no history: typical figures for the first step) or assumed. A batch's seconds assume FetchX's per-site pace. notes say what to change when a request would be refused or is likely to fail.",
+    "x-scope": "fetch:write",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/EstimateRequest"
+       },
+       "examples": {
+        "fetch": {
+         "value": {
+          "url": "https://shop.example.com/search?q=hotels",
+          "expect": {
+           "selector": ".result"
+          }
+         }
+        },
+        "batch": {
+         "value": {
+          "items": [
+           "https://shop.example.com/item/1",
+           "https://shop.example.com/item/2",
+           {
+            "url": "https://other.example.org/list",
+            "scroll": 20
+           }
+          ],
+          "defaults": {
+           "formats": [
+            "markdown"
+           ],
+           "max_credits": 200
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "The estimate. Nothing was sent or reserved.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Estimate"
+        },
+        "examples": {
+         "fetch": {
+          "value": {
+           "kind": "fetch",
+           "requests": 1,
+           "estimated": 1,
+           "credits": {
+            "expected": 115,
+            "typical": 122,
+            "high": 135
+           },
+           "seconds": {
+            "typical": 58.2,
+            "high": 71.0
+           },
+           "balance": {
+            "credits": 9420,
+            "covers_expected": true,
+            "covers_high": true
+           },
+           "items": [
+            {
+             "index": 0,
+             "url": "https://shop.example.com/search?q=hotels",
+             "host": "shop.example.com",
+             "basis": "history",
+             "samples": 42,
+             "step": "browser_residential",
+             "steps": [
+              {
+               "step": "browser_residential",
+               "share": 0.95
+              },
+              {
+               "step": "http_residential",
+               "share": 0.05
+              }
+             ],
+             "planned": [
+              "http",
+              "browser_residential",
+              "browser_residential",
+              "browser_residential",
+              "browser_residential"
+             ],
+             "success_rate": 0.94,
+             "credits": {
+              "expected": 115,
+              "typical": 122,
+              "high": 135,
+              "hold": 410
+             },
+             "seconds": {
+              "typical": 58.2,
+              "high": 71.0
+             },
+             "notes": []
+            }
+           ],
+           "notes": []
+          }
+         },
+         "batch": {
+          "value": {
+           "kind": "batch",
+           "requests": 3,
+           "estimated": 3,
+           "credits": {
+            "expected": 205,
+            "typical": 209,
+            "high": 352
+           },
+           "seconds": {
+            "typical": 101.0,
+            "high": 146.0
+           },
+           "balance": {
+            "credits": 9420,
+            "covers_expected": true,
+            "covers_high": true
+           },
+           "hosts": {
+            "shop.example.com": {
+             "requests": 2,
+             "pace": {
+              "tier": "guarded",
+              "max_running": 2,
+              "start_gap_ms": 4000
+             },
+             "credits": {
+              "expected": 90,
+              "high": 152
+             }
+            },
+            "other.example.org": {
+             "requests": 1,
+             "pace": {
+              "tier": "open",
+              "max_running": 4,
+              "start_gap_ms": 500
+             },
+             "credits": {
+              "expected": 115,
+              "high": 200
+             }
+            }
+           },
+           "items": [
+            {
+             "index": 0,
+             "url": "https://shop.example.com/item/1",
+             "host": "shop.example.com",
+             "basis": "history",
+             "samples": 42,
+             "step": "browser_residential",
+             "steps": [
+              {
+               "step": "browser_residential",
+               "share": 0.95
+              },
+              {
+               "step": "http_residential",
+               "share": 0.05
+              }
+             ],
+             "planned": [
+              "http",
+              "browser_residential",
+              "browser_residential",
+              "browser_residential",
+              "browser_residential"
+             ],
+             "success_rate": 0.94,
+             "credits": {
+              "expected": 45,
+              "typical": 47,
+              "high": 76,
+              "hold": 200
+             },
+             "seconds": {
+              "typical": 58.2,
+              "high": 71.0
+             },
+             "notes": []
+            },
+            {
+             "index": 1,
+             "url": "https://shop.example.com/item/2",
+             "host": "shop.example.com",
+             "basis": "history",
+             "samples": 42,
+             "step": "browser_residential",
+             "steps": [
+              {
+               "step": "browser_residential",
+               "share": 0.95
+              },
+              {
+               "step": "http_residential",
+               "share": 0.05
+              }
+             ],
+             "planned": [
+              "http",
+              "browser_residential",
+              "browser_residential",
+              "browser_residential",
+              "browser_residential"
+             ],
+             "success_rate": 0.94,
+             "credits": {
+              "expected": 45,
+              "typical": 47,
+              "high": 76,
+              "hold": 200
+             },
+             "seconds": {
+              "typical": 58.2,
+              "high": 71.0
+             },
+             "notes": []
+            },
+            {
+             "index": 2,
+             "url": "https://other.example.org/list",
+             "host": "other.example.org",
+             "basis": "defaults",
+             "samples": 0,
+             "step": "browser_residential",
+             "steps": [
+              {
+               "step": "browser_residential",
+               "share": 1
+              }
+             ],
+             "planned": [
+              "browser_residential",
+              "browser_residential",
+              "browser_residential",
+              "browser_residential",
+              "browser_residential"
+             ],
+             "success_rate": null,
+             "credits": {
+              "expected": 115,
+              "typical": 115,
+              "high": 200,
+              "hold": 200
+             },
+             "seconds": {
+              "typical": 101.0,
+              "high": 146.0
+             },
+             "notes": [
+              {
+               "code": "no_history",
+               "message": "FetchX has no recent requests to other.example.org to go by, so the figures are typical for the browser_residential step. The estimate improves once a page from this host has been fetched."
+              }
+             ]
+            }
+           ],
+           "notes": []
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "The body is neither a POST /v1/fetch body nor a batch body; error.details.field names what is wrong. A single request that would be refused is reported in its item instead.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "items",
+             "reason": "1 to 1000 URLs or requests"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "FetchX cannot estimate right now (the fetching service is not answering). During maintenance that pauses the API, error.code is maintenance.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unavailable": {
+          "value": {
+           "error": {
+            "code": "unavailable",
+            "message": "FetchX cannot take work right now; wait and retry."
+           }
+          }
+         },
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
      }
     }
    }
@@ -1873,6 +2427,33 @@
            "error": {
             "code": "api_key_scope_forbidden",
             "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
            }
           }
          }
@@ -1990,6 +2571,113 @@
            "error": {
             "code": "api_key_scope_forbidden",
             "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/status": {
+   "get": {
+    "operationId": "getStatus",
+    "tags": [
+     "Service"
+    ],
+    "summary": "Service status",
+    "description": "The API's state, its components and any incident or maintenance notice (scheduled, active, or resolved in the last 14 days). No API key needed, any origin may call it, and it answers during maintenance. Refreshed every 10 seconds. The status page at https://fetchx.ai/status shows the same with 90 days of history, from a monitor that does not run on FetchX's servers.",
+    "security": [],
+    "responses": {
+     "200": {
+      "description": "The status.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ServiceStatus"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "status": "maintenance",
+           "updated_at": "2026-11-22T03:05:00.000Z",
+           "components": [
+            {
+             "id": "api",
+             "name": "API",
+             "status": "maintenance"
+            },
+            {
+             "id": "fetching",
+             "name": "Fetching",
+             "status": "maintenance"
+            },
+            {
+             "id": "console",
+             "name": "Console and billing",
+             "status": "operational"
+            }
+           ],
+           "notices": [
+            {
+             "id": "7",
+             "kind": "maintenance",
+             "title": "Database upgrade",
+             "body": "The API is paused while the database is upgraded.",
+             "impact": "maintenance",
+             "components": [
+              "api",
+              "fetching"
+             ],
+             "pause_api": true,
+             "status": "active",
+             "starts_at": "2026-11-22T03:00:00.000Z",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "resolved_at": null,
+             "updates": [
+              {
+               "at": "2026-11-22T03:00:00.000Z",
+               "text": "Started."
+              }
+             ]
+            }
+           ],
+           "api": {
+            "version": "1.4.0"
+           },
+           "links": {
+            "status_page": "https://fetchx.ai/status",
+            "changelog": "https://fetchx.ai/changelog",
+            "docs": "https://fetchx.ai/docs"
            }
           }
          }
@@ -3387,6 +4075,597 @@
      "payment_hold": {
       "type": "boolean",
       "description": "True while spending is paused over a payment issue."
+     }
+    }
+   },
+   "EstimateRequest": {
+    "description": "One POST /v1/fetch body, or a batch body: items (URLs, or requests with url) merged over defaults. async, webhook_url and idempotency_key are set once for a batch, never in defaults or an item.",
+    "anyOf": [
+     {
+      "$ref": "#/components/schemas/FetchRequest"
+     },
+     {
+      "$ref": "#/components/schemas/EstimateBatch"
+     }
+    ]
+   },
+   "EstimateBatch": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "items"
+    ],
+    "properties": {
+     "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 12000
+        },
+        {
+         "type": "object"
+        }
+       ]
+      },
+      "description": "URLs, or POST /v1/fetch bodies (with url) merged over defaults."
+     },
+     "defaults": {
+      "type": "object",
+      "description": "POST /v1/fetch fields every item gets unless it sets its own (not url, async, webhook_url or idempotency_key)."
+     },
+     "webhook_url": {
+      "type": "string"
+     },
+     "idempotency_key": {
+      "type": "string"
+     },
+     "tags": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   },
+   "EstimateCredits": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "expected",
+     "typical",
+     "high"
+    ],
+    "properties": {
+     "expected": {
+      "type": "integer",
+      "description": "typical times the share of requests that usually succeed (failures are free)."
+     },
+     "typical": {
+      "type": "integer",
+      "description": "What a success usually costs."
+     },
+     "high": {
+      "type": "integer",
+      "description": "A high-end cost for a success (90th percentile of traffic, with a captcha if the site sometimes needs one)."
+     },
+     "hold": {
+      "type": "integer",
+      "description": "Items only: what the request reserves while it runs (released when it settles)."
+     }
+    }
+   },
+   "EstimateSeconds": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "typical",
+     "high"
+    ],
+    "properties": {
+     "typical": {
+      "type": "number"
+     },
+     "high": {
+      "type": "number"
+     }
+    }
+   },
+   "EstimateNote": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "code",
+     "message"
+    ],
+    "properties": {
+     "code": {
+      "type": "string",
+      "description": "no_history, likely_needs_more_credits, likely_needs_other_options, max_credits_too_low, insufficient_credits, balance_may_run_out, cooling_down, low_success_rate or no_route."
+     },
+     "message": {
+      "type": "string",
+      "description": "What it means and what to change."
+     }
+    }
+   },
+   "EstimateItem": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "index",
+     "url"
+    ],
+    "properties": {
+     "index": {
+      "type": "integer",
+      "description": "The request's position (0 for a single request)."
+     },
+     "url": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "host": {
+      "type": "string"
+     },
+     "basis": {
+      "type": "string",
+      "enum": [
+       "history",
+       "routes",
+       "defaults",
+       "assumed",
+       "none"
+      ],
+      "description": "Where the figures come from; none when no step is open to this request."
+     },
+     "samples": {
+      "type": "integer",
+      "description": "Recent requests to this host the figures are based on."
+     },
+     "step": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "http",
+         "http_residential",
+         "browser",
+         "browser_residential"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The step most likely to get the data."
+     },
+     "steps": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "step",
+        "share"
+       ],
+       "properties": {
+        "step": {
+         "type": "string",
+         "enum": [
+          "http",
+          "http_residential",
+          "browser",
+          "browser_residential"
+         ]
+        },
+        "share": {
+         "type": "number"
+        }
+       }
+      },
+      "description": "The steps likely to get the data, with their share."
+     },
+     "planned": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "enum": [
+        "http",
+        "http_residential",
+        "browser",
+        "browser_residential"
+       ]
+      },
+      "description": "The steps FetchX would try, in order."
+     },
+     "success_rate": {
+      "type": [
+       "number",
+       "null"
+      ],
+      "description": "Share of recent requests to this host that succeeded; null without history."
+     },
+     "credits": {
+      "$ref": "#/components/schemas/EstimateCredits"
+     },
+     "seconds": {
+      "$ref": "#/components/schemas/EstimateSeconds"
+     },
+     "notes": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/EstimateNote"
+      }
+     },
+     "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "code",
+       "message"
+      ],
+      "properties": {
+       "code": {
+        "type": "string"
+       },
+       "message": {
+        "type": "string"
+       },
+       "details": {
+        "type": "object"
+       }
+      },
+      "description": "Why POST /v1/fetch (or the batch) would refuse this request; it is left out of the totals."
+     }
+    }
+   },
+   "Estimate": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "kind",
+     "requests",
+     "estimated",
+     "credits",
+     "seconds",
+     "balance",
+     "items",
+     "notes"
+    ],
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "fetch",
+       "batch"
+      ]
+     },
+     "requests": {
+      "type": "integer"
+     },
+     "estimated": {
+      "type": "integer",
+      "description": "Requests that would be accepted and are in the totals."
+     },
+     "credits": {
+      "$ref": "#/components/schemas/EstimateCredits"
+     },
+     "seconds": {
+      "$ref": "#/components/schemas/EstimateSeconds"
+     },
+     "balance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "credits",
+       "covers_expected",
+       "covers_high"
+      ],
+      "properties": {
+       "credits": {
+        "type": [
+         "integer",
+         "null"
+        ],
+        "description": "Credits available now; null for a project that is not metered."
+       },
+       "covers_expected": {
+        "type": "boolean"
+       },
+       "covers_high": {
+        "type": "boolean"
+       }
+      }
+     },
+     "hosts": {
+      "type": "object",
+      "description": "Batches only: per site, its requests, FetchX's pace for it and its credits.",
+      "additionalProperties": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "requests",
+        "pace",
+        "credits"
+       ],
+       "properties": {
+        "requests": {
+         "type": "integer"
+        },
+        "pace": {
+         "anyOf": [
+          {
+           "type": "object",
+           "additionalProperties": false,
+           "required": [
+            "tier",
+            "max_running",
+            "start_gap_ms"
+           ],
+           "properties": {
+            "tier": {
+             "type": "string",
+             "enum": [
+              "open",
+              "guarded",
+              "limited"
+             ]
+            },
+            "max_running": {
+             "type": "integer"
+            },
+            "start_gap_ms": {
+             "type": "integer"
+            }
+           }
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "credits": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "expected",
+          "high"
+         ],
+         "properties": {
+          "expected": {
+           "type": "integer"
+          },
+          "high": {
+           "type": "integer"
+          }
+         }
+        }
+       }
+      }
+     },
+     "items": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/EstimateItem"
+      }
+     },
+     "notes": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/EstimateNote"
+      }
+     }
+    }
+   },
+   "ServiceStatus": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "status",
+     "updated_at",
+     "components",
+     "notices",
+     "api",
+     "links"
+    ],
+    "properties": {
+     "status": {
+      "type": "string",
+      "enum": [
+       "operational",
+       "degraded",
+       "partial_outage",
+       "major_outage",
+       "maintenance"
+      ],
+      "description": "The worst state of any component."
+     },
+     "updated_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "components": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "id",
+        "name",
+        "status"
+       ],
+       "properties": {
+        "id": {
+         "type": "string",
+         "enum": [
+          "api",
+          "fetching",
+          "console"
+         ]
+        },
+        "name": {
+         "type": "string"
+        },
+        "status": {
+         "type": "string",
+         "enum": [
+          "operational",
+          "degraded",
+          "partial_outage",
+          "major_outage",
+          "maintenance"
+         ]
+        }
+       }
+      }
+     },
+     "notices": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/StatusNotice"
+      },
+      "description": "Scheduled and active notices, then those resolved in the last 14 days."
+     },
+     "api": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "version"
+      ],
+      "properties": {
+       "version": {
+        "type": "string",
+        "description": "The API's version (the latest changelog release)."
+       }
+      }
+     },
+     "links": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "status_page",
+       "changelog",
+       "docs"
+      ],
+      "properties": {
+       "status_page": {
+        "type": "string"
+       },
+       "changelog": {
+        "type": "string"
+       },
+       "docs": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   "StatusNotice": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "kind",
+     "title",
+     "body",
+     "impact",
+     "components",
+     "pause_api",
+     "status",
+     "starts_at",
+     "ends_at",
+     "resolved_at",
+     "updates"
+    ],
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "incident",
+       "maintenance"
+      ]
+     },
+     "title": {
+      "type": "string"
+     },
+     "body": {
+      "type": "string"
+     },
+     "impact": {
+      "type": "string",
+      "enum": [
+       "none",
+       "minor",
+       "major",
+       "maintenance"
+      ]
+     },
+     "components": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "pause_api": {
+      "type": "boolean",
+      "description": "While active, the API answers 503 maintenance."
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "scheduled",
+       "active",
+       "resolved"
+      ]
+     },
+     "starts_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "ends_at": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time",
+      "description": "The planned end."
+     },
+     "resolved_at": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time"
+     },
+     "updates": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "at",
+        "text"
+       ],
+       "properties": {
+        "at": {
+         "type": "string",
+         "format": "date-time"
+        },
+        "text": {
+         "type": "string"
+        }
+       }
+      }
      }
     }
    }
