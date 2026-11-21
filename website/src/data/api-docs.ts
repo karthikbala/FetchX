@@ -300,7 +300,7 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         id: 'traffic',
         title: 'What a browser downloads',
         blocks: [
-          { kind: 'text', text: 'Most of a heavy page’s cost is residential traffic, and most of that is images, video and fonts. `block_resources` (on unless you ask for a screenshot) skips the page’s own images, media and fonts. Scripts, styles and data still load, so the text and markdown are the same. Frames such as a captcha keep everything they need. Set it to `false` if you need the page exactly as a person sees it.' },
+          { kind: 'text', text: 'Most of a heavy page’s cost is residential traffic, and a good part of that is images, video and fonts. `block_resources` (on unless you ask for a screenshot) skips the page’s own images, media and fonts, which took a large search page from 14.4 MB to 11.4 MB. Scripts, styles and data still load, so the text and markdown are the same. Frames such as a captcha keep everything they need. Set it to `false` if you need the page exactly as a person sees it.' },
         ],
       },
       {
@@ -370,7 +370,7 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         title: 'How charging works',
         blocks: [
           { kind: 'text', text: 'When a request is admitted, FetchX reserves up to `max_credits` or the price of the most expensive step it might use. If the balance cannot cover the cheapest step, the request is refused with 402 before anything is sent. On success it charges the price of the step that got the data, plus 10 for a solved captcha, plus 5 per MB of residential transfer beyond the first 1 MB (HTTP) or 5 MB (browser), and releases the rest. Failed requests, uncertain ones, pages without what `expect` asked for and every earlier failed step cost nothing.' },
-          { kind: 'text', text: 'Every answer carries `credits`: `charged`, `max` (what was reserved), `balance` (what the project has left) and, on success, a `breakdown` of the step price, captcha credits, traffic in MB, the MB included and the traffic credits. A browser page that costs far more than its step is paying for traffic: `block_resources` (on by default) cuts most of it.' },
+          { kind: 'text', text: 'Every answer carries `credits`: `charged`, `max` (what was reserved), `balance` (what the project has left) and, on success, a `breakdown` of the step price, captcha credits, traffic in MB, the MB included and the traffic credits. A browser page that costs far more than its step is paying for traffic: `block_resources` (on by default) cuts the images, video and fonts out of it.' },
           { kind: 'text', text: 'Trial credits and purchased credits share one balance. Purchased credits do not expire.' },
         ],
       },

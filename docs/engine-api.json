@@ -2221,7 +2221,7 @@
           },
           "block_resources": {
             "type": "boolean",
-            "description": "In a browser, do not download images, video, audio or web fonts on the page. They are most of a rendered page\u2019s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. Defaults to true, or false when formats has screenshot."
+            "description": "In a browser, do not download images, video, audio or web fonts on the page. They carry none of the text but a good part of a rendered page\u2019s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. Defaults to true, or false when formats has screenshot."
           },
           "expect": {
             "type": "object",

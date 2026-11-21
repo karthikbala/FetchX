@@ -15,7 +15,7 @@ A request is charged only when it succeeds, at the price of the step that got th
 | `captcha`, added when the winning step solved one | 10 |
 | `residential_overage_per_mb`, beyond `residential_included_mb` (1 MB for HTTP, 5 MB for a browser) | 5 per started MB |
 
-Most of a browser page's price past the step is residential traffic: a large travel search page settled at about 13 MB plus about 0.7 MB per screen scrolled, mostly images, which is how a 25-credit step became 90 to 135 credits. The engine's `block_resources` (on unless a screenshot is asked for) refuses the page's own images, media and fonts at its request gate, so they are never downloaded; frames such as captchas keep theirs.
+Most of a browser page's price past the step is residential traffic: a large travel search page settled at about 13 MB plus about 0.7 MB per screen scrolled, which is how a 25-credit step became 90 to 135 credits. The engine's `block_resources` (on unless a screenshot is asked for) refuses the page's own images, media and fonts at its request gate, so they are never downloaded; frames such as captchas keep theirs. Measured live on 2026-11-21, it took that page from 14.4 MB to 11.4 MB (75 to 60 credits) with the same results; the rest is scripts and data the page needs.
 
 Each settled success stores its `wire_bytes` in `fetch_settlements`, and every answer shows `credits.breakdown` (`priceParts` in `src/billing/ledger.mjs`): `step`, `step_credits`, `captcha_credits`, `traffic_mb`, `included_mb` and `traffic_credits`, which add up to `charged` unless the reservation capped it.
 
