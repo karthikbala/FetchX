@@ -109,5 +109,9 @@ class FetchXClient:
     def delete(self, id):
         self._send('DELETE', '/v1/fetch/' + quote(id, safe=''))
 
+    def balance(self):
+        """Credits available now: {'credits', 'reserved', 'trial', 'purchased', 'payment_hold'}."""
+        return self._send('GET', '/v1/balance')
+
     def usage(self, *, period=None, since=None, until=None):
         return self._send('GET', '/v1/usage' + _query({'period': period, 'since': since, 'until': until}))

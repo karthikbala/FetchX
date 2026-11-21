@@ -1,7 +1,7 @@
 // An in-memory engine that speaks the pinned contract (docs/engine-api.json)
 // over HTTP, for platform tests. It fetches nothing: each job's outcome comes
 // from `script(request, {allowed})`, which may return
-//   {planned, step, status, error_code, captcha, wire_bytes, body, content_type, screenshot, data, hold}
+//   {planned, step, status, error_code, page_status, challenge, captcha, wire_bytes, body, content_type, screenshot, data, hold}
 // `planned` are the tiers the job would need (by default the browser tiers for
 // render: always, the HTTP tiers for render: never, else every tier); when none
 // is allowed the job is refused with budget_too_low, as the engine does. `step`
@@ -40,13 +40,13 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
   });
 
   const view = (job, {includeBody = true} = {}) => {
-    const base = {id: job.id, status: job.status, idempotency_key: job.key, url: job.request.url, created_at: job.created_at,
-      finished_at: job.finished_at, tags: job.request.tags ?? []};
-    if (job.status === 'pending') return {...base, data: null, attempts: [], skipped: [], fixes: [], error: null};
+    const base = {id: job.id, status: job.status, page_status: job.page_status ?? null, idempotency_key: job.key, url: job.request.url,
+      created_at: job.created_at, finished_at: job.finished_at, tags: job.request.tags ?? []};
+    if (job.status === 'pending') return {...base, data: null, challenge: null, attempts: [], skipped: [], fixes: [], error: null};
     const data = job.data ? {...job.data} : null;
     if (data && job.deleted) data.content_expired = true;
-    else if (data && includeBody) Object.assign(data, {body: job.body, body_encoding: 'utf-8'});
-    return {...base, data, attempts: job.attempts, skipped: job.skipped, fixes: [], error: job.error};
+    else if (data && includeBody && (job.request.formats ?? ['body']).includes('body')) Object.assign(data, {body: job.body, body_encoding: 'utf-8'});
+    return {...base, data, challenge: job.challenge, attempts: job.attempts, skipped: job.skipped, fixes: [], error: job.error};
   };
   const envelope = (job, options) => ({job: view(job, options), tenant: job.tenant, usage: job.usage, webhook_url: job.webhook_url,
     deadline: job.deadline});
@@ -72,10 +72,13 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
     job.screenshot = outcome.screenshot ?? (transport === 'browser' && formats.includes('screenshot') ? Buffer.from('jpeg') : null);
     if (job.screenshot && formats.includes('screenshot')) job.data.screenshot = Buffer.from(job.screenshot).toString('base64');
     Object.assign(job.data, outcome.data);
-    job.attempts = blocked ? [] : [{transport, class: routeClass, country: null, result: succeeded ? 'success' : 'blocked', status_code: job.data.status_code}];
+    job.attempts = blocked ? [] : [{transport, class: routeClass, country: null, result: succeeded ? 'success' : 'blocked', status_code: job.data.status_code,
+      wire_bytes: outcome.wire_bytes ?? 1000}];
     job.skipped = blocked ? [{transport, class: routeClass, country: null, reason: 'over_max_credits'}] : [];
+    job.page_status = outcome.page_status ?? (succeeded ? 'content' : 'challenge');
+    job.challenge = outcome.challenge ?? null;
     job.error = succeeded ? null : {code: outcome.error_code ?? 'blocked', message: 'The site refused every route FetchX was allowed to try.',
-      next: {action: 'retry_later', detail: 'Retry later.'}};
+      next: {action: 'retry_later', retry_with_new_key: true, detail: 'Retry later.'}};
     job.usage = succeeded ? {step, captcha_solved: outcome.captcha === true, wire_bytes: outcome.wire_bytes ?? 1000} : null;
     outbox.push(job.id);
   }
@@ -106,7 +109,7 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
       const existing = jobs.get(existingId);
       if (existing.hash !== hash) return refuse(reply, 409, 'idempotency_conflict');
       if (existing.status === 'pending' && !request.async) await within(existing.done, waitMs);
-      return reply.code(existing.status === 'pending' ? 202 : 200).send({...envelope(existing, {includeBody: request.include_body !== false}), created: false});
+      return reply.code(existing.status === 'pending' ? 202 : 200).send({...envelope(existing), created: false});
     }
     if (jobs.has(id)) return refuse(reply, 409, 'job_id_conflict');
     const allowed = steps === undefined || steps === null ? null : new Set(steps);
@@ -120,7 +123,7 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
     byKey.set(`${tenant}\0${key}`, id);
     job.done = Promise.resolve(outcome.hold).then(() => finish(job, outcome, allowed));
     if (!request.async) await within(job.done, waitMs);
-    return reply.code(job.status === 'pending' ? 202 : 200).send({...envelope(job, {includeBody: request.include_body !== false}), created: true});
+    return reply.code(job.status === 'pending' ? 202 : 200).send({...envelope(job), created: true});
   });
 
   const own = (req, reply) => {

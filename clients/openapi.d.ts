@@ -92,6 +92,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/balance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Credit balance
+         * @description The project’s credits now: cheap to call before a batch, or to watch a crawl. Every fetch result also carries credits.balance.
+         */
+        get: operations["getBalance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/usage": {
         parameters: {
             query?: never;
@@ -201,13 +221,24 @@ export interface components {
                 /** @description true uses a browser on this route. */
                 render?: boolean;
             };
-            /** @description Extra outputs. screenshot needs a browser. */
-            formats?: ("markdown" | "text" | "links" | "metadata" | "json" | "screenshot")[];
             /**
-             * @description Return the body. Set false when only formats are needed.
-             * @default true
+             * @description What to return. body: the response as received (the rendered page after a browser), the default when formats is left out. markdown, text, links, metadata and json are derived from it; screenshot needs a browser. Ask only for what you use: a rendered page can be megabytes of HTML. The body is stored either way and can be downloaded from /v1/fetch/{id}/content.
+             * @default [
+             *       "body"
+             *     ]
              */
-            include_body?: boolean;
+            formats?: ("body" | "markdown" | "text" | "links" | "metadata" | "json" | "screenshot")[];
+            /** @description In a browser, do not download images, video, audio or web fonts on the page. They are most of a rendered page’s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. Defaults to true, or false when formats has screenshot. */
+            block_resources?: boolean;
+            /** @description What the page must show to be the content you want. Every condition given must hold, or the step is not a success: auto mode tries a browser, then one fresh IP, and a request that never gets it fails with content_missing and is not charged. A browser waits up to 10 s for the selector after the page settles. A real 404 or 410 is the site’s answer and is not checked. */
+            expect?: {
+                /** @description A CSS selector that must match at least one element (HTML only). */
+                selector?: string;
+                /** @description Text that must appear in the page’s visible text (or a non-HTML body), ignoring case and spacing. */
+                text?: string;
+                /** @description The page’s markdown (a non-HTML body’s text) must have at least this many characters. */
+                min_markdown_length?: number;
+            };
             /**
              * @description The most attempts that may reach the site. Steps refused before anything is sent do not count.
              * @default 5
@@ -245,6 +276,11 @@ export interface components {
             id: string;
             /** @enum {string} */
             status: "pending" | "succeeded" | "failed";
+            /**
+             * @description What the page was. content: the page you asked for (with expect, it showed what you expected). not_found: the site’s real 404 or 410, billed like content. empty: it loaded but showed next to nothing, or not what expect asked for. challenge: a bot wall, block or rate limit stopped it (see challenge). error: anything else (see error). Null while pending.
+             * @enum {string|null}
+             */
+            page_status: "content" | "not_found" | "empty" | "challenge" | "error" | null;
             idempotency_key: string;
             url: string;
             /** Format: date-time */
@@ -254,11 +290,18 @@ export interface components {
             tags: string[];
             /** @description What the site answered: on success the real answer, on failure the last response. Null only when nothing reached the site. */
             data: components["schemas"]["FetchData"] | null;
+            /** @description The walls the request met on its way, or null when it met none. */
+            challenge: components["schemas"]["Challenge"] | null;
+            /** @description What this request cost. Present on every result: a pending or failed request shows 0. */
             credits: {
-                /** @description 0 unless the request succeeded. */
+                /** @description 0 unless the request succeeded. Never more than max. */
                 charged: number;
-                /** @description The most this request could have cost (null for unmetered projects). */
+                /** @description The most this request could have cost: max_credits, or the dearest step it might use (null for unmetered projects). */
                 max: number | null;
+                /** @description Credits the project has available as this answer is made (null for unmetered projects). Also at GET /v1/balance. */
+                balance: number | null;
+                /** @description How the price of the step that got the data adds up; null unless the request succeeded. */
+                breakdown: components["schemas"]["CreditBreakdown"] | null;
             };
             /** @description One entry per step tried, in order. Providers are never named. */
             attempts: components["schemas"]["Attempt"][];
@@ -267,6 +310,35 @@ export interface components {
             /** @description Headers FetchX corrected. */
             fixes: ("user-agent" | "accept" | "accept-language")[];
             error: components["schemas"]["FetchError"] | null;
+        };
+        /** @description Blocks, bot challenges and rate limits met on the way, and on the page that answered (a captcha, a wall that cleared). FetchX handles them itself; this says what it met and how it got past. */
+        Challenge: {
+            /** @description The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, recaptcha, hcaptcha), or null when the page did not say. */
+            vendor: string | null;
+            /** @description How many attempts met one. */
+            walls: number;
+            /** @description Whether FetchX got past them to the page. */
+            passed: boolean;
+            /**
+             * @description rotation: a later attempt on another route or a fresh IP got through; captcha: solved on the page (10 credits); wait: it cleared by itself. Null when not passed.
+             * @enum {string|null}
+             */
+            passed_by: "rotation" | "captcha" | "wait" | null;
+        };
+        /** @description charged = step_credits + captcha_credits + traffic_credits, capped at max. */
+        CreditBreakdown: {
+            /** @enum {string} */
+            step: "http" | "http_residential" | "browser" | "browser_residential";
+            /** @description The step’s price. */
+            step_credits: number;
+            /** @description For a captcha solved on the page, else 0. */
+            captcha_credits: number;
+            /** @description Megabytes (10^6 bytes) the step moved, to one decimal. */
+            traffic_mb: number;
+            /** @description Traffic included in a residential step’s price; null when traffic is not charged. */
+            included_mb: number | null;
+            /** @description Per started MB past included_mb, on residential steps. block_resources keeps it down. */
+            traffic_credits: number;
         };
         FetchData: {
             /** @description The site's HTTP status. */
@@ -285,7 +357,7 @@ export interface components {
             };
             /** @description Cookies the site set, for multi-step flows. */
             cookies?: components["schemas"]["Cookie"][];
-            /** @description The body: utf-8 text, or base64 for binary. Left out when include_body is false or when it is too large to inline (see body_url). */
+            /** @description The body: utf-8 text, or base64 for binary. Only when formats has body (the default); left out on reads with include_body=false, and when it is too large to inline (see body_url). */
             body?: string;
             /** @enum {string} */
             body_encoding?: "utf-8" | "base64";
@@ -333,14 +405,20 @@ export interface components {
             /** @description A fresh residential IP for the same step. */
             rotation?: number;
             /**
-             * @description not_admitted means nothing reached the site on this step (for example the provider refused the host); it does not count as an attempt.
+             * @description not_admitted means nothing reached the site on this step (for example the provider refused the host); it does not count as an attempt. content_missing means the page loaded without what expect asked for.
              * @enum {string}
              */
-            result: "success" | "answered" | "blocked" | "rate_limited" | "login_required" | "site_error" | "needs_browser" | "unreachable" | "failed" | "too_large" | "uncertain" | "not_admitted" | "url_not_allowed";
+            result: "success" | "answered" | "blocked" | "rate_limited" | "login_required" | "site_error" | "needs_browser" | "content_missing" | "unreachable" | "failed" | "too_large" | "uncertain" | "not_admitted" | "url_not_allowed";
             /** @description The underlying error, when result is not_admitted or failed. */
             code?: string;
+            /** @description On a blocked or rate-limited step, the bot-protection vendor whose page it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf). */
+            challenge?: string;
+            /** @description On a content_missing step, the expect conditions the page did not meet. */
+            missing?: ("selector" | "text" | "min_markdown_length")[];
             status_code: number | null;
             ms?: number | null;
+            /** @description Bytes this step moved over the network, requests and responses together. On a residential route this is the traffic billed past the included megabytes. */
+            wire_bytes?: number;
             /** @description Captchas met on this step, as type:outcome. */
             captcha?: string[];
             /**
@@ -370,14 +448,17 @@ export interface components {
         };
         FetchError: {
             /** @enum {string} */
-            code: "blocked" | "rate_limited" | "login_required" | "site_error" | "unreachable" | "cooling_down" | "timeout" | "too_large" | "uncertain" | "route_unavailable" | "url_not_allowed";
+            code: "blocked" | "rate_limited" | "content_missing" | "login_required" | "site_error" | "unreachable" | "cooling_down" | "timeout" | "too_large" | "uncertain" | "route_unavailable" | "url_not_allowed";
             message: string;
             retry_after_seconds?: number;
-            /** @description What to do next. */
+            /** @description What to do next. A request key replays its first result, failures included, so a retry always needs a new idempotency_key. */
             next: {
                 /** @enum {string} */
-                action: "retry_after" | "retry_later" | "use_auto" | "provide_credentials" | "check_url" | "raise_timeout" | "render_never" | "recover";
+                action: "retry_after" | "retry_later" | "check_expect" | "use_auto" | "provide_credentials" | "check_url" | "raise_timeout" | "render_never" | "recover";
+                /** @description The earliest time a retry can help. */
                 retry_after_seconds?: number;
+                /** @description true: the same request may succeed if sent again with a new idempotency_key (after retry_after_seconds when given). false: sent again unchanged it would fail the same way; change it as action says. */
+                retry_with_new_key: boolean;
                 detail: string;
             };
         };
@@ -441,6 +522,18 @@ export interface components {
                 details?: Record<string, never>;
                 retry_after_seconds?: number;
             };
+        };
+        Balance: {
+            /** @description Available now: what new requests can reserve. Null for an unmetered project. */
+            credits: number | null;
+            /** @description Held by running requests; released or charged when they finish. */
+            reserved: number;
+            /** @description Trial credits granted (spent first). */
+            trial: number;
+            /** @description Credits bought. They do not expire. */
+            purchased: number;
+            /** @description True while spending is paused over a payment issue. */
+            payment_hold: boolean;
         };
     };
     responses: never;
@@ -616,7 +709,7 @@ export interface operations {
     getFetch: {
         parameters: {
             query?: {
-                /** @description false leaves out the body, for cheap polling. */
+                /** @description false leaves out the body (asked for with formats: body), for cheap polling. */
                 include_body?: boolean;
             };
             header?: never;
@@ -859,6 +952,44 @@ export interface operations {
             };
             /** @description The content expired or was deleted. */
             410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getBalance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The balance. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Balance"];
+                };
+            };
+            /** @description The API key is missing, wrong or revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

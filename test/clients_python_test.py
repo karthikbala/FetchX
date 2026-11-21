@@ -36,12 +36,14 @@ class ClientTests(unittest.TestCase):
         client.list(status='failed', limit=5)
         self.assertEqual(client.content(RESULT['id']), {'body': b'%PDF', 'content_type': 'application/pdf'})
         self.assertIsNone(client.delete(RESULT['id']))
+        client.balance()
         client.usage(period='day')
         base = 'https://api.fetchx.test'
         self.assertEqual([(m, u) for m, u, _ in calls], [
             ('POST', base + '/v1/fetch'), ('GET', base + '/v1/fetch/' + RESULT['id'] + '?include_body=false'),
             ('GET', base + '/v1/fetch?status=failed&limit=5'), ('GET', base + '/v1/fetch/' + RESULT['id'] + '/content'),
-            ('DELETE', base + '/v1/fetch/' + RESULT['id']), ('GET', base + '/v1/usage?period=day')])
+            ('DELETE', base + '/v1/fetch/' + RESULT['id']), ('GET', base + '/v1/balance'),
+            ('GET', base + '/v1/usage?period=day')])
         self.assertTrue(all(auth == 'Bearer fxk_fixture' for _, _, auth in calls))
 
     def test_a_lost_reply_is_resent_with_the_same_key(self):

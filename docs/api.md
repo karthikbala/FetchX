@@ -8,10 +8,11 @@ The contract is [`openapi.json`](openapi.json); `test/api-contract.test.mjs` hol
 | --- | --- | --- |
 | `POST /v1/fetch` | `fetch:write` | Get a URL. 200 when finished (`succeeded` or `failed`), 202 while running |
 | `GET /v1/fetch` | `fetch:read` | List requests, newest first: `status`, `tag`, `idempotency_key`, `since`, `limit`, `cursor` |
-| `GET /v1/fetch/{id}` | `fetch:read` | The result; `include_body=false` for polling |
+| `GET /v1/fetch/{id}` | `fetch:read` | The result; `include_body=false` for polling (the body only appears when `formats` asked for `body`) |
 | `GET /v1/fetch/{id}/content` | `fetch:read` | The body as received, with its Content-Type |
 | `GET /v1/fetch/{id}/screenshot` | `fetch:read` | The JPEG screenshot |
 | `DELETE /v1/fetch/{id}` | `fetch:read` | Delete everything the site sent, now |
+| `GET /v1/balance` | `usage:read` | Credits available now, reserved, trial and purchased, and whether a payment hold is on |
 | `GET /v1/usage` | `usage:read` | Balance and usage for a day, a month or a range |
 
 Keys are `fxk_` console keys with scopes, or a `tokenHash` in `config.projects` (unmetered, all scopes). The console API (`/control/...`, behind the website's bridge) mirrors these per project; see [console](console.md).
@@ -21,13 +22,15 @@ Keys are `fxk_` console keys with scopes, or a `tokenHash` in `config.projects` 
 1. **Admission** (`FetchFront.submit` in `src/fetch/front.mjs`): check `max_credits`, the project's concurrency limit and its balance, and reserve credits in one transaction with a pending `fetch_settlements` row. Nothing has been sent yet, so every refusal here is a 4xx and free.
 2. **The engine** (`EngineClient.startJob`): the request goes to the engine as sent, with the job id, the project as tenant and the cost tiers the reservation covers. The engine validates it (a refusal there is a 4xx, and the reservation is released), checks the idempotency key per project, and runs auto mode. It answers within the sync wait (60 s) or with 202.
 3. **Settlement** (`FetchFront.settle`): when the engine reports the job finished (its signed event, a read of the result, or the reconciler), charge the winning step's price, at most the reservation, or release it; then queue the customer webhook. Each job settles once.
-4. **Reads** (`get`, `list`, `content`, `screenshot`, `delete`) go to the engine, which stores results for 7 days, and are shown with the platform's `credits`.
+4. **Reads** (`get`, `list`, `content`, `screenshot`, `delete`) go to the engine, which stores results for 7 days, and are shown with the platform's `credits`: `charged`, `max`, the project's `balance` now and, for a success, a `breakdown` from the settlement row (step price, captcha, traffic MB, MB included, traffic credits).
 
 If the engine's answer is lost after the job may have been sent, the reservation is kept and the reconciler finds out from the engine what happened; FetchX never resends it.
 
 ## Errors
 
-Refused calls are `{error: {code, message, details?}}` with a 4xx (`src/api/v1.mjs`). Failed fetches are HTTP 200 with `status: failed` and `error: {code, message, next: {action, detail}}`; The engine maps each code to the next step. The code lists are in the contract and in the [published errors page](https://fetchx.ai/docs/errors).
+Refused calls are `{error: {code, message, details?}}` with a 4xx (`src/api/v1.mjs`). They store nothing under the idempotency key, so the caller can resend with the same key, except after `409 idempotency_conflict`. Failed fetches are HTTP 200 with `status: failed` and `error: {code, message, next: {action, retry_after_seconds?, retry_with_new_key, detail}}`; the engine maps each code to the next step (`nextAction` in the engine's `src/fetch/service.mjs`). A key replays its first result for 90 days, failures included, so `retry_with_new_key` says whether sending the request again with a new key can help. The code lists are in the contract and in the [published errors page](https://fetchx.ai/docs/errors), which has one row per code with its action and whether to retry.
+
+Every result has `page_status` (`content`, `not_found`, `empty`, `challenge`, `error`, null while pending) and `challenge` (the bot-protection vendor met, how many attempts met a wall, and whether rotation, a captcha or a wait got past it). Both come from the engine unchanged.
 
 ## Changing the API
 

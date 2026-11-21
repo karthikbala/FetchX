@@ -16,7 +16,7 @@
 import {randomBytes, randomUUID} from 'node:crypto';
 import {GatewayError, fail} from '../policy.mjs';
 import {Sealer} from '../crypto.mjs';
-import {STEPS, priceOf, worstCaseOf} from '../billing/ledger.mjs';
+import {STEPS, priceOf, priceParts, worstCaseOf} from '../billing/ledger.mjs';
 import {budget} from '../budgets.mjs';
 
 // Credits one request may reserve and requests at once per project are
@@ -49,6 +49,8 @@ export async function initFetchFront(pool) {
       deadline timestamptz,
       settled_at timestamptz
     );
+    -- The winning step's wire bytes, for the price breakdown results show.
+    ALTER TABLE fetch_settlements ADD COLUMN IF NOT EXISTS wire_bytes bigint;
     CREATE INDEX IF NOT EXISTS fetch_settlements_project_created ON fetch_settlements (project, created_at);
     CREATE INDEX IF NOT EXISTS fetch_settlements_pending ON fetch_settlements (deadline) WHERE status = 'pending';
     CREATE TABLE IF NOT EXISTS webhook_secrets (
@@ -201,17 +203,17 @@ export class FetchFront {
       let charged = 0;
       const step = status === 'succeeded' && STEPS.includes(usage?.step) ? usage.step : null;
       const captcha = step !== null && usage.captcha_solved === true;
+      const wireBytes = step !== null && Number.isSafeInteger(usage.wire_bytes) && usage.wire_bytes >= 0 ? usage.wire_bytes : null;
       if (step && this.ledger.metered(current.project) && current.credits_max !== null) {
-        const price = priceOf(this.ledger.prices, {step, captchaSolved: captcha,
-          wireBytes: Number.isSafeInteger(usage.wire_bytes) ? usage.wire_bytes : 0});
+        const price = priceOf(this.ledger.prices, {step, captchaSolved: captcha, wireBytes: wireBytes ?? 0});
         charged = await this.ledger.charge(client, {project: current.project, request: id, step,
           credits: Math.min(price, Number(current.credits_max)), captcha});
       } else {
         await this.ledger.release(client, {request: id});
       }
       const updated = (await client.query(`UPDATE fetch_settlements SET status = $2, error_code = $3, step = $4, captcha = $5,
-        credits_charged = $6, settled_at = clock_timestamp() WHERE request = $1 RETURNING *`,
-      [id, status, status === 'succeeded' ? null : errorCode, step, captcha, charged])).rows[0];
+        credits_charged = $6, wire_bytes = $7, settled_at = clock_timestamp() WHERE request = $1 RETURNING *`,
+      [id, status, status === 'succeeded' ? null : errorCode, step, captcha, charged, wireBytes])).rows[0];
       if (typeof webhookUrl === 'string' && webhookUrl) {
         await client.query('INSERT INTO webhook_deliveries (request, project, url) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
           [id, current.project, this.sealer.seal(webhookUrl)]);
@@ -268,11 +270,28 @@ export class FetchFront {
         usage: envelope.usage, webhook_url: envelope.webhook_url}) ?? settlement;
     }
     const credits = {charged: Number(settlement?.credits_charged ?? 0),
-      max: settlement?.credits_max === null || settlement?.credits_max === undefined ? null : Number(settlement.credits_max)};
-    const {id, status, idempotency_key: key, url, created_at: createdAt, finished_at: finishedAt, tags, data, attempts, skipped, fixes, error,
-      ...extra} = job;
-    return {id, status, idempotency_key: key, url, created_at: createdAt, finished_at: finishedAt, tags, data, credits, attempts, skipped, fixes,
-      error, ...extra};
+      max: settlement?.credits_max === null || settlement?.credits_max === undefined ? null : Number(settlement.credits_max),
+      balance: (await this.ledger.balance(project))?.available ?? null,
+      breakdown: this.#breakdownOf(settlement)};
+    const {id, status, page_status: pageStatus = null, idempotency_key: key, url, created_at: createdAt, finished_at: finishedAt, tags, data,
+      challenge = null, attempts, skipped, fixes, error, ...extra} = job;
+    return {id, status, page_status: pageStatus, idempotency_key: key, url, created_at: createdAt, finished_at: finishedAt, tags, data,
+      credits, challenge, attempts, skipped, fixes, error, ...extra};
+  }
+
+  // How the price of the step that got the data adds up (shown for unmetered
+  // projects too, which are not charged it). Null unless the job succeeded.
+  #breakdownOf(settlement) {
+    if (settlement?.status !== 'succeeded' || !STEPS.includes(settlement.step) || settlement.wire_bytes === null
+      || settlement.wire_bytes === undefined) return null;
+    return priceParts(this.ledger.prices, {step: settlement.step, captchaSolved: settlement.captcha, wireBytes: Number(settlement.wire_bytes)});
+  }
+
+  // The project's credits now, for GET /v1/balance.
+  async balance(project) {
+    const balance = await this.ledger.balance(project);
+    return balance ? {credits: balance.available, reserved: balance.reserved, trial: balance.trial, purchased: balance.purchased,
+      payment_hold: balance.held} : {credits: null, reserved: 0, trial: 0, purchased: 0, payment_hold: false};
   }
 
   async get(project, id, {includeBody = true} = {}) {

@@ -6,6 +6,7 @@ export type FetchResult = Schemas['FetchResult'];
 export type FetchData = Schemas['FetchData'];
 export type FetchList = Schemas['FetchList'];
 export type Usage = Schemas['Usage'];
+export type Balance = Schemas['Balance'];
 export type Attempt = Schemas['Attempt'];
 
 type Transport = (url: string, options: RequestInit) => Promise<Response>;
@@ -66,5 +67,6 @@ export class FetchXClient {
   content(id: string): Promise<Download>;
   screenshot(id: string): Promise<Download>;
   delete(id: string): Promise<void>;
+  balance(): Promise<Balance>;
   usage(query?: UsageQuery): Promise<Usage>;
 }

@@ -111,6 +111,9 @@ export class FetchXClient {
   // DELETE /v1/fetch/{id}
   async delete(id) { await this.#send('DELETE', `/v1/fetch/${encodeURIComponent(id)}`); }
 
+  // GET /v1/balance: {credits, reserved, trial, purchased, payment_hold}
+  balance() { return this.#send('GET', '/v1/balance'); }
+
   // GET /v1/usage: {period: 'day' | 'month'} or {since, until}
   usage(query = {}) {
     const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null));

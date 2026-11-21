@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FetchX engine private API",
-    "version": "1.3",
+    "version": "1.5",
     "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). info.version is the contract version; GET /internal/v1/status and /healthz report it."
   },
   "security": [
@@ -1693,7 +1693,7 @@
           },
           "body": {
             "type": "string",
-            "description": "The body: utf-8 text, or base64 for binary. Left out when include_body is false or when it is too large to inline (see body_url)."
+            "description": "The body: utf-8 text, or base64 for binary. Only when formats has body (the default); left out on reads with include_body=false, and when it is too large to inline (see body_url)."
           },
           "body_encoding": {
             "type": "string",
@@ -1844,6 +1844,7 @@
               "login_required",
               "site_error",
               "needs_browser",
+              "content_missing",
               "unreachable",
               "failed",
               "too_large",
@@ -1851,11 +1852,27 @@
               "not_admitted",
               "url_not_allowed"
             ],
-            "description": "not_admitted means nothing reached the site on this step (for example the provider refused the host); it does not count as an attempt."
+            "description": "not_admitted means nothing reached the site on this step (for example the provider refused the host); it does not count as an attempt. content_missing means the page loaded without what expect asked for."
           },
           "code": {
             "type": "string",
             "description": "The underlying error, when result is not_admitted or failed."
+          },
+          "challenge": {
+            "type": "string",
+            "description": "On a blocked or rate-limited step, the bot-protection vendor whose page it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf)."
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "selector",
+                "text",
+                "min_markdown_length"
+              ]
+            },
+            "description": "On a content_missing step, the expect conditions the page did not meet."
           },
           "status_code": {
             "type": [
@@ -1868,6 +1885,11 @@
               "integer",
               "null"
             ]
+          },
+          "wire_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Bytes this step moved over the network, requests and responses together. On a residential route this is the traffic billed past the included megabytes."
           },
           "captcha": {
             "type": "array",
@@ -1901,6 +1923,37 @@
               "still_loading"
             ],
             "description": "Browser steps on pages that answered: settled when the page had stopped filling itself in (results, listings loaded by script) before it was read; still_loading when the engine's wait ran out first, so the page may be missing content that loads late. wait_for with a selector waits longer for what is needed."
+          },
+          "content_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Browser steps on pages that answered: how long the engine waited for the page to fill itself in, scrolling included."
+          },
+          "screens": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Browser steps on pages that answered: the screens scrolled after the page filled in, to load what appears as a reader scrolls. 0 when it was not scrolled: the page fit on one screen, or the wait used up its time first."
+          },
+          "scroll": {
+            "type": "string",
+            "enum": [
+              "wheel",
+              "script"
+            ],
+            "description": "How the page was scrolled, when screens is above 0: by mouse wheel, or by script when a wheel did not move the page (a sheet that locks the page takes the wheel)."
+          },
+          "requests": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Browser steps that answered: the requests the page made that FetchX let through (the page, its scripts, images and data)."
+          },
+          "refused": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "Browser steps that answered: the page's requests that FetchX did not let through, by reason (for example url_not_allowed, insecure_request, request_limit, source_dns_failed). Absent when there were none."
           }
         }
       },
@@ -1955,6 +2008,7 @@
             "enum": [
               "blocked",
               "rate_limited",
+              "content_missing",
               "login_required",
               "site_error",
               "unreachable",
@@ -1977,15 +2031,17 @@
             "additionalProperties": false,
             "required": [
               "action",
+              "retry_with_new_key",
               "detail"
             ],
-            "description": "What to do next.",
+            "description": "What to do next. A request key replays its first result, failures included, so a retry always needs a new idempotency_key.",
             "properties": {
               "action": {
                 "type": "string",
                 "enum": [
                   "retry_after",
                   "retry_later",
+                  "check_expect",
                   "use_auto",
                   "provide_credentials",
                   "check_url",
@@ -1995,7 +2051,12 @@
                 ]
               },
               "retry_after_seconds": {
-                "type": "integer"
+                "type": "integer",
+                "description": "The earliest time a retry can help."
+              },
+              "retry_with_new_key": {
+                "type": "boolean",
+                "description": "true: the same request may succeed if sent again with a new idempotency_key (after retry_after_seconds when given). false: sent again unchanged it would fail the same way; change it as action says."
               },
               "detail": {
                 "type": "string"
@@ -2144,6 +2205,7 @@
             "items": {
               "type": "string",
               "enum": [
+                "body",
                 "markdown",
                 "text",
                 "links",
@@ -2152,12 +2214,39 @@
                 "screenshot"
               ]
             },
-            "description": "Extra outputs. screenshot needs a browser."
+            "description": "What to return. body: the response as received (the rendered page after a browser), the default when formats is left out. markdown, text, links, metadata and json are derived from it; screenshot needs a browser. Ask only for what you use: a rendered page can be megabytes of HTML. The body is stored either way and can be downloaded from /v1/fetch/{id}/content.",
+            "default": [
+              "body"
+            ]
           },
-          "include_body": {
+          "block_resources": {
             "type": "boolean",
-            "default": true,
-            "description": "Return the body. Set false when only formats are needed."
+            "description": "In a browser, do not download images, video, audio or web fonts on the page. They are most of a rendered page\u2019s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. Defaults to true, or false when formats has screenshot."
+          },
+          "expect": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "description": "What the page must show to be the content you want. Every condition given must hold, or the step is not a success: auto mode tries a browser, then one fresh IP, and a request that never gets it fails with content_missing and is not charged. A browser waits up to 10 s for the selector after the page settles. A real 404 or 410 is the site\u2019s answer and is not checked.",
+            "properties": {
+              "selector": {
+                "type": "string",
+                "maxLength": 512,
+                "description": "A CSS selector that must match at least one element (HTML only)."
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "description": "Text that must appear in the page\u2019s visible text (or a non-HTML body), ignoring case and spacing."
+              },
+              "min_markdown_length": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000,
+                "description": "The page\u2019s markdown (a non-HTML body\u2019s text) must have at least this many characters."
+              }
+            }
           },
           "max_attempts": {
             "type": "integer",
@@ -2216,12 +2305,14 @@
         "required": [
           "id",
           "status",
+          "page_status",
           "idempotency_key",
           "url",
           "created_at",
           "finished_at",
           "tags",
           "data",
+          "challenge",
           "attempts",
           "skipped",
           "fixes",
@@ -2239,6 +2330,21 @@
               "succeeded",
               "failed"
             ]
+          },
+          "page_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "content",
+              "not_found",
+              "empty",
+              "challenge",
+              "error",
+              null
+            ],
+            "description": "What the page was. content: the page you asked for (with expect, it showed what you expected). not_found: the site\u2019s real 404 or 410, billed like content. empty: it loaded but showed next to nothing, or not what expect asked for. challenge: a bot wall, block or rate limit stopped it (see challenge). error: anything else (see error). Null while pending."
           },
           "idempotency_key": {
             "type": "string"
@@ -2273,6 +2379,17 @@
               }
             ],
             "description": "What the site answered: on success the real answer, on failure the last response. Null only when nothing reached the site."
+          },
+          "challenge": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Challenge"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The walls the request met on its way, or null when it met none."
           },
           "attempts": {
             "type": "array",
@@ -2312,6 +2429,48 @@
           }
         },
         "description": "The caller-facing view of a job. The platform adds `credits` and returns it as the public FetchResult."
+      },
+      "Challenge": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "vendor",
+          "walls",
+          "passed",
+          "passed_by"
+        ],
+        "description": "Blocks, bot challenges and rate limits met on the way, and on the page that answered (a captcha, a wall that cleared). FetchX handles them itself; this says what it met and how it got past.",
+        "properties": {
+          "vendor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, recaptcha, hcaptcha), or null when the page did not say."
+          },
+          "walls": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How many attempts met one."
+          },
+          "passed": {
+            "type": "boolean",
+            "description": "Whether FetchX got past them to the page."
+          },
+          "passed_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "rotation",
+              "captcha",
+              "wait",
+              null
+            ],
+            "description": "rotation: a later attempt on another route or a fresh IP got through; captcha: solved on the page (10 credits); wait: it cleared by itself. Null when not passed."
+          }
+        }
       },
       "Step": {
         "type": "string",
