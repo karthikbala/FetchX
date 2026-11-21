@@ -149,3 +149,47 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   await expect('delete', `/v1/fetch/${list.id}`, 204, undefined, one);
   await expect('post', `/v1/fetch/${list.id}/next`, 410, {body: {}}, next);
 });
+
+test('real batch responses match the contract', {skip: !databaseUrl}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const {call, engine, events, platform} = await platformFor(store, {script: request => request.url.includes('/wall') ? {status: 'failed'} : {body: html('item')}});
+  const expect = async (method, path, status, request, specUrl = path.split('?')[0]) => {
+    const response = await call(method.toUpperCase(), path, request);
+    assert.equal(response.status, status, `${method} ${path}: ${JSON.stringify(response.body)}`);
+    if (response.body) assertValid(responseSchema(method, specUrl, status), response.body, `${method} ${path} ${status}`);
+    return response.body;
+  };
+  const one = '/v1/batches/{id}';
+  const items = '/v1/batches/{id}/items';
+  // Each running item holds its worst case (160 credits): room for both at once.
+  await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 1000 WHERE project = $1', [PROJECT]);
+  const body = {items: ['https://shop.example.com/1', {url: 'https://shop.example.com/wall', formats: ['text']}],
+    defaults: {formats: ['markdown']}, webhook_url: 'https://hooks.example.com/b', idempotency_key: 'contract-batch', tags: ['t']};
+  const batch = await expect('post', '/v1/batches', 202, {body});
+  await expect('post', '/v1/batches', 200, {body});
+  await expect('post', '/v1/batches', 409, {body: {...body, items: ['https://shop.example.com/2']}});
+  await expect('post', '/v1/batches', 400, {body: {items: ['http://127.0.0.1/']}});
+  await expect('post', '/v1/batches', 400, {body: {items: []}});
+  await expect('post', '/v1/batches', 401, {token: 'wrong', body});
+  await expect('get', `/v1/batches/${batch.id}/items`, 200, undefined, items);
+  await platform.batchRunner.tick();
+  await Promise.all([...engine.jobs.values()].map(job => job.done));
+  await engine.deliver(events);
+  await expect('get', `/v1/batches/${batch.id}/items?order=finished`, 200, undefined, items);
+  const done = await expect('get', `/v1/batches/${batch.id}`, 200, undefined, one);
+  assert.equal(done.status, 'finished');
+  const page = await expect('get', `/v1/batches/${batch.id}/items?limit=1`, 200, undefined, items);
+  await expect('get', `/v1/batches/${batch.id}/items?limit=1&cursor=${page.next_cursor}&results=false`, 200, undefined, items);
+  await expect('get', `/v1/batches/${batch.id}/items?status=nope`, 400, undefined, items);
+  await expect('get', '/v1/batches?limit=1', 200);
+  await expect('get', '/v1/batches?status=nope', 400);
+  await expect('post', `/v1/batches/${batch.id}/cancel`, 200, undefined, '/v1/batches/{id}/cancel');
+  await expect('get', '/v1/batches/00000000-0000-4000-8000-000000000000', 404, undefined, one);
+  await expect('get', '/v1/batches/00000000-0000-4000-8000-000000000000/items', 404, undefined, items);
+  await expect('post', '/v1/batches/00000000-0000-4000-8000-000000000000/cancel', 404, undefined, '/v1/batches/{id}/cancel');
+  const queued = await expect('post', '/v1/batches', 202, {body: {items: ['https://shop.example.com/3', 'https://shop.example.com/4']}});
+  await expect('post', `/v1/batches/${queued.id}/cancel`, 200, undefined, '/v1/batches/{id}/cancel');
+  await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 0 WHERE project = $1', [PROJECT]);
+  await expect('post', '/v1/batches', 402, {body: {items: ['https://shop.example.com/5']}});
+});

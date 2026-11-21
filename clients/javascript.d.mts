@@ -13,6 +13,18 @@ export type EstimateRequest = Schemas['EstimateRequest'];
 export type Estimate = Schemas['Estimate'];
 export type ServiceStatus = Schemas['ServiceStatus'];
 export type Attempt = Schemas['Attempt'];
+// The batch owns async, webhook_url and idempotency_key; the API refuses them on items and defaults.
+type BatchOwned = 'async' | 'webhook_url' | 'idempotency_key';
+export type BatchItemRequest = Omit<FetchRequest, BatchOwned>;
+export type BatchDefaults = Partial<Omit<FetchRequest, BatchOwned | 'url'>>;
+export type BatchRequest = Omit<Schemas['BatchRequest'], 'items' | 'defaults'> & {
+  items: (string | BatchItemRequest)[];
+  defaults?: BatchDefaults;
+};
+export type Batch = Schemas['Batch'];
+export type BatchList = Schemas['BatchList'];
+export type BatchItem = Schemas['BatchItem'];
+export type BatchItemList = Schemas['BatchItemList'];
 
 type Transport = (url: string, options: RequestInit) => Promise<Response>;
 
@@ -52,6 +64,20 @@ export interface ListQuery {
   cursor?: string;
 }
 
+export interface BatchListQuery {
+  status?: 'running' | 'paused' | 'finished' | 'canceled';
+  limit?: number;
+  cursor?: string;
+}
+
+export interface BatchItemsQuery {
+  status?: 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
+  order?: 'index' | 'finished';
+  results?: boolean;
+  limit?: number;
+  cursor?: string;
+}
+
 export interface UsageQuery {
   period?: 'day' | 'month';
   since?: string;
@@ -74,6 +100,14 @@ export class FetchXClient {
   content(id: string): Promise<Download>;
   screenshot(id: string): Promise<Download>;
   delete(id: string): Promise<void>;
+  /** Many URLs in one job, run at each site's pace; resolves with the batch at once. */
+  submitBatch(input: BatchRequest): Promise<Batch>;
+  getBatch(id: string): Promise<Batch>;
+  listBatches(query?: BatchListQuery): Promise<BatchList>;
+  batchItems(id: string, query?: BatchItemsQuery): Promise<BatchItemList>;
+  cancelBatch(id: string): Promise<Batch>;
+  /** Each item once it has finished, as items finish, until the batch is over. */
+  batchResults(id: string, options?: {intervalMs?: number; limit?: number; results?: boolean}): AsyncGenerator<BatchItem, void, undefined>;
   /** What a request, or a batch ({items, defaults}), would cost and take. Nothing is sent or reserved. */
   estimate(input: EstimateRequest): Promise<Estimate>;
   /** Service status and notices. */

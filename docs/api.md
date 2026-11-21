@@ -13,6 +13,11 @@ The contract is [`openapi.json`](openapi.json); `test/api-contract.test.mjs` hol
 | `GET /v1/fetch/{id}/content` | `fetch:read` | The body as received, with its Content-Type |
 | `GET /v1/fetch/{id}/screenshot` | `fetch:read` | The JPEG screenshot |
 | `DELETE /v1/fetch/{id}` | `fetch:read` | Delete everything the site sent, now |
+| `POST /v1/batches` | `fetch:write` | Many URLs in one job (up to 1000), checked whole, then run at each site's pace. 202 queued, 200 for a replayed key |
+| `GET /v1/batches` | `fetch:read` | List batches, newest first: `status`, `limit`, `cursor` |
+| `GET /v1/batches/{id}` | `fetch:read` | The batch: status, item counts, credits charged |
+| `GET /v1/batches/{id}/items` | `fetch:read` | Its items with their results: `order=index` (default) or `order=finished` (a feed), `status`, `results`, `limit`, `cursor` |
+| `POST /v1/batches/{id}/cancel` | `fetch:write` | Stop the items that have not started |
 | `GET /v1/balance` | `usage:read` | Credits available now, reserved, trial and purchased, and whether a payment hold is on |
 | `GET /v1/usage` | `usage:read` | Balance and usage for a day, a month or a range |
 | `POST /v1/estimate` | `fetch:write` | What a request, or a batch of up to 1,000, would cost and how long it would take. Nothing is sent, reserved or charged |
@@ -34,6 +39,19 @@ If the engine's answer is lost after the job may have been sent, the reservation
 `scroll` on a request (`auto` up to 10 screens, `off`, or 1 to 50 screens) is the engine's: the platform passes it on and never prices it. A scrolled page loads more, so on a residential route its extra traffic counts toward the per-MB charge like any other (Karthik, 2026-11-20); `scroll: off` avoids that.
 
 A successful result carries `data.page` (number, `previous_id`, screens scrolled, whether it reached the end) and `data.next_page` (`link`, `click`, `scroll` or `null`). `POST /v1/fetch/{id}/next` (`FetchFront.submitNext`) goes through the same admission as a fetch: a new id, a reservation and a pending settlement row, with the ceiling of a GET that may load the deepest page's traffic (150 MB; `PAGE_DEPTH` in `src/fetch/front.mjs`, the engine's limit). A fetch with `scroll` past 10 reserves for 2.5 MB more a screen. `EngineClient.startNextJob` sends `{id, tenant, request, allowed_steps}` to `/internal/v1/jobs/{previous}/next`, where `request` holds only what may change per page (`scroll`, `max_credits`, `timeout_ms`, `async`, `webhook_url`, `idempotency_key`, `tags`). The engine builds the rest from the earlier job, on the same kept session where it can. Its refusals (`404 not_found`, `409 pending`, `409 no_next_page` with `details.reason`, `410 content_expired`) release the reservation like any other refusal. A next page settles, and is charged, like any job.
+
+## Batches
+
+A batch (`src/fetch/batches.mjs`) is a queue of ordinary requests. Nothing is reserved up front; each item is admitted, reserved, charged and released like a single request when it starts.
+
+1. **Submit** (`BatchService.submit`): `expandBatch` lays each item over `defaults`, the platform checks what it bills from (`FetchFront.billingCheck`), and the engine checks the rest without storing anything (`POST /internal/v1/requests/check`, which also says which host each item is paced under). One bad item refuses the batch with its place (`items[3].formats` or `defaults.formats`). Metered projects need a balance that covers the cheapest step. The batch and its items are stored in one transaction (`fetch_batches`, `fetch_batch_items`, defaults, items and webhook URL sealed).
+2. **The queue** (`BatchRunner`, every second, after each settlement, and when a host's next spaced start falls due): resume paused batches the balance now covers, ask the engine for the pace of each host with queued items (`POST /internal/v1/pace`), and start what fits. Nothing starts while the engine has browser work waiting. Hosts take turns, one start each per round; on one host, batches take turns by when that host last served them. Each project keeps one of its requests-at-once for single requests.
+3. **An item's start** (`FetchFront.startBatchItem`): the same admission as `submit`, with the item claimed (marked running) in the reservation's transaction and the job sent `paced: true` with the item's own key, `batch.<id>.<index>`. The engine refuses a paced job with `429 host_busy` when its host has no free slot; the reservation is released and the item waits. An item does not start with less than its full reservation while the project's other requests hold credits (`credits_busy`, internal): it waits for them. When the balance cannot cover the cheapest step at all, the batch pauses with `paused_reason` and a `batch.paused` event. When the engine refuses an item with `extract_unavailable` (its items ask for `extract` and extraction can't run), the batch pauses with that reason and `paused_until` 5 minutes on (or the refusal's `retry_after_seconds`), and the queue resumes it once that time has passed.
+4. **Settlement**: the settle transaction also finishes the item (`BatchService.settled`), queues its `fetch.finished` webhook to the batch's URL with `batch: {id, index}`, and finishes the batch (`batch.finished`) after its last item. A job dropped before it started (`#discard`) puts its item back in the queue.
+
+Recovery: a lost start answer stays pending for the reconciler, which settles the item from the engine or, when the engine never had the job, discards it and requeues the item; an item claimed but never reserved (a crash between the two) is requeued after 10 minutes; a key the engine already had (a restart after an uncertain start) links the item to that job. The item's key means the engine never runs it twice.
+
+The engine decides the pace (`src/fetch/pace.mjs` there): open hosts 4 at once and 0.5 s apart, hosts that refused or rate-limited FetchX before 2 at once and 4 s apart, hosts rate-limited in the last 10 minutes 1 at a time and 15 s apart, from its shared site knowledge. Every job counts toward its host, single requests included; only batch items wait.
 
 ## Estimates
 

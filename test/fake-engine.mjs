@@ -14,6 +14,10 @@
 // successful job returns `extract` (default {}) and reports `extract_tokens`
 // (default 1000) of page text read; `extract_unavailable` (a reason) refuses
 // the job with 503, as the engine does when extraction can't run.
+// Pacing: every job holds a slot on its host until it finishes; a paced job
+// (JobInput.paced) is refused with host_busy when `pace(host)` ({tier,
+// max_running, start_gap_ms}, default open 4 / 0 ms) leaves no free slot.
+// `browserWaiting` (settable) is what POST /internal/v1/pace reports.
 // test/engine-contract.test.mjs validates what it answers against the contract.
 import Fastify from 'fastify';
 import {createHmac, randomUUID} from 'node:crypto';
@@ -33,16 +37,48 @@ const scrollValid = scroll => scroll === undefined || ['auto', 'off'].includes(s
 const canonical = value => JSON.stringify(value, (key, item) => (item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(name => [name, item[name]])) : item));
 
+const FORMATS = ['body', 'markdown', 'text', 'links', 'metadata', 'json', 'screenshot'];
+// The crude checks a fake job gets: a refusal {status, code, details} or null.
+function refusalOf(request) {
+  let url;
+  try { url = new URL(request.url); } catch { return {status: 400, code: 'invalid_request', details: {field: 'url'}}; }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || /^(10\.|127\.|localhost$)/.test(url.hostname)
+    || /\bfx[ks]_[A-Za-z0-9_-]{20,}/.test(decodeURIComponent(request.url))) return {status: 400, code: 'url_not_allowed', details: {field: 'url'}};
+  if (request.max_attempts !== undefined && (!Number.isInteger(request.max_attempts) || request.max_attempts < 1 || request.max_attempts > 5)) {
+    return {status: 400, code: 'invalid_request', details: {field: 'max_attempts', reason: '1 to 5'}};
+  }
+  if (!scrollValid(request.scroll)) return {status: 400, code: 'invalid_request', details: {field: 'scroll', reason: 'auto, off, or 1 to 50'}};
+  if (request.formats !== undefined && (!Array.isArray(request.formats) || request.formats.some(f => !FORMATS.includes(f)))) {
+    return {status: 400, code: 'invalid_request', details: {field: 'formats'}};
+  }
+  if (typeof request.body === 'string' && Buffer.byteLength(request.body) > 1_000_000) {
+    return {status: 413, code: 'request_too_large', details: {field: 'body', max_bytes: 1_000_000}};
+  }
+  return null;
+}
+
 // `estimates` scripts POST /internal/v1/estimates: {history: {host: SiteUsage},
 // proven: {host: tier}, cooling: {host: {retry_after_seconds}}, pace: {host: Pace},
 // defaults: {requests, steps}}; a request's planned tiers are plannedFor's.
-export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}} = {}) {
+export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}, pace = () => ({tier: 'open', max_running: 4, start_gap_ms: 0})} = {}) {
   const jobs = new Map();
+  // host -> running jobs, and when the last one started.
+  const hostRunning = new Map();
+  const hostStarted = new Map();
+  const hostOf = request => { try { return new URL(request.url).hostname.toLowerCase(); } catch { return ''; } };
+  const paceOf = host => {
+    const {tier = 'open', max_running: max = 4, start_gap_ms: gap = 0} = pace(host) ?? {};
+    const running = hostRunning.get(host) ?? 0;
+    const last = hostStarted.get(host);
+    const wait = last === undefined ? 0 : Math.max(0, last + gap - Date.now());
+    return {tier, running, max_running: max, start_gap_ms: gap, next_start_in_ms: running >= max ? null : wait};
+  };
   const byKey = new Map();
   const outbox = [];
   const calls = [];
   const admin = [];
   const app = Fastify({logger: false, bodyLimit: 3 * 1024 * 1024});
+  const fake = {browserWaiting: 0};
 
   app.addHook('onRequest', async (req, reply) => {
     calls.push({method: req.method, url: req.url});
@@ -104,7 +140,7 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
 
   // The envelope's own fields, checked as the engine does; a refusal is sent and null returned.
   const envelopeOf = (req, reply) => {
-    const {id, tenant, request, allowed_steps: steps, wait_ms: waitMs = 60_000} = req.body ?? {};
+    const {id, tenant, request, allowed_steps: steps, wait_ms: waitMs = 60_000, paced = false} = req.body ?? {};
     if (!UUID.test(id ?? '')) { refuse(reply, 400, 'invalid_request', {field: 'id'}); return null; }
     if (typeof tenant !== 'string' || !/^[A-Za-z0-9_.:-]{1,100}$/.test(tenant)) { refuse(reply, 400, 'invalid_request', {field: 'tenant'}); return null; }
     if (!request || typeof request !== 'object' || Array.isArray(request)) { refuse(reply, 400, 'invalid_request', {field: 'request'}); return null; }
@@ -112,7 +148,8 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
       refuse(reply, 400, 'invalid_request', {field: 'allowed_steps'});
       return null;
     }
-    return {id, tenant, request, allowed: steps === undefined || steps === null ? null : new Set(steps), waitMs};
+    if (typeof paced !== 'boolean') { refuse(reply, 400, 'invalid_request', {field: 'paced'}); return null; }
+    return {id, tenant, request, allowed: steps === undefined || steps === null ? null : new Set(steps), waitMs, paced};
   };
   // The job for an idempotency key, if it has one: answered (or refused) here.
   const replay = async (reply, {tenant, key, hash, async: isAsync, waitMs}) => {
@@ -124,18 +161,28 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     reply.code(existing.status === 'pending' ? 202 : 200).send({...envelope(existing), created: false});
     return true;
   };
-  const start = async (reply, {id, tenant, request, allowed, waitMs, key, hash, page = null, previous = null}) => {
+  const start = async (reply, {id, tenant, request, allowed, waitMs, key, hash, page = null, previous = null, paced = false}) => {
     if (jobs.has(id)) return refuse(reply, 409, 'job_id_conflict');
     const outcome = await script(request, {allowed: allowed ? [...allowed] : null, ...(previous ? {previous} : {})}) ?? {};
     const planned = outcome.planned ?? plannedFor(request);
     if (request.extract && outcome.extract_unavailable) return refuse(reply, 503, 'extract_unavailable', {reason: outcome.extract_unavailable});
     if (allowed && !planned.some(step => allowed.has(step))) return refuse(reply, 402, 'budget_too_low', {planned_steps: planned});
+    const host = hostOf(request);
+    const slot = paceOf(host);
+    if (paced && slot.next_start_in_ms !== 0) {
+      const wait = slot.next_start_in_ms ?? 2000;
+      return refuse(reply, 429, 'host_busy', {tier: slot.tier, running: slot.running, max_running: slot.max_running, retry_after_ms: wait,
+        retry_after_seconds: Math.max(1, Math.ceil(wait / 1000))});
+    }
+    hostRunning.set(host, (hostRunning.get(host) ?? 0) + 1);
+    hostStarted.set(host, Date.now());
     const timeout = request.timeout_ms ?? 120_000;
     const job = {id, tenant, request, key, hash, page, allowed: allowed ? [...allowed] : null, status: 'pending', created_at: new Date().toISOString(),
       finished_at: null, deadline: new Date(Date.now() + timeout).toISOString(), webhook_url: request.webhook_url ?? null, usage: null, deleted: false};
     jobs.set(id, job);
     byKey.set(`${tenant}\0${key}`, id);
-    job.done = Promise.resolve(outcome.hold).then(() => finish(job, outcome, allowed));
+    job.done = Promise.resolve(outcome.hold).then(() => finish(job, outcome, allowed))
+      .finally(() => hostRunning.set(host, Math.max(0, (hostRunning.get(host) ?? 1) - 1)));
     if (!request.async) await within(job.done, waitMs);
     return reply.code(job.status === 'pending' ? 202 : 200).send({...envelope(job), created: true});
   };
@@ -144,19 +191,8 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     const input = envelopeOf(req, reply);
     if (!input) return reply;
     const {request} = input;
-    let url;
-    try { url = new URL(request.url); } catch { return refuse(reply, 400, 'invalid_request', {field: 'url'}); }
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || /^(10\.|127\.|localhost$)/.test(url.hostname)
-      || /\bfx[ks]_[A-Za-z0-9_-]{20,}/.test(decodeURIComponent(request.url))) return refuse(reply, 400, 'url_not_allowed');
-    if (request.max_attempts !== undefined && (!Number.isInteger(request.max_attempts) || request.max_attempts < 1 || request.max_attempts > 5)) {
-      return refuse(reply, 400, 'invalid_request', {field: 'max_attempts', reason: '1 to 5'});
-    }
-    if (!scrollValid(request.scroll)) {
-      return refuse(reply, 400, 'invalid_request', {field: 'scroll', reason: 'auto, off, or 1 to 50'});
-    }
-    if (typeof request.body === 'string' && Buffer.byteLength(request.body) > 1_000_000) {
-      return refuse(reply, 413, 'request_too_large', {field: 'body', max_bytes: 1_000_000});
-    }
+    const refusal = refusalOf(request);
+    if (refusal) return refuse(reply, refusal.status, refusal.code, refusal.code === 'url_not_allowed' ? undefined : refusal.details);
     const key = request.idempotency_key ?? `auto_${randomUUID()}`;
     const {idempotency_key: _key, ...hashed} = request;
     const hash = canonical(hashed);
@@ -237,6 +273,20 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     job.deleted = true;
     return reply.code(204).send();
   });
+  // A batch's checks and its hosts' pace.
+  app.post('/internal/v1/requests/check', async (req, reply) => {
+    const requests = req.body?.requests;
+    if (!Array.isArray(requests) || !requests.length || requests.length > 1000) return refuse(reply, 400, 'invalid_request', {field: 'requests'});
+    return {results: requests.map(request => {
+      const refusal = refusalOf(request ?? {});
+      return refusal ? {error: {code: refusal.code, details: refusal.details}} : {host: hostOf(request)};
+    })};
+  });
+  app.post('/internal/v1/pace', async (req, reply) => {
+    const hosts = req.body?.hosts;
+    if (!Array.isArray(hosts) || !hosts.length || hosts.length > 500) return refuse(reply, 400, 'invalid_request', {field: 'hosts'});
+    return {hosts: Object.fromEntries(hosts.map(host => [host.toLowerCase(), paceOf(host.toLowerCase())])), browser_waiting: fake.browserWaiting};
+  });
   app.post('/internal/v1/estimates', async (req, reply) => {
     const requests = req.body?.requests;
     if (!Array.isArray(requests) || !requests.length || requests.length > 1000) return refuse(reply, 400, 'invalid_request', {field: 'requests'});
@@ -252,7 +302,7 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
       pace: estimates.pace?.[item.host] ?? {tier: 'open', max_running: 4, start_gap_ms: 500}}]));
     return {items, hosts, defaults: estimates.defaults ?? {requests: 0, steps: []}};
   });
-  app.get('/internal/v1/status', async () => ({service: 'FetchX engine', release: 'fake', contract: '1.7', browser: {}, captcha: {},
+  app.get('/internal/v1/status', async () => ({service: 'FetchX engine', release: 'fake', contract: '1.8', browser: {}, captcha: {},
     events: {undelivered: outbox.length, oldest_undelivered: null}}));
   // Admin: every call is recorded. Budgets (one engine budget) and the audit
   // trail are kept in memory, enough for the platform's merged list and log;
@@ -320,5 +370,5 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     return answers;
   }
 
-  return {app, fetchImpl, jobs, outbox, calls, admin, deliver, view, envelope};
+  return {app, fetchImpl, jobs, outbox, calls, admin, deliver, view, envelope, fake, hostRunning};
 }

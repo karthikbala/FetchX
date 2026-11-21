@@ -3,6 +3,7 @@
 // `estimator` prices requests before they are sent (src/fetch/estimate.mjs);
 // `board` is the service status (src/status.mjs). Retired and unknown routes,
 // deprecation headers and maintenance are src/api/lifecycle.mjs.
+// `batches` is the BatchService (src/fetch/batches.mjs).
 //   POST   /v1/fetch                  get a URL
 //   POST   /v1/fetch/:id/next         get the page after request :id's (a new request)
 //   GET    /v1/fetch                  list recent requests
@@ -10,6 +11,11 @@
 //   GET    /v1/fetch/:id/content      the raw body, as received
 //   GET    /v1/fetch/:id/screenshot   the screenshot (JPEG)
 //   DELETE /v1/fetch/:id              delete stored content now
+//   POST   /v1/batches                many URLs in one job, paced per site
+//   GET    /v1/batches                list recent batches
+//   GET    /v1/batches/:id            one batch: status, item counts, credits
+//   GET    /v1/batches/:id/items      its items and their results, paged
+//   POST   /v1/batches/:id/cancel     stop a batch (queued items are canceled)
 //   POST   /v1/estimate               what a request or a batch would cost and take, before sending it
 //   GET    /v1/balance                credits available now
 //   GET    /v1/usage                  credits and usage
@@ -26,10 +32,10 @@ const MESSAGES = {
   insufficient_credits: 'The balance is below the cheapest step this request could take.',
   max_credits_too_low: 'max_credits is below the cheapest step; see error.details.min_credits.',
   payment_hold: 'Spending is paused while a payment issue is resolved.',
-  not_found: 'No request with that id in this project.',
+  not_found: 'Nothing with that id in this project.',
   idempotency_conflict: 'This idempotency_key was used before with a different request.',
   request_too_large: 'The request body is over 1 MB.',
-  too_many_requests: 'The project has too many requests running; wait and retry.',
+  too_many_requests: 'The project has too many requests running or queued; wait and retry.',
   unavailable: 'FetchX cannot take work right now; wait and retry.',
   pending: 'The request is still running.',
   content_expired: 'The stored content has expired or was deleted.',
@@ -94,7 +100,7 @@ export async function usageReport({service, ledger}, project, query = {}) {
 const idParams = {schema: {params: {type: 'object', required: ['id'], properties: {id: {type: 'string', maxLength: 64}}}}};
 
 // app.authenticate(req, scope) sets req.project and req.keyId.
-export function registerApi(app, {service, ledger, estimator, board}) {
+export function registerApi(app, {service, ledger, estimator, board, batches}) {
   const guard = scope => async req => app.authenticate(req, scope);
   app.post('/v1/fetch', {preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
     const view = await service.submit(req.project, req.body, {keyId: req.keyId});
@@ -121,6 +127,15 @@ export function registerApi(app, {service, ledger, estimator, board}) {
     return reply.code(204).send();
   });
   app.post('/v1/estimate', {preHandler: guard(API_SCOPES.write)}, req => estimator.estimate(req.project, req.body));
+  app.post('/v1/batches', {preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
+    const {batch, created} = await batches.submit(req.project, req.body, {keyId: req.keyId});
+    return reply.code(created ? 202 : 200).send(batch);
+  });
+  app.get('/v1/batches', {preHandler: guard(API_SCOPES.read)}, req => batches.list(req.project, req.query ?? {}));
+  app.get('/v1/batches/:id', {...idParams, preHandler: guard(API_SCOPES.read)}, req => batches.get(req.project, req.params.id));
+  app.get('/v1/batches/:id/items', {...idParams, preHandler: guard(API_SCOPES.read)},
+    req => batches.items(req.project, req.params.id, req.query ?? {}));
+  app.post('/v1/batches/:id/cancel', {...idParams, preHandler: guard(API_SCOPES.write)}, req => batches.cancel(req.project, req.params.id));
   app.get('/v1/balance', {preHandler: guard(API_SCOPES.usage)}, req => service.balance(req.project));
   app.get('/v1/usage', {preHandler: guard(API_SCOPES.usage)}, req => usageReport({service, ledger}, req.project, req.query ?? {}));
   // Public: no API key, any origin, and it answers during maintenance.

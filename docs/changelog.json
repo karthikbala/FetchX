@@ -6,7 +6,7 @@
   },
   "releases": [
     {
-      "version": "1.5.0",
+      "version": "1.6.0",
       "date": "2026-11-21",
       "title": "Pages as JSON in your own shape",
       "changes": [
@@ -14,7 +14,20 @@
         {"type": "added", "text": "Fields you list in the schema's required work like expect: a page that does not show them fails with content_missing and is not charged, and attempts[].missing names them as extract:<field>."},
         {"type": "added", "text": "Extraction costs 10 credits per started 25,000 tokens of page text read (one unit on most pages, 60 at most), charged only when the request succeeds. credits.breakdown shows extract_tokens and extract_credits, and POST /v1/estimate counts it."},
         {"type": "added", "text": "503 extract_unavailable: when FetchX cannot read pages into JSON, a request with extract is refused before anything is fetched. If extraction fails after the fetch, the request fails with extract_unavailable. Neither is charged. Wait retry_after_seconds, or send it without extract."},
+        {"type": "added", "text": "Batches take extract too, in defaults or per item. While extraction is unavailable, a batch whose items ask for it pauses with paused_reason extract_unavailable and tries again by itself after 5 minutes; nothing is charged meanwhile."},
         {"type": "removed", "text": "The json format (the body parsed as JSON). A JSON API's response is in body; use extract to get a page as JSON."}
+      ]
+    },
+    {
+      "version": "1.5.0",
+      "date": "2026-11-21",
+      "title": "Batches: many URLs in one job, run at each site's pace",
+      "changes": [
+        {"type": "added", "text": "POST /v1/batches: up to 1000 URLs, or POST /v1/fetch bodies laid over shared defaults, in one job. Every item is checked first, and one bad item refuses the batch and names it (items[3].formats). FetchX starts the items itself at the pace each site can take, so you need no pacing loop of your own; each item is charged only if it succeeds."},
+        {"type": "added", "text": "GET /v1/batches, GET /v1/batches/{id}, GET /v1/batches/{id}/items (by index, or with order=finished as a feed of what finished since your last read) and POST /v1/batches/{id}/cancel."},
+        {"type": "added", "text": "Batch webhooks: each item's result as it finishes (fetch.finished, with batch: {id, index}), then batch.finished when it ends or batch.paused when the balance runs out. A batch that paused starts again by itself after a top-up."},
+        {"type": "added", "text": "Every webhook delivery carries an X-FetchX-Event header naming the event, and every result has batch: {id, index} for a batch item, or null."},
+        {"type": "added", "text": "The JavaScript and Python clients: submitBatch, getBatch, listBatches, batchItems, cancelBatch, and batchResults to follow results until the batch ends (submit_batch, batch_results and so on in Python)."}
       ]
     },
     {

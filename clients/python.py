@@ -3,6 +3,9 @@
     fetchx = FetchXClient(os.environ['FETCHX_URL'], os.environ['FETCHX_TOKEN'])
     result = fetchx.fetch(url='https://example.com', formats=['markdown'])
     page2 = fetchx.next_page(result['id']) if (result.get('data') or {}).get('next_page') else None
+    batch = fetchx.submit_batch(['https://example.com/a', 'https://example.com/b'], defaults={'formats': ['markdown']})
+    for item in fetchx.batch_results(batch['id']):
+        print(item['index'], (item['result'] or {}).get('status'))
 
 Every POST carries an idempotency_key (generated when you leave it out), so the
 client can safely resend the same request after a lost response, a 429 or a
@@ -119,6 +122,41 @@ class FetchXClient:
 
     def delete(self, id):
         self._send('DELETE', '/v1/fetch/' + quote(id, safe=''))
+
+    def submit_batch(self, items, **batch):
+        """POST /v1/batches: many URLs in one job, run at each site's pace. Returns the batch at once.
+
+        items are URLs or POST /v1/fetch bodies; batch may hold defaults, webhook_url, idempotency_key and tags.
+        """
+        if not isinstance(items, list):
+            raise FetchXError('items_required')
+        return self._start('/v1/batches', {**batch, 'items': items})
+
+    def get_batch(self, id):
+        return self._send('GET', '/v1/batches/' + quote(id, safe=''))
+
+    def list_batches(self, *, status=None, limit=None, cursor=None):
+        return self._send('GET', '/v1/batches' + _query({'status': status, 'limit': limit, 'cursor': cursor}))
+
+    def batch_items(self, id, *, status=None, order=None, results=None, limit=None, cursor=None):
+        flag = None if results is None else ('true' if results else 'false')
+        return self._send('GET', '/v1/batches/' + quote(id, safe='') + '/items' + _query(
+            {'status': status, 'order': order, 'results': flag, 'limit': limit, 'cursor': cursor}))
+
+    def cancel_batch(self, id):
+        return self._send('POST', '/v1/batches/' + quote(id, safe='') + '/cancel')
+
+    def batch_results(self, id, *, interval=5.0, limit=100, results=True):
+        """Yields each item once it has finished, with its result, until the batch is over."""
+        cursor = None
+        while True:
+            page = self.batch_items(id, order='finished', limit=limit, results=results, cursor=cursor)
+            yield from page['items']
+            if page['next_cursor'] is None:
+                return
+            cursor = page['next_cursor']
+            if len(page['items']) < limit:
+                time.sleep(interval)
 
     def estimate(self, **body):
         """What one POST /v1/fetch body, or a batch body (items=, defaults=), would cost and take. Nothing is sent or reserved."""

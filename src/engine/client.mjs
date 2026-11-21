@@ -6,7 +6,7 @@
 // started.
 import {GatewayError} from '../policy.mjs';
 
-export const ENGINE_CONTRACT = '1.7';
+export const ENGINE_CONTRACT = '1.8';
 const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH']);
 // 503 answers that are refusals: nothing was started, and the caller is told why.
 const REFUSED_503 = new Set(['extract_unavailable']);
@@ -67,7 +67,8 @@ export class EngineClient {
     throw unavailable(true, `http_${response.status}`);
   }
 
-  // {id, tenant, request, allowed_steps, wait_ms?} -> {status, envelope}
+  // {id, tenant, request, allowed_steps, wait_ms?, paced?} -> {status, envelope}. A paced
+  // job (a batch item) is refused with host_busy when its host has no free slot.
   async startJob(input) {
     const waitMs = input.wait_ms ?? 60_000;
     const {status, body} = await this.#call('POST', '/internal/v1/jobs', {body: input, timeoutMs: Math.max(this.timeoutMs, waitMs + 30_000)});
@@ -99,6 +100,17 @@ export class EngineClient {
 
   async remove(tenant, id) {
     await this.#call('DELETE', `/internal/v1/jobs/${encodeURIComponent(id)}`, {query: {tenant}});
+  }
+
+  // Checks requests without starting them: [{host} | {error: {code, details?}}], in order.
+  async checkRequests(requests) {
+    return (await this.#call('POST', '/internal/v1/requests/check', {body: {requests}})).body.results;
+  }
+
+  // How fast each host may take paced work now: {hosts: {host: {tier, running,
+  // max_running, start_gap_ms, next_start_in_ms}}, browser_waiting}.
+  async pace(hosts) {
+    return (await this.#call('POST', '/internal/v1/pace', {body: {hosts}, timeoutMs: 10_000})).body;
   }
 
   // What requests would take, before they are sent: {requests} -> {items, hosts, defaults}.

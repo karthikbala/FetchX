@@ -60,6 +60,11 @@ else:
 | `GET /v1/fetch/{id}/content` | `content(id)` | `content(id)` | `fetch:read` |
 | `GET /v1/fetch/{id}/screenshot` | `screenshot(id)` | `screenshot(id)` | `fetch:read` |
 | `DELETE /v1/fetch/{id}` | `delete(id)` | `delete(id)` | `fetch:read` |
+| `POST /v1/batches` | `submitBatch(input)` | `submit_batch(items, **batch)` | `fetch:write` |
+| `GET /v1/batches/{id}` | `getBatch(id)` | `get_batch(id)` | `fetch:read` |
+| `GET /v1/batches` | `listBatches(query)` | `list_batches(...)` | `fetch:read` |
+| `GET /v1/batches/{id}/items` | `batchItems(id, query)`, `batchResults(id)` | `batch_items(id, ...)`, `batch_results(id)` | `fetch:read` |
+| `POST /v1/batches/{id}/cancel` | `cancelBatch(id)` | `cancel_batch(id)` | `fetch:write` |
 | `POST /v1/estimate` | `estimate(input)` | `estimate(**input)` | `fetch:write` |
 | `GET /v1/balance` | `balance()` | `balance()` | `usage:read` |
 | `GET /v1/usage` | `usage(query)` | `usage(...)` | `usage:read` |
@@ -110,3 +115,21 @@ if (result.status === 'succeeded') console.log(result.data.extract); // {name: '
 ```
 
 A value the page does not show is `null`, never guessed. A `required` field the page does not show fails the request with `content_missing`, uncharged, after FetchX has tried a browser and fresh IPs. Extraction adds 10 credits per started 25,000 tokens of page text read (`credits.breakdown.extract_credits`). When it is unavailable, the call is refused with `extract_unavailable` (503) before anything is fetched; the clients do not retry it on their own.
+
+## Batches
+
+`submitBatch` hands FetchX up to 1000 URLs at once. FetchX runs them itself, at the pace each site can take, so there is no pacing or polling loop to write: sites run side by side, and a site that has refused or rate-limited FetchX before gets fewer requests at once, further apart. Each item is billed like a single request, only when it succeeds. Results go to `webhook_url` as each item finishes, or read them as they come with `batchResults`:
+
+```js
+const batch = await fetchx.submitBatch({
+  items: ['https://shop.example.com/p/1', 'https://shop.example.com/p/2', {url: 'https://shop.example.com/search?q=lamp', scroll: 20}],
+  defaults: {formats: ['markdown'], expect: {text: 'Price'}},
+  idempotency_key: 'catalog-2026-11-21',
+});
+for await (const item of fetchx.batchResults(batch.id)) {
+  if (item.status === 'succeeded') console.log(item.url, item.result.data.markdown.length);
+  else console.log(item.url, item.error?.code ?? item.result?.error?.code);
+}
+```
+
+Each item is `defaults` with the item's own fields on top. A bad item refuses the whole batch with a 400 naming it (`items[2].scroll`), before anything is queued.

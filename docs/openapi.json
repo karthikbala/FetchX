@@ -2,8 +2,8 @@
  "openapi": "3.1.0",
  "info": {
   "title": "FetchX API",
-  "version": "1.5.0",
-  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one; POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. GET /v1/status needs no key.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
+  "version": "1.6.0",
+  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. GET /v1/status needs no key.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
  },
  "servers": [
   {
@@ -25,6 +25,10 @@
   {
    "name": "Fetch",
    "description": "Get URLs and read the results."
+  },
+  {
+   "name": "Batches",
+   "description": "Many URLs in one job, paced per site, with results by webhook or by page."
   },
   {
    "name": "Usage",
@@ -198,7 +202,8 @@
            "fixes": [
             "user-agent"
            ],
-           "error": null
+           "error": null,
+           "batch": null
           }
          },
          "failed": {
@@ -274,7 +279,8 @@
              "detail": "The site refused every route FetchX was allowed to try. Retry with a new idempotency key after the wait (FetchX draws fresh IPs), or allow more with max_attempts or max_credits."
             },
             "retry_after_seconds": 30
-           }
+           },
+           "batch": null
           }
          },
          "content_missing": {
@@ -357,7 +363,8 @@
              "retry_with_new_key": true,
              "detail": "The page loaded without what `expect` asked for; `data` shows what came back. If `expect` is right for this page, the site may be holding content back from those IPs: retry with a new idempotency key after the wait. If it is not, fix `expect`."
             }
-           }
+           },
+           "batch": null
           }
          }
         }
@@ -401,7 +408,8 @@
            ],
            "skipped": [],
            "fixes": [],
-           "error": null
+           "error": null,
+           "batch": null
           }
          }
         }
@@ -934,7 +942,8 @@
            "fixes": [
             "user-agent"
            ],
-           "error": null
+           "error": null,
+           "batch": null
           }
          }
         }
@@ -978,7 +987,8 @@
            ],
            "skipped": [],
            "fixes": [],
-           "error": null
+           "error": null,
+           "batch": null
           }
          }
         }
@@ -1332,7 +1342,8 @@
            ],
            "skipped": [],
            "fixes": [],
-           "error": null
+           "error": null,
+           "batch": null
           }
          },
          "next_page_missing": {
@@ -1376,7 +1387,8 @@
              "retry_with_new_key": false,
              "detail": "The earlier page's next-page control was not there when FetchX opened the list again; the list may have changed. Fetch the earlier page again, then ask for its next page."
             }
-           }
+           },
+           "batch": null
           }
          }
         }
@@ -1420,7 +1432,8 @@
            ],
            "skipped": [],
            "fixes": [],
-           "error": null
+           "error": null,
+           "batch": null
           }
          }
         }
@@ -2719,14 +2732,991 @@
      }
     }
    }
+  },
+  "/v1/batches": {
+   "post": {
+    "operationId": "createBatch",
+    "tags": [
+     "Batches"
+    ],
+    "summary": "Submit many URLs in one job",
+    "description": "Queues up to 1000 items and answers at once with the batch. FetchX starts the items itself, per site, at the pace it knows each site can take (from what it has learned about the site across all customers: a site that has refused or rate-limited FetchX before gets fewer requests at once, further apart), so you need no pacing or polling loop of your own. Different sites run side by side, within your project's limit of requests at once (one slot is always left for single requests).\n\nEach item is an ordinary request: it reserves credits only when it starts, is charged only if it succeeds, at the price of the step that got the data, and its result is at GET /v1/fetch/{request_id}. Results go to `webhook_url` as each item finishes and when the batch ends; GET /v1/batches/{id}/items pages through them if you poll instead. A batch whose credits run out pauses, and starts again by itself once the balance covers its next item.",
+    "x-scope": "fetch:write",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/BatchRequest"
+       },
+       "examples": {
+        "urls": {
+         "summary": "URLs with shared settings",
+         "value": {
+          "items": [
+           "https://shop.example.com/p/1",
+           "https://shop.example.com/p/2",
+           "https://news.example.org/a"
+          ],
+          "defaults": {
+           "formats": [
+            "markdown",
+            "metadata"
+           ],
+           "expect": {
+            "text": "Price"
+           }
+          },
+          "webhook_url": "https://hooks.example.com/fetchx",
+          "idempotency_key": "catalog-2026-11-21"
+         }
+        },
+        "mixed": {
+         "summary": "Items with settings of their own",
+         "value": {
+          "items": [
+           {
+            "url": "https://shop.example.com/search?q=lamp",
+            "scroll": 20
+           },
+           {
+            "url": "https://shop.example.com/p/9",
+            "formats": [
+             "markdown"
+            ],
+            "tags": [
+             "detail"
+            ]
+           }
+          ],
+          "defaults": {
+           "render": "always"
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "The idempotency_key already has this batch: the same batch, nothing new queued.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Batch"
+        },
+        "examples": {
+         "existing": {
+          "value": {
+           "id": "0b7a3c1e-5d2f-4e8a-9b6c-1d2e3f4a5b6c",
+           "status": "running",
+           "paused_reason": null,
+           "idempotency_key": "hotels-2026-11-21",
+           "tags": [
+            "hotels"
+           ],
+           "created_at": "2026-11-21T06:00:00.000Z",
+           "finished_at": null,
+           "canceled_at": null,
+           "items": {
+            "total": 200,
+            "queued": 180,
+            "running": 2,
+            "succeeded": 17,
+            "failed": 1,
+            "canceled": 0
+           },
+           "credits": {
+            "charged": 1530
+           },
+           "webhook": true
+          }
+         }
+        }
+       }
+      }
+     },
+     "202": {
+      "description": "Queued. Follow it at GET /v1/batches/{id}, or wait for the webhook.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Batch"
+        },
+        "examples": {
+         "queued": {
+          "value": {
+           "id": "0b7a3c1e-5d2f-4e8a-9b6c-1d2e3f4a5b6c",
+           "status": "running",
+           "paused_reason": null,
+           "idempotency_key": "hotels-2026-11-21",
+           "tags": [
+            "hotels"
+           ],
+           "created_at": "2026-11-21T06:00:00.000Z",
+           "finished_at": null,
+           "canceled_at": null,
+           "items": {
+            "total": 200,
+            "queued": 200,
+            "running": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "canceled": 0
+           },
+           "credits": {
+            "charged": 0
+           },
+           "webhook": true
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "A field is missing or wrong, or an item's URL is not public. Nothing was queued. error.details.field names the item and field.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "items[3].formats"
+            }
+           }
+          }
+         },
+         "url_not_allowed": {
+          "value": {
+           "error": {
+            "code": "url_not_allowed",
+            "message": "The URL must be public http or https and must not resolve to a private address.",
+            "details": {
+             "field": "items[0].url"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "402": {
+      "description": "The balance is below the cheapest step, or spending is paused by a payment issue. Nothing was queued.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "insufficient_credits": {
+          "value": {
+           "error": {
+            "code": "insufficient_credits",
+            "message": "The balance is below the cheapest step this request could take.",
+            "details": {
+             "available": 0,
+             "needed": 1
+            }
+           }
+          }
+         },
+         "payment_hold": {
+          "value": {
+           "error": {
+            "code": "payment_hold",
+            "message": "Spending is paused while a payment issue is resolved."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "The idempotency_key was used before with a different batch.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "idempotency_conflict": {
+          "value": {
+           "error": {
+            "code": "idempotency_conflict",
+            "message": "This idempotency_key was used before with a different request."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "413": {
+      "description": "The body is over 1 MB, or an item is too large.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "request_too_large": {
+          "value": {
+           "error": {
+            "code": "request_too_large",
+            "message": "The request body is over 1 MB."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "429": {
+      "description": "The project already has 10,000 items waiting. Wait `retry_after_seconds`.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "too_many_requests": {
+          "value": {
+           "error": {
+            "code": "too_many_requests",
+            "message": "The project has too many requests running or queued; wait and retry.",
+            "details": {
+             "retry_after_seconds": 60,
+             "queued": 9990,
+             "max_queued": 10000
+            },
+            "retry_after_seconds": 60
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "FetchX cannot take work right now. Nothing was queued. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unavailable": {
+          "value": {
+           "error": {
+            "code": "unavailable",
+            "message": "FetchX cannot take work right now; wait and retry."
+           }
+          }
+         },
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "get": {
+    "operationId": "listBatches",
+    "tags": [
+     "Batches"
+    ],
+    "summary": "List recent batches",
+    "description": "The project's batches, newest first.",
+    "x-scope": "fetch:read",
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "running",
+        "paused",
+        "finished",
+        "canceled"
+       ]
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "schema": {
+       "type": "integer",
+       "minimum": 1,
+       "maximum": 100,
+       "default": 25
+      }
+     },
+     {
+      "name": "cursor",
+      "in": "query",
+      "description": "`next_cursor` from the previous page.",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "One page of batches.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/BatchList"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "A query parameter is wrong.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "limit"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/batches/{id}": {
+   "get": {
+    "operationId": "getBatch",
+    "tags": [
+     "Batches"
+    ],
+    "summary": "Read a batch",
+    "description": "Its status, how many items are queued, running, succeeded, failed or canceled, and what it has cost so far.",
+    "x-scope": "fetch:read",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The batch id.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The batch.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Batch"
+        },
+        "examples": {
+         "running": {
+          "value": {
+           "id": "0b7a3c1e-5d2f-4e8a-9b6c-1d2e3f4a5b6c",
+           "status": "running",
+           "paused_reason": null,
+           "idempotency_key": "hotels-2026-11-21",
+           "tags": [
+            "hotels"
+           ],
+           "created_at": "2026-11-21T06:00:00.000Z",
+           "finished_at": null,
+           "canceled_at": null,
+           "items": {
+            "total": 200,
+            "queued": 180,
+            "running": 2,
+            "succeeded": 17,
+            "failed": 1,
+            "canceled": 0
+           },
+           "credits": {
+            "charged": 1530
+           },
+           "webhook": true
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No batch with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "error": {
+            "code": "not_found",
+            "message": "Nothing with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/batches/{id}/items": {
+   "get": {
+    "operationId": "listBatchItems",
+    "tags": [
+     "Batches"
+    ],
+    "summary": "Read a batch's items and results",
+    "description": "The batch's items, a page at a time, each with its result once it has finished (the FetchResult without the body). By default in item order; order=finished lists finished items in the order they finished, so keeping next_cursor between calls reads only what finished since the last one (items show there about 2 seconds after they finish). This is the polling alternative to the webhook.",
+    "x-scope": "fetch:read",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The batch id.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "status",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "canceled"
+       ]
+      }
+     },
+     {
+      "name": "order",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "index",
+        "finished"
+       ],
+       "default": "index"
+      }
+     },
+     {
+      "name": "results",
+      "in": "query",
+      "description": "false leaves `result` out (null), for a quick look at statuses.",
+      "schema": {
+       "type": "boolean",
+       "default": true
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "schema": {
+       "type": "integer",
+       "minimum": 1,
+       "maximum": 100,
+       "default": 25
+      }
+     },
+     {
+      "name": "cursor",
+      "in": "query",
+      "description": "`next_cursor` from the previous page (with the same order).",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "One page of items.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/BatchItemList"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "A query parameter is wrong.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "limit"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No batch with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "error": {
+            "code": "not_found",
+            "message": "Nothing with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/batches/{id}/cancel": {
+   "post": {
+    "operationId": "cancelBatch",
+    "tags": [
+     "Batches"
+    ],
+    "summary": "Cancel a batch",
+    "description": "Queued items are canceled and never start; items already running finish, and are charged if they succeed. batch.finished is sent once nothing is running. Canceling a batch that is over changes nothing.",
+    "x-scope": "fetch:write",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The batch id.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The batch, canceled.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Batch"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No batch with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "error": {
+            "code": "not_found",
+            "message": "Nothing with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
   }
  },
  "webhooks": {
   "fetchFinished": {
    "post": {
     "summary": "A request with webhook_url finished",
-    "description": "FetchX POSTs the finished result (without the body) to webhook_url. Verify `X-FetchX-Signature: sha256=<hex>`, an HMAC-SHA256 with the project's webhook secret over `<X-FetchX-Timestamp>.<raw body>`. Delivery is tried 3 times.",
+    "description": "FetchX POSTs the finished result (without the body) to webhook_url, and to a batch's webhook_url as each of its items finishes (with `batch` set). X-FetchX-Event is fetch.finished. Verify `X-FetchX-Signature: sha256=<hex>`, an HMAC-SHA256 with the project's webhook secret over `<X-FetchX-Timestamp>.<raw body>`. Delivery is tried 3 times.",
     "parameters": [
+     {
+      "name": "X-FetchX-Event",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "enum": [
+        "fetch.finished"
+       ]
+      }
+     },
      {
       "name": "X-FetchX-Signature",
       "in": "header",
@@ -2752,6 +3742,110 @@
       "application/json": {
        "schema": {
         "$ref": "#/components/schemas/FetchResult"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Any 2xx acknowledges the delivery."
+     }
+    }
+   }
+  },
+  "batchFinished": {
+   "post": {
+    "summary": "A batch with webhook_url ended",
+    "description": "A batch with webhook_url ended: every item finished, or it was canceled and nothing is running. The body is the Batch. Signed like fetch.finished; X-FetchX-Event names the event. Delivery is tried 3 times.",
+    "parameters": [
+     {
+      "name": "X-FetchX-Event",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "enum": [
+        "batch.finished"
+       ]
+      }
+     },
+     {
+      "name": "X-FetchX-Signature",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^sha256=[a-f0-9]{64}$"
+      }
+     },
+     {
+      "name": "X-FetchX-Timestamp",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[0-9]{10}$"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Batch"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Any 2xx acknowledges the delivery."
+     }
+    }
+   }
+  },
+  "batchPaused": {
+   "post": {
+    "summary": "A batch with webhook_url paused",
+    "description": "A batch with webhook_url paused: the balance does not cover its next item, or spending is on hold. It starts again by itself once the balance covers the item. The body is the Batch. Signed like fetch.finished; X-FetchX-Event names the event. Delivery is tried 3 times.",
+    "parameters": [
+     {
+      "name": "X-FetchX-Event",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "enum": [
+        "batch.paused"
+       ]
+      }
+     },
+     {
+      "name": "X-FetchX-Signature",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^sha256=[a-f0-9]{64}$"
+      }
+     },
+     {
+      "name": "X-FetchX-Timestamp",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[0-9]{10}$"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Batch"
        }
       }
      }
@@ -3119,7 +4213,8 @@
      "attempts",
      "skipped",
      "fixes",
-     "error"
+     "error",
+     "batch"
     ],
     "properties": {
      "id": {
@@ -3272,6 +4367,29 @@
         "type": "null"
        }
       ]
+     },
+     "batch": {
+      "type": [
+       "object",
+       "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+       "id",
+       "index"
+      ],
+      "description": "The batch this request is an item of (POST /v1/batches), or null.",
+      "properties": {
+       "id": {
+        "type": "string",
+        "format": "uuid"
+       },
+       "index": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "The item's place in the batch's items, from 0."
+       }
+      }
      }
     }
    },
@@ -4864,6 +5982,338 @@
        "type": "string"
       },
       "description": "The required fields the page did not show."
+     }
+    }
+   },
+   "BatchRequest": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "items"
+    ],
+    "description": "Many URLs in one job. Each item is a URL, or a POST /v1/fetch body without async, webhook_url and idempotency_key (the batch owns those, and an item that sets one is refused); its fields are laid over `defaults` (a shallow merge: an item's field replaces the default whole). FetchX checks every item before anything is queued: one bad item refuses the batch with 400 naming it (`items[3].formats`, or `defaults.formats` when the default is at fault).",
+    "properties": {
+     "items": {
+      "type": "array",
+      "description": "Up to 1000 URLs, or POST /v1/fetch bodies without async, webhook_url and idempotency_key. Each item’s fields are laid over `defaults`; its result is a request of its own.",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": {
+       "oneOf": [
+        {
+         "type": "string",
+         "maxLength": 12000,
+         "description": "A URL, fetched with `defaults`."
+        },
+        {
+         "$ref": "#/components/schemas/FetchRequest"
+        }
+       ]
+      }
+     },
+     "defaults": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "POST /v1/fetch fields every item uses unless it sets its own: anything but url, async, webhook_url and idempotency_key. max_credits here caps each item, not the batch."
+     },
+     "webhook_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "A public https URL. FetchX POSTs each item's result as it finishes (event fetch.finished, the FetchResult without its body, with `batch`), and the batch when it ends (batch.finished) or pauses (batch.paused). The X-FetchX-Event header names the event."
+     },
+     "idempotency_key": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.:-]{1,160}$",
+      "description": "The same key with the same body returns the same batch and queues nothing new. Generated when absent."
+     },
+     "tags": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+       "type": "string",
+       "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
+      },
+      "description": "Your labels for the batch. Items keep their own `tags`."
+     }
+    }
+   },
+   "Batch": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "status",
+     "paused_reason",
+     "idempotency_key",
+     "tags",
+     "created_at",
+     "finished_at",
+     "canceled_at",
+     "items",
+     "credits",
+     "webhook"
+    ],
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "running",
+       "paused",
+       "finished",
+       "canceled"
+      ],
+      "description": "running: items are queued or running. paused: the balance does not cover the next item (or spending is on hold), or its items ask for extract and extraction is unavailable for now (paused_reason says which); it starts again by itself once that clears. finished: every item has finished. canceled: you canceled it; items that were running still finish."
+     },
+     "paused_reason": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "enum": [
+       "insufficient_credits",
+       "payment_hold",
+       "extract_unavailable",
+       null
+      ],
+      "description": "Why the batch is paused: insufficient_credits or payment_hold until the balance covers the next item; extract_unavailable when its items ask for extract and FetchX cannot read pages into JSON right now (it tries again by itself after 5 minutes; nothing is charged meanwhile)."
+     },
+     "idempotency_key": {
+      "type": "string"
+     },
+     "tags": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "finished_at": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time",
+      "description": "When the last item finished (or the batch was canceled with nothing running)."
+     },
+     "canceled_at": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time"
+     },
+     "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "total",
+       "queued",
+       "running",
+       "succeeded",
+       "failed",
+       "canceled"
+      ],
+      "properties": {
+       "total": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "queued": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "running": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "succeeded": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "failed": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "canceled": {
+        "type": "integer",
+        "minimum": 0
+       }
+      },
+      "description": "Items by status. queued: waiting for its site's pace. running: being fetched. succeeded and failed: as the request's status. canceled: never started."
+     },
+     "credits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "charged"
+      ],
+      "properties": {
+       "charged": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "The sum of what the batch's items cost. Only successful items are charged."
+       }
+      }
+     },
+     "webhook": {
+      "type": "boolean",
+      "description": "Whether results go to a webhook."
+     }
+    }
+   },
+   "BatchList": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "items",
+     "next_cursor"
+    ],
+    "properties": {
+     "items": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/Batch"
+      }
+     },
+     "next_cursor": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   },
+   "BatchItem": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "index",
+     "url",
+     "status",
+     "request_id",
+     "credits",
+     "error",
+     "started_at",
+     "finished_at",
+     "result"
+    ],
+    "properties": {
+     "index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The item's place in the batch's items, from 0."
+     },
+     "url": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "queued",
+       "running",
+       "succeeded",
+       "failed",
+       "canceled"
+      ]
+     },
+     "request_id": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "uuid",
+      "description": "The item's request, readable at GET /v1/fetch/{id}, once it has started."
+     },
+     "credits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "charged"
+      ],
+      "properties": {
+       "charged": {
+        "type": "integer",
+        "minimum": 0
+       }
+      }
+     },
+     "error": {
+      "type": [
+       "object",
+       "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+       "code",
+       "message"
+      ],
+      "description": "Why the item failed without starting (refused before anything was sent; not charged). A fetch that ran and failed has its error in result.error.",
+      "properties": {
+       "code": {
+        "type": "string"
+       },
+       "message": {
+        "type": "string"
+       },
+       "details": {
+        "type": "object"
+       }
+      }
+     },
+     "started_at": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time"
+     },
+     "finished_at": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time"
+     },
+     "result": {
+      "oneOf": [
+       {
+        "$ref": "#/components/schemas/FetchResult"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The finished item's result (without the body; download it from /v1/fetch/{id}/content), or null while it is queued or running, or with results=false."
+     }
+    }
+   },
+   "BatchItemList": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "items",
+     "next_cursor"
+    ],
+    "properties": {
+     "items": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/BatchItem"
+      }
+     },
+     "next_cursor": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "Pass it as cursor for the next page. With order=finished it is also how to read only what finished since: it stays set while the batch can still change, and is null once the batch is over and everything was read."
      }
     }
    }

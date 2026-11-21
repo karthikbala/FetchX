@@ -196,6 +196,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List recent batches
+         * @description The project's batches, newest first.
+         */
+        get: operations["listBatches"];
+        put?: never;
+        /**
+         * Submit many URLs in one job
+         * @description Queues up to 1000 items and answers at once with the batch. FetchX starts the items itself, per site, at the pace it knows each site can take (from what it has learned about the site across all customers: a site that has refused or rate-limited FetchX before gets fewer requests at once, further apart), so you need no pacing or polling loop of your own. Different sites run side by side, within your project's limit of requests at once (one slot is always left for single requests).
+         *
+         *     Each item is an ordinary request: it reserves credits only when it starts, is charged only if it succeeds, at the price of the step that got the data, and its result is at GET /v1/fetch/{request_id}. Results go to `webhook_url` as each item finishes and when the batch ends; GET /v1/batches/{id}/items pages through them if you poll instead. A batch whose credits run out pauses, and starts again by itself once the balance covers its next item.
+         */
+        post: operations["createBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/batches/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a batch
+         * @description Its status, how many items are queued, running, succeeded, failed or canceled, and what it has cost so far.
+         */
+        get: operations["getBatch"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/batches/{id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a batch's items and results
+         * @description The batch's items, a page at a time, each with its result once it has finished (the FetchResult without the body). By default in item order; order=finished lists finished items in the order they finished, so keeping next_cursor between calls reads only what finished since the last one (items show there about 2 seconds after they finish). This is the polling alternative to the webhook.
+         */
+        get: operations["listBatchItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/batches/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a batch
+         * @description Queued items are canceled and never start; items already running finish, and are charged if they succeed. batch.finished is sent once nothing is running. Canceling a batch that is over changes nothing.
+         */
+        post: operations["cancelBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export interface webhooks {
     fetchFinished: {
@@ -209,12 +295,13 @@ export interface webhooks {
         put?: never;
         /**
          * A request with webhook_url finished
-         * @description FetchX POSTs the finished result (without the body) to webhook_url. Verify `X-FetchX-Signature: sha256=<hex>`, an HMAC-SHA256 with the project's webhook secret over `<X-FetchX-Timestamp>.<raw body>`. Delivery is tried 3 times.
+         * @description FetchX POSTs the finished result (without the body) to webhook_url, and to a batch's webhook_url as each of its items finishes (with `batch` set). X-FetchX-Event is fetch.finished. Verify `X-FetchX-Signature: sha256=<hex>`, an HMAC-SHA256 with the project's webhook secret over `<X-FetchX-Timestamp>.<raw body>`. Delivery is tried 3 times.
          */
         post: {
             parameters: {
                 query?: never;
                 header: {
+                    "X-FetchX-Event": "fetch.finished";
                     "X-FetchX-Signature": string;
                     "X-FetchX-Timestamp": string;
                 };
@@ -224,6 +311,96 @@ export interface webhooks {
             requestBody: {
                 content: {
                     "application/json": components["schemas"]["FetchResult"];
+                };
+            };
+            responses: {
+                /** @description Any 2xx acknowledges the delivery. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    batchFinished: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A batch with webhook_url ended
+         * @description A batch with webhook_url ended: every item finished, or it was canceled and nothing is running. The body is the Batch. Signed like fetch.finished; X-FetchX-Event names the event. Delivery is tried 3 times.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "X-FetchX-Event": "batch.finished";
+                    "X-FetchX-Signature": string;
+                    "X-FetchX-Timestamp": string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["Batch"];
+                };
+            };
+            responses: {
+                /** @description Any 2xx acknowledges the delivery. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    batchPaused: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A batch with webhook_url paused
+         * @description A batch with webhook_url paused: the balance does not cover its next item, or spending is on hold. It starts again by itself once the balance covers the item. The body is the Batch. Signed like fetch.finished; X-FetchX-Event names the event. Delivery is tried 3 times.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    "X-FetchX-Event": "batch.paused";
+                    "X-FetchX-Signature": string;
+                    "X-FetchX-Timestamp": string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["Batch"];
                 };
             };
             responses: {
@@ -421,6 +598,13 @@ export interface components {
             /** @description Headers FetchX corrected. */
             fixes: ("user-agent" | "accept" | "accept-language")[];
             error: components["schemas"]["FetchError"] | null;
+            /** @description The batch this request is an item of (POST /v1/batches), or null. */
+            batch: {
+                /** Format: uuid */
+                id: string;
+                /** @description The item's place in the batch's items, from 0. */
+                index: number;
+            } | null;
         };
         /** @description Blocks, bot challenges and rate limits met on the way, and on the page that answered (a captcha, a wall that cleared). FetchX handles them itself; this says what it met and how it got past. */
         Challenge: {
@@ -873,6 +1057,100 @@ export interface components {
             };
             /** @description The required fields the page did not show. */
             required_missing?: string[];
+        };
+        /** @description Many URLs in one job. Each item is a URL, or a POST /v1/fetch body without async, webhook_url and idempotency_key (the batch owns those, and an item that sets one is refused); its fields are laid over `defaults` (a shallow merge: an item's field replaces the default whole). FetchX checks every item before anything is queued: one bad item refuses the batch with 400 naming it (`items[3].formats`, or `defaults.formats` when the default is at fault). */
+        BatchRequest: {
+            /** @description Up to 1000 URLs, or POST /v1/fetch bodies without async, webhook_url and idempotency_key. Each item’s fields are laid over `defaults`; its result is a request of its own. */
+            items: (string | components["schemas"]["FetchRequest"])[];
+            /** @description POST /v1/fetch fields every item uses unless it sets its own: anything but url, async, webhook_url and idempotency_key. max_credits here caps each item, not the batch. */
+            defaults?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Format: uri
+             * @description A public https URL. FetchX POSTs each item's result as it finishes (event fetch.finished, the FetchResult without its body, with `batch`), and the batch when it ends (batch.finished) or pauses (batch.paused). The X-FetchX-Event header names the event.
+             */
+            webhook_url?: string;
+            /** @description The same key with the same body returns the same batch and queues nothing new. Generated when absent. */
+            idempotency_key?: string;
+            /** @description Your labels for the batch. Items keep their own `tags`. */
+            tags?: string[];
+        };
+        Batch: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description running: items are queued or running. paused: the balance does not cover the next item (or spending is on hold), or its items ask for extract and extraction is unavailable for now (paused_reason says which); it starts again by itself once that clears. finished: every item has finished. canceled: you canceled it; items that were running still finish.
+             * @enum {string}
+             */
+            status: "running" | "paused" | "finished" | "canceled";
+            /**
+             * @description Why the batch is paused: insufficient_credits or payment_hold until the balance covers the next item; extract_unavailable when its items ask for extract and FetchX cannot read pages into JSON right now (it tries again by itself after 5 minutes; nothing is charged meanwhile).
+             * @enum {string|null}
+             */
+            paused_reason: "insufficient_credits" | "payment_hold" | "extract_unavailable" | null;
+            idempotency_key: string;
+            tags: string[];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When the last item finished (or the batch was canceled with nothing running).
+             */
+            finished_at: string | null;
+            /** Format: date-time */
+            canceled_at: string | null;
+            /** @description Items by status. queued: waiting for its site's pace. running: being fetched. succeeded and failed: as the request's status. canceled: never started. */
+            items: {
+                total: number;
+                queued: number;
+                running: number;
+                succeeded: number;
+                failed: number;
+                canceled: number;
+            };
+            credits: {
+                /** @description The sum of what the batch's items cost. Only successful items are charged. */
+                charged: number;
+            };
+            /** @description Whether results go to a webhook. */
+            webhook: boolean;
+        };
+        BatchList: {
+            items: components["schemas"]["Batch"][];
+            next_cursor: string | null;
+        };
+        BatchItem: {
+            /** @description The item's place in the batch's items, from 0. */
+            index: number;
+            url: string;
+            /** @enum {string} */
+            status: "queued" | "running" | "succeeded" | "failed" | "canceled";
+            /**
+             * Format: uuid
+             * @description The item's request, readable at GET /v1/fetch/{id}, once it has started.
+             */
+            request_id: string | null;
+            credits: {
+                charged: number;
+            };
+            /** @description Why the item failed without starting (refused before anything was sent; not charged). A fetch that ran and failed has its error in result.error. */
+            error: {
+                code: string;
+                message: string;
+                details?: Record<string, never>;
+            } | null;
+            /** Format: date-time */
+            started_at: string | null;
+            /** Format: date-time */
+            finished_at: string | null;
+            /** @description The finished item's result (without the body; download it from /v1/fetch/{id}/content), or null while it is queued or running, or with results=false. */
+            result: components["schemas"]["FetchResult"] | null;
+        };
+        BatchItemList: {
+            items: components["schemas"]["BatchItem"][];
+            /** @description Pass it as cursor for the next page. With order=finished it is also how to read only what finished since: it stays set while the batch can still change, and is null once the batch is over and everything was read. */
+            next_cursor: string | null;
         };
     };
     responses: never;
@@ -1646,6 +1924,366 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceStatus"];
+                };
+            };
+        };
+    };
+    listBatches: {
+        parameters: {
+            query?: {
+                status?: "running" | "paused" | "finished" | "canceled";
+                limit?: number;
+                /** @description `next_cursor` from the previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of batches. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BatchList"];
+                };
+            };
+            /** @description A query parameter is wrong. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key is missing, wrong or revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchRequest"];
+            };
+        };
+        responses: {
+            /** @description The idempotency_key already has this batch: the same batch, nothing new queued. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Batch"];
+                };
+            };
+            /** @description Queued. Follow it at GET /v1/batches/{id}, or wait for the webhook. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Batch"];
+                };
+            };
+            /** @description A field is missing or wrong, or an item's URL is not public. Nothing was queued. error.details.field names the item and field. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key is missing, wrong or revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The balance is below the cheapest step, or spending is paused by a payment issue. Nothing was queued. */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The idempotency_key was used before with a different batch. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The body is over 1 MB, or an item is too large. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The project already has 10,000 items waiting. Wait `retry_after_seconds`. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description FetchX cannot take work right now. Nothing was queued. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The batch id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The batch. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Batch"];
+                };
+            };
+            /** @description The API key is missing, wrong or revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No batch with that id in this project. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listBatchItems: {
+        parameters: {
+            query?: {
+                status?: "queued" | "running" | "succeeded" | "failed" | "canceled";
+                order?: "index" | "finished";
+                /** @description false leaves `result` out (null), for a quick look at statuses. */
+                results?: boolean;
+                limit?: number;
+                /** @description `next_cursor` from the previous page (with the same order). */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The batch id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of items. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BatchItemList"];
+                };
+            };
+            /** @description A query parameter is wrong. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key is missing, wrong or revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No batch with that id in this project. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    cancelBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The batch id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The batch, canceled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Batch"];
+                };
+            };
+            /** @description The API key is missing, wrong or revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No batch with that id in this project. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };

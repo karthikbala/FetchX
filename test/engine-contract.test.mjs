@@ -51,11 +51,14 @@ test('engine client requests and fake engine answers and events match the contra
   const exchanges = [];
   let release;
   const held = new Promise(resolve => { release = resolve; });
+  let openGate;
+  const gate = new Promise(resolve => { openGate = resolve; });
   const {call, engine, events, platform} = await platformFor(store, {
     script: request => request.url.includes('/wall') ? {status: 'failed', planned: ['http']}
-      : request.url.includes('/held') ? {hold: held}
+      : request.url.includes('/held') ? {hold: held} : request.url.includes('/gate') ? {hold: gate}
         : request.url.includes('/list') ? {body: html('list'), next_page: {how: 'link', url: 'https://shop.example.com/list?page=2'}}
           : {body: html('ok')},
+    pace: host => ({tier: 'open', max_running: host === 'one.example.com' ? 1 : 4, start_gap_ms: 0}),
     wrapEngineFetch: fakeFetch => async (url, init) => {
       const response = await fakeFetch(url, init);
       exchanges.push({url: new URL(url), init, status: response.status, body: response.status === 204 ? null : await response.clone().arrayBuffer()});
@@ -99,6 +102,15 @@ test('engine client requests and fake engine answers and events match the contra
   await call('GET', '/v1/fetch/00000000-0000-4000-8000-000000000000');
   await call('POST', '/v1/estimate', {body: {items: ['https://shop.example.com/1', {url: 'http://127.0.0.1/', render: 'always'}]}});
   await platform.engine.status();
+  // Batches: the check before anything is queued, the pace the queue reads,
+  // and paced starts, one of them refused because its host is full.
+  await call('POST', '/v1/batches', {body: {items: ['https://shop.example.com/b1', {url: 'https://shop.example.com/b2', formats: ['pdf']}]}});
+  const batch = await call('POST', '/v1/batches', {body: {items: ['https://one.example.com/gate', 'https://one.example.com/2']}});
+  assert.equal(batch.status, 202, JSON.stringify(batch.body));
+  assert.equal((await platform.batchRunner.tick()).started, 1);
+  assert.equal(await platform.batches.startNext({batch: batch.body.id, host: 'one.example.com'}), 'host_busy');
+  openGate();
+  await Promise.all([...engine.jobs.values()].map(job => job.done));
 
   const statuses = new Set();
   for (const {url, init, status, body} of exchanges) {
@@ -131,7 +143,8 @@ test('engine client requests and fake engine answers and events match the contra
     'GET /internal/v1/jobs/{id}/content 410', 'GET /internal/v1/jobs/{id}/screenshot 404', 'DELETE /internal/v1/jobs/{id} 204',
     'DELETE /internal/v1/jobs/{id} 409', 'GET /internal/v1/status 200', 'POST /internal/v1/jobs/{id}/next 200',
     'POST /internal/v1/jobs/{id}/next 400', 'POST /internal/v1/jobs/{id}/next 404', 'POST /internal/v1/jobs/{id}/next 409',
-    'POST /internal/v1/jobs/{id}/next 410', 'POST /internal/v1/estimates 200']) {
+    'POST /internal/v1/jobs/{id}/next 410', 'POST /internal/v1/jobs 429', 'POST /internal/v1/requests/check 200',
+    'POST /internal/v1/pace 200', 'POST /internal/v1/estimates 200']) {
     assert.ok(statuses.has(expected), `not exercised: ${expected}`);
   }
 
