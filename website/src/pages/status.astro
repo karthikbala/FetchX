@@ -1,0 +1,50 @@
+---
+import Layout from '../layouts/Layout.astro';
+import '../styles/status.css';
+---
+<Layout title="Status — FetchX" description="Whether the FetchX API is up, planned maintenance, incidents and 90 days of uptime, from a monitor that runs outside FetchX’s servers." active="status">
+  <div class="container st-page" data-status-root aria-busy="true">
+    <header class="page-intro st-intro">
+      <span class="eyebrow">FETCHX STATUS</span>
+      <h1 class="st-headline"><span class="st-dot" data-status-dot data-state="unknown" aria-hidden="true"></span><span data-status-headline>Checking the API…</span></h1>
+      <p data-status-summary>The API is checked every minute by a monitor on Cloudflare, outside FetchX’s own servers, so this page still answers when the API does not.</p>
+      <p class="st-meta mono" data-status-checked></p>
+    </header>
+
+    <noscript><p class="st-note">This page needs JavaScript to show the live state. The same data is at <a href="/api/status">/api/status</a>, and the API’s own view at <a href="https://app.fetchx.ai/v1/status">app.fetchx.ai/v1/status</a>.</p></noscript>
+
+    <section class="st-section" data-status-notices hidden aria-labelledby="st-notices-title">
+      <h2 id="st-notices-title">Now and coming up</h2>
+      <div class="st-notices" data-status-notice-list></div>
+    </section>
+
+    <section class="st-section" aria-labelledby="st-components-title">
+      <h2 id="st-components-title">Components</h2>
+      <ul class="st-components" data-status-components></ul>
+    </section>
+
+    <section class="st-section" aria-labelledby="st-uptime-title">
+      <div class="st-section-head">
+        <h2 id="st-uptime-title">Last 90 days</h2>
+        <span class="mono st-uptime" data-status-uptime></span>
+      </div>
+      <ol class="st-bars" data-status-days aria-label="Daily API availability for the last 90 days, oldest first"></ol>
+      <div class="st-axis mono"><span class="st-axis-90">90 days ago</span><span class="st-axis-45">45 days ago</span><span>Today</span></div>
+      <ul class="st-legend mono">
+        <li><i data-level="operational"></i>Up</li><li><i data-level="degraded"></i>Degraded</li><li><i data-level="maintenance"></i>Maintenance</li><li><i data-level="outage"></i>Outage</li><li><i data-level="no_data"></i>No data</li>
+      </ul>
+    </section>
+
+    <section class="st-section" aria-labelledby="st-history-title">
+      <h2 id="st-history-title">Past incidents and maintenance</h2>
+      <div class="st-history" data-status-history><p class="st-empty">Nothing in the last 90 days.</p></div>
+    </section>
+
+    <section class="st-section st-links" aria-labelledby="st-links-title">
+      <h2 id="st-links-title">For your code</h2>
+      <p>During maintenance that pauses the API, every <code>/v1</code> route answers <code>503</code> with <code>error.code</code> <code>maintenance</code> and a <code>Retry-After</code> header: wait and retry, nothing was charged. <code>GET /v1/status</code> keeps answering and needs no API key.</p>
+      <p><a href="/changelog">API changelog</a> · <a href="/docs/errors">Errors and next steps</a> · <a href="/api/status">This page as JSON</a></p>
+    </section>
+  </div>
+</Layout>
+<script>import '../scripts/status.ts';</script>

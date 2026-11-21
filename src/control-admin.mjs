@@ -117,4 +117,20 @@ export function registerAdminRoutes(route,{gateway,config,authenticated,body,noQ
   if(!own(key))return gateway.engine.admin('GET','/budgets/'+encodeURIComponent(key)+'/audit');
   return {entries:(await budgetAudit(store.pool,{key,limit:200})).map(budgetEntry)};
  });
+ // ---- Status notices (src/status.mjs): incidents and maintenance, shown on the status page ----
+ const board=gateway.board;
+ const NOTICE_FIELDS=['title','body','impact','components','pause_api','starts_at','ends_at','update'];
+ route('GET','/admin/notices',async req=>{noQuery(req);await operator(req);return {notices:await board.list()};});
+ route('POST','/admin/notices',async req=>{
+  noQuery(req);const auth=await operator(req),input=body(req,['kind',...NOTICE_FIELDS]);
+  return {notice:await board.create(input,auth.user.email)};
+ });
+ route('PUT','/admin/notices/:nid',async req=>{
+  noQuery(req);const auth=await operator(req),input=body(req,NOTICE_FIELDS);
+  return {notice:await board.change(req.params.nid,input,auth.user.email)};
+ });
+ route('POST','/admin/notices/:nid/resolve',async req=>{
+  noQuery(req);const auth=await operator(req),input=body(req,['update']);
+  return {notice:await board.resolve(req.params.nid,input,auth.user.email)};
+ });
 }

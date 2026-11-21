@@ -6,7 +6,8 @@
  "compatibility_date":"2026-10-29",
  "workers_dev":false,
  "preview_urls":false,
- "triggers":{"crons":["15 2 * * *"]},
+ "triggers":{"crons":["15 2 * * *","* * * * *"]},
+ "vars":{"STATUS_URL":"https://app.fetchx.ai/v1/status"},
  "d1_databases":[
   {"binding":"DB","database_name":"fetchx-enquiries","database_id":"7b078ac0-ba43-4828-bcce-773e0dec5bae"},
   {"binding":"PREVIEW_DB","database_name":"fetchx-enquiries-preview","database_id":"e842e74a-7f40-4e08-a507-09c544020027"}
