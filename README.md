@@ -20,7 +20,7 @@ The platform calls the engine over a private network with a service token ([the 
 
 ## How it works
 
-- **One endpoint.** `POST /v1/fetch` takes a URL and returns the body as received, plus markdown, text, links, metadata, parsed JSON or a screenshot on request. Six more endpoints read results, download files, list, delete and report usage. See the [API guide](docs/api.md) and the [OpenAPI contract](docs/openapi.json).
+- **One endpoint.** `POST /v1/fetch` takes a URL and returns the body as received, plus markdown, text, links, metadata, parsed JSON or a screenshot on request. `POST /v1/fetch/{id}/next` gets the page after one, on the same browser session where it can. Six more endpoints read results, download files, list, delete and report usage. See the [API guide](docs/api.md) and the [OpenAPI contract](docs/openapi.json).
 - **Auto mode** (in the engine). Requests climb from plain HTTP through datacenter and residential routes to a Camoufox browser until the site answers, solving captchas on the way.
 - **Budgets.** Every spend limit can be changed in the admin portal without a redeploy, within hard bounds in code, with each change audited. The platform keeps its own (credits per request, requests at once per project, trial credits); provider spend (2Captcha, residential traffic, worker VMs, attempts) is capped by the engine's budgets, shown in the same list. See [budgets](docs/budgets.md).
 - **Success-only billing.** A request reserves credits up front and is charged only if it succeeds, at the price of the step that worked. See [billing](docs/billing.md).

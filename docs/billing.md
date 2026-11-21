@@ -35,6 +35,8 @@ A request reserves at admission (`FetchFront.submit`, in one transaction with it
 
 The job's `usage` (the winning step, whether it solved a captcha, its wire bytes) arrives with the engine's signed `job.finished` event, or from the engine when the result is read or the reconciler looks it up. Settlement happens once per job: on success `Ledger.charge` records the price (never more than the reservation) and removes the reservation; otherwise `Ledger.release` removes it. A job the engine never started is released by the reconciler; one whose fate is unknown stays reserved until the engine confirms it.
 
+Scrolling within a page (`scroll`) has no fee, but what a scrolled page loads is wire traffic like any other, so on a residential route it counts toward `residential_overage_per_mb` (Karthik, 2026-11-20). A page read deeper than 10 screens may load more (the engine allows 2.5 MB more traffic a screen past 10, at most 150 MB), so its reservation covers that traffic: `scroll: 30` reserves for 80 MB. A next page (`POST /v1/fetch/{id}/next`) is a request of its own: its depth is the engine's replay, so it is reserved at admission for the deepest page (150 MB), charged at its winning step and the traffic it actually used only when it succeeds, released otherwise. `max_credits` caps both the reservation and the charge. `max_credits` is not carried over from the earlier request.
+
 Projects provisioned in `config.projects` are unmetered: nothing is reserved or charged.
 
 ## Trial and purchases

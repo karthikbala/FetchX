@@ -20,7 +20,8 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   const store = await openStore();
   t.after(() => store.close());
   const {app} = await platformFor(store, {script: request => request.url.includes('.pdf') ? {content_type: 'application/pdf', body: '%PDF-1.4'}
-    : {body: html('client page')}});
+    : request.url.includes('/list') ? {body: html('list page'), next_page: {how: 'link', url: 'https://shop.example.com/list?page=2'}}
+      : {body: html('client page')}});
   const client = new FetchXClient({url: 'https://api.fetchx.test/', token: TOKEN, fetch: transportFor(app)});
   const page = await client.fetch({url: 'https://shop.example.com/a', formats: ['markdown'], tags: ['sdk']});
   assert.equal(page.status, 'succeeded');
@@ -36,9 +37,16 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   const pending = await client.fetch({url: 'https://shop.example.com/later', async: true});
   assert.equal(pending.status, 'pending');
   assert.equal((await client.wait(pending.id, {intervalMs: 20})).status, 'succeeded');
+  const list = await client.fetch({url: 'https://shop.example.com/list'});
+  const second = await client.nextPage(list.id, {scroll: 'off'});
+  assert.equal(second.status, 'succeeded');
+  assert.equal(second.url, 'https://shop.example.com/list?page=2');
+  assert.deepEqual([second.data.page.number, second.data.page.previous_id], [2, list.id]);
+  assert.match(second.idempotency_key, /^[0-9a-f-]{36}$/);
+  await assert.rejects(client.nextPage(page.id), error => error.code === 'no_next_page' && error.status === 409 && error.details.reason === 'none_found');
   await client.delete(page.id);
   assert.equal((await client.get(page.id)).data.content_expired, true);
-  assert.equal((await client.usage({period: 'day'})).used.succeeded, 3);
+  assert.equal((await client.usage({period: 'day'})).used.succeeded, 5);
   assert.equal((await client.balance()).credits, (await new Ledger({store, config: {}}).balance(PROJECT)).available);
   await assert.rejects(client.fetch({url: 'https://shop.example.com/', max_attempts: 9}),
     error => error instanceof FetchXError && error.code === 'invalid_request' && error.status === 400 && error.details.field === 'max_attempts');

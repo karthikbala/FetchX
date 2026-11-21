@@ -7,6 +7,7 @@ The contract is [`openapi.json`](openapi.json); `test/api-contract.test.mjs` hol
 | Method and path | Key scope | What it does |
 | --- | --- | --- |
 | `POST /v1/fetch` | `fetch:write` | Get a URL. 200 when finished (`succeeded` or `failed`), 202 while running |
+| `POST /v1/fetch/{id}/next` | `fetch:write` | Get the page after request `{id}`'s, as a new request (same answers as `POST /v1/fetch`) |
 | `GET /v1/fetch` | `fetch:read` | List requests, newest first: `status`, `tag`, `idempotency_key`, `since`, `limit`, `cursor` |
 | `GET /v1/fetch/{id}` | `fetch:read` | The result; `include_body=false` for polling (the body only appears when `formats` asked for `body`) |
 | `GET /v1/fetch/{id}/content` | `fetch:read` | The body as received, with its Content-Type |
@@ -25,6 +26,12 @@ Keys are `fxk_` console keys with scopes, or a `tokenHash` in `config.projects` 
 4. **Reads** (`get`, `list`, `content`, `screenshot`, `delete`) go to the engine, which stores results for 7 days, and are shown with the platform's `credits`: `charged`, `max`, the project's `balance` now and, for a success, a `breakdown` from the settlement row (step price, captcha, traffic MB, MB included, traffic credits).
 
 If the engine's answer is lost after the job may have been sent, the reservation is kept and the reconciler finds out from the engine what happened; FetchX never resends it.
+
+## Scrolling and next pages
+
+`scroll` on a request (`auto` up to 10 screens, `off`, or 1 to 50 screens) is the engine's: the platform passes it on and never prices it. A scrolled page loads more, so on a residential route its extra traffic counts toward the per-MB charge like any other (Karthik, 2026-11-20); `scroll: off` avoids that.
+
+A successful result carries `data.page` (number, `previous_id`, screens scrolled, whether it reached the end) and `data.next_page` (`link`, `click`, `scroll` or `null`). `POST /v1/fetch/{id}/next` (`FetchFront.submitNext`) goes through the same admission as a fetch: a new id, a reservation and a pending settlement row, with the ceiling of a GET that may load the deepest page's traffic (150 MB; `PAGE_DEPTH` in `src/fetch/front.mjs`, the engine's limit). A fetch with `scroll` past 10 reserves for 2.5 MB more a screen. `EngineClient.startNextJob` sends `{id, tenant, request, allowed_steps}` to `/internal/v1/jobs/{previous}/next`, where `request` holds only what may change per page (`scroll`, `max_credits`, `timeout_ms`, `async`, `webhook_url`, `idempotency_key`, `tags`). The engine builds the rest from the earlier job, on the same kept session where it can. Its refusals (`404 not_found`, `409 pending`, `409 no_next_page` with `details.reason`, `410 content_expired`) release the reservation like any other refusal. A next page settles, and is charged, like any job.
 
 ## Errors
 

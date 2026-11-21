@@ -3,7 +3,7 @@
  "info": {
   "title": "FetchX API",
   "version": "1.0.0",
-  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work; the other endpoints read results, download files, list, delete and report credits.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data. Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for. Every result says what it cost in `credits`, with a breakdown."
+  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one; the other endpoints read results, download files, list, delete and report credits.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data. Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for. Every result says what it cost in `credits`, with a breakdown."
  },
  "servers": [
   {
@@ -1091,6 +1091,452 @@
     }
    }
   },
+  "/v1/fetch/{id}/next": {
+   "post": {
+    "operationId": "createNextPage",
+    "tags": [
+     "Fetch"
+    ],
+    "summary": "Get the next page",
+    "description": "Gets the page after request {id}'s, as a new request with its own id. Request {id} must have succeeded with a `data.next_page`, and its content must not have expired (7 days) or been deleted.\n\nFetchX builds the new request from the earlier one: the same headers, formats, country, render, wait_for and scroll, plus the cookies the site set on the earlier page. When the earlier page came through a residential browser session, the next page uses the same session (exit IP and device identity) while it is still available, so the site sees the same visitor. For `link`, FetchX fetches the next page's address with the earlier page as referrer. For `click` and `scroll`, it opens the list again, repeats the steps back to the earlier page, then clicks its next control or scrolls further, so each later page of a long list takes a little longer. The new page has its own `data.next_page`, so a list is read by calling this with each new id in turn.\n\nBilled like any request: only when it succeeds, at the price of the step that got the data (a browser step when the next page needs one). A failed next page costs nothing.",
+    "x-scope": "fetch:write",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The id of the request whose next page you want.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/NextPageRequest"
+       },
+       "examples": {
+        "same": {
+         "summary": "The next page, with the earlier request's settings",
+         "value": {}
+        },
+        "deeper": {
+         "summary": "Scroll further, with a budget and a key",
+         "value": {
+          "scroll": 20,
+          "max_credits": 60,
+          "timeout_ms": 150000,
+          "idempotency_key": "lamps-page-2"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "The next page finished: `status` is `succeeded` or `failed`.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FetchResult"
+        },
+        "examples": {
+         "succeeded": {
+          "value": {
+           "id": "5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d",
+           "status": "succeeded",
+           "page_status": "content",
+           "idempotency_key": "auto_8e2f…",
+           "url": "https://shop.example.com/search?q=lamp&page=2",
+           "created_at": "2026-11-20T10:00:10.000Z",
+           "finished_at": "2026-11-20T10:00:21.400Z",
+           "tags": [
+            "catalog"
+           ],
+           "data": {
+            "status_code": 200,
+            "final_url": "https://shop.example.com/search?q=lamp&page=2",
+            "content_type": "text/html; charset=utf-8",
+            "rendered": true,
+            "body_bytes": 412377,
+            "page": {
+             "number": 2,
+             "previous_id": "3f7c1d2e-8a4b-4c6d-9e0f-1a2b3c4d5e6f",
+             "screens": 4,
+             "end": true
+            },
+            "headers": {
+             "content-type": "text/html; charset=utf-8"
+            },
+            "cookies": [
+             {
+              "name": "session",
+              "value": "abc",
+              "domain": "shop.example.com",
+              "path": "/"
+             }
+            ],
+            "next_page": {
+             "how": "link",
+             "url": "https://shop.example.com/search?q=lamp&page=3"
+            },
+            "markdown": "# Lamps, page 2\n\n…"
+           },
+           "credits": {
+            "charged": 25,
+            "max": 160,
+            "balance": 4975,
+            "breakdown": {
+             "step": "browser_residential",
+             "step_credits": 25,
+             "captcha_credits": 0,
+             "traffic_mb": 4.2,
+             "included_mb": 5,
+             "traffic_credits": 0
+            }
+           },
+           "challenge": null,
+           "attempts": [
+            {
+             "transport": "browser",
+             "class": "residential",
+             "country": "US",
+             "result": "success",
+             "status_code": 200,
+             "ms": 11400
+            }
+           ],
+           "skipped": [],
+           "fixes": [],
+           "error": null
+          }
+         },
+         "next_page_missing": {
+          "value": {
+           "id": "6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e",
+           "status": "failed",
+           "page_status": "error",
+           "idempotency_key": "auto_8e2f…",
+           "url": "https://shop.example.com/search?q=lamp",
+           "created_at": "2026-11-20T10:00:10.000Z",
+           "finished_at": "2026-11-20T10:00:21.400Z",
+           "tags": [
+            "catalog"
+           ],
+           "data": null,
+           "credits": {
+            "charged": 0,
+            "max": 160,
+            "balance": 5000,
+            "breakdown": null
+           },
+           "challenge": null,
+           "attempts": [
+            {
+             "transport": "browser",
+             "class": "residential",
+             "country": "US",
+             "result": "failed",
+             "code": "next_page_missing",
+             "status_code": null,
+             "ms": 9200
+            }
+           ],
+           "skipped": [],
+           "fixes": [],
+           "error": {
+            "code": "next_page_missing",
+            "message": "The next page could not be reached again from the earlier page.",
+            "next": {
+             "action": "refetch_previous",
+             "retry_with_new_key": false,
+             "detail": "The earlier page's next-page control was not there when FetchX opened the list again; the list may have changed. Fetch the earlier page again, then ask for its next page."
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "202": {
+      "description": "Still running: `async` was true, or the result took longer than 60 seconds. Poll GET /v1/fetch/{id} with the new id, or wait for the webhook.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FetchResult"
+        },
+        "examples": {
+         "pending": {
+          "value": {
+           "id": "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+           "status": "pending",
+           "page_status": null,
+           "idempotency_key": "big-crawl-1",
+           "url": "https://slow.example.com/",
+           "created_at": "2026-11-19T10:02:00.000Z",
+           "finished_at": null,
+           "tags": [],
+           "data": null,
+           "credits": {
+            "charged": 0,
+            "max": 160,
+            "balance": 4840,
+            "breakdown": null
+           },
+           "challenge": null,
+           "attempts": [
+            {
+             "transport": "http",
+             "class": "direct",
+             "country": null,
+             "result": "needs_browser",
+             "status_code": 200
+            }
+           ],
+           "skipped": [],
+           "fixes": [],
+           "error": null
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "A field is wrong (for example scroll: off for a next page that loads on scroll). Nothing was sent.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "scroll",
+             "reason": "this next page loads as the page is scrolled; use auto or a number of screens"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "402": {
+      "description": "Not enough credits for the cheapest step, max_credits below it, or spending paused by a payment issue. Nothing was sent.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "insufficient_credits": {
+          "value": {
+           "error": {
+            "code": "insufficient_credits",
+            "message": "The balance is below the cheapest step this request could take.",
+            "details": {
+             "available": 0,
+             "needed": 1
+            }
+           }
+          }
+         },
+         "max_credits_too_low": {
+          "value": {
+           "error": {
+            "code": "max_credits_too_low",
+            "message": "max_credits is below the cheapest step; see error.details.min_credits.",
+            "details": {
+             "min_credits": 10
+            }
+           }
+          }
+         },
+         "payment_hold": {
+          "value": {
+           "error": {
+            "code": "payment_hold",
+            "message": "Spending is paused while a payment issue is resolved."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No request with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "error": {
+            "code": "not_found",
+            "message": "No request with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "Request {id} has no next page to open (details.reason: failed, none_found, limit or url_not_allowed), is still running, or the idempotency_key was used before with a different body.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "no_next_page": {
+          "value": {
+           "error": {
+            "code": "no_next_page",
+            "message": "That request has no next page to open; error.details.reason says why.",
+            "details": {
+             "reason": "none_found"
+            }
+           }
+          }
+         },
+         "pending": {
+          "value": {
+           "error": {
+            "code": "pending",
+            "message": "The request is still running."
+           }
+          }
+         },
+         "idempotency_conflict": {
+          "value": {
+           "error": {
+            "code": "idempotency_conflict",
+            "message": "This idempotency_key was used before with a different request."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "410": {
+      "description": "Request {id}'s content expired or was deleted, and the next page needs its cookies. Fetch the earlier page again.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "content_expired": {
+          "value": {
+           "error": {
+            "code": "content_expired",
+            "message": "The stored content has expired or was deleted."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "429": {
+      "description": "The project has too many requests running. Wait `retry_after_seconds`.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "too_many_requests": {
+          "value": {
+           "error": {
+            "code": "too_many_requests",
+            "message": "The project has too many requests running; wait and retry."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "FetchX cannot take work right now. Nothing was charged.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unavailable": {
+          "value": {
+           "error": {
+            "code": "unavailable",
+            "message": "FetchX cannot take work right now; wait and retry."
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/v1/fetch/{id}/content": {
    "get": {
     "operationId": "getFetchContent",
@@ -1675,6 +2121,24 @@
        }
       }
      },
+     "scroll": {
+      "description": "How far a page opened in a browser is scrolled before it is read. auto (the default): once the page has filled in, keep scrolling while scrolling loads more, up to 10 screens. off: read the page once it has filled in, without scrolling. A number from 1 to 50: scroll up to that many screens, stopping early at the end of the page; implies a browser, and more screens take more time (raise timeout_ms for many). Scrolling has no fee of its own, but what a scrolled page loads is traffic like any other: on a residential route it counts toward the per-MB charge beyond the included traffic, so off is the cheapest choice when the first screen is enough. A number past 10 reserves credits for 2.5 MB more traffic a screen while the request runs; only what the page used is charged.",
+      "default": "auto",
+      "oneOf": [
+       {
+        "type": "string",
+        "enum": [
+         "auto",
+         "off"
+        ]
+       },
+       {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50
+       }
+      ]
+     },
      "country": {
       "type": "string",
       "description": "The exit country for proxy routes (ISO 3166-1 alpha-2). Defaults to the country that worked for this site before, else US.",
@@ -1807,6 +2271,95 @@
        "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
       },
       "description": "Your labels, to filter the list."
+     }
+    }
+   },
+   "NextPageRequest": {
+    "type": "object",
+    "additionalProperties": false,
+    "description": "What may change for a next page. Everything else (headers, formats, country, render, wait_for, block_resources) comes from the earlier request, and the cookies the site set on the earlier page are sent with it. An empty object is fine.",
+    "properties": {
+     "scroll": {
+      "description": "As in FetchRequest; defaults to the earlier request's. For a next page that loads as the page is scrolled (next_page.how is scroll), it is how many more screens to scroll past where the earlier page ended (auto: up to 10 more); off is refused there.",
+      "default": "auto",
+      "oneOf": [
+       {
+        "type": "string",
+        "enum": [
+         "auto",
+         "off"
+        ]
+       },
+       {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50
+       }
+      ]
+     },
+     "expect": {
+      "type": [
+       "object",
+       "null"
+      ],
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "As in POST /v1/fetch. Left out, the earlier request's expect applies; null drops it, for a list whose later pages do not show what the first one did.",
+      "properties": {
+       "selector": {
+        "type": "string",
+        "maxLength": 512,
+        "description": "A CSS selector that must match at least one element (HTML only)."
+       },
+       "text": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "description": "Text that must appear in the page’s visible text (or a non-HTML body), ignoring case and spacing."
+       },
+       "min_markdown_length": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000000,
+        "description": "The page’s markdown (a non-HTML body’s text) must have at least this many characters."
+       }
+      }
+     },
+     "max_credits": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000,
+      "description": "The most this page may cost. Not taken from the earlier request: without it, the page may use any step, like a new request. A next page holds credits for the deepest page's traffic (150 MB) while it runs and is charged only for what it used; max_credits caps both."
+     },
+     "timeout_ms": {
+      "type": "integer",
+      "minimum": 5000,
+      "maximum": 180000,
+      "default": 120000,
+      "description": "As in FetchRequest; defaults to the earlier request's. A next page reached by clicking or scrolling opens the list again and repeats the earlier steps first, so deep pages of a long list may need more time."
+     },
+     "async": {
+      "type": "boolean",
+      "description": "Defaults to the earlier request's."
+     },
+     "webhook_url": {
+      "type": "string",
+      "description": "Defaults to the earlier request's.",
+      "format": "uri"
+     },
+     "idempotency_key": {
+      "type": "string",
+      "description": "The same key with the same body returns the same result and is charged once. Generated when absent.",
+      "pattern": "^[A-Za-z0-9_.:-]{1,160}$"
+     },
+     "tags": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+       "type": "string",
+       "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
+      },
+      "description": "Defaults to the earlier request's."
      }
     }
    },
@@ -2106,6 +2659,9 @@
       "type": "integer",
       "minimum": 0
      },
+     "page": {
+      "$ref": "#/components/schemas/PageInfo"
+     },
      "content_expired": {
       "type": "boolean",
       "description": "True after 7 days or DELETE: everything below is gone."
@@ -2123,6 +2679,17 @@
        "$ref": "#/components/schemas/Cookie"
       },
       "description": "Cookies the site set, for multi-step flows."
+     },
+     "next_page": {
+      "oneOf": [
+       {
+        "$ref": "#/components/schemas/NextPage"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "On successful results: how the page leads on, or null when FetchX found no next page. Gone with the rest of the content after 7 days or DELETE."
      },
      "body": {
       "type": "string",
@@ -2177,6 +2744,67 @@
       "type": "string",
       "description": "formats: screenshot, base64 JPEG. Also at /v1/fetch/{id}/screenshot.",
       "contentEncoding": "base64"
+     }
+    }
+   },
+   "PageInfo": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "number",
+     "previous_id",
+     "screens",
+     "end"
+    ],
+    "description": "Where this page sits in a list read page by page, and how far it was scrolled.",
+    "properties": {
+     "number": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1 for a request made with POST /v1/fetch; each next page adds 1."
+     },
+     "previous_id": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "uuid",
+      "description": "The request this one is the next page of; null for page 1."
+     },
+     "screens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Screens scrolled reading this page (for a next page that loads on scroll, past where the earlier page ended). 0 when it was not scrolled."
+     },
+     "end": {
+      "type": [
+       "boolean",
+       "null"
+      ],
+      "description": "true: scrolling reached the end of the page and nothing more loaded. false: scrolling stopped (screens or time) while there was more. null: not scrolled."
+     }
+    }
+   },
+   "NextPage": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "how"
+    ],
+    "description": "How a page leads on to the next one. Open it with POST /v1/fetch/{id}/next.",
+    "properties": {
+     "how": {
+      "type": "string",
+      "enum": [
+       "link",
+       "click",
+       "scroll"
+      ],
+      "description": "link: a link to the next page (url). click: a Next or Load more control the page handles itself, with no address of its own. scroll: the list loads more as it is scrolled further, and scrolling stopped before its end."
+     },
+     "url": {
+      "type": "string",
+      "description": "For link: the next page's address."
      }
     }
    },
@@ -2419,7 +3047,8 @@
        "too_large",
        "uncertain",
        "route_unavailable",
-       "url_not_allowed"
+       "url_not_allowed",
+       "next_page_missing"
       ]
      },
      "message": {
@@ -2449,7 +3078,8 @@
          "check_url",
          "raise_timeout",
          "render_never",
-         "recover"
+         "recover",
+         "refetch_previous"
         ]
        },
        "retry_after_seconds": {

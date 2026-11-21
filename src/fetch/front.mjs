@@ -6,6 +6,8 @@
 //   submit   reserve (in one transaction with a pending settlement row), send
 //            the job with the cost tiers the reservation covers, settle at once
 //            if it finished, release if the engine refused it.
+//   submitNext   the same for the page after an earlier request's: a new job,
+//            reserved, charged and released like any other.
 //   settle   once per job id: charge the winning step's price (at most the
 //            reservation) or release; queue the customer webhook.
 //   reconcile   settle jobs whose event never came, and release reservations
@@ -31,6 +33,12 @@ export const DEFAULT_LIMITS = Object.freeze({
   settleGraceMs: 30_000,
   metadataDays: 90,
 });
+// What a page read deeper than 10 screens may load (the engine's PAGE_DEPTH):
+// 2.5 MB more for each screen past 10, up to 150 MB. A caller's own `scroll`
+// sets the depth; a next page's depth is its replay, which only the engine
+// knows, so it reserves for the deepest. Residential traffic is paid per MB, so
+// the reservation covers it.
+export const PAGE_DEPTH = Object.freeze({screens: 10, wireBytes: 2_500_000, maxWireBytes: 150_000_000});
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export async function initFetchFront(pool) {
@@ -96,18 +104,37 @@ export class FetchFront {
       throw invalid('max_credits', `1 to ${this.limits.maxCredits}`);
     }
     const method = typeof raw.method === 'string' ? raw.method.toUpperCase() : 'GET';
-    return {maxCredits, method};
+    const deeper = Number.isSafeInteger(raw.scroll) ? Math.max(0, raw.scroll - PAGE_DEPTH.screens) : 0;
+    return {maxCredits, method, maxWireBytes: deeper ? Math.min(this.#deepestWireBytes(),
+      this.limits.maxWireBytes + PAGE_DEPTH.wireBytes * deeper) : this.limits.maxWireBytes};
   }
 
+  #deepestWireBytes() { return Math.max(this.limits.maxWireBytes, PAGE_DEPTH.maxWireBytes); }
+
   // The most any step could cost this request: the ceiling of its reservation.
-  #ceiling({maxCredits, method}) {
+  #ceiling({maxCredits, method, maxWireBytes}) {
     const table = this.ledger.prices;
-    const worst = Math.max(...STEPS.map(step => worstCaseOf(table, step, {captcha: method === 'GET', maxWireBytes: this.limits.maxWireBytes})));
+    const worst = Math.max(...STEPS.map(step => worstCaseOf(table, step, {captcha: method === 'GET', maxWireBytes})));
     return Math.min(maxCredits ?? Infinity, worst, budget(this.config, 'fetch.maxCreditsPerRequest'));
   }
 
   async submit(project, raw, {keyId = null} = {}) {
     const billing = this.#billingInput(raw);
+    return this.#start(project, billing, {keyId},
+      (id, allowed) => this.engine.startJob({id, tenant: project, request: raw, allowed_steps: allowed}));
+  }
+
+  // The page after request `previous` (POST /v1/fetch/{id}/next). The engine
+  // builds it from the earlier request, so only what may change per page is
+  // sent; a next page is always a GET, which sets the reservation's ceiling.
+  async submitNext(project, previous, raw = {}, {keyId = null} = {}) {
+    const billing = {...this.#billingInput(raw), method: 'GET', maxWireBytes: this.#deepestWireBytes()};
+    return this.#start(project, billing, {keyId},
+      (id, allowed) => this.engine.startNextJob(previous, {id, tenant: project, request: raw, allowed_steps: allowed}));
+  }
+
+  // Reserves for a new job, then send(id, allowed_steps) starts it on the engine.
+  async #start(project, billing, {keyId}, send) {
     const id = randomUUID();
     const table = this.ledger.prices;
     const metered = this.ledger.metered(project);
@@ -147,7 +174,7 @@ export class FetchFront {
 
     let answer;
     try {
-      answer = await this.engine.startJob({id, tenant: project, request: raw, allowed_steps: allowed});
+      answer = await send(id, allowed);
     } catch (error) {
       // Refused, or never sent: nothing ran, so nothing is owed. A call that
       // may have reached the engine stays pending for the reconciler.

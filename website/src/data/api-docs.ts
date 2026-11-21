@@ -36,6 +36,7 @@ export type DocPage = {
 };
 
 const createFetch = contractOperation('createFetch');
+const createNextPage = contractOperation('createNextPage');
 const getUsage = contractOperation('getUsage');
 const getBalance = contractOperation('getBalance');
 const hostedApi = 'https://app.fetchx.ai';
@@ -109,6 +110,9 @@ const requestErrorRows = [
   ['403', '`api_key_scope_forbidden`', 'The key does not have the scope this endpoint needs.'],
   ['404', '`not_found`', 'No request with that id in this project.'],
   ['409', '`idempotency_conflict`', 'The `idempotency_key` was used before with a different body. Use a new key.'],
+  ['409', '`no_next_page`', 'A next page was asked for a request that has none. `error.details.reason` is `failed`, `none_found`, `limit` (the list is too deep to reach again) or `url_not_allowed`.'],
+  ['409', '`pending`', 'The request is still running. Wait for it to finish.'],
+  ['410', '`content_expired`', 'The request\'s content expired (7 days) or was deleted, so its body or its next page can no longer be read. Fetch it again.'],
   ['413', '`request_too_large`', 'The request body is over 1 MB.'],
   ['429', '`too_many_requests`', 'The project has too many requests running. Wait `retry_after_seconds`.'],
   ['503', '`unavailable`', 'FetchX cannot take work right now. Wait and resend with the same key.'],
@@ -126,6 +130,7 @@ const fetchErrorRows = [
   ['`timeout`', '`timeout_ms` ran out.', '`raise_timeout`, or send with `async: true`', 'Yes, with a higher `timeout_ms` or `async: true`'],
   ['`too_large`', 'The response is over 10 MB, or the rendered page is over 5 MB.', '`render_never` for large files', 'No: send it with `render: never`'],
   ['`uncertain`', 'The outcome is unknown: FetchX restarted while it ran, or the connection dropped after a POST was sent.', 'GET and HEAD: `retry_later` (5 s). Other methods: `recover`.', 'GET and HEAD: yes. Other methods: no, check the site first, because it may have acted on the request.'],
+  ['`next_page_missing`', 'A next page reached by clicking or scrolling could not be reached again: when FetchX opened the list, its Next control was gone. The list may have changed.', '`refetch_previous`: fetch the earlier page again, then ask for its next page', 'No: fetch the earlier page again first'],
 ];
 
 export const docPages: DocPage[] = [
@@ -294,6 +299,7 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         blocks: [
           { kind: 'text', text: 'Some sites answer 200 with a page that is not the one you asked for: a frame with no prices, a skeleton, or an empty template served to suspected bots. Pass `expect` with a CSS `selector` that must match, `text` that must appear, or a `min_markdown_length`. A page without it is not a success: FetchX tries a browser and fresh residential IPs, and if no route shows it the request fails with `content_missing` and is not charged.' },
           { kind: 'text', text: 'In a browser, `expect.selector` is also what FetchX waits for (up to 10 seconds) unless you set `wait_for`.' },
+          { kind: 'text', text: 'A next page (`POST /v1/fetch/{id}/next`) keeps the earlier request’s `expect`. Pass `expect` there to replace it, or `null` to drop it when later pages of a list show something else.' },
         ],
       },
       {
@@ -303,6 +309,16 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
           { kind: 'text', text: 'Most of a heavy page’s cost is residential traffic, and a good part of that is images, video and fonts. `block_resources` (on unless you ask for a screenshot) skips the page’s own images, media and fonts, which took a large search page from 14.4 MB to 11.4 MB. Scripts, styles and data still load, so the text and markdown are the same. Frames such as a captcha keep everything they need. Set it to `false` if you need the page exactly as a person sees it.' },
         ],
       },
+      {
+        id: 'scroll',
+        title: 'Scrolling and next pages',
+        blocks: [
+          { kind: 'text', text: 'In a browser, FetchX waits for a page to fill itself in, then scrolls it like a reader while scrolling loads more, up to 10 screens. `scroll: off` reads it without scrolling; a number from 1 to 50 scrolls that many screens (raise `timeout_ms` for many). Scrolling has no fee of its own, but a scrolled page loads more, and residential traffic beyond the included 5 MB is charged per MB, so `off` is the cheapest choice when the first screen is enough.' },
+          { kind: 'text', text: 'A successful result says how the page leads on in `data.next_page`: a `link` to the next page, a Next or Load more button to `click`, or more to `scroll`; `null` when there is none. `data.page` says which page this is and how far it was scrolled.' },
+          { kind: 'text', text: 'A page read deeper than 10 screens, and every next page, may load more traffic, so it holds enough credits for it while it runs (up to 150 MB) and is charged only for what it used, and only when it succeeds. Set `max_credits` to hold and spend less.' },
+        ],
+      },
+      operationSection(createNextPage),
       {
         id: 'response',
         title: 'The response',
@@ -322,7 +338,7 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
     description: 'Read a result, download its body or screenshot, list requests and delete stored content.',
     group: 'API reference',
     sections: [
-      ...contractOperations.filter(operation => operation !== createFetch && operation !== getUsage && operation !== getBalance).map(operationSection),
+      ...contractOperations.filter(operation => ![createFetch, createNextPage, getUsage, getBalance].includes(operation)).map(operationSection),
       {
         id: 'retention',
         title: 'Retention',
@@ -371,6 +387,7 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         blocks: [
           { kind: 'text', text: 'When a request is admitted, FetchX reserves up to `max_credits` or the price of the most expensive step it might use. If the balance cannot cover the cheapest step, the request is refused with 402 before anything is sent. On success it charges the price of the step that got the data, plus 10 for a solved captcha, plus 5 per MB of residential transfer beyond the first 1 MB (HTTP) or 5 MB (browser), and releases the rest. Failed requests, uncertain ones, pages without what `expect` asked for and every earlier failed step cost nothing.' },
           { kind: 'text', text: 'Every answer carries `credits`: `charged`, `max` (what was reserved), `balance` (what the project has left) and, on success, a `breakdown` of the step price, captcha credits, traffic in MB, the MB included and the traffic credits. A browser page that costs far more than its step is paying for traffic: `block_resources` (on by default) cuts the images, video and fonts out of it.' },
+          { kind: 'text', text: 'Scrolling within a page has no fee, but what it loads counts as transfer. Each next page (`POST /v1/fetch/{id}/next`) is a request of its own, charged the same way: only when it succeeds, at the price of the step that got it.' },
           { kind: 'text', text: 'Trial credits and purchased credits share one balance. Purchased credits do not expire.' },
         ],
       },

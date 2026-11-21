@@ -52,6 +52,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/fetch/{id}/next": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Get the next page
+         * @description Gets the page after request {id}'s, as a new request with its own id. Request {id} must have succeeded with a `data.next_page`, and its content must not have expired (7 days) or been deleted.
+         *
+         *     FetchX builds the new request from the earlier one: the same headers, formats, country, render, wait_for and scroll, plus the cookies the site set on the earlier page. When the earlier page came through a residential browser session, the next page uses the same session (exit IP and device identity) while it is still available, so the site sees the same visitor. For `link`, FetchX fetches the next page's address with the earlier page as referrer. For `click` and `scroll`, it opens the list again, repeats the steps back to the earlier page, then clicks its next control or scrolls further, so each later page of a long list takes a little longer. The new page has its own `data.next_page`, so a list is read by calling this with each new id in turn.
+         *
+         *     Billed like any request: only when it succeeds, at the price of the step that got the data (a browser step when the next page needs one). A failed next page costs nothing.
+         */
+        post: operations["createNextPage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/fetch/{id}/content": {
         parameters: {
             query?: never;
@@ -210,6 +234,11 @@ export interface components {
                 selector?: string;
                 ms?: number;
             };
+            /**
+             * @description How far a page opened in a browser is scrolled before it is read. auto (the default): once the page has filled in, keep scrolling while scrolling loads more, up to 10 screens. off: read the page once it has filled in, without scrolling. A number from 1 to 50: scroll up to that many screens, stopping early at the end of the page; implies a browser, and more screens take more time (raise timeout_ms for many). Scrolling has no fee of its own, but what a scrolled page loads is traffic like any other: on a residential route it counts toward the per-MB charge beyond the included traffic, so off is the cheapest choice when the first screen is enough. A number past 10 reserves credits for 2.5 MB more traffic a screen while the request runs; only what the page used is charged.
+             * @default auto
+             */
+            scroll?: ("auto" | "off") | number;
             /** @description The exit country for proxy routes (ISO 3166-1 alpha-2). Defaults to the country that worked for this site before, else US. */
             country?: string;
             /** @description One fixed route; turns auto mode off: one attempt, with a precise error. */
@@ -269,6 +298,41 @@ export interface components {
             /** @description The same key with the same body returns the same result and is charged once. Generated when absent. */
             idempotency_key?: string;
             /** @description Your labels, to filter the list. */
+            tags?: string[];
+        };
+        /** @description What may change for a next page. Everything else (headers, formats, country, render, wait_for, block_resources) comes from the earlier request, and the cookies the site set on the earlier page are sent with it. An empty object is fine. */
+        NextPageRequest: {
+            /**
+             * @description As in FetchRequest; defaults to the earlier request's. For a next page that loads as the page is scrolled (next_page.how is scroll), it is how many more screens to scroll past where the earlier page ended (auto: up to 10 more); off is refused there.
+             * @default auto
+             */
+            scroll?: ("auto" | "off") | number;
+            /** @description As in POST /v1/fetch. Left out, the earlier request's expect applies; null drops it, for a list whose later pages do not show what the first one did. */
+            expect?: {
+                /** @description A CSS selector that must match at least one element (HTML only). */
+                selector?: string;
+                /** @description Text that must appear in the page’s visible text (or a non-HTML body), ignoring case and spacing. */
+                text?: string;
+                /** @description The page’s markdown (a non-HTML body’s text) must have at least this many characters. */
+                min_markdown_length?: number;
+            } | null;
+            /** @description The most this page may cost. Not taken from the earlier request: without it, the page may use any step, like a new request. A next page holds credits for the deepest page's traffic (150 MB) while it runs and is charged only for what it used; max_credits caps both. */
+            max_credits?: number;
+            /**
+             * @description As in FetchRequest; defaults to the earlier request's. A next page reached by clicking or scrolling opens the list again and repeats the earlier steps first, so deep pages of a long list may need more time.
+             * @default 120000
+             */
+            timeout_ms?: number;
+            /** @description Defaults to the earlier request's. */
+            async?: boolean;
+            /**
+             * Format: uri
+             * @description Defaults to the earlier request's.
+             */
+            webhook_url?: string;
+            /** @description The same key with the same body returns the same result and is charged once. Generated when absent. */
+            idempotency_key?: string;
+            /** @description Defaults to the earlier request's. */
             tags?: string[];
         };
         FetchResult: {
@@ -349,6 +413,7 @@ export interface components {
             /** @description True when a browser produced the result. */
             rendered: boolean;
             body_bytes: number;
+            page?: components["schemas"]["PageInfo"];
             /** @description True after 7 days or DELETE: everything below is gone. */
             content_expired?: boolean;
             /** @description Selected response headers. */
@@ -357,6 +422,8 @@ export interface components {
             };
             /** @description Cookies the site set, for multi-step flows. */
             cookies?: components["schemas"]["Cookie"][];
+            /** @description On successful results: how the page leads on, or null when FetchX found no next page. Gone with the rest of the content after 7 days or DELETE. */
+            next_page?: components["schemas"]["NextPage"] | null;
             /** @description The body: utf-8 text, or base64 for binary. Only when formats has body (the default); left out on reads with include_body=false, and when it is too large to inline (see body_url). */
             body?: string;
             /** @enum {string} */
@@ -377,6 +444,30 @@ export interface components {
             json?: unknown;
             /** @description formats: screenshot, base64 JPEG. Also at /v1/fetch/{id}/screenshot. */
             screenshot?: string;
+        };
+        /** @description Where this page sits in a list read page by page, and how far it was scrolled. */
+        PageInfo: {
+            /** @description 1 for a request made with POST /v1/fetch; each next page adds 1. */
+            number: number;
+            /**
+             * Format: uuid
+             * @description The request this one is the next page of; null for page 1.
+             */
+            previous_id: string | null;
+            /** @description Screens scrolled reading this page (for a next page that loads on scroll, past where the earlier page ended). 0 when it was not scrolled. */
+            screens: number;
+            /** @description true: scrolling reached the end of the page and nothing more loaded. false: scrolling stopped (screens or time) while there was more. null: not scrolled. */
+            end: boolean | null;
+        };
+        /** @description How a page leads on to the next one. Open it with POST /v1/fetch/{id}/next. */
+        NextPage: {
+            /**
+             * @description link: a link to the next page (url). click: a Next or Load more control the page handles itself, with no address of its own. scroll: the list loads more as it is scrolled further, and scrolling stopped before its end.
+             * @enum {string}
+             */
+            how: "link" | "click" | "scroll";
+            /** @description For link: the next page's address. */
+            url?: string;
         };
         Cookie: {
             name: string;
@@ -448,13 +539,13 @@ export interface components {
         };
         FetchError: {
             /** @enum {string} */
-            code: "blocked" | "rate_limited" | "content_missing" | "login_required" | "site_error" | "unreachable" | "cooling_down" | "timeout" | "too_large" | "uncertain" | "route_unavailable" | "url_not_allowed";
+            code: "blocked" | "rate_limited" | "content_missing" | "login_required" | "site_error" | "unreachable" | "cooling_down" | "timeout" | "too_large" | "uncertain" | "route_unavailable" | "url_not_allowed" | "next_page_missing";
             message: string;
             retry_after_seconds?: number;
             /** @description What to do next. A request key replays its first result, failures included, so a retry always needs a new idempotency_key. */
             next: {
                 /** @enum {string} */
-                action: "retry_after" | "retry_later" | "check_expect" | "use_auto" | "provide_credentials" | "check_url" | "raise_timeout" | "render_never" | "recover";
+                action: "retry_after" | "retry_later" | "check_expect" | "use_auto" | "provide_credentials" | "check_url" | "raise_timeout" | "render_never" | "recover" | "refetch_previous";
                 /** @description The earliest time a retry can help. */
                 retry_after_seconds?: number;
                 /** @description true: the same request may succeed if sent again with a new idempotency_key (after retry_after_seconds when given). false: sent again unchanged it would fail the same way; change it as action says. */
@@ -816,6 +907,123 @@ export interface operations {
             };
             /** @description The request is still running. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createNextPage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The id of the request whose next page you want. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["NextPageRequest"];
+            };
+        };
+        responses: {
+            /** @description The next page finished: `status` is `succeeded` or `failed`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResult"];
+                };
+            };
+            /** @description Still running: `async` was true, or the result took longer than 60 seconds. Poll GET /v1/fetch/{id} with the new id, or wait for the webhook. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResult"];
+                };
+            };
+            /** @description A field is wrong (for example scroll: off for a next page that loads on scroll). Nothing was sent. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key is missing, wrong or revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not enough credits for the cheapest step, max_credits below it, or spending paused by a payment issue. Nothing was sent. */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No request with that id in this project. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request {id} has no next page to open (details.reason: failed, none_found, limit or url_not_allowed), is still running, or the idempotency_key was used before with a different body. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request {id}'s content expired or was deleted, and the next page needs its cookies. Fetch the earlier page again. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The project has too many requests running. Wait `retry_after_seconds`. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description FetchX cannot take work right now. Nothing was charged. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -71,6 +71,14 @@ export class EngineClient {
     return {status, envelope: body};
   }
 
+  // The page after job `previous`'s: {id, tenant, request (NextPageRequest), allowed_steps, wait_ms?} -> {status, envelope}
+  async startNextJob(previous, input) {
+    const waitMs = input.wait_ms ?? 60_000;
+    const {status, body} = await this.#call('POST', `/internal/v1/jobs/${encodeURIComponent(previous)}/next`,
+      {body: input, timeoutMs: Math.max(this.timeoutMs, waitMs + 30_000)});
+    return {status, envelope: body};
+  }
+
   async getJob(tenant, id, {includeBody = true} = {}) {
     return (await this.#call('GET', `/internal/v1/jobs/${encodeURIComponent(id)}`,
       {query: {tenant, ...(includeBody ? {} : {include_body: 'false'})}})).body;

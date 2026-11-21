@@ -2,6 +2,7 @@
 //
 //   const fetchx = new FetchXClient({url: process.env.FETCHX_URL, token: process.env.FETCHX_TOKEN});
 //   const result = await fetchx.fetch({url: 'https://example.com', formats: ['markdown']});
+//   const page2 = result.data?.next_page ? await fetchx.nextPage(result.id) : null;
 //
 // Every POST carries an idempotency_key (generated when you leave it out), so
 // the client can safely resend the same request after a lost response, a 429
@@ -65,19 +66,32 @@ export class FetchXClient {
     return data;
   }
 
-  // POST /v1/fetch. Resolves with the result: status is succeeded or failed,
-  // or pending (HTTP 202) when it is still running; use wait() for those.
-  async fetch(input) {
-    if (!isObject(input) || typeof input.url !== 'string') throw new FetchXError('url_required');
+  // A POST that starts work, with an idempotency_key so it can be resent.
+  async #start(path, input) {
     const body = {...input, idempotency_key: input.idempotency_key ?? globalThis.crypto.randomUUID()};
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.#send('POST', '/v1/fetch', {body, idempotencyKey: body.idempotency_key});
+        return await this.#send('POST', path, {body, idempotencyKey: body.idempotency_key});
       } catch (error) {
         if (!(error instanceof FetchXError) || !RETRYABLE.has(error.code) || attempt >= this.retries) throw error;
         await sleep(Math.min(30, error.retryAfterSeconds ?? 2 ** attempt) * 1000);
       }
     }
+  }
+
+  // POST /v1/fetch. Resolves with the result: status is succeeded or failed,
+  // or pending (HTTP 202) when it is still running; use wait() for those.
+  async fetch(input) {
+    if (!isObject(input) || typeof input.url !== 'string') throw new FetchXError('url_required');
+    return this.#start('/v1/fetch', input);
+  }
+
+  // POST /v1/fetch/{id}/next: the page after a result whose data.next_page is
+  // set, as a new request with its own id and its own data.next_page. input:
+  // {scroll, max_credits, timeout_ms, async, webhook_url, idempotency_key, tags}.
+  async nextPage(id, input = {}) {
+    if (!isObject(input)) throw new FetchXError('invalid_input');
+    return this.#start(`/v1/fetch/${encodeURIComponent(id)}/next`, input);
   }
 
   // GET /v1/fetch/{id}

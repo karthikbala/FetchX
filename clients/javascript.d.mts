@@ -2,6 +2,8 @@ import type {components} from './openapi.js';
 
 type Schemas = components['schemas'];
 export type FetchRequest = Schemas['FetchRequest'];
+export type NextPageRequest = Schemas['NextPageRequest'];
+export type NextPage = Schemas['NextPage'];
 export type FetchResult = Schemas['FetchResult'];
 export type FetchData = Schemas['FetchData'];
 export type FetchList = Schemas['FetchList'];
@@ -61,6 +63,8 @@ export interface Download {
 export class FetchXClient {
   constructor(options: FetchXClientOptions);
   fetch(input: FetchRequest): Promise<FetchResult>;
+  /** The page after a result whose data.next_page is set: a new request, billed only when it succeeds. */
+  nextPage(id: string, input?: NextPageRequest): Promise<FetchResult>;
   get(id: string, options?: {includeBody?: boolean}): Promise<FetchResult>;
   wait(id: string, options?: {intervalMs?: number; timeoutMs?: number; includeBody?: boolean}): Promise<FetchResult>;
   list(query?: ListQuery): Promise<FetchList>;
