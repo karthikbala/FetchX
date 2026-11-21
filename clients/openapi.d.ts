@@ -746,7 +746,7 @@ export interface components {
             ms?: number | null;
             /** @description Bytes this step moved over the network, requests and responses together. On a residential route this is the traffic billed past the included megabytes. */
             wire_bytes?: number;
-            /** @description Captchas met on this step, as type:outcome. */
+            /** @description Captchas met on this step, as type:outcome. passed: the page let the visitor through; still_challenged: the same captcha came back; still_blocked: the captcha went away but the site kept refusing; other outcomes say why no solve was made (for example captcha_timeout). Only a request that succeeds is charged for its captchas. */
             captcha?: string[];
             /**
              * @description Browser steps on sites that have refused FetchX before start at the site's home page. passed: it loaded; cleared: a bot check there cleared by itself; solved: the check there was a captcha, which was solved, and the visit went on (see captcha); challenged: the check stayed, so this step ended there and the next one used a fresh IP; failed: the home page did not load, and the page was visited directly.
