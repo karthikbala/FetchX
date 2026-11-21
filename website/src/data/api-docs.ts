@@ -38,6 +38,7 @@ export type DocPage = {
 const createFetch = contractOperation('createFetch');
 const createNextPage = contractOperation('createNextPage');
 const getUsage = contractOperation('getUsage');
+const getBalance = contractOperation('getBalance');
 const hostedApi = 'https://app.fetchx.ai';
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 const openApiLink: DocBlock = { kind: 'link', label: 'OpenAPI contract (JSON)', href: '/openapi.json' };
@@ -117,18 +118,19 @@ const requestErrorRows = [
   ['503', '`unavailable`', 'FetchX cannot take work right now. Wait and resend with the same key.'],
 ];
 const fetchErrorRows = [
-  ['`blocked`', 'The site refused every route FetchX was allowed to try: a 403, a challenge page, or a captcha that could not be solved.', '`retry_later`, or `use_auto` when `route` was set'],
-  ['`rate_limited`', 'The site returned 429, even after fresh residential IPs.', '`retry_after`, with the site’s own wait'],
-  ['`login_required`', 'The site returned 401.', '`provide_credentials`: send its cookie or Authorization header'],
-  ['`site_error`', 'The site returned a 5xx error.', '`retry_later`'],
-  ['`unreachable`', 'DNS, connection or TLS failed on every route.', '`check_url`'],
-  ['`url_not_allowed`', 'The site resolves, or redirects, to a private or reserved address.', '`check_url`'],
-  ['`cooling_down`', 'Every route for this site is resting after recent failures, so nothing was sent.', '`retry_after`'],
-  ['`route_unavailable`', 'No allowed route can be used, for example `route` names one this service does not have.', '`use_auto`'],
-  ['`timeout`', '`timeout_ms` ran out.', '`raise_timeout`, or send with `async: true`'],
-  ['`too_large`', 'The response is over 10 MB, or the rendered page is over 5 MB.', '`render_never` for large files'],
-  ['`uncertain`', 'The outcome is unknown, for example the connection dropped after a POST was sent.', '`recover`: read the request; FetchX never resends it'],
-  ['`next_page_missing`', 'A next page reached by clicking or scrolling could not be reached again: when FetchX opened the list, its Next control was gone. The list may have changed.', '`refetch_previous`: fetch the earlier page again, then ask for its next page'],
+  ['`blocked`', 'The site refused every route FetchX was allowed to try: a 403, a challenge page, or a captcha that could not be solved.', '`retry_later` (900 s, or the site’s own wait). With `route` set: `use_auto`.', 'Yes, after the wait. With `use_auto`: no, remove `route` first.'],
+  ['`rate_limited`', 'The site returned 429, even after fresh residential IPs.', '`retry_after`, with the site’s own wait (60 s when it gives none)', 'Yes, after the wait'],
+  ['`content_missing`', 'The page loaded on every route tried, but without what `expect` asked for. `data` shows what came back.', '`check_expect` (300 s)', 'Yes, after the wait, if `expect` is right for this page. Otherwise fix `expect` first.'],
+  ['`login_required`', 'The site returned 401.', '`provide_credentials`: send its cookie or Authorization header', 'No: add the credentials first'],
+  ['`site_error`', 'The site returned a 5xx error.', '`retry_later` (300 s)', 'Yes, after the wait'],
+  ['`unreachable`', 'DNS, connection or TLS failed on every route.', '`check_url` (300 s)', 'Yes, once the URL is right, after the wait'],
+  ['`url_not_allowed`', 'The site resolves, or redirects, to a private or reserved address.', '`check_url`', 'No: FetchX only fetches public sites'],
+  ['`cooling_down`', 'Every route for this site is resting after recent failures, so nothing was sent.', '`retry_after` (300 s, or until the rest ends)', 'Yes, after the wait'],
+  ['`route_unavailable`', 'No allowed route can be used, for example `route` names one this service does not have. When FetchX has used its own traffic allowance for that route for now, the action is `retry_later` (3600 s).', '`use_auto`, or `retry_later`', 'With `use_auto`: no, remove `route` or `country` first. With `retry_later`: yes, after the wait.'],
+  ['`timeout`', '`timeout_ms` ran out.', '`raise_timeout`, or send with `async: true`', 'Yes, with a higher `timeout_ms` or `async: true`'],
+  ['`too_large`', 'The response is over 10 MB, or the rendered page is over 5 MB.', '`render_never` for large files', 'No: send it with `render: never`'],
+  ['`uncertain`', 'The outcome is unknown: FetchX restarted while it ran, or the connection dropped after a POST was sent.', 'GET and HEAD: `retry_later` (5 s). Other methods: `recover`.', 'GET and HEAD: yes. Other methods: no, check the site first, because it may have acted on the request.'],
+  ['`next_page_missing`', 'A next page reached by clicking or scrolling could not be reached again: when FetchX opened the list, its Next control was gone. The list may have changed.', '`refetch_previous`: fetch the earlier page again, then ask for its next page', 'No: fetch the earlier page again first'],
 ];
 
 export const docPages: DocPage[] = [
@@ -153,7 +155,7 @@ export const docPages: DocPage[] = [
         blocks: [
           { kind: 'text', text: 'Only `url` is required. FetchX starts with the cheapest route, moves to a residential IP or a browser when the site blocks it, and remembers what worked for that site so the next request starts there.' },
           { kind: 'code', title: 'POST /v1/fetch', snippets: fetchSnippets(minimal) },
-          { kind: 'text', text: 'Ask for `formats` to get markdown, plain text, links, page metadata, parsed JSON or a screenshot alongside the body.' },
+          { kind: 'text', text: '`formats` picks what comes back: the raw `body` (the default when you leave `formats` out), markdown, plain text, links, page metadata, parsed JSON or a screenshot. The body is only returned when you list it, so ask for what you will use.' },
           { kind: 'code', title: 'Markdown from a page that needs a browser', snippets: fetchSnippets(markdownRequest) },
         ],
       },
@@ -161,7 +163,8 @@ export const docPages: DocPage[] = [
         id: 'result',
         title: 'Read the result',
         blocks: [
-          { kind: 'text', text: 'A fetch that ran answers HTTP 200 with `status: succeeded` or `status: failed`. `data` holds what the site answered, `attempts` lists every route tried, and `credits.charged` is what it cost: 0 unless it succeeded.' },
+          { kind: 'text', text: 'A fetch that ran answers HTTP 200 with `status: succeeded` or `status: failed`. `data` holds what the site answered, `attempts` lists every route tried, and `credits.charged` is what it cost: 0 unless it succeeded. `credits.balance` is what the project has left, and `credits.breakdown` shows how the charge was made up.' },
+          { kind: 'text', text: '`page_status` says what the page was: `content`, `not_found` (the site’s real 404), `empty`, `challenge` or `error`. `challenge` names any bot wall FetchX met on the way, such as `cloudflare` or `datadome`, and whether it got past it by rotating IPs, solving a captcha or waiting.' },
           { kind: 'code', title: 'Succeeded', snippets: [{ label: 'JSON', language: 'json', code: json(succeeded) }] },
           { kind: 'text', text: 'A failed fetch says what happened and what to do next, in `error.next`. It is never charged.' },
           { kind: 'code', title: 'Failed', snippets: [{ label: 'JSON', language: 'json', code: json(failed) }] },
@@ -173,7 +176,9 @@ export const docPages: DocPage[] = [
         id: 'retries',
         title: 'Retry safely',
         blocks: [
-          { kind: 'text', text: 'Send an `idempotency_key` with each request (the SDKs add one for you). If a response is lost, send the same body with the same key: FetchX returns the first result and charges once. The same key with a different body is refused with 409.' },
+          { kind: 'text', text: 'Send an `idempotency_key` with each request (the SDKs add one for you). If a response is lost, or the call gets 429 or 503, send the same body with the same key: FetchX returns the first result and charges once. The same key with a different body is refused with 409.' },
+          { kind: 'text', text: 'A key keeps its first result for 90 days, failures included, and never runs the fetch again. To try a failed fetch again, read `error.next`: when `retry_with_new_key` is true, wait `retry_after_seconds` (when given) and send it with a new key. When it is false, the same request would fail the same way, so change it as `next.action` says first.' },
+          { kind: 'link', label: 'Every error and when to retry', href: '/docs/errors' },
         ],
       },
     ],
@@ -223,7 +228,7 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         id: 'check',
         title: '3. Check the result and report',
         blocks: [
-          { kind: 'text', text: '`status: succeeded` means the site gave its real answer; check `data.markdown` or `data.body` against what the user asked for. `status: failed` comes with `error.next.action`: follow it rather than guessing. A lost response is resent with the same key and body, which returns the first result and is never charged twice. Report the outcome before doing more work.' },
+          { kind: 'text', text: '`status: succeeded` means the site gave its real answer; check `data.markdown` or `data.body` against what the user asked for. Pass `expect` (a selector or text the page must show) and FetchX checks it for you and never charges for a page without it. `status: failed` comes with `error.next.action`: follow it rather than guessing, and retry with a new key only when `error.next.retry_with_new_key` is true. A lost response is resent with the same key and body, which returns the first result and is never charged twice. Report the outcome before doing more work.' },
           { kind: 'link', label: 'Errors and next steps', href: '/docs/errors' },
         ],
       },
@@ -289,6 +294,22 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         ],
       },
       {
+        id: 'expect',
+        title: 'Make sure the page has what you need',
+        blocks: [
+          { kind: 'text', text: 'Some sites answer 200 with a page that is not the one you asked for: a frame with no prices, a skeleton, or an empty template served to suspected bots. Pass `expect` with a CSS `selector` that must match, `text` that must appear, or a `min_markdown_length`. A page without it is not a success: FetchX tries a browser and fresh residential IPs, and if no route shows it the request fails with `content_missing` and is not charged.' },
+          { kind: 'text', text: 'In a browser, `expect.selector` is also what FetchX waits for (up to 10 seconds) unless you set `wait_for`.' },
+          { kind: 'text', text: 'A next page (`POST /v1/fetch/{id}/next`) keeps the earlier request’s `expect`. Pass `expect` there to replace it, or `null` to drop it when later pages of a list show something else.' },
+        ],
+      },
+      {
+        id: 'traffic',
+        title: 'What a browser downloads',
+        blocks: [
+          { kind: 'text', text: 'Most of a heavy page’s cost is residential traffic, and a good part of that is images, video and fonts. `block_resources` (on unless you ask for a screenshot) skips the page’s own images, media and fonts, which took a large search page from 14.4 MB to 11.4 MB. Scripts, styles and data still load, so the text and markdown are the same. Frames such as a captcha keep everything they need. Set it to `false` if you need the page exactly as a person sees it.' },
+        ],
+      },
+      {
         id: 'scroll',
         title: 'Scrolling and next pages',
         blocks: [
@@ -317,7 +338,7 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
     description: 'Read a result, download its body or screenshot, list requests and delete stored content.',
     group: 'API reference',
     sections: [
-      ...contractOperations.filter(operation => ![createFetch, createNextPage, getUsage].includes(operation)).map(operationSection),
+      ...contractOperations.filter(operation => ![createFetch, createNextPage, getUsage, getBalance].includes(operation)).map(operationSection),
       {
         id: 'retention',
         title: 'Retention',
@@ -336,6 +357,7 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         title: 'Refused calls (4xx)',
         blocks: [
           { kind: 'text', text: 'The call itself was wrong, so nothing was sent to the site and nothing was charged. The body is `{error: {code, message, details?}}`.' },
+          { kind: 'text', text: 'A refused call stores nothing under its `idempotency_key`, so once you have fixed it you can send it with the same key. The exception is 409: that key already belongs to a different request, so use a new one. After a 429 or a 503, resend the same body with the same key.' },
           { kind: 'table', headers: ['HTTP', 'Code', 'Meaning'], rows: requestErrorRows },
         ],
       },
@@ -344,7 +366,8 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         title: 'Failed fetches (HTTP 200, status: failed)',
         blocks: [
           { kind: 'text', text: 'The site was tried and did not give its answer. Nothing is charged. `error.next.action` is meant for programs: act on it rather than on the message. `data` holds what the site last answered, such as the block page.' },
-          { kind: 'table', headers: ['Code', 'What happened', 'next.action'], rows: fetchErrorRows },
+          { kind: 'text', text: 'The key you sent now holds this failure: sending the same key again returns it without running anything. `error.next.retry_with_new_key` says whether a retry can help. When it is true, wait `error.next.retry_after_seconds` (when given) and send the request with a new key. When it is false, the same request would fail the same way, so change it first.' },
+          { kind: 'table', headers: ['Code', 'What happened', 'next.action', 'Retry with a new key?'], rows: fetchErrorRows },
           { kind: 'text', text: 'With `route` set there is exactly one attempt, so the error is precise about that route and suggests auto mode.' },
         ],
       },
@@ -362,11 +385,13 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         id: 'charging',
         title: 'How charging works',
         blocks: [
-          { kind: 'text', text: 'When a request is admitted, FetchX reserves up to `max_credits` or the price of the most expensive step it might use. If the balance cannot cover the cheapest step, the request is refused with 402 before anything is sent. On success it charges the price of the step that got the data, plus 10 for a solved captcha, plus 5 per MB of residential transfer beyond the first 1 MB (HTTP) or 5 MB (browser), and releases the rest. Failed requests, uncertain ones and every earlier failed step cost nothing.' },
+          { kind: 'text', text: 'When a request is admitted, FetchX reserves up to `max_credits` or the price of the most expensive step it might use. If the balance cannot cover the cheapest step, the request is refused with 402 before anything is sent. On success it charges the price of the step that got the data, plus 10 for a solved captcha, plus 5 per MB of residential transfer beyond the first 1 MB (HTTP) or 5 MB (browser), and releases the rest. Failed requests, uncertain ones, pages without what `expect` asked for and every earlier failed step cost nothing.' },
+          { kind: 'text', text: 'Every answer carries `credits`: `charged`, `max` (what was reserved), `balance` (what the project has left) and, on success, a `breakdown` of the step price, captcha credits, traffic in MB, the MB included and the traffic credits. A browser page that costs far more than its step is paying for traffic: `block_resources` (on by default) cuts the images, video and fonts out of it.' },
           { kind: 'text', text: 'Scrolling within a page has no fee, but what it loads counts as transfer. Each next page (`POST /v1/fetch/{id}/next`) is a request of its own, charged the same way: only when it succeeds, at the price of the step that got it.' },
           { kind: 'text', text: 'Trial credits and purchased credits share one balance. Purchased credits do not expire.' },
         ],
       },
+      operationSection(getBalance),
       operationSection(getUsage),
     ],
   },

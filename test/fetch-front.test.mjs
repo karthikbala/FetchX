@@ -16,12 +16,15 @@ test('a successful fetch is charged once, at the price of the step the engine re
   const store = await openStore();
   t.after(() => store.close());
   const {call, engine} = await platformFor(store, {script: () => ({step: 'http'})});
-  const first = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/p/1', formats: ['markdown'], idempotency_key: 'one'}});
+  const first = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/p/1', formats: ['body', 'markdown'], idempotency_key: 'one'}});
   assert.equal(first.status, 200, JSON.stringify(first.body));
   assert.equal(first.body.status, 'succeeded');
-  assert.deepEqual(first.body.credits, {charged: 1, max: 100});
-  assert.deepEqual(Object.keys(first.body), ['id', 'status', 'idempotency_key', 'url', 'created_at', 'finished_at', 'tags', 'data', 'credits',
-    'attempts', 'skipped', 'fixes', 'error']);
+  assert.equal(first.body.page_status, 'content');
+  // Every answer says what it cost, how that adds up, and what is left.
+  assert.deepEqual(first.body.credits, {charged: 1, max: 100, balance: 99, breakdown: {step: 'http', step_credits: 1, captcha_credits: 0,
+    traffic_mb: 0, included_mb: null, traffic_credits: 0}});
+  assert.deepEqual(Object.keys(first.body), ['id', 'status', 'page_status', 'idempotency_key', 'url', 'created_at', 'finished_at', 'tags', 'data',
+    'credits', 'challenge', 'attempts', 'skipped', 'fixes', 'error']);
   assert.equal(await balance(store), 99);
   assert.equal(await reservations(store), 0);
   // What the engine was sent: the job id, the project as tenant, every tier the reservation covers.
@@ -29,9 +32,9 @@ test('a successful fetch is charged once, at the price of the step the engine re
   assert.equal(sent.tenant, PROJECT);
   assert.equal(sent.request.url, 'https://shop.example.com/p/1');
   // Replay: the same job, no new work, no new charge.
-  const replay = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/p/1', formats: ['markdown'], idempotency_key: 'one'}});
+  const replay = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/p/1', formats: ['body', 'markdown'], idempotency_key: 'one'}});
   assert.equal(replay.body.id, first.body.id);
-  assert.deepEqual(replay.body.credits, {charged: 1, max: 100});
+  assert.deepEqual(replay.body.credits, first.body.credits);
   assert.equal(engine.jobs.size, 1);
   assert.equal(await balance(store), 99);
   assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM fetch_settlements')).rows[0].n, 1, 'the replay left nothing behind');
@@ -54,6 +57,11 @@ test('a successful fetch is charged once, at the price of the step the engine re
   assert.equal((await call('GET', '/v1/fetch/00000000-0000-4000-8000-000000000000')).status, 404);
   const usage = await call('GET', '/v1/usage');
   assert.equal(usage.body.balance.credits, 99);
+  assert.deepEqual((await call('GET', '/v1/balance')).body, {credits: 99, reserved: 0, trial: 100, purchased: 0, payment_hold: false});
+  // Formats decide what comes back: markdown alone leaves the body out (it stays at /content).
+  const lean = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/p/3', formats: ['markdown']}});
+  assert.equal(lean.body.data.body, undefined);
+  assert.equal(typeof lean.body.data.markdown, 'string');
   assert.equal(usage.body.used.credits, 1);
   assert.equal(usage.body.used.succeeded, 1);
   assert.deepEqual(usage.body.by_step, [{step: 'http', requests: 1, credits: 1}]);
@@ -68,7 +76,8 @@ test('prices come from the platform: residential, browser, captcha and bandwidth
   assert.equal((await call('POST', '/v1/fetch', {body: {url: 'https://b.example.com/'}})).body.credits.charged, 35, 'residential browser 25 + captcha 10');
   // 60 left: the reservation (and so the charge) is capped at what is available.
   const big = await call('POST', '/v1/fetch', {body: {url: 'https://c.example.com/'}});
-  assert.deepEqual(big.body.credits, {charged: 15, max: 60}, '5 + 2 MB over the included 1 MB at 5 each');
+  assert.deepEqual(big.body.credits, {charged: 15, max: 60, balance: 45, breakdown: {step: 'http_residential', step_credits: 5, captcha_credits: 0,
+    traffic_mb: 2.5, included_mb: 1, traffic_credits: 10}}, '5 + 2 MB over the included 1 MB at 5 each');
   assert.equal(await balance(store), 45);
 });
 
@@ -79,7 +88,8 @@ test('failures are free; the reservation shapes allowed_steps and refusals say w
     : request.render === 'always' ? {planned: ['browser', 'browser_residential']} : {})});
   const failed = await call('POST', '/v1/fetch', {body: {url: 'https://wall.example.com/'}});
   assert.equal(failed.body.status, 'failed');
-  assert.deepEqual(failed.body.credits, {charged: 0, max: 100});
+  assert.deepEqual(failed.body.credits, {charged: 0, max: 100, balance: 100, breakdown: null});
+  assert.equal(failed.body.page_status, 'challenge');
   assert.equal(await balance(store), 100);
   assert.equal(await reservations(store), 0);
   // max_credits below every planned step.
@@ -111,7 +121,11 @@ test('failures are free; the reservation shapes allowed_steps and refusals say w
   // Unmetered projects (provisioned in config) send every tier and pay nothing.
   const free = await call('POST', '/v1/fetch', {token: UNMETERED_TOKEN, body: {url: 'https://shop.example.com/', render: 'always'}});
   assert.equal(free.body.status, 'succeeded');
-  assert.deepEqual(free.body.credits, {charged: 0, max: null});
+  assert.equal(free.body.credits.charged, 0);
+  assert.equal(free.body.credits.max, null);
+  assert.equal(free.body.credits.balance, null);
+  assert.equal(free.body.credits.breakdown.step_credits, 10, 'the price is shown, not charged');
+  assert.equal((await call('GET', '/v1/balance', {token: UNMETERED_TOKEN})).body.credits, null);
   assert.equal((await call('POST', '/v1/fetch', {token: 'wrong', body: {url: 'https://shop.example.com/'}})).status, 401);
   assert.equal((await call('POST', '/v1/fetch', {body: {url: 'https://10.0.0.1/'}})).body.error.code, 'url_not_allowed');
   assert.equal(await reservations(store), 0);
@@ -145,7 +159,8 @@ test('a next page is a new request: reserved, charged only when it succeeds, ref
   assert.equal(second.body.url, 'https://shop.example.com/list?page=2');
   assert.deepEqual(second.body.data.page, {number: 2, previous_id: first.body.id, screens: 0, end: null});
   assert.deepEqual(second.body.tags, ['crawl'], 'settings come from the earlier request');
-  assert.deepEqual(second.body.credits, {charged: 10, max: 90});
+  assert.deepEqual(second.body.credits, {charged: 10, max: 90, balance: 80, breakdown: {step: 'browser', step_credits: 10, captcha_credits: 0,
+    traffic_mb: 0, included_mb: null, traffic_credits: 0}});
   assert.equal(await balance(store), 80);
   pages.set(2, second.body.id);
   assert.ok(engine.calls.some(c => c.method === 'POST' && c.url === `/internal/v1/jobs/${first.body.id}/next`));
@@ -240,7 +255,8 @@ test('async jobs settle from the engine\'s signed event, once, and webhooks foll
   const {call, engine, events, platform, webhooks} = await platformFor(store, {script: () => ({step: 'browser', hold: gate})});
   const pending = await call('POST', '/v1/fetch', {body: {url: 'https://slow.example.com/', async: true, webhook_url: 'https://hooks.example.com/fx'}});
   assert.equal(pending.status, 202);
-  assert.deepEqual(pending.body.credits, {charged: 0, max: 100});
+  assert.deepEqual(pending.body.credits, {charged: 0, max: 100, balance: 0, breakdown: null});
+  assert.equal(pending.body.page_status, null);
   assert.equal(await balance(store), 0, 'the whole worst case is held while it runs');
   release();
   await engine.jobs.get(pending.body.id).done;

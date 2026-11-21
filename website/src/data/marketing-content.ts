@@ -81,7 +81,7 @@ export const productPages: ProductPage[] = [
       note: 'Reserved example domain. Only url is required.',
     },
     outputs: [
-      { title: 'The content', text: 'data.body has the page or file (base64 for binary), and formats add markdown, plain text, links, page metadata, parsed JSON or a screenshot.' },
+      { title: 'The content', text: 'formats picks what comes back: data.body has the page or file as received (base64 for binary, and the default), or ask for markdown, plain text, links, page metadata, parsed JSON or a screenshot.' },
       { title: 'Every attempt', text: 'attempts lists each route tried, with its result and the site’s status. skipped explains steps that were not tried.' },
       { title: 'Safe retries', text: 'Send an idempotency_key. If a response is lost, the same key and body return the first result and are never charged twice.' },
     ],

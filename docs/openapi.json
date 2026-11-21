@@ -3,7 +3,7 @@
  "info": {
   "title": "FetchX API",
   "version": "1.0.0",
-  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one; the other endpoints read results, download files, list, delete and report credits.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data. Failed, uncertain and refused requests cost nothing."
+  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one; the other endpoints read results, download files, list, delete and report credits.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data. Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for. Every result says what it cost in `credits`, with a breakdown."
  },
  "servers": [
   {
@@ -56,18 +56,17 @@
          }
         },
         "markdown": {
-         "summary": "Markdown from a page that needs a browser",
+         "summary": "Markdown from a page that needs a browser, charged only if it shows a price",
          "value": {
           "url": "https://shop.example.com/p/42",
           "render": "always",
-          "wait_for": {
-           "selector": ".price"
-          },
           "formats": [
            "markdown",
            "metadata"
           ],
-          "include_body": false,
+          "expect": {
+           "selector": ".price"
+          },
           "country": "US",
           "max_credits": 60
          }
@@ -111,6 +110,7 @@
           "value": {
            "id": "3f7c1d2e-8a4b-4c6d-9e0f-1a2b3c4d5e6f",
            "status": "succeeded",
+           "page_status": "content",
            "idempotency_key": "order-42",
            "url": "https://shop.example.com/p/42",
            "created_at": "2026-11-19T10:00:00.000Z",
@@ -135,13 +135,26 @@
               "path": "/"
              }
             ],
-            "markdown": "# Product 42\n\nIn stock.",
-            "body": "<html>…</html>",
-            "body_encoding": "utf-8"
+            "markdown": "# Product 42\n\nIn stock."
            },
            "credits": {
-            "charged": 25,
-            "max": 160
+            "charged": 35,
+            "max": 160,
+            "balance": 9420,
+            "breakdown": {
+             "step": "browser_residential",
+             "step_credits": 25,
+             "captcha_credits": 10,
+             "traffic_mb": 3.1,
+             "included_mb": 5,
+             "traffic_credits": 0
+            }
+           },
+           "challenge": {
+            "vendor": "cloudflare",
+            "walls": 3,
+            "passed": true,
+            "passed_by": "captcha"
            },
            "attempts": [
             {
@@ -150,7 +163,8 @@
              "country": null,
              "result": "blocked",
              "status_code": 403,
-             "ms": 410
+             "ms": 410,
+             "wire_bytes": 9200
             },
             {
              "transport": "http",
@@ -158,7 +172,8 @@
              "country": "US",
              "result": "blocked",
              "status_code": 403,
-             "ms": 640
+             "ms": 640,
+             "wire_bytes": 9800
             },
             {
              "transport": "browser",
@@ -169,7 +184,8 @@
              "ms": 3300,
              "captcha": [
               "turnstile:passed"
-             ]
+             ],
+             "wire_bytes": 3104512
             }
            ],
            "skipped": [],
@@ -183,6 +199,7 @@
           "value": {
            "id": "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
            "status": "failed",
+           "page_status": "challenge",
            "idempotency_key": "auto_6a1c…",
            "url": "https://walled.example.com/",
            "created_at": "2026-11-19T10:01:00.000Z",
@@ -203,7 +220,15 @@
            },
            "credits": {
             "charged": 0,
-            "max": 160
+            "max": 160,
+            "balance": 9455,
+            "breakdown": null
+           },
+           "challenge": {
+            "vendor": "datadome",
+            "walls": 2,
+            "passed": false,
+            "passed_by": null
            },
            "attempts": [
             {
@@ -220,7 +245,8 @@
              "country": "US",
              "result": "blocked",
              "status_code": 403,
-             "ms": 5200
+             "ms": 5200,
+             "challenge": "datadome"
             }
            ],
            "skipped": [
@@ -237,8 +263,93 @@
             "message": "The site refused every route FetchX was allowed to try.",
             "next": {
              "action": "retry_later",
-             "retry_after_seconds": 900,
-             "detail": "The site refused every route FetchX was allowed to try. Retry later, or allow more with max_attempts or max_credits."
+             "retry_after_seconds": 30,
+             "retry_with_new_key": true,
+             "detail": "The site refused every route FetchX was allowed to try. Retry with a new idempotency key after the wait (FetchX draws fresh IPs), or allow more with max_attempts or max_credits."
+            },
+            "retry_after_seconds": 30
+           }
+          }
+         },
+         "content_missing": {
+          "summary": "Loaded, but without what expect asked for: not charged",
+          "value": {
+           "id": "5d6e7f80-9a1b-4c2d-8e3f-4a5b6c7d8e9f",
+           "status": "failed",
+           "page_status": "empty",
+           "idempotency_key": "listing-7",
+           "url": "https://stays.example.com/search?city=la",
+           "created_at": "2026-11-21T10:00:00.000Z",
+           "finished_at": "2026-11-21T10:01:40.000Z",
+           "tags": [],
+           "data": {
+            "status_code": 200,
+            "final_url": "https://stays.example.com/search?city=la",
+            "content_type": "text/html; charset=utf-8",
+            "rendered": true,
+            "body_bytes": 612000,
+            "headers": {
+             "content-type": "text/html; charset=utf-8"
+            },
+            "cookies": []
+           },
+           "credits": {
+            "charged": 0,
+            "max": 160,
+            "balance": 9455,
+            "breakdown": null
+           },
+           "challenge": null,
+           "attempts": [
+            {
+             "transport": "http",
+             "class": "direct",
+             "country": null,
+             "result": "content_missing",
+             "missing": [
+              "selector"
+             ],
+             "status_code": 200,
+             "ms": 800,
+             "wire_bytes": 210000
+            },
+            {
+             "transport": "browser",
+             "class": "residential",
+             "country": "US",
+             "result": "content_missing",
+             "missing": [
+              "selector"
+             ],
+             "status_code": 200,
+             "ms": 41000,
+             "wire_bytes": 4100000
+            },
+            {
+             "transport": "browser",
+             "class": "residential",
+             "country": "US",
+             "rotation": 1,
+             "result": "content_missing",
+             "missing": [
+              "selector"
+             ],
+             "status_code": 200,
+             "ms": 39000,
+             "wire_bytes": 3900000
+            }
+           ],
+           "skipped": [],
+           "fixes": [],
+           "error": {
+            "code": "content_missing",
+            "message": "The page loaded without what `expect` asked for, on every route FetchX tried.",
+            "retry_after_seconds": 300,
+            "next": {
+             "action": "check_expect",
+             "retry_after_seconds": 300,
+             "retry_with_new_key": true,
+             "detail": "The page loaded without what `expect` asked for; `data` shows what came back. If `expect` is right for this page, the site may be holding content back from those IPs: retry with a new idempotency key after the wait. If it is not, fix `expect`."
             }
            }
           }
@@ -259,6 +370,7 @@
           "value": {
            "id": "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
            "status": "pending",
+           "page_status": null,
            "idempotency_key": "big-crawl-1",
            "url": "https://slow.example.com/",
            "created_at": "2026-11-19T10:02:00.000Z",
@@ -267,8 +379,11 @@
            "data": null,
            "credits": {
             "charged": 0,
-            "max": 160
+            "max": 160,
+            "balance": 9260,
+            "breakdown": null
            },
+           "challenge": null,
            "attempts": [
             {
              "transport": "http",
@@ -655,7 +770,7 @@
      {
       "name": "include_body",
       "in": "query",
-      "description": "false leaves out the body, for cheap polling.",
+      "description": "false leaves out the body (asked for with formats: body), for cheap polling.",
       "schema": {
        "type": "boolean",
        "default": true
@@ -675,6 +790,7 @@
           "value": {
            "id": "3f7c1d2e-8a4b-4c6d-9e0f-1a2b3c4d5e6f",
            "status": "succeeded",
+           "page_status": "content",
            "idempotency_key": "order-42",
            "url": "https://shop.example.com/p/42",
            "created_at": "2026-11-19T10:00:00.000Z",
@@ -704,8 +820,23 @@
             "body_encoding": "utf-8"
            },
            "credits": {
-            "charged": 25,
-            "max": 160
+            "charged": 35,
+            "max": 160,
+            "balance": 9420,
+            "breakdown": {
+             "step": "browser_residential",
+             "step_credits": 25,
+             "captcha_credits": 10,
+             "traffic_mb": 0.9,
+             "included_mb": 5,
+             "traffic_credits": 0
+            }
+           },
+           "challenge": {
+            "vendor": "cloudflare",
+            "walls": 3,
+            "passed": true,
+            "passed_by": "captcha"
            },
            "attempts": [
             {
@@ -759,6 +890,7 @@
           "value": {
            "id": "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
            "status": "pending",
+           "page_status": null,
            "idempotency_key": "big-crawl-1",
            "url": "https://slow.example.com/",
            "created_at": "2026-11-19T10:02:00.000Z",
@@ -767,8 +899,11 @@
            "data": null,
            "credits": {
             "charged": 0,
-            "max": 160
+            "max": 160,
+            "balance": 9420,
+            "breakdown": null
            },
+           "challenge": null,
            "attempts": [
             {
              "transport": "http",
@@ -1015,6 +1150,7 @@
           "value": {
            "id": "5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d",
            "status": "succeeded",
+           "page_status": "content",
            "idempotency_key": "auto_8e2f…",
            "url": "https://shop.example.com/search?q=lamp&page=2",
            "created_at": "2026-11-20T10:00:10.000Z",
@@ -1053,8 +1189,18 @@
            },
            "credits": {
             "charged": 25,
-            "max": 160
+            "max": 160,
+            "balance": 4975,
+            "breakdown": {
+             "step": "browser_residential",
+             "step_credits": 25,
+             "captcha_credits": 0,
+             "traffic_mb": 4.2,
+             "included_mb": 5,
+             "traffic_credits": 0
+            }
            },
+           "challenge": null,
            "attempts": [
             {
              "transport": "browser",
@@ -1074,6 +1220,7 @@
           "value": {
            "id": "6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e",
            "status": "failed",
+           "page_status": "error",
            "idempotency_key": "auto_8e2f…",
            "url": "https://shop.example.com/search?q=lamp",
            "created_at": "2026-11-20T10:00:10.000Z",
@@ -1084,8 +1231,11 @@
            "data": null,
            "credits": {
             "charged": 0,
-            "max": 160
+            "max": 160,
+            "balance": 5000,
+            "breakdown": null
            },
+           "challenge": null,
            "attempts": [
             {
              "transport": "browser",
@@ -1104,6 +1254,7 @@
             "message": "The next page could not be reached again from the earlier page.",
             "next": {
              "action": "refetch_previous",
+             "retry_with_new_key": false,
              "detail": "The earlier page's next-page control was not there when FetchX opened the list again; the list may have changed. Fetch the earlier page again, then ask for its next page."
             }
            }
@@ -1125,6 +1276,7 @@
           "value": {
            "id": "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
            "status": "pending",
+           "page_status": null,
            "idempotency_key": "big-crawl-1",
            "url": "https://slow.example.com/",
            "created_at": "2026-11-19T10:02:00.000Z",
@@ -1133,8 +1285,11 @@
            "data": null,
            "credits": {
             "charged": 0,
-            "max": 160
+            "max": 160,
+            "balance": 4840,
+            "breakdown": null
            },
+           "challenge": null,
            "attempts": [
             {
              "transport": "http",
@@ -1654,6 +1809,80 @@
     }
    }
   },
+  "/v1/balance": {
+   "get": {
+    "operationId": "getBalance",
+    "tags": [
+     "Usage"
+    ],
+    "summary": "Credit balance",
+    "description": "The project’s credits now: cheap to call before a batch, or to watch a crawl. Every fetch result also carries credits.balance.",
+    "x-scope": "usage:read",
+    "responses": {
+     "200": {
+      "description": "The balance.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Balance"
+        },
+        "examples": {
+         "balance": {
+          "value": {
+           "credits": 9420,
+           "reserved": 160,
+           "trial": 1000,
+           "purchased": 10000,
+           "payment_hold": false
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/v1/usage": {
    "get": {
     "operationId": "getUsage",
@@ -1951,6 +2180,7 @@
       "items": {
        "type": "string",
        "enum": [
+        "body",
         "markdown",
         "text",
         "links",
@@ -1959,12 +2189,39 @@
         "screenshot"
        ]
       },
-      "description": "Extra outputs. screenshot needs a browser."
+      "description": "What to return. body: the response as received (the rendered page after a browser), the default when formats is left out. markdown, text, links, metadata and json are derived from it; screenshot needs a browser. Ask only for what you use: a rendered page can be megabytes of HTML. The body is stored either way and can be downloaded from /v1/fetch/{id}/content.",
+      "default": [
+       "body"
+      ]
      },
-     "include_body": {
+     "block_resources": {
       "type": "boolean",
-      "default": true,
-      "description": "Return the body. Set false when only formats are needed."
+      "description": "In a browser, do not download images, video, audio or web fonts on the page. They carry none of the text but a good part of a rendered page’s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. Defaults to true, or false when formats has screenshot."
+     },
+     "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "What the page must show to be the content you want. Every condition given must hold, or the step is not a success: auto mode tries a browser, then one fresh IP, and a request that never gets it fails with content_missing and is not charged. A browser waits up to 10 s for the selector after the page settles. A real 404 or 410 is the site’s answer and is not checked.",
+      "properties": {
+       "selector": {
+        "type": "string",
+        "maxLength": 512,
+        "description": "A CSS selector that must match at least one element (HTML only)."
+       },
+       "text": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "description": "Text that must appear in the page’s visible text (or a non-HTML body), ignoring case and spacing."
+       },
+       "min_markdown_length": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000000,
+        "description": "The page’s markdown (a non-HTML body’s text) must have at least this many characters."
+       }
+      }
      },
      "max_attempts": {
       "type": "integer",
@@ -2020,7 +2277,7 @@
    "NextPageRequest": {
     "type": "object",
     "additionalProperties": false,
-    "description": "What may change for a next page. Everything else (headers, formats, country, render, wait_for, scroll) comes from the earlier request, and the cookies the site set on the earlier page are sent with it. An empty object is fine.",
+    "description": "What may change for a next page. Everything else (headers, formats, country, render, wait_for, block_resources) comes from the earlier request, and the cookies the site set on the earlier page are sent with it. An empty object is fine.",
     "properties": {
      "scroll": {
       "description": "As in FetchRequest; defaults to the earlier request's. For a next page that loads as the page is scrolled (next_page.how is scroll), it is how many more screens to scroll past where the earlier page ended (auto: up to 10 more); off is refused there.",
@@ -2039,6 +2296,34 @@
         "maximum": 50
        }
       ]
+     },
+     "expect": {
+      "type": [
+       "object",
+       "null"
+      ],
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "As in POST /v1/fetch. Left out, the earlier request's expect applies; null drops it, for a list whose later pages do not show what the first one did.",
+      "properties": {
+       "selector": {
+        "type": "string",
+        "maxLength": 512,
+        "description": "A CSS selector that must match at least one element (HTML only)."
+       },
+       "text": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "description": "Text that must appear in the page’s visible text (or a non-HTML body), ignoring case and spacing."
+       },
+       "min_markdown_length": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000000,
+        "description": "The page’s markdown (a non-HTML body’s text) must have at least this many characters."
+       }
+      }
      },
      "max_credits": {
       "type": "integer",
@@ -2084,12 +2369,14 @@
     "required": [
      "id",
      "status",
+     "page_status",
      "idempotency_key",
      "url",
      "created_at",
      "finished_at",
      "tags",
      "data",
+     "challenge",
      "credits",
      "attempts",
      "skipped",
@@ -2108,6 +2395,21 @@
        "succeeded",
        "failed"
       ]
+     },
+     "page_status": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "enum": [
+       "content",
+       "not_found",
+       "empty",
+       "challenge",
+       "error",
+       null
+      ],
+      "description": "What the page was. content: the page you asked for (with expect, it showed what you expected). not_found: the site’s real 404 or 410, billed like content. empty: it loaded but showed next to nothing, or not what expect asked for. challenge: a bot wall, block or rate limit stopped it (see challenge). error: anything else (see error). Null while pending."
      },
      "idempotency_key": {
       "type": "string"
@@ -2143,25 +2445,57 @@
       ],
       "description": "What the site answered: on success the real answer, on failure the last response. Null only when nothing reached the site."
      },
+     "challenge": {
+      "oneOf": [
+       {
+        "$ref": "#/components/schemas/Challenge"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The walls the request met on its way, or null when it met none."
+     },
      "credits": {
       "type": "object",
       "additionalProperties": false,
       "required": [
        "charged",
-       "max"
+       "max",
+       "balance",
+       "breakdown"
       ],
+      "description": "What this request cost. Present on every result: a pending or failed request shows 0.",
       "properties": {
        "charged": {
         "type": "integer",
         "minimum": 0,
-        "description": "0 unless the request succeeded."
+        "description": "0 unless the request succeeded. Never more than max."
        },
        "max": {
         "type": [
          "integer",
          "null"
         ],
-        "description": "The most this request could have cost (null for unmetered projects)."
+        "description": "The most this request could have cost: max_credits, or the dearest step it might use (null for unmetered projects)."
+       },
+       "balance": {
+        "type": [
+         "integer",
+         "null"
+        ],
+        "description": "Credits the project has available as this answer is made (null for unmetered projects). Also at GET /v1/balance."
+       },
+       "breakdown": {
+        "oneOf": [
+         {
+          "$ref": "#/components/schemas/CreditBreakdown"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "How the price of the step that got the data adds up; null unless the request succeeded."
        }
       }
      },
@@ -2200,6 +2534,95 @@
         "type": "null"
        }
       ]
+     }
+    }
+   },
+   "Challenge": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "vendor",
+     "walls",
+     "passed",
+     "passed_by"
+    ],
+    "description": "Blocks, bot challenges and rate limits met on the way, and on the page that answered (a captcha, a wall that cleared). FetchX handles them itself; this says what it met and how it got past.",
+    "properties": {
+     "vendor": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, recaptcha, hcaptcha), or null when the page did not say."
+     },
+     "walls": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "How many attempts met one."
+     },
+     "passed": {
+      "type": "boolean",
+      "description": "Whether FetchX got past them to the page."
+     },
+     "passed_by": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "enum": [
+       "rotation",
+       "captcha",
+       "wait",
+       null
+      ],
+      "description": "rotation: a later attempt on another route or a fresh IP got through; captcha: solved on the page (10 credits); wait: it cleared by itself. Null when not passed."
+     }
+    }
+   },
+   "CreditBreakdown": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "step",
+     "step_credits",
+     "captcha_credits",
+     "traffic_mb",
+     "included_mb",
+     "traffic_credits"
+    ],
+    "description": "charged = step_credits + captcha_credits + traffic_credits, capped at max.",
+    "properties": {
+     "step": {
+      "type": "string",
+      "enum": [
+       "http",
+       "http_residential",
+       "browser",
+       "browser_residential"
+      ]
+     },
+     "step_credits": {
+      "type": "integer",
+      "description": "The step’s price."
+     },
+     "captcha_credits": {
+      "type": "integer",
+      "description": "For a captcha solved on the page, else 0."
+     },
+     "traffic_mb": {
+      "type": "number",
+      "description": "Megabytes (10^6 bytes) the step moved, to one decimal."
+     },
+     "included_mb": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "Traffic included in a residential step’s price; null when traffic is not charged."
+     },
+     "traffic_credits": {
+      "type": "integer",
+      "description": "Per started MB past included_mb, on residential steps. block_resources keeps it down."
      }
     }
    },
@@ -2270,7 +2693,7 @@
      },
      "body": {
       "type": "string",
-      "description": "The body: utf-8 text, or base64 for binary. Left out when include_body is false or when it is too large to inline (see body_url)."
+      "description": "The body: utf-8 text, or base64 for binary. Only when formats has body (the default); left out on reads with include_body=false, and when it is too large to inline (see body_url)."
      },
      "body_encoding": {
       "type": "string",
@@ -2482,6 +2905,7 @@
        "login_required",
        "site_error",
        "needs_browser",
+       "content_missing",
        "unreachable",
        "failed",
        "too_large",
@@ -2489,11 +2913,27 @@
        "not_admitted",
        "url_not_allowed"
       ],
-      "description": "not_admitted means nothing reached the site on this step (for example the provider refused the host); it does not count as an attempt."
+      "description": "not_admitted means nothing reached the site on this step (for example the provider refused the host); it does not count as an attempt. content_missing means the page loaded without what expect asked for."
      },
      "code": {
       "type": "string",
       "description": "The underlying error, when result is not_admitted or failed."
+     },
+     "challenge": {
+      "type": "string",
+      "description": "On a blocked or rate-limited step, the bot-protection vendor whose page it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf)."
+     },
+     "missing": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "enum": [
+        "selector",
+        "text",
+        "min_markdown_length"
+       ]
+      },
+      "description": "On a content_missing step, the expect conditions the page did not meet."
      },
      "status_code": {
       "type": [
@@ -2506,6 +2946,11 @@
        "integer",
        "null"
       ]
+     },
+     "wire_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Bytes this step moved over the network, requests and responses together. On a residential route this is the traffic billed past the included megabytes."
      },
      "captcha": {
       "type": "array",
@@ -2593,6 +3038,7 @@
       "enum": [
        "blocked",
        "rate_limited",
+       "content_missing",
        "login_required",
        "site_error",
        "unreachable",
@@ -2616,15 +3062,17 @@
       "additionalProperties": false,
       "required": [
        "action",
+       "retry_with_new_key",
        "detail"
       ],
-      "description": "What to do next.",
+      "description": "What to do next. A request key replays its first result, failures included, so a retry always needs a new idempotency_key.",
       "properties": {
        "action": {
         "type": "string",
         "enum": [
          "retry_after",
          "retry_later",
+         "check_expect",
          "use_auto",
          "provide_credentials",
          "check_url",
@@ -2635,7 +3083,12 @@
         ]
        },
        "retry_after_seconds": {
-        "type": "integer"
+        "type": "integer",
+        "description": "The earliest time a retry can help."
+       },
+       "retry_with_new_key": {
+        "type": "boolean",
+        "description": "true: the same request may succeed if sent again with a new idempotency_key (after retry_after_seconds when given). false: sent again unchanged it would fail the same way; change it as action says."
        },
        "detail": {
         "type": "string"
@@ -2898,6 +3351,42 @@
         "type": "integer"
        }
       }
+     }
+    }
+   },
+   "Balance": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "credits",
+     "reserved",
+     "trial",
+     "purchased",
+     "payment_hold"
+    ],
+    "properties": {
+     "credits": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "Available now: what new requests can reserve. Null for an unmetered project."
+     },
+     "reserved": {
+      "type": "integer",
+      "description": "Held by running requests; released or charged when they finish."
+     },
+     "trial": {
+      "type": "integer",
+      "description": "Trial credits granted (spent first)."
+     },
+     "purchased": {
+      "type": "integer",
+      "description": "Credits bought. They do not expire."
+     },
+     "payment_hold": {
+      "type": "boolean",
+      "description": "True while spending is paused over a payment issue."
      }
     }
    }

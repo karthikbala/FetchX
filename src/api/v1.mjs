@@ -7,6 +7,7 @@
 //   GET    /v1/fetch/:id/content      the raw body, as received
 //   GET    /v1/fetch/:id/screenshot   the screenshot (JPEG)
 //   DELETE /v1/fetch/:id              delete stored content now
+//   GET    /v1/balance                credits available now
 //   GET    /v1/usage                  credits and usage
 import {GatewayError} from '../policy.mjs';
 
@@ -110,5 +111,6 @@ export function registerApi(app, {service, ledger}) {
     await service.remove(req.project, req.params.id);
     return reply.code(204).send();
   });
+  app.get('/v1/balance', {preHandler: guard(API_SCOPES.usage)}, req => service.balance(req.project));
   app.get('/v1/usage', {preHandler: guard(API_SCOPES.usage)}, req => usageReport({service, ledger}, req.project, req.query ?? {}));
 }

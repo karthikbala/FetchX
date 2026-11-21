@@ -21,7 +21,7 @@ const {token, apiBaseUrl} = await connectFetchX({
   onApproval: ({verificationUri, userCode}) => console.error(`Open ${verificationUri}\nFetchX code: ${userCode}`),
 });
 const fetchx = new FetchXClient({url: apiBaseUrl, token});
-console.log((await fetchx.usage()).balance);
+console.log((await fetchx.balance()).credits);
 ```
 
 The hosted helper is published as [connect-client.mjs](https://fetchx.ai/connect-client.mjs). For a self-hosted deployment, pass `--origin` (helper option `origin`) and, if the API uses another origin, `--api-origin` (`apiOrigin`). If Connect is not available, make a key in the console and set `FETCHX_TOKEN` and `FETCHX_URL` through your runtime's secret settings.
@@ -60,6 +60,7 @@ else:
 | `GET /v1/fetch/{id}/content` | `content(id)` | `content(id)` | `fetch:read` |
 | `GET /v1/fetch/{id}/screenshot` | `screenshot(id)` | `screenshot(id)` | `fetch:read` |
 | `DELETE /v1/fetch/{id}` | `delete(id)` | `delete(id)` | `fetch:read` |
+| `GET /v1/balance` | `balance()` | `balance()` | `usage:read` |
 | `GET /v1/usage` | `usage(query)` | `usage(...)` | `usage:read` |
 
 ## Scrolling and next pages

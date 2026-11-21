@@ -33,14 +33,22 @@ export function prices(config) {
   return merged;
 }
 
-// The price of one successful step. Bytes are the wire bytes of that step.
-export function priceOf(table, {step, captchaSolved = false, wireBytes = 0}) {
-  let credits = table[step] + (captchaSolved ? table.captcha : 0);
+// How the price of one successful step adds up: the step, a solved captcha,
+// and residential traffic past what the step includes (per started MB). Bytes
+// are the wire bytes of that step.
+export function priceParts(table, {step, captchaSolved = false, wireBytes = 0}) {
   const included = table.residential_included_mb[step];
-  if (included !== undefined && Number.isSafeInteger(wireBytes) && wireBytes > included * MB) {
-    credits += Math.ceil((wireBytes - included * MB) / MB) * table.residential_overage_per_mb;
-  }
-  return credits;
+  const bytes = Number.isSafeInteger(wireBytes) && wireBytes > 0 ? wireBytes : 0;
+  const traffic = included !== undefined && bytes > included * MB
+    ? Math.ceil((bytes - included * MB) / MB) * table.residential_overage_per_mb : 0;
+  return {step, step_credits: table[step], captcha_credits: captchaSolved ? table.captcha : 0, traffic_mb: Math.round(bytes / (MB / 10)) / 10,
+    included_mb: included ?? null, traffic_credits: traffic};
+}
+
+// The price of one successful step.
+export function priceOf(table, options) {
+  const parts = priceParts(table, options);
+  return parts.step_credits + parts.captcha_credits + parts.traffic_credits;
 }
 
 // The most a step can cost given the response size cap.
