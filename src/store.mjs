@@ -9,6 +9,7 @@ import {initLedger} from './billing/ledger.mjs';
 import {initFetchFront} from './fetch/front.mjs';
 import {initBatches} from './fetch/batches.mjs';
 import {initBudgets} from './budgets.mjs';
+import {initStatus} from './status.mjs';
 
 export class Store {
   constructor(url) {
@@ -68,6 +69,7 @@ export class Store {
     await initFetchFront(this.pool);
     await initBatches(this.pool);
     await initBudgets(this.pool);
+    await initStatus(this.pool);
   }
 
   async close() {

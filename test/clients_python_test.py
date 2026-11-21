@@ -38,6 +38,8 @@ class ClientTests(unittest.TestCase):
         self.assertIsNone(client.delete(RESULT['id']))
         client.balance()
         client.usage(period='day')
+        client.estimate(items=['https://shop.example.com/a'], defaults={'render': 'never'})
+        client.status()
         bodies = []
         next_client = client_for(lambda request: bodies.append(json.loads(request.content)) or httpx.Response(200, json=RESULT))
         next_client.next_page(RESULT['id'], scroll=3)
@@ -49,7 +51,8 @@ class ClientTests(unittest.TestCase):
             ('POST', base + '/v1/fetch'), ('GET', base + '/v1/fetch/' + RESULT['id'] + '?include_body=false'),
             ('GET', base + '/v1/fetch?status=failed&limit=5'), ('GET', base + '/v1/fetch/' + RESULT['id'] + '/content'),
             ('DELETE', base + '/v1/fetch/' + RESULT['id']), ('GET', base + '/v1/balance'),
-            ('GET', base + '/v1/usage?period=day'), ('POST', base + '/v1/fetch/' + RESULT['id'] + '/next')])
+            ('GET', base + '/v1/usage?period=day'), ('POST', base + '/v1/estimate'), ('GET', base + '/v1/status'),
+            ('POST', base + '/v1/fetch/' + RESULT['id'] + '/next')])
         self.assertTrue(all(auth == 'Bearer fxk_fixture' for _, _, auth in calls))
 
     def test_batches_use_the_documented_methods_and_paths_and_follow_results_to_the_end(self):
@@ -102,6 +105,14 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(client_for(handler).fetch(url='https://shop.example.com/')['id'], RESULT['id'])
         self.assertEqual(len(keys), 2)
         self.assertEqual(keys[0], keys[1])
+
+    def test_maintenance_and_a_restarting_gateway_are_waited_out(self):
+        replies = [httpx.Response(503, json={'error': {'code': 'maintenance', 'message': 'paused', 'retry_after_seconds': 0}}),
+                   httpx.Response(503, json={'error': {'code': 'unavailable', 'message': 'restarting', 'retry_after_seconds': 0}}),
+                   httpx.Response(200, json=RESULT)]
+        module.time.sleep = lambda _seconds: None
+        self.assertEqual(client_for(lambda _request: replies.pop(0)).fetch(url='https://shop.example.com/')['id'], RESULT['id'])
+        self.assertEqual(replies, [])
 
     def test_errors_carry_code_status_details_and_never_the_body_or_token(self):
         def refused(_request):

@@ -24,6 +24,7 @@ Fetching is configured in the engine's own `engine.json` (proxies, residential p
 | `fetchLimits` | Overrides for `DEFAULT_LIMITS` in `src/fetch/front.mjs`: `maxCredits` (the largest `max_credits`, 100,000), `maxWireBytes` (the engine's response cap, used for the worst-case reservation), `settleGraceMs` (how long past its deadline a job without an event is looked up, 30 s), `metadataDays` (90). Budgets: `maxCreditsPerRequest` (the most one metered request may reserve, 100,000) and `maxConcurrentPerProject` (10). |
 | `destinations.blockedHosts` | Extra host names customer webhooks are never sent to. `fetchx.ai` and the console origins are always blocked. |
 | `pricing` | Overrides for `DEFAULT_PRICES` in `src/billing/ledger.mjs`; see [billing](billing.md). |
+| `status.links` | Overrides for the links in `GET /v1/status`, `503 maintenance`, `404 route_not_found` and `410 route_retired` answers: `status_page` (https://fetchx.ai/status), `changelog` (https://fetchx.ai/changelog), `docs` (https://fetchx.ai/docs). |
 
 ## Engine
 

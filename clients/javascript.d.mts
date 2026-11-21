@@ -9,6 +9,9 @@ export type FetchData = Schemas['FetchData'];
 export type FetchList = Schemas['FetchList'];
 export type Usage = Schemas['Usage'];
 export type Balance = Schemas['Balance'];
+export type EstimateRequest = Schemas['EstimateRequest'];
+export type Estimate = Schemas['Estimate'];
+export type ServiceStatus = Schemas['ServiceStatus'];
 export type Attempt = Schemas['Attempt'];
 // The batch owns async, webhook_url and idempotency_key; the API refuses them on items and defaults.
 type BatchOwned = 'async' | 'webhook_url' | 'idempotency_key';
@@ -105,6 +108,10 @@ export class FetchXClient {
   cancelBatch(id: string): Promise<Batch>;
   /** Each item once it has finished, as items finish, until the batch is over. */
   batchResults(id: string, options?: {intervalMs?: number; limit?: number; results?: boolean}): AsyncGenerator<BatchItem, void, undefined>;
+  /** What a request, or a batch ({items, defaults}), would cost and take. Nothing is sent or reserved. */
+  estimate(input: EstimateRequest): Promise<Estimate>;
+  /** Service status and notices. */
+  status(): Promise<ServiceStatus>;
   balance(): Promise<Balance>;
   usage(query?: UsageQuery): Promise<Usage>;
 }

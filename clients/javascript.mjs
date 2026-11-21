@@ -10,7 +10,7 @@
 // the client can safely resend the same request after a lost response, a 429
 // or a 503: FetchX returns the first result and never charges twice.
 
-const RETRYABLE = new Set(['network_error', 'too_many_requests', 'unavailable']);
+const RETRYABLE = new Set(['network_error', 'too_many_requests', 'unavailable', 'maintenance']);
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -164,6 +164,13 @@ export class FetchXClient {
       if (page.items.length < limit) await sleep(intervalMs);
     }
   }
+
+  // POST /v1/estimate: what one POST /v1/fetch body, or a batch body
+  // ({items, defaults}), would cost and take. Nothing is sent or reserved.
+  estimate(input) { return this.#send('POST', '/v1/estimate', {body: input}); }
+
+  // GET /v1/status: service status and notices (needs no key, but sends it).
+  status() { return this.#send('GET', '/v1/status'); }
 
   // GET /v1/balance: {credits, reserved, trial, purchased, payment_hold}
   balance() { return this.#send('GET', '/v1/balance'); }

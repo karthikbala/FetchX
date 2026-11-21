@@ -3,7 +3,7 @@ import Layout from '../../layouts/Layout.astro';
 import Brand from '../../components/Brand.astro';
 import '../../styles/product-preview.css';
 ---
-<Layout title="Admin — FetchX" description="Operator tools for FetchX provider rules, spend budgets, reachability probes and site knowledge." appMode={true} noindex={true}>
+<Layout title="Admin — FetchX" description="Operator tools for FetchX provider rules, spend budgets, reachability probes, site knowledge and status notices." appMode={true} noindex={true}>
   <div class="product-preview fx-admin" data-admin>
     <header class="fx-admin-top">
       <a href="/app" class="pp-brand" aria-label="FetchX workspace"><Brand/></a>
@@ -13,7 +13,7 @@ import '../../styles/product-preview.css';
     <main class="fx-admin-main">
       <p class="pp-eyebrow">OPERATOR</p>
       <h1>Administration</h1>
-      <p class="fx-admin-lede">Provider rules, spend budgets, reachability probes and what FetchX has learned per site. Every change is validated, versioned and recorded with your email.</p>
+      <p class="fx-admin-lede">Provider rules, spend budgets, reachability probes, what FetchX has learned per site, and the notices on the status page. Every change is validated, versioned and recorded with your email.</p>
       <p class="fx-admin-error" data-admin-error role="alert" hidden></p>
       <section class="fx-admin-gate" data-admin-gate><p data-admin-gate-text>Checking your session…</p><a href="/login" class="pp-button pp-button-primary" data-admin-login hidden>Sign in</a></section>
 
@@ -23,6 +23,7 @@ import '../../styles/product-preview.css';
           <button type="button" role="tab" data-tab="budgets" aria-selected="false">Budgets</button>
           <button type="button" role="tab" data-tab="probes" aria-selected="false">Reachability probes</button>
           <button type="button" role="tab" data-tab="sites" aria-selected="false">Site knowledge</button>
+          <button type="button" role="tab" data-tab="status" aria-selected="false">Status</button>
           <button type="button" role="tab" data-tab="audit" aria-selected="false">Audit log</button>
         </nav>
 
@@ -113,6 +114,36 @@ import '../../styles/product-preview.css';
           </div>
         </section>
 
+        <section data-panel="status" class="fx-admin-panel" hidden>
+          <div class="fx-admin-card">
+            <h2>Status notices</h2>
+            <p class="fx-admin-hint">Incidents and planned maintenance, shown on <a href="/status">fetchx.ai/status</a> and in <code>GET /v1/status</code> within a minute. A maintenance notice that pauses the API makes every <code>/v1</code> route except <code>GET /v1/status</code> answer 503 <code>maintenance</code> while it is active. Resolving a notice ends its pause. Post planned maintenance at least a day ahead.</p>
+            <div class="fx-admin-table-wrap"><table class="fx-admin-table"><thead><tr><th>Notice</th><th>State</th><th>Affects</th><th>When</th><th>By</th><th></th></tr></thead><tbody data-notices-body></tbody></table></div>
+          </div>
+          <form class="fx-admin-card" data-notice-form>
+            <h2 data-notice-form-title>Post a notice</h2>
+            <input type="hidden" name="id">
+            <div class="fx-admin-grid">
+              <div>
+                <label>Kind <select name="kind" data-notice-kind><option value="incident">Incident</option><option value="maintenance">Planned maintenance</option></select></label>
+                <label>Title <input name="title" required maxlength="200" placeholder="Fetching is slower than usual"></label>
+                <label>Details <textarea name="body" rows="3" maxlength="4000" placeholder="What customers will notice and what to do."></textarea></label>
+                <label data-notice-impact>Impact <select name="impact"><option value="minor">Minor: degraded</option><option value="major">Major: outage</option><option value="none">None: for information</option></select></label>
+              </div>
+              <div>
+                <fieldset class="fx-admin-countries"><legend>Affects</legend>
+                  <label><input type="checkbox" name="components" value="api"> API</label><label><input type="checkbox" name="components" value="fetching"> Fetching</label><label><input type="checkbox" name="components" value="console"> Console and billing</label>
+                </fieldset>
+                <label>Starts <input type="datetime-local" name="starts_at"><small class="fx-admin-field-hint">Your local time. Empty: now.</small></label>
+                <label>Planned end <input type="datetime-local" name="ends_at"><small class="fx-admin-field-hint">Sets Retry-After during a pause.</small></label>
+                <label class="fx-admin-inline" data-notice-pause hidden><input type="checkbox" name="pause_api"> Pause the API (503 maintenance) while this is active</label>
+                <label><span data-notice-update-label>First update</span> <input name="update" maxlength="4000" placeholder="We are looking into it."></label>
+              </div>
+            </div>
+            <div class="fx-admin-actions"><button class="pp-button pp-button-primary" type="submit" data-notice-submit>Post notice</button><button class="pp-button pp-button-secondary" type="button" data-notice-cancel hidden>Cancel edit</button></div>
+          </form>
+        </section>
+
         <section data-panel="audit" class="fx-admin-panel" hidden>
           <div class="fx-admin-card">
             <h2>Changes</h2>
@@ -139,7 +170,7 @@ import '../../styles/product-preview.css';
     .fx-admin p.fx-admin-hint{color:#9fac9a;font-size:13px;margin:0 0 14px}
     .fx-admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px}
     .fx-admin-card label{display:flex;flex-direction:column;gap:4px;font-size:13px;margin-bottom:10px;color:#cfdac9}
-    .fx-admin-card input:not([type=checkbox]),.fx-admin-card select{background:#101718;border:1px solid #33402f;color:#e8efe6;border-radius:6px;padding:8px 10px;font:inherit}
+    .fx-admin-card input:not([type=checkbox]),.fx-admin-card select,.fx-admin-card textarea{background:#101718;border:1px solid #33402f;color:#e8efe6;border-radius:6px;padding:8px 10px;font:inherit}
     .fx-admin-inline,.fx-admin-countries label{flex-direction:row!important;align-items:center;gap:6px!important}
     .fx-admin-countries{border:1px solid #2f3d2c;border-radius:8px;display:flex;flex-wrap:wrap;gap:14px;padding:10px 12px;margin:0 0 10px}
     .fx-admin-countries legend{font-size:12px;color:#9fac9a;padding:0 4px}
@@ -156,6 +187,8 @@ import '../../styles/product-preview.css';
     .fx-admin-tag.is-warn{color:#f2d27a;border-color:#6a5a2c}
     .fx-admin-summary{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;font-size:13px;margin:14px 0}
     .fx-admin-summary dt{color:#9fac9a}.fx-admin-summary dd{margin:0}
+    .fx-admin-card textarea{resize:vertical;min-height:72px}.fx-admin .fx-admin-field-hint{color:#9fac9a;font-size:11px}
+    .fx-admin p.fx-admin-hint a{color:#c9f27a;text-decoration:underline}.fx-admin code{font-family:var(--mono);font-size:12px}
     @media(max-width:640px){.fx-admin-main{padding:20px 16px}.fx-admin-top{padding:14px 16px;flex-wrap:wrap}.fx-admin-main h1{font-size:26px}}
   </style>
   <script>import '../../scripts/admin';</script>

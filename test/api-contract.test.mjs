@@ -32,7 +32,9 @@ test('the contract is self-contained, with unique operation ids and matching pat
       ids.add(operation.operationId);
       assert.deepEqual((operation.parameters ?? []).filter(p => p.in === 'path').map(p => p.name),
         [...path.matchAll(/\{([^}]+)\}/g)].map(([, name]) => name), path);
-      assert.ok(Object.values(API_SCOPES).includes(operation['x-scope']), `${path} names a real scope`);
+      // A public operation (GET /v1/status) has no security and no scope.
+      if (Array.isArray(operation.security) && operation.security.length === 0) assert.equal(operation['x-scope'], undefined, path);
+      else assert.ok(Object.values(API_SCOPES).includes(operation['x-scope']), `${path} names a real scope`);
     }
   }
   const check = value => {
@@ -54,7 +56,7 @@ test('every registered route is documented with its scope, and nothing else is e
   app.decorate('authenticate', async (req, scope) => { scopes[`${req.method} ${req.routeOptions.url}`] = scope; });
   const routes = [];
   app.addHook('onRoute', ({method, url}) => { for (const verb of [method].flat()) if (verb !== 'HEAD') routes.push([verb.toLowerCase(), url]); });
-  registerApi(app, {service: {}, ledger: {}});
+  registerApi(app, {service: {}, ledger: {}, estimator: {}, board: {}});
   await app.ready();
   const documented = Object.entries(spec.paths).flatMap(([path, methods]) => Object.keys(methods).map(method => `${method} ${path}`)).sort();
   assert.deepEqual(routes.map(([method, url]) => `${method} ${specPath(url)}`).sort(), documented);
@@ -82,7 +84,7 @@ test('every documented example matches its schema', () => {
 test('real responses from the gateway match the contract', {skip: !databaseUrl}, async t => {
   const store = await openStore();
   t.after(() => store.close());
-  const {call, engine} = await platformFor(store, {script: request => request.url.includes('/wall') ? {status: 'failed', body: 'denied'}
+  const {call, engine, platform} = await platformFor(store, {script: request => request.url.includes('/wall') ? {status: 'failed', body: 'denied'}
     : request.url.includes('/pdf') ? {content_type: 'application/pdf', body: '%PDF-1.4'}
       : request.url.includes('/list') ? {body: html('list'), step: 'browser', next_page: {how: 'click'}}
       : {body: html('hello'), data: {headers: {'set-cookie': 'sid=1; Path=/'}, cookies: [{name: 'sid', value: '1', domain: 'shop.example.com', path: '/'}]}}});
@@ -118,6 +120,19 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   await expect('post', '/v1/fetch', 409, {body: {url: 'https://shop.example.com/other', idempotency_key: ok.idempotency_key}});
   await expect('post', '/v1/fetch', 413, {body: {url: 'https://shop.example.com/', method: 'POST', body: 'x'.repeat(1_000_001)}});
   await expect('get', '/v1/usage?period=year', 400);
+  // Estimates, status, and maintenance on every keyed route.
+  await expect('post', '/v1/estimate', 200, {body: {url: 'https://shop.example.com/p', expect: {selector: 'main'}}});
+  await expect('post', '/v1/estimate', 200, {body: {items: ['https://shop.example.com/1', {url: 'http://127.0.0.1/'}, 3],
+    defaults: {formats: ['markdown']}}});
+  await expect('post', '/v1/estimate', 400, {body: {items: []}});
+  await expect('get', '/v1/status', 200);
+  const pause = await platform.board.create({kind: 'maintenance', title: 'Upgrade', pause_api: true}, 'ops@example.com');
+  for (const [method, path, specUrl] of [['post', '/v1/fetch'], ['get', '/v1/usage'], ['get', `/v1/fetch/${ok.id}`, one],
+    ['post', '/v1/estimate']]) {
+    await expect(method, path, 503, method === 'post' ? {body: {url: 'https://shop.example.com/'}} : undefined, specUrl);
+  }
+  await expect('get', '/v1/status', 200);
+  await platform.board.resolve(pause.id, {}, 'ops@example.com');
   // Next pages, with credits to spare.
   await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 1000 WHERE project = $1', [PROJECT]);
   const next = '/v1/fetch/{id}/next';

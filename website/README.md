@@ -111,6 +111,12 @@ For retry, load `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `GOOGLE_REFRESH_T
 
 Review pending/failed/uncertain notifications through `status`. A provider acceptance (`sent`) is not proof of inbox delivery: the launch test must independently confirm the same reference in the sales inbox.
 
+## Status page
+
+`/status` shows what `GET /api/status` (`functions/api/status.ts`, `src/server/status.ts`) reads from D1, cached for 30 s. The same scheduled Worker as retention (`wrangler.retention.jsonc`) runs every minute as the status monitor: it reads the API's `GET /v1/status` (`STATUS_URL`) and records it in both databases, so staging shows live data too. It needs migration `0003_status.sql` applied first. The page keeps working, with 90 days of history, when the API does not answer. See the platform's `docs/operations.md` for maintenance.
+
+`/changelog`, `/changelog.json` and `/changelog.xml` (Atom) are built from `../docs/changelog.json` at build time, so publish a new website build when it changes.
+
 ## Retention
 
 `ops/retention-worker.ts`, configured in `wrangler.retention.jsonc`, runs daily at **02:15 UTC (07:45 IST)**. It deletes expired enquiries and short-lived hashed rate buckets in both databases. It has no public URL. Enquiries expire after 90 days; rate buckets expire after 24 hours, with deletion on the next daily sweep.

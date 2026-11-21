@@ -59,6 +59,7 @@ const useCaseLinks = [['AI agents & RAG', '/use-cases/ai-agents'], ['Price monit
     <meta property="og:image:alt" content="FetchX — Unlock the web. With one API."/><meta name="twitter:card" content="summary_large_image"/>
     <title>{title}</title>
     {!privatePage && <script type="application/ld+json" set:html={schema}/>}
+    <slot name="head"/>
   </head>
   <body class:list={{ 'app-mode': appMode }}>
     <a href="#main" class="skip-link">Skip to content</a>
@@ -86,7 +87,7 @@ const useCaseLinks = [['AI agents & RAG', '/use-cases/ai-agents'], ['Price monit
       <div class="fx-footer-grid container">
         <div class="fx-footer-brand"><a href="/" class="logo-link" aria-label="FetchX home"><Brand/></a><p>Web access.<br/>Engineered for what’s next.</p><MotionControl/></div>
         <div class="fx-footer-column"><h2>Product</h2>{productLinks.map(([label, href]) => <a href={href}>{label}</a>)}<a href="/pricing">Pricing</a><a href="/app">Workspace preview</a></div>
-        <div class="fx-footer-column"><h2>Build</h2><a href="/docs">API documentation</a><a href="/developers">Developer overview</a><a href="/resources">Guides & resources</a><a href="/llms.txt">For AI readers</a></div>
+        <div class="fx-footer-column"><h2>Build</h2><a href="/docs">API documentation</a><a href="/developers">Developer overview</a><a href="/resources">Guides & resources</a><a href="/changelog">API changelog</a><a href="/status">Status</a><a href="/llms.txt">For AI readers</a></div>
         <div class="fx-footer-column"><h2>Company</h2><a href="/about">About FetchX</a><a href="/contact">Contact us</a><a href="/privacy">Privacy</a><a href="/terms">Website terms</a><a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a></div>
       </div>
       <div class="fx-footer-bottom container"><span>© {new Date().getUTCFullYear()} FetchX</span><span class="mono">PUBLIC WEB. REAL POSSIBILITIES.<span class="tiny-dot"></span></span></div>

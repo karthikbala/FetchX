@@ -35,6 +35,7 @@ export const CONTROL_REQUEST_LIMIT=96*1024;
 export const CONTROL_RESPONSE_LIMIT=2*1024*1024;
 const CONTROL_FETCH_RESPONSE_LIMIT=28*1024*1024;
 const ADMIN_BUDGET='[a-z][A-Za-z0-9.]{1,80}';
+const ADMIN_NOTICE='[1-9][0-9]{0,17}';
 const ADMIN_RULE='[a-z0-9][a-z0-9._-]{0,63}',ADMIN_HOST='[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?';
 const fetchResultPath=new RegExp(`^/projects/${PROJECT}/fetch(?:/${UUID})?$`);
 export const CONTROL_TIMEOUT_MS=85_000;
@@ -98,6 +99,9 @@ function allowedMethods(path:string):string[]|null {
  if(new RegExp(`^/admin/budgets/${ADMIN_BUDGET}$`).test(path))return ['PUT'];
  if(new RegExp(`^/admin/budgets/${ADMIN_BUDGET}/(?:reset)$`).test(path))return ['POST'];
  if(new RegExp(`^/admin/budgets/${ADMIN_BUDGET}/audit$`).test(path))return ['GET'];
+ if(path==='/admin/notices')return ['GET','POST'];
+ if(new RegExp(`^/admin/notices/${ADMIN_NOTICE}$`).test(path))return ['PUT'];
+ if(new RegExp(`^/admin/notices/${ADMIN_NOTICE}/resolve$`).test(path))return ['POST'];
  return null;
 }
 class ProxyFailure extends Error {constructor(readonly code:string){super(code);}}

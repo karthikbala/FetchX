@@ -1,5 +1,8 @@
 // The public API, one version. `service` is the FetchFront
 // (src/fetch/front.mjs): it bills, and the engine does the fetching.
+// `estimator` prices requests before they are sent (src/fetch/estimate.mjs);
+// `board` is the service status (src/status.mjs). Retired and unknown routes,
+// deprecation headers and maintenance are src/api/lifecycle.mjs.
 // `batches` is the BatchService (src/fetch/batches.mjs).
 //   POST   /v1/fetch                  get a URL
 //   POST   /v1/fetch/:id/next         get the page after request :id's (a new request)
@@ -13,8 +16,10 @@
 //   GET    /v1/batches/:id            one batch: status, item counts, credits
 //   GET    /v1/batches/:id/items      its items and their results, paged
 //   POST   /v1/batches/:id/cancel     stop a batch (queued items are canceled)
+//   POST   /v1/estimate               what a request or a batch would cost and take, before sending it
 //   GET    /v1/balance                credits available now
 //   GET    /v1/usage                  credits and usage
+//   GET    /v1/status                 service status and notices (no API key)
 import {GatewayError} from '../policy.mjs';
 
 export const API_SCOPES = Object.freeze({write: 'fetch:write', read: 'fetch:read', usage: 'usage:read'});
@@ -36,10 +41,13 @@ const MESSAGES = {
   content_expired: 'The stored content has expired or was deleted.',
   no_next_page: 'That request has no next page to open; error.details.reason says why.',
   credit_account_unavailable: 'The project has no credit account.',
+  maintenance: 'FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.',
+  route_retired: 'This route was retired; error.details.replacement says what to use instead.',
+  route_not_found: 'There is no such route. Check the method and path against the docs (error.details.docs_url).',
 };
 const STATUS = {invalid_request: 400, url_not_allowed: 400, unauthorized: 401, api_key_scope_forbidden: 403, insufficient_credits: 402,
   max_credits_too_low: 402, payment_hold: 402, not_found: 404, idempotency_conflict: 409, request_too_large: 413, too_many_requests: 429,
-  pending: 409, content_expired: 410, no_next_page: 409};
+  pending: 409, content_expired: 410, no_next_page: 409, route_retired: 410, route_not_found: 404, maintenance: 503};
 
 export function apiError(error) {
   const known = error instanceof GatewayError;
@@ -91,7 +99,7 @@ export async function usageReport({service, ledger}, project, query = {}) {
 const idParams = {schema: {params: {type: 'object', required: ['id'], properties: {id: {type: 'string', maxLength: 64}}}}};
 
 // app.authenticate(req, scope) sets req.project and req.keyId.
-export function registerApi(app, {service, ledger, batches}) {
+export function registerApi(app, {service, ledger, estimator, board, batches}) {
   const guard = scope => async req => app.authenticate(req, scope);
   app.post('/v1/fetch', {preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
     const view = await service.submit(req.project, req.body, {keyId: req.keyId});
@@ -117,6 +125,7 @@ export function registerApi(app, {service, ledger, batches}) {
     await service.remove(req.project, req.params.id);
     return reply.code(204).send();
   });
+  app.post('/v1/estimate', {preHandler: guard(API_SCOPES.write)}, req => estimator.estimate(req.project, req.body));
   app.post('/v1/batches', {preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
     const {batch, created} = await batches.submit(req.project, req.body, {keyId: req.keyId});
     return reply.code(created ? 202 : 200).send(batch);
@@ -128,4 +137,9 @@ export function registerApi(app, {service, ledger, batches}) {
   app.post('/v1/batches/:id/cancel', {...idParams, preHandler: guard(API_SCOPES.write)}, req => batches.cancel(req.project, req.params.id));
   app.get('/v1/balance', {preHandler: guard(API_SCOPES.usage)}, req => service.balance(req.project));
   app.get('/v1/usage', {preHandler: guard(API_SCOPES.usage)}, req => usageReport({service, ledger}, req.project, req.query ?? {}));
+  // Public: no API key, any origin, and it answers during maintenance.
+  app.get('/v1/status', async (req, reply) => {
+    reply.header('access-control-allow-origin', '*');
+    return board.publicView();
+  });
 }

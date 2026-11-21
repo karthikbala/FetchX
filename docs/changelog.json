@@ -1,0 +1,91 @@
+{
+  "title": "FetchX API changelog",
+  "description": "Changes to the FetchX API at /v1, newest first. Each release has a version (docs/openapi.json info.version is the latest) and a date. Breaking changes are announced here as deprecations first: each names the version and date it was deprecated, what replaces it, and its sunset date, at least 30 days later. Until the sunset the API still serves it and marks responses with Deprecation and Sunset headers; afterwards a retired route answers 410 Gone with error.details.replacement.",
+  "policy": {
+    "notice_days": 30
+  },
+  "releases": [
+    {
+      "version": "1.5.0",
+      "date": "2026-11-21",
+      "title": "Batches: many URLs in one job, run at each site's pace",
+      "changes": [
+        {"type": "added", "text": "POST /v1/batches: up to 1000 URLs, or POST /v1/fetch bodies laid over shared defaults, in one job. Every item is checked first, and one bad item refuses the batch and names it (items[3].formats). FetchX starts the items itself at the pace each site can take, so you need no pacing loop of your own; each item is charged only if it succeeds."},
+        {"type": "added", "text": "GET /v1/batches, GET /v1/batches/{id}, GET /v1/batches/{id}/items (by index, or with order=finished as a feed of what finished since your last read) and POST /v1/batches/{id}/cancel."},
+        {"type": "added", "text": "Batch webhooks: each item's result as it finishes (fetch.finished, with batch: {id, index}), then batch.finished when it ends or batch.paused when the balance runs out. A batch that paused starts again by itself after a top-up."},
+        {"type": "added", "text": "Every webhook delivery carries an X-FetchX-Event header naming the event, and every result has batch: {id, index} for a batch item, or null."},
+        {"type": "added", "text": "The JavaScript and Python clients: submitBatch, getBatch, listBatches, batchItems, cancelBatch, and batchResults to follow results until the batch ends (submit_batch, batch_results and so on in Python)."}
+      ]
+    },
+    {
+      "version": "1.4.0",
+      "date": "2026-11-21",
+      "title": "Cost estimates, status and clear answers for routes that are gone",
+      "changes": [
+        {"type": "added", "text": "POST /v1/estimate: what a request, or a batch of up to 1000, would cost and how long it would take, before anything is sent or reserved. It uses what recent requests to each site took, the price table and your max_credits, and says when a request would be refused or is likely to fail."},
+        {"type": "added", "text": "GET /v1/status: the API's state, its components and any incident or maintenance notice, without an API key. The status page at https://fetchx.ai/status shows the same, with 90 days of history, and keeps working when the API does not answer."},
+        {"type": "added", "text": "During maintenance that pauses the API, every /v1 route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url. Wait and retry; nothing was sent or charged."},
+        {"type": "added", "text": "Routes that have been retired answer 410 Gone with error.code route_retired and error.details.replacement, and unknown routes answer 404 route_not_found with links to the docs, this changelog and the status page, instead of a bare 404."},
+        {"type": "added", "text": "Deprecated routes carry Deprecation, Sunset and Link headers (RFC 9745, RFC 8594) until they are retired. None are deprecated today."},
+        {"type": "added", "text": "This changelog, also as JSON at https://fetchx.ai/changelog.json and as an Atom feed at https://fetchx.ai/changelog.xml."},
+        {"type": "changed", "text": "While FetchX restarts, the API answers 503 with error.code unavailable and a Retry-After header instead of an HTML error page. Resend with the same idempotency_key."},
+        {"type": "changed", "text": "The JavaScript and Python clients wait out 503 maintenance like any other 503, up to retries times."}
+      ]
+    },
+    {
+      "version": "1.3.0",
+      "date": "2026-11-21",
+      "title": "Page status, content checks and cost on every answer",
+      "changes": [
+        {"type": "added", "text": "page_status (content, not_found, empty, challenge or error) and challenge (vendor, walls, whether it was passed and how) on every result."},
+        {"type": "added", "text": "expect: a selector, text or minimum markdown length the page must show. A page without it fails with content_missing and is not charged."},
+        {"type": "added", "text": "block_resources (default true): a browser does not download images, video, audio or web fonts, which cuts residential traffic."},
+        {"type": "added", "text": "credits.breakdown (step, captcha and traffic credits) and credits.balance on every result; credits.charged is 0 on failures. GET /v1/balance returns the credits available now."},
+        {"type": "added", "text": "error.next.retry_with_new_key on every failure says whether the same request can get a different answer with a new idempotency_key."},
+        {"type": "changed", "text": "body is a format, and the default. A request whose formats leave it out does not get the raw body back."},
+        {"type": "removed", "text": "include_body on POST /v1/fetch. Use formats instead; GET /v1/fetch/{id}?include_body=false still works."}
+      ]
+    },
+    {
+      "version": "1.2.0",
+      "date": "2026-11-21",
+      "title": "Scrolling and next pages",
+      "changes": [
+        {"type": "added", "text": "scroll: auto (up to 10 screens, the default), off, or 1 to 50 screens."},
+        {"type": "added", "text": "POST /v1/fetch/{id}/next gets the page after a result's page on the same session: a next link, a next button or more scrolling. data.next_page says whether there is one, and data.page which page this is."},
+        {"type": "changed", "text": "A page read deeper than 10 screens reserves more credits, for the traffic it may load."}
+      ]
+    },
+    {
+      "version": "1.1.0",
+      "date": "2026-11-20",
+      "title": "Browser steps explain themselves",
+      "changes": [
+        {"type": "added", "text": "attempts[] report a browser step's warm-up visit (warmup), whether a bot check cleared by itself (wall), whether the page finished filling in (content, content_ms, screens, scroll) and its requests let through or refused."},
+        {"type": "changed", "text": "A rendered page that answered but shows next to nothing is not a success and is not charged; FetchX tries a fresh IP."},
+        {"type": "changed", "text": "After a wall on a residential browser, FetchX draws a fresh IP from the other provider at once instead of resting the route."},
+        {"type": "changed", "text": "timeout_ms defaults to 120 s, which leaves room for a captcha solve."}
+      ]
+    },
+    {
+      "version": "1.0.0",
+      "date": "2026-11-19",
+      "title": "One API",
+      "changes": [
+        {"type": "added", "text": "POST /v1/fetch gets any public URL in auto mode: the cheapest route first, then datacenter and residential IPs and a real browser, solving captchas on the way, starting at the route known to work for the site."},
+        {"type": "added", "text": "GET /v1/fetch, GET and DELETE /v1/fetch/{id}, GET /v1/fetch/{id}/content and /screenshot, and GET /v1/usage."},
+        {"type": "added", "text": "One credit balance. A request is charged only when it succeeds, at the price of the step that got the data."},
+        {"type": "removed", "text": "The /v2 API (fetch, render, scrape, operations, sessions, capabilities, access profiles, recipes, artifacts and usage) and the earlier /v1 workflow, job, operation, profile and render routes. Since 1.4.0 they answer 410 Gone."}
+      ]
+    }
+  ],
+  "deprecations": [],
+  "retired": [
+    {"path": "/v2", "match": "prefix", "retired_in": "1.0.0", "retired_on": "2026-11-19", "replacement": "POST /v1/fetch", "note": "The /v2 API was replaced by one API at /v1."},
+    {"path": "/v1/workflows", "match": "prefix", "retired_in": "1.0.0", "retired_on": "2026-11-19", "replacement": "POST /v1/fetch"},
+    {"path": "/v1/jobs", "match": "prefix", "retired_in": "1.0.0", "retired_on": "2026-11-19", "replacement": "POST /v1/fetch and GET /v1/fetch/{id}"},
+    {"path": "/v1/operations", "match": "prefix", "retired_in": "1.0.0", "retired_on": "2026-11-19", "replacement": "GET /v1/fetch/{id}"},
+    {"path": "/v1/profiles", "match": "prefix", "retired_in": "1.0.0", "retired_on": "2026-11-19", "replacement": "POST /v1/fetch (auto mode chooses the route)"},
+    {"path": "/v1/render", "match": "prefix", "retired_in": "1.0.0", "retired_on": "2026-11-19", "replacement": "POST /v1/fetch with render: always"}
+  ]
+}

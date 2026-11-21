@@ -48,6 +48,10 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   assert.equal((await client.get(page.id)).data.content_expired, true);
   assert.equal((await client.usage({period: 'day'})).used.succeeded, 5);
   assert.equal((await client.balance()).credits, (await new Ledger({store, config: {}}).balance(PROJECT)).available);
+  const estimate = await client.estimate({items: ['https://shop.example.com/a', 'https://shop.example.com/b'], defaults: {render: 'never'}});
+  assert.equal(estimate.kind, 'batch');
+  assert.equal(estimate.estimated, 2);
+  assert.equal((await client.status()).status, 'operational');
   await assert.rejects(client.fetch({url: 'https://shop.example.com/', max_attempts: 9}),
     error => error instanceof FetchXError && error.code === 'invalid_request' && error.status === 400 && error.details.field === 'max_attempts');
   const stranger = new FetchXClient({url: 'https://api.fetchx.test', token: 'fxk_wrong', fetch: transportFor(app)});
@@ -105,6 +109,13 @@ test('429 and 503 wait and resend; other errors and bad replies do not', async (
   assert.equal((await client.fetch({url: 'https://shop.example.com/'})).id, 'r1');
   assert.equal(seen.length, 2);
   assert.equal(seen[0], seen[1], 'the resend reuses the key');
+
+  // Maintenance (from the gateway) and nginx's fallback while the gateway restarts are both waited out.
+  const paused = [Response.json({error: {code: 'maintenance', message: 'paused', retry_after_seconds: 0, details: {status_url: 'https://fetchx.ai/status'}}}, {status: 503}),
+    Response.json({error: {code: 'unavailable', message: 'restarting', retry_after_seconds: 0}}, {status: 503}),
+    Response.json({id: 'r2', status: 'succeeded'})];
+  const waiting = new FetchXClient({url: 'https://api.fetchx.test', token: 'fxk_x', retries: 2, fetch: async () => paused.shift()});
+  assert.equal((await waiting.fetch({url: 'https://shop.example.com/'})).id, 'r2');
 
   let posts = 0;
   const conflicted = new FetchXClient({url: 'https://api.fetchx.test', token: 'fxk_x', fetch: async () => {

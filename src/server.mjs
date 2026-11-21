@@ -17,6 +17,9 @@ import {FetchFront} from './fetch/front.mjs';
 import {WebhookSender} from './fetch/webhooks.mjs';
 import {BatchRunner, BatchService} from './fetch/batches.mjs';
 import {registerApi, apiError} from './api/v1.mjs';
+import {registerLifecycle} from './api/lifecycle.mjs';
+import {Estimator} from './fetch/estimate.mjs';
+import {StatusBoard} from './status.mjs';
 import {ControlIdentity} from './control-identity.mjs';
 import {isControlRequest, registerControl} from './control.mjs';
 import {ControlStripe, isStripeWebhookRequest, registerStripeWebhook} from './control-stripe.mjs';
@@ -31,6 +34,8 @@ export function createPlatform({store, config, deps = {}}) {
   platform.engine = deps.engine ?? new EngineClient(config.engine, {fetchImpl: deps.engineFetch});
   platform.front = new FetchFront({store, config, ledger: platform.ledger, engine: platform.engine,
     onSettled: () => platform.webhooks?.kick()});
+  platform.estimator = new Estimator({config, ledger: platform.ledger, engine: platform.engine, front: platform.front});
+  platform.board = deps.board ?? new StatusBoard({store, config, engine: platform.engine});
   // Batches: their items are FetchFront jobs, started by the runner at each site's pace.
   platform.batches = new BatchService({store, config, front: platform.front, engine: platform.engine, ledger: platform.ledger});
   platform.front.batches = platform.batches;
@@ -88,7 +93,9 @@ export function server(platform, {stripeFetch, stripeAutoProcess = true} = {}) {
     await platform.store.pool.query('SELECT 1');
     return {ok: true, service: 'FetchX', release: config.release ?? null};
   });
-  registerApi(app, {service: platform.front, ledger: platform.ledger, batches: platform.batches});
+  registerLifecycle(app, {board: platform.board, config});
+  registerApi(app, {service: platform.front, ledger: platform.ledger, estimator: platform.estimator, board: platform.board,
+    batches: platform.batches});
   registerControl(app, platform, {identity: platform.controlIdentity, ledger: platform.ledger, service: platform.front, stripe});
   registerStripeWebhook(app, stripe, {autoProcess: stripeAutoProcess});
   app.addHook('onClose', async () => {

@@ -6,7 +6,7 @@
 // started.
 import {GatewayError} from '../policy.mjs';
 
-export const ENGINE_CONTRACT = '1.6';
+export const ENGINE_CONTRACT = '1.7';
 const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH']);
 
 function unavailable(sent, cause) {
@@ -108,6 +108,11 @@ export class EngineClient {
   // max_running, start_gap_ms, next_start_in_ms}}, browser_waiting}.
   async pace(hosts) {
     return (await this.#call('POST', '/internal/v1/pace', {body: {hosts}, timeoutMs: 10_000})).body;
+  }
+
+  // What requests would take, before they are sent: {requests} -> {items, hosts, defaults}.
+  async estimate(requests) {
+    return (await this.#call('POST', '/internal/v1/estimates', {body: {requests}, timeoutMs: 30_000})).body;
   }
 
   async status() {

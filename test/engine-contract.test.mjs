@@ -100,6 +100,7 @@ test('engine client requests and fake engine answers and events match the contra
   await call('DELETE', `/v1/fetch/${ok.body.id}`);
   await call('GET', `/v1/fetch/${ok.body.id}/content`);
   await call('GET', '/v1/fetch/00000000-0000-4000-8000-000000000000');
+  await call('POST', '/v1/estimate', {body: {items: ['https://shop.example.com/1', {url: 'http://127.0.0.1/', render: 'always'}]}});
   await platform.engine.status();
   // Batches: the check before anything is queued, the pace the queue reads,
   // and paced starts, one of them refused because its host is full.
@@ -143,7 +144,7 @@ test('engine client requests and fake engine answers and events match the contra
     'DELETE /internal/v1/jobs/{id} 409', 'GET /internal/v1/status 200', 'POST /internal/v1/jobs/{id}/next 200',
     'POST /internal/v1/jobs/{id}/next 400', 'POST /internal/v1/jobs/{id}/next 404', 'POST /internal/v1/jobs/{id}/next 409',
     'POST /internal/v1/jobs/{id}/next 410', 'POST /internal/v1/jobs 429', 'POST /internal/v1/requests/check 200',
-    'POST /internal/v1/pace 200']) {
+    'POST /internal/v1/pace 200', 'POST /internal/v1/estimates 200']) {
     assert.ok(statuses.has(expected), `not exercised: ${expected}`);
   }
 
