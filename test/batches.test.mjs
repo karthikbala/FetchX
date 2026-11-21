@@ -199,6 +199,35 @@ test('the queue never takes a project\'s last running slot, stops while browsers
   assert.equal(done.status, 'finished');
 });
 
+test('a host with spaced starts is looked at again when its next start is due, not at the next round', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  let release;
+  const hold = new Promise(resolve => { release = resolve; });
+  const ctx = await platformFor(store, {script: () => ({step: 'http', hold}), pace: () => ({max_running: 4, start_gap_ms: 300}),
+    deps: {batchIntervalMs: 60_000}});
+  const {call, engine, platform} = ctx;
+  await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 1000 WHERE project = $1', [PROJECT]);
+  const {body: batch} = await call('POST', '/v1/batches', {body: {items: [1, 2, 3].map(i => `https://gap.example.com/${i}`)}});
+  assert.deepEqual(await platform.batchRunner.tick(), {started: 1, next_in_ms: 300}, 'one start, the next due after the gap');
+  const early = await platform.batchRunner.tick();
+  assert.equal(early.started, 0);
+  assert.ok(early.next_in_ms > 0 && early.next_in_ms <= 300, 'still inside the gap');
+  // Running, the queue wakes itself for each due start, long before its 60 s round.
+  const begun = Date.now();
+  platform.batchRunner.start();
+  for (let i = 0; i < 150 && engine.jobs.size < 3; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(engine.jobs.size, 3);
+  assert.ok(Date.now() - begun < 2_000);
+  await platform.batchRunner.close();
+  const starts = (await store.pool.query('SELECT started_at FROM fetch_batch_items WHERE batch = $1 ORDER BY started_at', [batch.id])).rows
+    .map(row => row.started_at.getTime());
+  for (let i = 1; i < starts.length; i++) assert.ok(starts[i] - starts[i - 1] >= 290, `starts ${starts[i] - starts[i - 1]} ms apart`);
+  release();
+  await drain(ctx);
+  assert.equal((await call('GET', `/v1/batches/${batch.id}`)).body.items.succeeded, 3);
+});
+
 test('a batch pauses when credits run out, says so, and starts again by itself after a top-up', {skip}, async t => {
   const store = await openStore();
   t.after(() => store.close());

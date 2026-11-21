@@ -671,6 +671,7 @@ export class BatchRunner {
     Object.assign(this, {batches, engine, intervalMs, now});
     this.running = null;
     this.again = false;
+    this.soon = null;
     // `${host} ${batch}` -> when an item of that batch last started on that host.
     this.served = new Map();
     this.lastOrphanSweep = 0;
@@ -691,6 +692,9 @@ export class BatchRunner {
     this.running = this.tick().catch(error => {
       process.stderr.write(JSON.stringify({event: 'batch_tick_failed', code: error?.code ?? null, name: error?.name ?? null}) + '\n');
       return {started: 0};
+    }).then(result => {
+      if (result.next_in_ms) this.#wakeIn(result.next_in_ms);
+      return result;
     }).finally(() => {
       this.running = null;
       if (this.again) {
@@ -699,6 +703,18 @@ export class BatchRunner {
       }
     });
     return this.running;
+  }
+
+  // A host whose next start is due before the next round is looked at again
+  // then, so spaced starts keep to the engine's gap and not to the interval.
+  // Only while the runner is started (tests drive tick() themselves).
+  #wakeIn(ms) {
+    if (!this.timer || this.soon) return;
+    this.soon = setTimeout(() => {
+      this.soon = null;
+      void this.kick();
+    }, Math.max(50, ms));
+    this.soon.unref();
   }
 
   async tick() {
@@ -725,11 +741,14 @@ export class BatchRunner {
     // Starts each host may take now: all its free slots, or one when its
     // starts are spaced out.
     const left = new Map();
+    // The soonest a host with free slots may start again, if before the next round.
+    let soon = null;
+    const dueIn = ms => { if (ms > 0 && ms < this.intervalMs && (soon === null || ms < soon)) soon = ms; };
     for (const host of hosts) {
       const state = pace[host];
-      if (!state || state.next_start_in_ms !== 0) continue;
-      const free = Math.max(0, state.max_running - state.running);
-      if (free > 0) left.set(host, state.start_gap_ms === 0 ? free : 1);
+      const free = state ? Math.max(0, state.max_running - state.running) : 0;
+      if (free > 0 && state.next_start_in_ms > 0) dueIn(state.next_start_in_ms);
+      if (free > 0 && state.next_start_in_ms === 0) left.set(host, state.start_gap_ms === 0 ? free : 1);
     }
     // One start per host per round, so the hosts take turns with each
     // project's room.
@@ -744,10 +763,12 @@ export class BatchRunner {
         if (outcome === 'started') {
           started++;
           again = true;
+          const state = pace[host];
+          if (state.start_gap_ms > 0 && state.max_running - state.running > 1) dueIn(state.start_gap_ms);
         }
       }
     }
-    return {started};
+    return soon === null ? {started} : {started, next_in_ms: soon};
   }
 
   // Starts one item on `host`, from the batch that host served least
@@ -781,7 +802,8 @@ export class BatchRunner {
 
   async close() {
     clearInterval(this.timer);
-    this.timer = null;
+    clearTimeout(this.soon);
+    this.timer = this.soon = null;
     await this.running;
   }
 }
