@@ -456,7 +456,7 @@ export interface components {
              * @default auto
              */
             scroll?: ("auto" | "off") | number;
-            /** @description The exit country for proxy routes (ISO 3166-1 alpha-2). Defaults to the country that worked for this site before, else US. */
+            /** @description The exit country for proxy routes (ISO 3166-1 alpha-2). Defaults to the country that worked for this site before, else US. When you leave it to FetchX and a site keeps blocking one country's IPs, FetchX moves to another country's IPs; attempts[].country says which country each attempt used. Set it to stay in one country. */
             country?: string;
             /** @description One fixed route; turns auto mode off: one attempt, with a precise error. */
             route?: {
@@ -474,7 +474,7 @@ export interface components {
              *     ]
              */
             formats?: ("body" | "markdown" | "text" | "links" | "metadata" | "screenshot")[];
-            /** @description In a browser, do not download images, video, audio or web fonts on the page. They carry none of the text but a good part of a rendered page’s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. Defaults to true, or false when formats has screenshot. */
+            /** @description In a browser, do not download images, video, audio or web fonts on the page. They carry none of the text but a good part of a rendered page’s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. On a site whose bot protection has walled FetchX, and on any attempt after a wall, the browser loads everything anyway, since a bot check can notice an image or font that never loads. Defaults to true, or false when formats has screenshot. */
             block_resources?: boolean;
             /** @description What the page must show to be the content you want. Every condition given must hold, or the step is not a success: auto mode tries a browser, then one fresh IP, and a request that never gets it fails with content_missing and is not charged. A browser waits up to 10 s for the selector after the page settles. A real 404 or 410 is the site’s answer and is not checked. */
             expect?: {
@@ -608,7 +608,7 @@ export interface components {
         };
         /** @description Blocks, bot challenges and rate limits met on the way, and on the page that answered (a captcha, a wall that cleared). FetchX handles them itself; this says what it met and how it got past. */
         Challenge: {
-            /** @description The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, recaptcha, hcaptcha), or null when the page did not say. */
+            /** @description The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, kasada, or the captcha provider when nothing else names one: arkose, recaptcha, hcaptcha), named from the wall page, its headers and cookies, also when the wall came as a rate limit (429); null when nothing said. */
             vendor: string | null;
             /** @description How many attempts met one. */
             walls: number;
@@ -738,7 +738,7 @@ export interface components {
             result: "success" | "answered" | "blocked" | "rate_limited" | "login_required" | "site_error" | "needs_browser" | "content_missing" | "unreachable" | "failed" | "too_large" | "uncertain" | "not_admitted" | "url_not_allowed";
             /** @description The underlying error, when result is not_admitted or failed. */
             code?: string;
-            /** @description On a blocked or rate-limited step, the bot-protection vendor whose page it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf). */
+            /** @description On a blocked or rate-limited step, the bot-protection vendor whose wall it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf, kasada; or arkose, recaptcha, hcaptcha when only its captcha says). */
             challenge?: string;
             /** @description On a content_missing step, the expect conditions the page did not meet, and extract:<field> for each required extract field it did not show. */
             missing?: (string | ("selector" | "text" | "min_markdown_length") | unknown)[];
@@ -746,13 +746,13 @@ export interface components {
             ms?: number | null;
             /** @description Bytes this step moved over the network, requests and responses together. On a residential route this is the traffic billed past the included megabytes. */
             wire_bytes?: number;
-            /** @description Captchas met on this step, as type:outcome. */
+            /** @description Captchas met on this step, as type:outcome. passed: the page let the visitor through; still_challenged: the same captcha came back; still_blocked: the captcha went away but the site kept refusing; other outcomes say why no solve was made (for example captcha_timeout). Only a request that succeeds is charged for its captchas. */
             captcha?: string[];
             /**
-             * @description Browser steps on sites that have refused FetchX before start at the site's home page. passed: it loaded; cleared: a bot check there cleared by itself; challenged: the check stayed, so this step ended there and the next one used a fresh IP; failed: the home page did not load, and the page was visited directly.
+             * @description Browser steps on sites that have refused FetchX before start at the site's home page. passed: it loaded; cleared: a bot check there cleared by itself; solved: the check there was a captcha, which was solved, and the visit went on (see captcha); challenged: the check stayed, so this step ended there and the next one used a fresh IP; failed: the home page did not load, and the page was visited directly.
              * @enum {string}
              */
-            warmup?: "passed" | "cleared" | "challenged" | "failed";
+            warmup?: "passed" | "cleared" | "solved" | "challenged" | "failed";
             /**
              * @description A bot check on the page itself: whether it cleared by itself before any captcha was solved.
              * @enum {string}

@@ -2,7 +2,7 @@
  "openapi": "3.1.0",
  "info": {
   "title": "FetchX API",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. GET /v1/status needs no key.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
  },
  "servers": [
@@ -3955,7 +3955,7 @@
      },
      "country": {
       "type": "string",
-      "description": "The exit country for proxy routes (ISO 3166-1 alpha-2). Defaults to the country that worked for this site before, else US.",
+      "description": "The exit country for proxy routes (ISO 3166-1 alpha-2). Defaults to the country that worked for this site before, else US. When you leave it to FetchX and a site keeps blocking one country's IPs, FetchX moves to another country's IPs; attempts[].country says which country each attempt used. Set it to stay in one country.",
       "pattern": "^[A-Z]{2}$"
      },
      "route": {
@@ -4009,7 +4009,7 @@
      },
      "block_resources": {
       "type": "boolean",
-      "description": "In a browser, do not download images, video, audio or web fonts on the page. They carry none of the text but a good part of a rendered page’s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. Defaults to true, or false when formats has screenshot."
+      "description": "In a browser, do not download images, video, audio or web fonts on the page. They carry none of the text but a good part of a rendered page’s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. On a site whose bot protection has walled FetchX, and on any attempt after a wall, the browser loads everything anyway, since a bot check can notice an image or font that never loads. Defaults to true, or false when formats has screenshot."
      },
      "expect": {
       "type": "object",
@@ -4409,7 +4409,7 @@
        "string",
        "null"
       ],
-      "description": "The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, recaptcha, hcaptcha), or null when the page did not say."
+      "description": "The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, kasada, or the captcha provider when nothing else names one: arkose, recaptcha, hcaptcha), named from the wall page, its headers and cookies, also when the wall came as a rate limit (429); null when nothing said."
      },
      "walls": {
       "type": "integer",
@@ -4809,7 +4809,7 @@
      },
      "challenge": {
       "type": "string",
-      "description": "On a blocked or rate-limited step, the bot-protection vendor whose page it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf)."
+      "description": "On a blocked or rate-limited step, the bot-protection vendor whose wall it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf, kasada; or arkose, recaptcha, hcaptcha when only its captcha says)."
      },
      "missing": {
       "type": "array",
@@ -4852,17 +4852,18 @@
       "items": {
        "type": "string"
       },
-      "description": "Captchas met on this step, as type:outcome."
+      "description": "Captchas met on this step, as type:outcome. passed: the page let the visitor through; still_challenged: the same captcha came back; still_blocked: the captcha went away but the site kept refusing; other outcomes say why no solve was made (for example captcha_timeout). Only a request that succeeds is charged for its captchas."
      },
      "warmup": {
       "type": "string",
       "enum": [
        "passed",
        "cleared",
+       "solved",
        "challenged",
        "failed"
       ],
-      "description": "Browser steps on sites that have refused FetchX before start at the site's home page. passed: it loaded; cleared: a bot check there cleared by itself; challenged: the check stayed, so this step ended there and the next one used a fresh IP; failed: the home page did not load, and the page was visited directly."
+      "description": "Browser steps on sites that have refused FetchX before start at the site's home page. passed: it loaded; cleared: a bot check there cleared by itself; solved: the check there was a captcha, which was solved, and the visit went on (see captcha); challenged: the check stayed, so this step ended there and the next one used a fresh IP; failed: the home page did not load, and the page was visited directly."
      },
      "wall": {
       "type": "string",
