@@ -328,8 +328,108 @@ async function forgetSite(host: string) {
   await run(async () => { await api(`/admin/sites/${encodeURIComponent(host)}`, { method: 'DELETE' }); toast(`Forgot ${host}.`); $('[data-site-detail]')!.hidden = true; await loadSites(); });
 }
 
+// ---- Status notices ----
+const COMPONENT_NAMES: Record<string, string> = { api: 'API', fetching: 'Fetching', console: 'Console and billing' };
+const localInput = (value?: string | null) => {
+  if (!value) return '';
+  const date = new Date(value), pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+const fromLocal = (value: string) => (value ? new Date(value).toISOString() : null);
+async function loadNotices() {
+  const { notices } = await api('/admin/notices');
+  $('[data-notices-body]')!.replaceChildren(...(notices as Json[]).map(notice => {
+    const state = notice.status === 'active' ? tag(notice.pause_api ? 'active · API paused' : 'active', notice.pause_api || notice.impact === 'major' ? 'is-off' : 'is-warn')
+      : notice.status === 'scheduled' ? tag(notice.pause_api ? 'scheduled · will pause API' : 'scheduled') : tag('resolved', 'is-ok');
+    const title = el('div', {}, el('strong', { text: notice.title }), el('small', { text: `${notice.kind === 'maintenance' ? 'Maintenance' : `Incident · ${notice.impact}`} · #${notice.id}` }));
+    const latest = (notice.updates as Json[]).at(-1);
+    if (latest) title.append(el('small', { text: `Latest: ${latest.text}` }));
+    const span = el('div', {}, el('span', { text: when(notice.starts_at) }),
+      el('small', { text: notice.resolved_at ? `resolved ${when(notice.resolved_at)}` : notice.ends_at ? `planned end ${when(notice.ends_at)}` : 'no planned end' }));
+    const actions = notice.status === 'resolved' ? el('span', {}) : el('div', {},
+      el('button', { type: 'button', text: 'Update', onclick: () => editNotice(notice) }),
+      el('button', { type: 'button', text: 'Resolve', onclick: () => void resolveNotice(notice) }));
+    return el('tr', {}, cell(title), cell(state), cell((notice.components as string[]).map(id => COMPONENT_NAMES[id] ?? id).join(', ') || '—'),
+      cell(span), cell(el('div', {}, el('span', { text: notice.created_by }), notice.updated_by ? el('small', { text: `last: ${notice.updated_by}` }) : null)), cell(actions));
+  }));
+}
+function syncNoticeKind() {
+  const form = $<HTMLFormElement>('[data-notice-form]')!;
+  const maintenance = (form.elements.namedItem('kind') as HTMLSelectElement).value === 'maintenance';
+  $('[data-notice-impact]')!.hidden = maintenance;
+  $('[data-notice-pause]')!.hidden = !maintenance;
+  if (!maintenance) (form.elements.namedItem('pause_api') as HTMLInputElement).checked = false;
+}
+function resetNoticeForm() {
+  const form = $<HTMLFormElement>('[data-notice-form]')!;
+  form.reset();
+  (form.elements.namedItem('id') as HTMLInputElement).value = '';
+  (form.elements.namedItem('kind') as HTMLSelectElement).disabled = false;
+  $('[data-notice-form-title]')!.textContent = 'Post a notice';
+  $('[data-notice-submit]')!.textContent = 'Post notice';
+  $('[data-notice-update-label]')!.textContent = 'First update';
+  $('[data-notice-cancel]')!.hidden = true;
+  syncNoticeKind();
+}
+function editNotice(notice: Json) {
+  const form = $<HTMLFormElement>('[data-notice-form]')!;
+  const field = <T extends HTMLElement = HTMLInputElement>(name: string) => form.elements.namedItem(name) as unknown as T;
+  field('id').value = notice.id;
+  field<HTMLSelectElement>('kind').value = notice.kind;
+  field<HTMLSelectElement>('kind').disabled = true;
+  field('title').value = notice.title;
+  field<HTMLTextAreaElement>('body').value = notice.body ?? '';
+  field<HTMLSelectElement>('impact').value = notice.kind === 'maintenance' ? 'minor' : notice.impact;
+  for (const box of $$<HTMLInputElement>('input[name="components"]', form)) box.checked = (notice.components as string[]).includes(box.value);
+  field('starts_at').value = localInput(notice.starts_at);
+  field('ends_at').value = localInput(notice.ends_at);
+  field('pause_api').checked = !!notice.pause_api;
+  field('update').value = '';
+  $('[data-notice-form-title]')!.textContent = `Update #${notice.id}`;
+  $('[data-notice-submit]')!.textContent = 'Save';
+  $('[data-notice-update-label]')!.textContent = 'Add an update (shown with the time)';
+  $('[data-notice-cancel]')!.hidden = false;
+  syncNoticeKind();
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+async function submitNotice(event: SubmitEvent) {
+  event.preventDefault();
+  const form = event.currentTarget as HTMLFormElement, data = new FormData(form);
+  const id = String(data.get('id') ?? ''), kind = (form.elements.namedItem('kind') as HTMLSelectElement).value;
+  const startsAt = fromLocal(String(data.get('starts_at') ?? '')), endsAt = fromLocal(String(data.get('ends_at') ?? ''));
+  const body: Json = {
+    title: String(data.get('title') ?? '').trim(), body: String(data.get('body') ?? '').trim(),
+    components: data.getAll('components').map(String), ends_at: endsAt,
+  };
+  if (kind === 'incident') body.impact = String(data.get('impact'));
+  else body.pause_api = data.get('pause_api') === 'on';
+  if (startsAt) body.starts_at = startsAt;
+  const update = String(data.get('update') ?? '').trim();
+  if (update) body.update = update;
+  if (endsAt && Date.parse(endsAt) <= Date.parse(startsAt ?? new Date().toISOString())) {
+    showError(new ApiError(400, 'notice_ends_at_invalid', 'The planned end must be after the start.')); return;
+  }
+  if (body.pause_api && (!startsAt || Date.parse(startsAt) <= Date.now())
+    && !window.confirm('This pauses the API now: every /v1 call except GET /v1/status will answer 503 maintenance until the notice ends or is resolved. Continue?')) return;
+  await run(async () => {
+    if (id) await api(`/admin/notices/${id}`, { method: 'PUT', body });
+    else await api('/admin/notices', { method: 'POST', body: { kind, ...body } });
+    toast(id ? `Notice #${id} updated.` : 'Notice posted.');
+    resetNoticeForm();
+    await loadNotices();
+  });
+}
+async function resolveNotice(notice: Json) {
+  const update = window.prompt(`Resolve “${notice.title}”${notice.pause_api ? ' and end the API pause' : ''}. Closing update shown on the status page:`, 'Resolved.');
+  if (update === null) return;
+  await run(async () => {
+    await api(`/admin/notices/${notice.id}/resolve`, { method: 'POST', body: update.trim() ? { update: update.trim() } : {} });
+    toast(`Notice #${notice.id} resolved.`); await loadNotices();
+  });
+}
+
 // ---- Tabs and boot ----
-const loaders: Record<string, () => Promise<void>> = { rules: loadRules, budgets: loadBudgets, probes: loadProbes, sites: loadSites, audit: loadAudit };
+const loaders: Record<string, () => Promise<void>> = { rules: loadRules, budgets: loadBudgets, probes: loadProbes, sites: loadSites, status: loadNotices, audit: loadAudit };
 function selectTab(name: string) {
   for (const tab of $$('[data-tab]')) tab.setAttribute('aria-selected', String(tab.dataset.tab === name));
   for (const panel of $$('[data-panel]')) panel.hidden = panel.dataset.panel !== name;
@@ -358,6 +458,10 @@ async function boot() {
   $('[data-apply-form]')!.addEventListener('submit', event => void submitApply(event as SubmitEvent));
   $('[data-budget-form]')!.addEventListener('submit', event => void submitBudget(event as SubmitEvent));
   $('[data-budget-cancel]')!.addEventListener('click', () => { $('[data-budget-form]')!.hidden = true; });
+  $('[data-notice-form]')!.addEventListener('submit', event => void submitNotice(event as SubmitEvent));
+  $('[data-notice-cancel]')!.addEventListener('click', resetNoticeForm);
+  $('[data-notice-kind]')!.addEventListener('change', syncNoticeKind);
+  syncNoticeKind();
   const none = $<HTMLInputElement>('[data-budget-form] input[name="none"]')!, value = $<HTMLInputElement>('[data-budget-form] input[name="value"]')!;
   none.addEventListener('change', () => { value.disabled = none.checked; });
   await run(loadRules);

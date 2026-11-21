@@ -122,6 +122,10 @@ export class FetchFront {
     return Math.min(maxCredits ?? Infinity, worst, budget(this.config, 'fetch.maxCreditsPerRequest'));
   }
 
+  // What a request would reserve while it runs: the most it can cost
+  // (POST /v1/estimate shows it as credits.hold). Throws like submit on a bad max_credits.
+  holdFor(raw) { return this.#ceiling(this.#billingInput(raw)); }
+
   async submit(project, raw, {keyId = null} = {}) {
     const billing = this.#billingInput(raw);
     return this.#start(project, billing, {keyId},

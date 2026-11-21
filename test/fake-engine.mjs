@@ -33,7 +33,10 @@ const scrollValid = scroll => scroll === undefined || ['auto', 'off'].includes(s
 const canonical = value => JSON.stringify(value, (key, item) => (item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(name => [name, item[name]])) : item));
 
-export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
+// `estimates` scripts POST /internal/v1/estimates: {history: {host: SiteUsage},
+// proven: {host: tier}, cooling: {host: {retry_after_seconds}}, pace: {host: Pace},
+// defaults: {requests, steps}}; a request's planned tiers are plannedFor's.
+export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}} = {}) {
   const jobs = new Map();
   const byKey = new Map();
   const outbox = [];
@@ -234,7 +237,22 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
     job.deleted = true;
     return reply.code(204).send();
   });
-  app.get('/internal/v1/status', async () => ({service: 'FetchX engine', release: 'fake', contract: '1.4', browser: {}, captcha: {},
+  app.post('/internal/v1/estimates', async (req, reply) => {
+    const requests = req.body?.requests;
+    if (!Array.isArray(requests) || !requests.length || requests.length > 1000) return refuse(reply, 400, 'invalid_request', {field: 'requests'});
+    const items = requests.map((request, index) => {
+      let host;
+      try { host = new URL(request.url).hostname; } catch { return {index, error: {code: 'invalid_request', details: {field: 'url'}}}; }
+      if (/^(?:127\.|10\.|localhost$)/.test(host)) return {index, error: {code: 'url_not_allowed', details: {field: 'url'}}};
+      const attempts = request.max_attempts ?? 5;
+      return {index, host, plan: {steps: plannedFor(request).slice(0, attempts), proven: estimates.proven?.[host] ?? null, explicit: false,
+        country: 'US', max_attempts: attempts, cooling: estimates.cooling?.[host] ?? null, skipped: []}};
+    });
+    const hosts = Object.fromEntries(items.filter(item => item.host).map(item => [item.host, {history: estimates.history?.[item.host] ?? null,
+      pace: estimates.pace?.[item.host] ?? {tier: 'open', max_running: 4, start_gap_ms: 500}}]));
+    return {items, hosts, defaults: estimates.defaults ?? {requests: 0, steps: []}};
+  });
+  app.get('/internal/v1/status', async () => ({service: 'FetchX engine', release: 'fake', contract: '1.7', browser: {}, captcha: {},
     events: {undelivered: outbox.length, oldest_undelivered: null}}));
   // Admin: every call is recorded. Budgets (one engine budget) and the audit
   // trail are kept in memory, enough for the platform's merged list and log;

@@ -1,0 +1,53 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { CHANGE_LABELS, changelog, releaseAnchor, routeLabel } from '../lib/changelog';
+import '../styles/status.css';
+const date = (day: string) => new Date(`${day}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+const latest = changelog.releases[0];
+---
+<Layout title="API changelog — FetchX" description="Every change to the FetchX API, newest first, with deprecations announced at least 30 days before a route is retired." active="changelog">
+  <link slot="head" rel="alternate" type="application/atom+xml" title="FetchX API changelog" href="/changelog.xml"/>
+  <div class="container st-page cl-page">
+    <header class="page-intro st-intro">
+      <span class="eyebrow">API CHANGELOG · LATEST {latest.version}</span>
+      <h1>What changed.</h1>
+      <p>Changes to the FetchX API at <code>/v1</code>, newest first. A breaking change is announced here as a deprecation at least {changelog.policy.notice_days} days before its sunset. Until then the API still serves the route and marks its answers with <code>Deprecation</code> and <code>Sunset</code> headers; afterwards it answers <code>410 Gone</code> with <code>error.details.replacement</code>.</p>
+      <p class="st-meta mono"><a href="/changelog.xml">Atom feed</a> · <a href="/changelog.json">JSON</a> · <a href="/status">Status</a></p>
+    </header>
+
+    <section class="st-section" aria-labelledby="cl-deprecations">
+      <h2 id="cl-deprecations">Deprecations in force</h2>
+      {changelog.deprecations.length ? (
+        <div class="cl-table-wrap"><table class="cl-table">
+          <thead><tr><th scope="col">Route</th><th scope="col">Deprecated</th><th scope="col">Sunset</th><th scope="col">Use instead</th></tr></thead>
+          <tbody>{changelog.deprecations.map(entry => (
+            <tr><td><code>{routeLabel(entry)}</code></td><td>{entry.deprecated_in}, {date(entry.deprecated_on)}</td><td>{entry.sunset_on ? date(entry.sunset_on) : 'Not set yet'}</td><td>{entry.replacement}{entry.note && <span class="cl-note">{entry.note}</span>}</td></tr>
+          ))}</tbody>
+        </table></div>
+      ) : <p class="st-empty">None. Every route in the API reference is current.</p>}
+    </section>
+
+    {changelog.releases.map(release => (
+      <section class="st-section cl-release" id={releaseAnchor(release.version)} aria-labelledby={`h-${releaseAnchor(release.version)}`}>
+        <div class="cl-release-head">
+          <h2 id={`h-${releaseAnchor(release.version)}`}><a href={`#${releaseAnchor(release.version)}`}>{release.version}</a> <span>{release.title}</span></h2>
+          <time class="mono" datetime={release.date}>{date(release.date)}</time>
+        </div>
+        <ul class="cl-changes">
+          {release.changes.map(change => <li><span class="cl-type mono" data-type={change.type}>{CHANGE_LABELS[change.type]}</span><span>{change.text}</span></li>)}
+        </ul>
+      </section>
+    ))}
+
+    <section class="st-section" aria-labelledby="cl-retired">
+      <h2 id="cl-retired">Retired routes</h2>
+      <p class="cl-lead">These answer <code>410 Gone</code> with <code>error.code</code> <code>route_retired</code> and what replaces them.</p>
+      <div class="cl-table-wrap"><table class="cl-table">
+        <thead><tr><th scope="col">Route</th><th scope="col">Retired</th><th scope="col">Use instead</th></tr></thead>
+        <tbody>{changelog.retired.map(entry => (
+          <tr><td><code>{routeLabel(entry)}</code></td><td>{entry.retired_in}, {date(entry.retired_on)}</td><td>{entry.replacement}</td></tr>
+        ))}</tbody>
+      </table></div>
+    </section>
+  </div>
+</Layout>

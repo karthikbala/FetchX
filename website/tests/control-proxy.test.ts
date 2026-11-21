@@ -174,6 +174,19 @@ describe('same-origin control bridge',()=>{
   for(const [path,method,body] of ok)expect((await send(path,{method,body})).status).toBe(200);
   expect(calls.map(({url,init})=>[url.replace('https://gateway.example/control',''),init.method])).toEqual(ok.map(([path,method])=>[path,method]));
  });
+ it('forwards only the admin status notice routes',async()=>{
+  for(const path of ['/admin/notices/0','/admin/notices/abc','/admin/notices/12/extra','/admin/notices/12/resolve/x','/admin/notices/1%2F2'])expect((await send(path)).status).toBe(404);
+  expect((await send('/admin/notices',{method:'DELETE'})).status).toBe(405);
+  expect((await send('/admin/notices/12')).status).toBe(405);
+  expect((await send('/admin/notices/12',{method:'DELETE'})).status).toBe(405);
+  expect((await send('/admin/notices/12/resolve')).status).toBe(405);
+  expect((await send('/admin/notices?x=1')).status).toBe(400);
+  expect(calls).toHaveLength(0);
+  const ok:[string,string,string?][]=[['/admin/notices','GET'],['/admin/notices','POST','{"kind":"incident","title":"t"}'],
+   ['/admin/notices/12','PUT','{"update":"u"}'],['/admin/notices/12/resolve','POST','{}']];
+  for(const [path,method,body] of ok)expect((await send(path,{method,body})).status).toBe(200);
+  expect(calls.map(({url,init})=>[url.replace('https://gateway.example/control',''),init.method])).toEqual(ok.map(([path,method])=>[path,method]));
+ });
  it('allows only the project-scoped Stripe checkout methods',async()=>{
   const stripe=`/projects/${project}/billing/stripe`,key='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const checkout=JSON.stringify({plan_id:'developer',idempotency_key:key});

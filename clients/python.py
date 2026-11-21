@@ -14,7 +14,7 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
-RETRYABLE = {'network_error', 'too_many_requests', 'unavailable'}
+RETRYABLE = {'network_error', 'too_many_requests', 'unavailable', 'maintenance'}
 
 
 class FetchXError(RuntimeError):
@@ -119,6 +119,14 @@ class FetchXClient:
 
     def delete(self, id):
         self._send('DELETE', '/v1/fetch/' + quote(id, safe=''))
+
+    def estimate(self, **body):
+        """What one POST /v1/fetch body, or a batch body (items=, defaults=), would cost and take. Nothing is sent or reserved."""
+        return self._send('POST', '/v1/estimate', body=body)
+
+    def status(self):
+        """Service status and notices."""
+        return self._send('GET', '/v1/status')
 
     def balance(self):
         """Credits available now: {'credits', 'reserved', 'trial', 'purchased', 'payment_hold'}."""

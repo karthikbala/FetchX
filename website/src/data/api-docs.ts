@@ -39,6 +39,8 @@ const createFetch = contractOperation('createFetch');
 const createNextPage = contractOperation('createNextPage');
 const getUsage = contractOperation('getUsage');
 const getBalance = contractOperation('getBalance');
+const createEstimate = contractOperation('createEstimate');
+const getStatus = contractOperation('getStatus');
 const hostedApi = 'https://app.fetchx.ai';
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 const openApiLink: DocBlock = { kind: 'link', label: 'OpenAPI contract (JSON)', href: '/openapi.json' };
@@ -74,7 +76,8 @@ const isJson = (operation: (typeof contractOperations)[number]) =>
   Object.values(operation.responses).some(response => 'content' in response && !!response.content?.['application/json'] && 'schema' in response.content['application/json']);
 
 function operationSection(operation: (typeof contractOperations)[number]): DocSection {
-  const blocks: DocBlock[] = [{ kind: 'text', text: '`' + operation.method + ' ' + operation.path + '` · key scope `' + operation.scope + '`.' }];
+  const blocks: DocBlock[] = [{ kind: 'text', text: '`' + operation.method + ' ' + operation.path + '` · '
+    + (operation.scope ? 'key scope `' + operation.scope + '`.' : 'no API key needed.') }];
   if (operation.description) blocks.push({ kind: 'text', text: operation.description });
   const parameters = parameterRows(operation);
   if (parameters.length) blocks.push({ kind: 'table', headers: ['Parameter', 'In', 'Type', 'Required', 'Description'], rows: parameters });
@@ -109,14 +112,17 @@ const requestErrorRows = [
   ['402', '`payment_hold`', 'Spending is paused while a payment issue is resolved.'],
   ['403', '`api_key_scope_forbidden`', 'The key does not have the scope this endpoint needs.'],
   ['404', '`not_found`', 'No request with that id in this project.'],
+  ['404', '`route_not_found`', 'No such route. `error.details` links the docs, the changelog and the status page.'],
   ['409', '`idempotency_conflict`', 'The `idempotency_key` was used before with a different body. Use a new key.'],
   ['409', '`no_next_page`', 'A next page was asked for a request that has none. `error.details.reason` is `failed`, `none_found`, `limit` (the list is too deep to reach again) or `url_not_allowed`.'],
   ['409', '`pending`', 'The request is still running. Wait for it to finish.'],
+  ['410', '`route_retired`', 'The route was retired. `error.details.replacement` says what to use, and `retired_in` the version that removed it.'],
   ['410', '`content_expired`', 'The request\'s content expired (7 days) or was deleted, so its body or its next page can no longer be read. Fetch it again.'],
   ['413', '`request_too_large`', 'The request body is over 1 MB.'],
   ['429', '`too_many_requests`', 'The project has too many requests running. Wait `retry_after_seconds`.'],
   ['503', '`unavailable`', 'FetchX cannot take work right now. Wait and resend with the same key.'],
   ['503', '`extract_unavailable`', 'The request asks for `extract`, and FetchX cannot read pages into JSON right now. Nothing was fetched or charged. Wait `retry_after_seconds`, or send it without `extract`.'],
+  ['503', '`maintenance`', 'Planned maintenance has paused the API. Nothing was run or charged. Wait for `Retry-After` and resend with the same key; `error.details.status_url` shows progress.'],
 ];
 const fetchErrorRows = [
   ['`blocked`', 'The site refused every route FetchX was allowed to try: a 403, a challenge page, or a captcha that could not be solved.', '`retry_later` (900 s, or the site’s own wait). With `route` set: `use_auto`.', 'Yes, after the wait. With `use_auto`: no, remove `route` first.'],
@@ -350,7 +356,7 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
     description: 'Read a result, download its body or screenshot, list requests and delete stored content.',
     group: 'API reference',
     sections: [
-      ...contractOperations.filter(operation => ![createFetch, createNextPage, getUsage, getBalance].includes(operation)).map(operationSection),
+      ...contractOperations.filter(operation => ![createFetch, createNextPage, getUsage, getBalance, createEstimate, getStatus].includes(operation)).map(operationSection),
       {
         id: 'retention',
         title: 'Retention',
@@ -403,8 +409,51 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
           { kind: 'text', text: 'Trial credits and purchased credits share one balance. Purchased credits do not expire.' },
         ],
       },
+      {
+        id: 'estimates',
+        title: 'Estimates before you send',
+        blocks: [
+          { kind: 'text', text: '`POST /v1/estimate` takes the body you would send to `POST /v1/fetch`, or a batch of up to 1,000 (`{items, defaults}`), and says what it would cost and how long it would take. Nothing is sent to the site, reserved or charged.' },
+          { kind: 'text', text: 'Figures come from what recent requests to the same site took, learned by host name only, priced with the table above, your `max_credits` and your balance. `credits.typical` is what one success usually costs, `credits.high` a high-end cost, and `credits.expected` counts only the share that usually succeeds, since failures are free. `notes` say what to change when a request would be refused (`max_credits_too_low`, `insufficient_credits`) or is likely to fail (`likely_needs_more_credits`, `cooling_down`, `low_success_rate`).' },
+          { kind: 'code', title: 'Estimate a batch', snippets: [{ label: 'cURL', language: 'bash', code: `curl "$FETCHX_URL/v1/estimate" \\
+  -H "Authorization: Bearer $FETCHX_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '${JSON.stringify(requestExample(createEstimate, 'batch'))}'` }, { label: 'Answer', language: 'json', code: json(responseExample(createEstimate, 'batch')) }] },
+        ],
+      },
+      operationSection(createEstimate),
       operationSection(getBalance),
       operationSection(getUsage),
+    ],
+  },
+  {
+    slug: 'status',
+    title: 'Status, maintenance and changes',
+    description: 'Whether the API is up, what it answers during maintenance, and how changes and retirements are announced.',
+    group: 'Guides',
+    method: getStatus.method,
+    endpoint: getStatus.path,
+    sections: [
+      {
+        id: 'maintenance',
+        title: 'Maintenance',
+        blocks: [
+          { kind: 'text', text: 'Planned maintenance is announced on the status page at https://fetchx.ai/status before it starts. While maintenance pauses the API, every `/v1` route except `GET /v1/status` answers `503` with `error.code` `maintenance`, a `Retry-After` header and `error.details.status_url`. Nothing was run or charged: wait and resend the same body with the same `idempotency_key`. The JavaScript and Python clients do this for `fetch` and `nextPage` up to `retries` times.' },
+          { kind: 'text', text: 'The status page is fed by a monitor that runs on Cloudflare, outside FetchX’s servers, so it keeps working, with 90 days of history, when the API does not answer.' },
+          { kind: 'link', label: 'Status page', href: '/status' },
+        ],
+      },
+      operationSection(getStatus),
+      {
+        id: 'changes',
+        title: 'Changes, deprecations and retired routes',
+        blocks: [
+          { kind: 'text', text: 'Every change to the API is in the changelog, newest first. A breaking change is announced there as a deprecation at least 30 days before its sunset. Until the sunset the route still answers, with a `Deprecation` header (RFC 9745), a `Sunset` header (RFC 8594) and `Link: <https://fetchx.ai/changelog>; rel="deprecation"`. Log those headers in your client to hear about a change before it lands.' },
+          { kind: 'text', text: 'After the sunset the route answers `410 Gone` with `error.code` `route_retired` and `error.details.replacement`. An unknown route answers `404` with `error.code` `route_not_found` and links to these docs, the changelog and the status page.' },
+          { kind: 'link', label: 'API changelog', href: '/changelog' },
+          { kind: 'link', label: 'Changelog as an Atom feed', href: '/changelog.xml' },
+        ],
+      },
     ],
   },
   {
@@ -442,9 +491,9 @@ export function verify(rawBody, headers, secret) {
         id: 'endpoints',
         title: 'Endpoints',
         blocks: [
-          { kind: 'text', text: '`/v1` is the only version. Changes within it are additive; a breaking change would come as a new version with notice.' },
+          { kind: 'text', text: '`/v1` is the only version. Every change is in the changelog at https://fetchx.ai/changelog; a breaking change is announced there as a deprecation at least 30 days before the route is retired. `GET /v1/status` needs no API key.' },
           { kind: 'table', headers: ['Method and path', 'Key scope', 'Purpose'], rows: contractOperations.map(operation => [
-            '`' + operation.method + ' ' + operation.path + '`', '`' + operation.scope + '`', operation.summary]) },
+            '`' + operation.method + ' ' + operation.path + '`', operation.scope ? '`' + operation.scope + '`' : 'none', operation.summary]) },
           openApiLink,
           { kind: 'link', label: 'JavaScript and Python clients', href: 'https://github.com/karthikbala/FetchX/tree/main/clients' },
         ],

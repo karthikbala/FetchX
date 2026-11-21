@@ -6,7 +6,7 @@
 // started.
 import {GatewayError} from '../policy.mjs';
 
-export const ENGINE_CONTRACT = '1.6';
+export const ENGINE_CONTRACT = '1.7';
 const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH']);
 // 503 answers that are refusals: nothing was started, and the caller is told why.
 const REFUSED_503 = new Set(['extract_unavailable']);
@@ -99,6 +99,11 @@ export class EngineClient {
 
   async remove(tenant, id) {
     await this.#call('DELETE', `/internal/v1/jobs/${encodeURIComponent(id)}`, {query: {tenant}});
+  }
+
+  // What requests would take, before they are sent: {requests} -> {items, hosts, defaults}.
+  async estimate(requests) {
+    return (await this.#call('POST', '/internal/v1/estimates', {body: {requests}, timeoutMs: 30_000})).body;
   }
 
   async status() {

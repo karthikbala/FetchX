@@ -2,6 +2,9 @@ import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 const port='4330';
 const base='http://127.0.0.1:'+port;
+// /api/status reads D1, so the local preview database needs the migrations.
+const migrate=spawn(process.execPath,['node_modules/wrangler/bin/wrangler.js','d1','migrations','apply','fetchx-enquiries-preview','--local'],{stdio:'ignore',env:{...process.env,CI:'1'}});
+if((await once(migrate,'exit'))[0]!==0)throw new Error('Local D1 migrations failed.');
 const server=spawn(process.execPath,['node_modules/wrangler/bin/wrangler.js','pages','dev','dist','--ip','127.0.0.1','--port',port,'--log-level','error','--show-interactive-dev-session=false'],{stdio:'inherit'});
 const environment={...process.env,TEST_BASE_URL:base,TEST_OUTPUT_DIR:process.env.TEST_OUTPUT_DIR||'.local/browser-reports'};
 try{

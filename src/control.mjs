@@ -74,6 +74,9 @@ function message(code){
  if(code==='budget_reason_required')return 'Give a reason; it is recorded in the audit log.';
  if(code==='budget_not_overridden')return 'This budget already uses its configured value.';
  if(code==='budget_unknown')return 'This budget does not exist.';
+ if(code==='notice_resolved')return 'This notice is already resolved.';
+ if(code==='notice_pause_api_invalid')return 'Only a maintenance notice can pause the API.';
+ if(code==='notice_not_found')return 'This notice does not exist.';
  if(/rate|limit/.test(code))return 'This request exceeds an account limit. Try again later.';
  if(/not_found|forbidden|membership/.test(code))return 'This resource is unavailable for this account.';
  if(/code|challenge/.test(code))return 'The verification code could not be accepted. Request a new code if needed.';

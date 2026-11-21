@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FetchX engine private API",
-    "version": "1.6",
-    "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). info.version is the contract version; GET /internal/v1/status and /healthz report it."
+    "version": "1.7",
+    "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). POST /internal/v1/estimates says what requests would take before they are sent (planned tiers, per-host history and pace), for the platform to price. info.version is the contract version; GET /internal/v1/status and /healthz report it."
   },
   "security": [
     {
@@ -625,6 +625,70 @@
           },
           "410": {
             "description": "Expired or deleted. Codes: content_expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/estimates": {
+      "post": {
+        "operationId": "estimateRequests",
+        "summary": "What requests would take, before they are sent",
+        "description": "Plans each request as POST /internal/v1/jobs would (with every tier allowed) and reports, per request, the cost tiers its ladder would try in order and the one site knowledge has proven; per host, what its recent requests took (site usage: the winning tier, wire bytes, captcha solves and seconds, over the last 100 requests within 30 days) and how fast a batch may start requests to it. Nothing is sent to any site and no tenant's data is read. A request that would be refused is reported in its item, and the others are still estimated.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EstimateInput"
+              },
+              "examples": {
+                "two": {
+                  "value": {
+                    "requests": [
+                      {
+                        "url": "https://shop.example.com/list"
+                      },
+                      {
+                        "url": "https://shop.example.com/item/1",
+                        "render": "always"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Estimates"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is wrong (not a list of 1 to 1000 requests). Codes: invalid_request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3193,6 +3257,331 @@
           "url": {
             "type": "string",
             "description": "For link: the next page's address."
+          }
+        }
+      },
+      "EstimateInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requests"
+        ],
+        "properties": {
+          "requests": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/FetchRequest"
+            },
+            "description": "Requests as POST /internal/v1/jobs takes them in `request`. One that is not valid is reported in its item."
+          }
+        }
+      },
+      "Spread": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "p50",
+          "p90"
+        ],
+        "properties": {
+          "p50": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "p90": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "description": "The median (p50) and 90th percentile (p90) of the samples; null when there are none."
+      },
+      "StepUsage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "share",
+          "captcha_share",
+          "wire_bytes",
+          "seconds",
+          "samples"
+        ],
+        "properties": {
+          "step": {
+            "$ref": "#/components/schemas/Step"
+          },
+          "share": {
+            "type": "number",
+            "description": "This tier's share of the successful requests (0 to 1)."
+          },
+          "captcha_share": {
+            "type": "number",
+            "description": "Share of this tier's successes that solved a captcha (0 to 1)."
+          },
+          "wire_bytes": {
+            "$ref": "#/components/schemas/Spread"
+          },
+          "seconds": {
+            "$ref": "#/components/schemas/Spread"
+          },
+          "samples": {
+            "type": "integer"
+          }
+        }
+      },
+      "SiteUsage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requests",
+          "succeeded",
+          "success_rate",
+          "seconds",
+          "steps",
+          "since"
+        ],
+        "description": "What a host's recent requests took: the last 100 finished requests within 30 days, from every tenant (host name only). Failures count only when they say something about the site (blocked, rate_limited, unreachable, site_error, timeout); pages read past the default depth are left out.",
+        "properties": {
+          "requests": {
+            "type": "integer"
+          },
+          "succeeded": {
+            "type": "integer"
+          },
+          "success_rate": {
+            "type": "number",
+            "description": "succeeded / requests (0 to 1)."
+          },
+          "seconds": {
+            "$ref": "#/components/schemas/Spread"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StepUsage"
+            },
+            "description": "Per tier that got the data."
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the oldest of these requests finished."
+          }
+        }
+      },
+      "Pace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tier",
+          "max_running",
+          "start_gap_ms"
+        ],
+        "description": "How fast a batch starts requests to this host: open (never refused FetchX), guarded (refused or rate-limited it before), limited (rate-limited it in the last ten minutes).",
+        "properties": {
+          "tier": {
+            "type": "string",
+            "enum": [
+              "open",
+              "guarded",
+              "limited"
+            ]
+          },
+          "max_running": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "start_gap_ms": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "EstimatePlan": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "steps",
+          "proven",
+          "explicit",
+          "country",
+          "max_attempts",
+          "cooling",
+          "skipped"
+        ],
+        "properties": {
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Step"
+            },
+            "description": "The tiers the request may dispatch, in order, up to max_attempts (an explicit route is one step). Rotations used only after a rate limit are left out."
+          },
+          "proven": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Step"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The first step's tier when site knowledge has proven that route for the host."
+          },
+          "explicit": {
+            "type": "boolean"
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_attempts": {
+            "type": "integer"
+          },
+          "cooling": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "retry_after_seconds"
+                ],
+                "properties": {
+                  "retry_after_seconds": {
+                    "type": "integer"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when every route is resting and none has worked for this host: sent now, the request would fail with cooling_down."
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "step",
+                "reason"
+              ],
+              "properties": {
+                "step": {
+                  "$ref": "#/components/schemas/Step"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "EstimateItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "index"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "description": "The request's position in `requests`."
+          },
+          "host": {
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/EstimatePlan"
+          },
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object"
+              }
+            },
+            "description": "Why POST /internal/v1/jobs would refuse this request (invalid_request, url_not_allowed, request_too_large)."
+          }
+        }
+      },
+      "Estimates": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "hosts",
+          "defaults"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EstimateItem"
+            }
+          },
+          "hosts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "history",
+                "pace"
+              ],
+              "properties": {
+                "history": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SiteUsage"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "pace": {
+                  "$ref": "#/components/schemas/Pace"
+                }
+              }
+            }
+          },
+          "defaults": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requests",
+              "steps"
+            ],
+            "description": "Per tier across recently active hosts, for hosts with no history of their own.",
+            "properties": {
+              "requests": {
+                "type": "integer"
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/StepUsage"
+                }
+              }
+            }
           }
         }
       },

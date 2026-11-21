@@ -116,6 +116,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Estimate cost and time before sending
+         * @description What one request, or a batch of up to 1000, would cost and how long it would take, before anything is sent, reserved or charged. Send the body you would send to POST /v1/fetch, or a batch body ({items, defaults}: each item a URL or a request, merged over defaults). For each request FetchX plans the steps it would try and prices them with what recent requests to the same site took (the step that got the data, its traffic, captcha solves and time: learned from every customer's requests by host name only), its price table, your max_credits and your balance. credits.typical is what one success usually costs and credits.high a high-end cost (90th percentile); credits.expected counts only the share of requests that usually succeed, since failures are free; credits.hold is what the request reserves while it runs. basis says where the figures come from: history (this site's recent requests), routes (a route known to work, priced from other sites), defaults (no history: typical figures for the first step) or assumed. A batch's seconds assume FetchX's per-site pace. notes say what to change when a request would be refused or is likely to fail.
+         */
+        post: operations["createEstimate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/balance": {
         parameters: {
             query?: never;
@@ -148,6 +168,26 @@ export interface paths {
          * @description The balance and where credits went in a period (UTC).
          */
         get: operations["getUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Service status
+         * @description The API's state, its components and any incident or maintenance notice (scheduled, active, or resolved in the last 14 days). No API key needed, any origin may call it, and it answers during maintenance. Refreshed every 10 seconds. The status page at https://fetchx.ai/status shows the same with 90 days of history, from a monitor that does not run on FetchX's servers.
+         */
+        get: operations["getStatus"];
         put?: never;
         post?: never;
         delete?: never;
@@ -638,6 +678,159 @@ export interface components {
             /** @description True while spending is paused over a payment issue. */
             payment_hold: boolean;
         };
+        /** @description One POST /v1/fetch body, or a batch body: items (URLs, or requests with url) merged over defaults. async, webhook_url and idempotency_key are set once for a batch, never in defaults or an item. */
+        EstimateRequest: components["schemas"]["FetchRequest"] | components["schemas"]["EstimateBatch"];
+        EstimateBatch: {
+            /** @description URLs, or POST /v1/fetch bodies (with url) merged over defaults. */
+            items: (string | Record<string, never>)[];
+            /** @description POST /v1/fetch fields every item gets unless it sets its own (not url, async, webhook_url or idempotency_key). */
+            defaults?: Record<string, never>;
+            webhook_url?: string;
+            idempotency_key?: string;
+            tags?: string[];
+        };
+        EstimateCredits: {
+            /** @description typical times the share of requests that usually succeed (failures are free). */
+            expected: number;
+            /** @description What a success usually costs. */
+            typical: number;
+            /** @description A high-end cost for a success (90th percentile of traffic, with a captcha if the site sometimes needs one). */
+            high: number;
+            /** @description Items only: what the request reserves while it runs (released when it settles). */
+            hold?: number;
+        };
+        EstimateSeconds: {
+            typical: number;
+            high: number;
+        };
+        EstimateNote: {
+            /** @description no_history, likely_needs_more_credits, likely_needs_other_options, max_credits_too_low, insufficient_credits, balance_may_run_out, balance_limits_pace (a batch), cooling_down, low_success_rate, no_route or extract_priced_by_text (the request has extract). */
+            code: string;
+            /** @description What it means and what to change. */
+            message: string;
+        };
+        EstimateItem: {
+            /** @description The request's position (0 for a single request). */
+            index: number;
+            url: string | null;
+            host?: string;
+            /**
+             * @description Where the figures come from; none when no step is open to this request.
+             * @enum {string}
+             */
+            basis?: "history" | "routes" | "defaults" | "assumed" | "none";
+            /** @description Recent requests to this host the figures are based on. */
+            samples?: number;
+            /** @description The step most likely to get the data. */
+            step?: ("http" | "http_residential" | "browser" | "browser_residential") | null;
+            /** @description The steps likely to get the data, with their share. */
+            steps?: {
+                /** @enum {string} */
+                step: "http" | "http_residential" | "browser" | "browser_residential";
+                share: number;
+            }[];
+            /** @description The steps FetchX would try, in order. */
+            planned?: ("http" | "http_residential" | "browser" | "browser_residential")[];
+            /** @description Share of recent requests to this host that succeeded; null without history. */
+            success_rate?: number | null;
+            credits?: components["schemas"]["EstimateCredits"];
+            seconds?: components["schemas"]["EstimateSeconds"];
+            notes?: components["schemas"]["EstimateNote"][];
+            /** @description Why POST /v1/fetch (or the batch) would refuse this request; it is left out of the totals. */
+            error?: {
+                code: string;
+                message: string;
+                details?: Record<string, never>;
+            };
+        };
+        Estimate: {
+            /** @enum {string} */
+            kind: "fetch" | "batch";
+            requests: number;
+            /** @description Requests that would be accepted and are in the totals. */
+            estimated: number;
+            credits: components["schemas"]["EstimateCredits"];
+            seconds: components["schemas"]["EstimateSeconds"];
+            balance: {
+                /** @description Credits available now; null for a project that is not metered. */
+                credits: number | null;
+                covers_expected: boolean;
+                covers_high: boolean;
+            };
+            /** @description Batches only: per site, its requests, FetchX's pace for it and its credits. */
+            hosts?: {
+                [key: string]: {
+                    requests: number;
+                    pace: {
+                        /** @enum {string} */
+                        tier: "open" | "guarded" | "limited";
+                        max_running: number;
+                        start_gap_ms: number;
+                    } | null;
+                    credits: {
+                        expected: number;
+                        high: number;
+                    };
+                };
+            };
+            items: components["schemas"]["EstimateItem"][];
+            notes: components["schemas"]["EstimateNote"][];
+        };
+        ServiceStatus: {
+            /**
+             * @description The worst state of any component.
+             * @enum {string}
+             */
+            status: "operational" | "degraded" | "partial_outage" | "major_outage" | "maintenance";
+            /** Format: date-time */
+            updated_at: string;
+            components: {
+                /** @enum {string} */
+                id: "api" | "fetching" | "console";
+                name: string;
+                /** @enum {string} */
+                status: "operational" | "degraded" | "partial_outage" | "major_outage" | "maintenance";
+            }[];
+            /** @description Scheduled and active notices, then those resolved in the last 14 days. */
+            notices: components["schemas"]["StatusNotice"][];
+            api: {
+                /** @description The API's version (the latest changelog release). */
+                version: string;
+            };
+            links: {
+                status_page: string;
+                changelog: string;
+                docs: string;
+            };
+        };
+        StatusNotice: {
+            id: string;
+            /** @enum {string} */
+            kind: "incident" | "maintenance";
+            title: string;
+            body: string;
+            /** @enum {string} */
+            impact: "none" | "minor" | "major" | "maintenance";
+            components: string[];
+            /** @description While active, the API answers 503 maintenance. */
+            pause_api: boolean;
+            /** @enum {string} */
+            status: "scheduled" | "active" | "resolved";
+            /** Format: date-time */
+            starts_at: string;
+            /**
+             * Format: date-time
+             * @description The planned end.
+             */
+            ends_at: string | null;
+            /** Format: date-time */
+            resolved_at: string | null;
+            updates: {
+                /** Format: date-time */
+                at: string;
+                text: string;
+            }[];
+        };
         /** @description How the page was read for extract. On a failed request, why its page did not give the JSON. */
         ExtractReport: {
             /**
@@ -745,6 +938,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     createFetch: {
@@ -841,7 +1043,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. */
+            /** @description FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -912,6 +1114,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     deleteFetch: {
@@ -962,6 +1173,15 @@ export interface operations {
             };
             /** @description The request is still running. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1077,7 +1297,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. */
+            /** @description FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1154,6 +1374,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     getFetchScreenshot: {
@@ -1222,6 +1451,75 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createEstimate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EstimateRequest"];
+            };
+        };
+        responses: {
+            /** @description The estimate. Nothing was sent or reserved. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Estimate"];
+                };
+            };
+            /** @description The body is neither a POST /v1/fetch body nor a batch body; error.details.field names what is wrong. A single request that would be refused is reported in its item instead. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key is missing, wrong or revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description FetchX cannot estimate right now (the fetching service is not answering). During maintenance that pauses the API, error.code is maintenance. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     getBalance: {
@@ -1253,6 +1551,15 @@ export interface operations {
             };
             /** @description The API key does not have the scope this endpoint needs. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1310,6 +1617,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceStatus"];
                 };
             };
         };
