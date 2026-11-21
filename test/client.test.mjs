@@ -58,6 +58,32 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   await assert.rejects(stranger.usage(), {code: 'unauthorized', status: 401});
 });
 
+test('the client submits a batch, reads it back and follows its results to the end', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const {app, engine, events, platform} = await platformFor(store, {script: request => request.url.includes('/wall') ? {status: 'failed'}
+    : {body: html('batch page')}});
+  await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 1000 WHERE project = $1', [PROJECT]);
+  const client = new FetchXClient({url: 'https://api.fetchx.test', token: TOKEN, fetch: transportFor(app)});
+  const batch = await client.submitBatch({items: ['https://shop.example.com/1', 'https://shop.example.com/wall'], defaults: {formats: ['markdown']}});
+  assert.equal(batch.status, 'running');
+  assert.match(batch.idempotency_key, /^[0-9a-f-]{36}$/, 'the client sets a key so retries are safe');
+  assert.equal((await client.submitBatch({items: ['https://shop.example.com/1', 'https://shop.example.com/wall'], defaults: {formats: ['markdown']},
+    idempotency_key: batch.idempotency_key})).id, batch.id);
+  assert.deepEqual((await client.listBatches({status: 'running'})).items.map(item => item.id), [batch.id]);
+  await platform.batchRunner.tick();
+  await Promise.all([...engine.jobs.values()].map(job => job.done));
+  await engine.deliver(events);
+  const seen = [];
+  for await (const item of client.batchResults(batch.id, {intervalMs: 10})) seen.push([item.index, item.status, item.result?.status]);
+  assert.deepEqual(seen.sort(), [[0, 'succeeded', 'succeeded'], [1, 'failed', 'failed']]);
+  assert.equal((await client.getBatch(batch.id)).status, 'finished');
+  assert.deepEqual((await client.batchItems(batch.id, {status: 'failed', results: false})).items.map(item => item.index), [1]);
+  assert.equal((await client.cancelBatch(batch.id)).status, 'finished', 'a finished batch stays finished');
+  await assert.rejects(client.submitBatch({items: []}), {code: 'invalid_request', status: 400});
+  await assert.rejects(client.getBatch('00000000-0000-4000-8000-000000000000'), {code: 'not_found', status: 404});
+});
+
 test('a lost reply is resent with the same key: one result, one charge', {skip}, async t => {
   const store = await openStore();
   t.after(() => store.close());

@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FetchX engine private API",
-    "version": "1.6",
-    "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). POST /internal/v1/estimates says what requests would take before they are sent (planned tiers, per-host history and pace), for the platform to price. info.version is the contract version; GET /internal/v1/status and /healthz report it."
+    "version": "1.7",
+    "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). POST /internal/v1/estimates says what requests would take before they are sent (planned tiers, per-host history and pace), for the platform to price. Batches are the platform's: it checks a batch's requests with POST /internal/v1/requests/check, asks POST /internal/v1/pace how fast each host may take work, and starts each item as a paced job (JobInput.paced), which the engine refuses with host_busy when the host has no free slot. info.version is the contract version; GET /internal/v1/status and /healthz report it."
   },
   "security": [
     {
@@ -88,6 +88,16 @@
           },
           "413": {
             "description": "Body over 1 MB. Codes: request_too_large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A paced job's host has no free slot at its pace; nothing was started. Codes: host_busy, with details {tier, running, max_running, retry_after_ms}.",
             "content": {
               "application/json": {
                 "schema": {
@@ -302,6 +312,16 @@
           },
           "413": {
             "description": "Body over 1 MB. Codes: request_too_large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A paced job's host has no free slot at its pace; nothing was started. Codes: host_busy, with details {tier, running, max_running, retry_after_ms}.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1813,6 +1833,114 @@
         },
         "summary": "One budget's changes, newest first, in the shape of rule audit rows."
       }
+    },
+    "/internal/v1/requests/check": {
+      "post": {
+        "operationId": "checkRequests",
+        "summary": "Check requests without starting them",
+        "description": "Each request is checked as POST /internal/v1/jobs would check it, in order, and nothing is stored or sent. The answer gives each request's host (the key it is paced under) or why it would be refused. The platform checks a batch this way before queueing it.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestCheck"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One result per request, in order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestCheckResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is wrong. Codes: invalid_request (details.field names it).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body over 3 MB. Codes: request_too_large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/pace": {
+      "post": {
+        "operationId": "hostPace",
+        "summary": "How fast each host may take paced work now",
+        "description": "For each host: its tier from site knowledge (open, guarded or limited), the jobs running on it now (single requests included), how many may run at once, the least time between starts, and how long until the next paced start may begin (null while the host is full). browser_waiting is the number of jobs waiting for a browser: paced work should not start while it is above 0.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaceQuery"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaceAnswer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is wrong. Codes: invalid_request (details.field names it).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2794,6 +2922,11 @@
             "minimum": 0,
             "maximum": 120000,
             "description": "How long to wait for the result before answering 202. Defaults to the engine's sync wait (60 s). Ignored for async requests."
+          },
+          "paced": {
+            "type": "boolean",
+            "default": false,
+            "description": "A batch item: start only when the job's host has a free slot at its pace (see POST /internal/v1/pace), else refuse with 429 host_busy and start nothing. Every job, paced or not, holds a slot on its host while it runs."
           }
         }
       },
@@ -3153,6 +3286,11 @@
             "minimum": 0,
             "maximum": 120000,
             "description": "How long to wait for the result before answering 202. Defaults to the engine's sync wait (60 s). Ignored for async requests."
+          },
+          "paced": {
+            "type": "boolean",
+            "default": false,
+            "description": "A batch item: start only when the job's host has a free slot at its pace (see POST /internal/v1/pace), else refuse with 429 host_busy and start nothing. Every job, paced or not, holds a slot on its host while it runs."
           }
         }
       },
@@ -3500,6 +3638,159 @@
                 }
               }
             }
+          }
+        }
+      },
+      "RequestCheck": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requests"
+        ],
+        "properties": {
+          "requests": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1000,
+            "items": {
+              "type": "object",
+              "description": "A FetchRequest as the caller sent it, valid or not: each result says whether the engine would take it."
+            }
+          }
+        }
+      },
+      "RequestCheckResults": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "host"
+                  ],
+                  "properties": {
+                    "host": {
+                      "type": "string",
+                      "description": "The host the request is paced under (lowercase)."
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "code"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "description": "invalid_request, url_not_allowed or request_too_large."
+                        },
+                        "details": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "PaceQuery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "hosts"
+        ],
+        "properties": {
+          "hosts": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "string",
+              "maxLength": 253
+            }
+          }
+        }
+      },
+      "HostPace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tier",
+          "running",
+          "max_running",
+          "start_gap_ms",
+          "next_start_in_ms"
+        ],
+        "properties": {
+          "tier": {
+            "type": "string",
+            "enum": [
+              "open",
+              "guarded",
+              "limited"
+            ],
+            "description": "open: the host never refused FetchX. guarded: it refused or rate-limited FetchX before. limited: one of its routes was rate-limited recently."
+          },
+          "running": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_running": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "start_gap_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "next_start_in_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "0: a paced job may start now. null: the host is full until a job finishes."
+          }
+        }
+      },
+      "PaceAnswer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "hosts",
+          "browser_waiting"
+        ],
+        "properties": {
+          "hosts": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/HostPace"
+            },
+            "description": "Keyed by the host as it is paced (lowercase), which is what POST /internal/v1/requests/check returns."
+          },
+          "browser_waiting": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       }

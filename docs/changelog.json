@@ -6,6 +6,18 @@
   },
   "releases": [
     {
+      "version": "1.5.0",
+      "date": "2026-11-21",
+      "title": "Batches: many URLs in one job, run at each site's pace",
+      "changes": [
+        {"type": "added", "text": "POST /v1/batches: up to 1000 URLs, or POST /v1/fetch bodies laid over shared defaults, in one job. Every item is checked first, and one bad item refuses the batch and names it (items[3].formats). FetchX starts the items itself at the pace each site can take, so you need no pacing loop of your own; each item is charged only if it succeeds."},
+        {"type": "added", "text": "GET /v1/batches, GET /v1/batches/{id}, GET /v1/batches/{id}/items (by index, or with order=finished as a feed of what finished since your last read) and POST /v1/batches/{id}/cancel."},
+        {"type": "added", "text": "Batch webhooks: each item's result as it finishes (fetch.finished, with batch: {id, index}), then batch.finished when it ends or batch.paused when the balance runs out. A batch that paused starts again by itself after a top-up."},
+        {"type": "added", "text": "Every webhook delivery carries an X-FetchX-Event header naming the event, and every result has batch: {id, index} for a batch item, or null."},
+        {"type": "added", "text": "The JavaScript and Python clients: submitBatch, getBatch, listBatches, batchItems, cancelBatch, and batchResults to follow results until the batch ends (submit_batch, batch_results and so on in Python)."}
+      ]
+    },
+    {
       "version": "1.4.0",
       "date": "2026-11-21",
       "title": "Cost estimates, status and clear answers for routes that are gone",
