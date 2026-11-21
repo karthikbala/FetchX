@@ -12,7 +12,7 @@
 // ({items: [url | {url, ...}], defaults, webhook_url?, idempotency_key?, tags?}),
 // each item merged over `defaults`.
 import {GatewayError} from '../policy.mjs';
-import {STEPS, priceOf} from '../billing/ledger.mjs';
+import {STEPS, extractCredits, priceOf} from '../billing/ledger.mjs';
 import {budget} from '../budgets.mjs';
 
 export const MAX_ESTIMATE_ITEMS = 1000;
@@ -137,9 +137,14 @@ export class Estimator {
   #priced(item, {host, plan}, {host: hostInfo, defaults, table, hold, metered, available}) {
     const request = item.request;
     const history = hostInfo.history && hostInfo.history.requests >= MIN_HISTORY ? hostInfo.history : null;
-    // The tiers the reservation would allow, as POST /v1/fetch decides them.
+    // Reading the page into JSON: one unit for most pages, up to the most a
+    // request may read (extract_max_tokens).
+    const extracting = request.extract !== undefined && request.extract !== null;
+    const extract = extracting ? {least: extractCredits(table, 0), high: extractCredits(table, table.extract_max_tokens)} : {least: 0, high: 0};
+    // The tiers the reservation would allow, as POST /v1/fetch decides them:
+    // a step and one unit of extraction must both fit.
     const reserve = metered ? Math.min(hold, available) : hold;
-    const allowed = new Set(STEPS.filter(step => !metered || table[step] <= reserve));
+    const allowed = new Set(STEPS.filter(step => !metered || table[step] + extract.least <= reserve));
     const usable = plan.steps.filter(step => allowed.has(step));
     const notes = [];
     const maxCredits = Number.isSafeInteger(request.max_credits) ? request.max_credits : null;
@@ -167,12 +172,15 @@ export class Estimator {
       basis = plan.proven === step ? 'routes' : 'defaults';
       if (!history) notes.push({code: 'no_history', message: `FetchX has no recent requests to ${host} to go by, so the figures are typical for the ${step} step. The estimate improves once a page from this host has been fetched.`});
     }
+    if (extracting) {
+      notes.push({code: 'extract_priced_by_text', message: `extract adds ${table.extract} credits per started ${table.extract_unit_tokens.toLocaleString('en-US')} tokens of page text read. typical counts one unit (${extract.least} credits), high counts the most a page can cost (${extract.high}).`});
+    }
     if (!usable.length) {
-      const cheapest = Math.min(...plan.steps.map(step => table[step]));
+      const cheapest = Math.min(...plan.steps.map(step => table[step])) + extract.least;
       notes.push(maxCredits !== null && maxCredits < cheapest
-        ? {code: 'max_credits_too_low', message: `max_credits ${maxCredits} is below the cheapest step this request needs (${cheapest} credits); POST /v1/fetch would refuse it. Raise max_credits or remove it.`}
+        ? {code: 'max_credits_too_low', message: `max_credits ${maxCredits} is below the cheapest step this request needs (${cheapest} credits${extracting ? ', with one unit of extract' : ''}); POST /v1/fetch would refuse it. Raise max_credits or remove it.`}
         : plan.steps.length && metered && available < cheapest
-          ? {code: 'insufficient_credits', message: `The balance (${available} credits) is below the cheapest step this request needs (${cheapest} credits). Top up first.`}
+          ? {code: 'insufficient_credits', message: `The balance (${available} credits) is below the cheapest step this request needs (${cheapest} credits${extracting ? ', with one unit of extract' : ''}). Top up first.`}
           : {code: 'no_route', message: 'No route is open for this request right now; see plan and cooling.'});
     }
     if (plan.cooling) {
@@ -191,8 +199,8 @@ export class Estimator {
       const extraSeconds = step.startsWith('browser') ? deep * DEEP.seconds : 0;
       const captcha = step.startsWith('browser') ? figures.captcha : 0;
       return {step, share, figures,
-        typical: priceOf(table, {step, wireBytes: figures.bytes[0] + extraBytes}) + captcha * table.captcha,
-        high: priceOf(table, {step, captchaSolved: captcha > 0, wireBytes: figures.bytes[1] + extraBytes}),
+        typical: priceOf(table, {step, wireBytes: figures.bytes[0] + extraBytes}) + captcha * table.captcha + extract.least,
+        high: priceOf(table, {step, captchaSolved: captcha > 0, wireBytes: figures.bytes[1] + extraBytes}) + extract.high,
         seconds: [figures.seconds[0] + extraSeconds, figures.seconds[1] + extraSeconds]};
     });
     if (basis !== 'history' && priced[0]?.figures.basis === 'assumed') basis = 'assumed';

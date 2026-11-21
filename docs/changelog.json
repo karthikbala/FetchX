@@ -6,6 +6,19 @@
   },
   "releases": [
     {
+      "version": "1.6.0",
+      "date": "2026-11-21",
+      "title": "Pages as JSON in your own shape",
+      "changes": [
+        {"type": "added", "text": "extract on POST /v1/fetch: send a small JSON Schema and get the page back as JSON in data.extract. A root object is one record; a root array, with a description of one record, gets every record on a list page. data.extract_report says how sure each value is and why a missing one is null. Every value is checked against the page, so a value the page does not show comes back null, never guessed. Next pages keep the same extract."},
+        {"type": "added", "text": "Fields you list in the schema's required work like expect: a page that does not show them fails with content_missing and is not charged, and attempts[].missing names them as extract:<field>."},
+        {"type": "added", "text": "Extraction costs 10 credits per started 25,000 tokens of page text read (one unit on most pages, 60 at most), charged only when the request succeeds. credits.breakdown shows extract_tokens and extract_credits, and POST /v1/estimate counts it."},
+        {"type": "added", "text": "503 extract_unavailable: when FetchX cannot read pages into JSON, a request with extract is refused before anything is fetched. If extraction fails after the fetch, the request fails with extract_unavailable. Neither is charged. Wait retry_after_seconds, or send it without extract."},
+        {"type": "added", "text": "Batches take extract too, in defaults or per item. While extraction is unavailable, a batch whose items ask for it pauses with paused_reason extract_unavailable and tries again by itself after 5 minutes; nothing is charged meanwhile."},
+        {"type": "removed", "text": "The json format (the body parsed as JSON). A JSON API's response is in body; use extract to get a page as JSON."}
+      ]
+    },
+    {
       "version": "1.5.0",
       "date": "2026-11-21",
       "title": "Batches: many URLs in one job, run at each site's pace",

@@ -22,7 +22,7 @@ test('a successful fetch is charged once, at the price of the step the engine re
   assert.equal(first.body.page_status, 'content');
   // Every answer says what it cost, how that adds up, and what is left.
   assert.deepEqual(first.body.credits, {charged: 1, max: 100, balance: 99, breakdown: {step: 'http', step_credits: 1, captcha_credits: 0,
-    traffic_mb: 0, included_mb: null, traffic_credits: 0}});
+    traffic_mb: 0, included_mb: null, traffic_credits: 0, extract_tokens: null, extract_credits: 0}});
   assert.deepEqual(Object.keys(first.body), ['id', 'status', 'page_status', 'idempotency_key', 'url', 'created_at', 'finished_at', 'tags', 'data',
     'credits', 'challenge', 'attempts', 'skipped', 'fixes', 'error', 'batch']);
   assert.equal(first.body.batch, null, 'a single request is not a batch item');
@@ -78,8 +78,51 @@ test('prices come from the platform: residential, browser, captcha and bandwidth
   // 60 left: the reservation (and so the charge) is capped at what is available.
   const big = await call('POST', '/v1/fetch', {body: {url: 'https://c.example.com/'}});
   assert.deepEqual(big.body.credits, {charged: 15, max: 60, balance: 45, breakdown: {step: 'http_residential', step_credits: 5, captcha_credits: 0,
-    traffic_mb: 2.5, included_mb: 1, traffic_credits: 10}}, '5 + 2 MB over the included 1 MB at 5 each');
+    traffic_mb: 2.5, included_mb: 1, traffic_credits: 10, extract_tokens: null, extract_credits: 0}}, '5 + 2 MB over the included 1 MB at 5 each');
   assert.equal(await balance(store), 45);
+});
+
+test('extract is priced per started 25,000 tokens of page text read, reserved for the most, and free when it cannot run', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const outcomes = [{step: 'http'}, {step: 'http', extract: {name: 'Lamp'}, extract_tokens: 30_000}, {step: 'browser', extract_tokens: 900_000},
+    {step: 'http', status: 'failed'}, {extract_unavailable: 'budget_exhausted'}, {step: 'http', extract_tokens: 0}];
+  const {call, engine} = await platformFor(store, {script: () => outcomes.shift()});
+  await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 1000 WHERE project = $1', [PROJECT]);
+  const extract = {schema: {type: 'object', properties: {name: {type: 'string', description: 'Product name'}}}};
+  const plain = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/p/0'}});
+  const read = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/p/1', extract}});
+  assert.equal(read.status, 200, JSON.stringify(read.body));
+  assert.deepEqual(read.body.data.extract, {name: 'Lamp'});
+  assert.equal(read.body.data.extract_report.status, 'complete');
+  assert.deepEqual(read.body.credits.breakdown, {step: 'http', step_credits: 1, captcha_credits: 0, traffic_mb: 0, included_mb: null,
+    traffic_credits: 0, extract_tokens: 30_000, extract_credits: 20});
+  assert.equal(read.body.credits.charged, 21, '1 for the step, 2 started units of 25,000 tokens at 10');
+  // The reservation covers the most text the engine reads: 6 units.
+  assert.equal(read.body.credits.max, plain.body.credits.max + 60);
+  assert.equal(engine.jobs.get(read.body.id).request.extract.schema.type, 'object', 'sent to the engine as given');
+  // Past 150,000 tokens nothing more is charged.
+  const long = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/p/2', render: 'always', extract}});
+  assert.equal(long.body.credits.charged, 10 + 60);
+  // A failure costs nothing, extract or not.
+  assert.equal((await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/p/3', extract}})).body.credits.charged, 0);
+  // Extraction unavailable: refused before anything is fetched, nothing held.
+  const refused = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/p/4', extract}});
+  assert.equal(refused.status, 503);
+  assert.equal(refused.body.error.code, 'extract_unavailable');
+  assert.equal(refused.body.error.retry_after_seconds, 300);
+  assert.equal(refused.body.error.details.reason, 'budget_exhausted');
+  assert.equal(await reservations(store), 0);
+  // An empty page still started a unit.
+  assert.equal((await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/p/5', extract}})).body.credits.charged, 11);
+  assert.equal(await balance(store), 1000 - 1 - 21 - 70 - 11);
+  // A request whose max_credits fits a step but not the least extraction can cost.
+  const tight = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/p/6', extract, max_credits: 5}});
+  assert.equal(tight.status, 402);
+  assert.equal(tight.body.error.code, 'max_credits_too_low');
+  assert.equal(tight.body.error.details.min_credits, 11);
+  assert.equal((await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/', formats: ['json']}})).status, 200,
+    'formats is the engine\'s to check');
 });
 
 test('failures are free; the reservation shapes allowed_steps and refusals say why', {skip}, async t => {
@@ -161,7 +204,7 @@ test('a next page is a new request: reserved, charged only when it succeeds, ref
   assert.deepEqual(second.body.data.page, {number: 2, previous_id: first.body.id, screens: 0, end: null});
   assert.deepEqual(second.body.tags, ['crawl'], 'settings come from the earlier request');
   assert.deepEqual(second.body.credits, {charged: 10, max: 90, balance: 80, breakdown: {step: 'browser', step_credits: 10, captcha_credits: 0,
-    traffic_mb: 0, included_mb: null, traffic_credits: 0}});
+    traffic_mb: 0, included_mb: null, traffic_credits: 0, extract_tokens: null, extract_credits: 0}});
   assert.equal(await balance(store), 80);
   pages.set(2, second.body.id);
   assert.ok(engine.calls.some(c => c.method === 'POST' && c.url === `/internal/v1/jobs/${first.body.id}/next`));

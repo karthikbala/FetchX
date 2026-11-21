@@ -16,7 +16,7 @@ export const KEY_SCOPES = [
   { id: 'usage:read', label: 'Read usage', detail: 'GET /v1/usage' },
 ] as const;
 
-export const FORMATS = ['body', 'markdown', 'text', 'links', 'metadata', 'json', 'screenshot'] as const;
+export const FORMATS = ['body', 'markdown', 'text', 'links', 'metadata', 'screenshot'] as const;
 
 // Code for the same request against the public API.
 export function requestCode(base: string, language: string, body: Record<string, unknown>) {

@@ -6,8 +6,10 @@
 // started.
 import {GatewayError} from '../policy.mjs';
 
-export const ENGINE_CONTRACT = '1.7';
+export const ENGINE_CONTRACT = '1.8';
 const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH']);
+// 503 answers that are refusals: nothing was started, and the caller is told why.
+const REFUSED_503 = new Set(['extract_unavailable']);
 
 function unavailable(sent, cause) {
   const error = new GatewayError('unavailable', 503);
@@ -53,7 +55,8 @@ export class EngineClient {
       return {status: response.status, body: json};
     }
     const error = json?.error;
-    if (response.status >= 400 && response.status < 500 && typeof error?.code === 'string') {
+    if (typeof error?.code === 'string' && ((response.status >= 400 && response.status < 500)
+      || (response.status === 503 && REFUSED_503.has(error.code)))) {
       // The token is the platform's own configuration, never the caller's fault.
       if (response.status === 401) throw unavailable(true, 'engine_unauthorized');
       const refusal = new GatewayError(error.code, response.status);

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FetchX engine private API",
-    "version": "1.7",
+    "version": "1.8",
     "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). POST /internal/v1/estimates says what requests would take before they are sent (planned tiers, per-host history and pace), for the platform to price. Batches are the platform's: it checks a batch's requests with POST /internal/v1/requests/check, asks POST /internal/v1/pace how fast each host may take work, and starts each item as a paced job (JobInput.paced), which the engine refuses with host_busy when the host has no free slot. info.version is the contract version; GET /internal/v1/status and /healthz report it."
   },
   "security": [
@@ -88,6 +88,16 @@
           },
           "413": {
             "description": "Body over 1 MB. Codes: request_too_large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The request asks for extract, and extraction cannot run now (its models are not configured, or its spend budget is used up); nothing was started and nothing is billed. Codes: extract_unavailable, with details.reason not_configured or budget_exhausted.",
             "content": {
               "application/json": {
                 "schema": {
@@ -312,6 +322,16 @@
           },
           "413": {
             "description": "Body over 1 MB. Codes: request_too_large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The request asks for extract, and extraction cannot run now (its models are not configured, or its spend budget is used up); nothing was started and nothing is billed. Codes: extract_unavailable, with details.reason not_configured or budget_exhausted.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2049,8 +2069,25 @@
           "metadata": {
             "$ref": "#/components/schemas/PageMetadata"
           },
-          "json": {
-            "description": "formats: json, the body parsed as JSON (null when it is not JSON)."
+          "extract": {
+            "description": "The JSON read from the page for the request's extract: an object for a one-record schema (fields the page does not show are null), an array of records for a list schema. null when the site answered 404 or 410. Only on requests with extract.",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extract_report": {
+            "$ref": "#/components/schemas/ExtractReport"
           },
           "screenshot": {
             "type": "string",
@@ -2213,7 +2250,7 @@
               "not_admitted",
               "url_not_allowed"
             ],
-            "description": "not_admitted means nothing reached the site on this step (for example the provider refused the host); it does not count as an attempt. content_missing means the page loaded without what expect asked for."
+            "description": "not_admitted means nothing reached the site on this step (for example the provider refused the host); it does not count as an attempt. content_missing means the page loaded without what expect asked for, or without a required extract field."
           },
           "code": {
             "type": "string",
@@ -2227,13 +2264,20 @@
             "type": "array",
             "items": {
               "type": "string",
-              "enum": [
-                "selector",
-                "text",
-                "min_markdown_length"
+              "anyOf": [
+                {
+                  "enum": [
+                    "selector",
+                    "text",
+                    "min_markdown_length"
+                  ]
+                },
+                {
+                  "pattern": "^extract:[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                }
               ]
             },
-            "description": "On a content_missing step, the expect conditions the page did not meet."
+            "description": "On a content_missing step, the expect conditions the page did not meet, and extract:<field> for each required extract field it did not show."
           },
           "status_code": {
             "type": [
@@ -2379,7 +2423,8 @@
               "uncertain",
               "route_unavailable",
               "url_not_allowed",
-              "next_page_missing"
+              "next_page_missing",
+              "extract_unavailable"
             ]
           },
           "message": {
@@ -2591,11 +2636,10 @@
                 "text",
                 "links",
                 "metadata",
-                "json",
                 "screenshot"
               ]
             },
-            "description": "What to return. body: the response as received (the rendered page after a browser), the default when formats is left out. markdown, text, links, metadata and json are derived from it; screenshot needs a browser. Ask only for what you use: a rendered page can be megabytes of HTML. The body is stored either way and can be downloaded from /v1/fetch/{id}/content.",
+            "description": "What to return. body: the response as received (the rendered page after a browser), the default when formats is left out. markdown, text, links and metadata are derived from it; screenshot needs a browser. Ask only for what you use: a rendered page can be megabytes of HTML. The body is stored either way and can be downloaded from /v1/fetch/{id}/content.",
             "default": [
               "body"
             ]
@@ -2626,6 +2670,25 @@
                 "minimum": 1,
                 "maximum": 1000000,
                 "description": "The page\u2019s markdown (a non-HTML body\u2019s text) must have at least this many characters."
+              }
+            }
+          },
+          "extract": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema"
+            ],
+            "description": "Read the page into JSON. schema is a small JSON Schema whose descriptions say what each field is: a root object asks for one record (a product, an article), a root array of objects (with a description of one record) asks for every record of that kind on a list page. Fields: string (format date, date-time or uri), number, integer, boolean, enum of strings, and arrays of strings or numbers; up to 30 per record. Every value is checked against the page: one the page does not show is null, never guessed. A field listed in required that the page does not show makes the step content_missing, as a missed expect does (the ladder tries a browser, then a fresh IP; never billed). The page is fetched only when extraction can run (else 503 extract_unavailable); if the models fail after the page is fetched, the job fails with extract_unavailable and is not billed. The result is data.extract with data.extract_report; usage.extract says how much page text was read. Not with HEAD.",
+            "properties": {
+              "schema": {
+                "type": "object",
+                "description": "type object (one record) or array (items: an object, description required, maxItems up to 200). additionalProperties may only be false. At most 16 KB."
+              },
+              "instructions": {
+                "type": "string",
+                "maxLength": 500,
+                "description": "Optional context for every field, for example which of several prices to take."
               }
             }
           },
@@ -2881,6 +2944,25 @@
           "wire_bytes": {
             "type": "integer",
             "minimum": 0
+          },
+          "extract": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "page_tokens",
+              "calls"
+            ],
+            "description": "When the request had extract: the page text the models read (the platform prices it) and the model calls made.",
+            "properties": {
+              "page_tokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "calls": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
           }
         }
       },
@@ -3638,6 +3720,114 @@
                 }
               }
             }
+          }
+        }
+      },
+      "ExtractReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "description": "How the page was read for extract. On a failed request, why its page did not give the JSON.",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "missing_required",
+              "unavailable",
+              "skipped"
+            ],
+            "description": "complete: every required field was found. missing_required: a required field was not on the page (the step was content_missing). unavailable: the models could not run. skipped: the site answered 404 or 410, so nothing was read."
+          },
+          "reason": {
+            "type": "string",
+            "description": "For unavailable or skipped: not_configured, budget_exhausted, calls_exhausted, error or not_found."
+          },
+          "page_tokens": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Page text the models read, in tokens of 4 characters."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when the page was longer than extraction reads (150,000 tokens), or the call cap or deadline stopped it; fields not reached are null."
+          },
+          "records": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Records returned for a list schema; null for one record."
+          },
+          "dropped": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "List blocks left out: empty, repeated, or missing a required field."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "blocks",
+              "chat"
+            ],
+            "description": "List schema: records read one by one from the page's repeated blocks, or the whole list read at once."
+          },
+          "fill": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "description": "List schema: the share of records with each field found."
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "One record: the fields that are null."
+          },
+          "reasons": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "not_found",
+                "unsure",
+                "ungrounded"
+              ]
+            },
+            "description": "Why each missing field is null: not_found (the page does not show it), unsure (the models disagreed or were not confident), ungrounded (a value was read that is not on the page)."
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "evidence": {
+                  "type": "string",
+                  "description": "The page text the value was read from."
+                }
+              }
+            },
+            "description": "One record: for each value found, how sure the model was and where on the page it was."
+          },
+          "required_missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The required fields the page did not show."
           }
         }
       },

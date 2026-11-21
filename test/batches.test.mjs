@@ -263,6 +263,35 @@ test('a batch pauses when credits run out, says so, and starts again by itself a
   assert.deepEqual(webhooks.map(hook => hook.headers['x-fetchx-event']), ['batch.paused', 'fetch.finished', 'fetch.finished', 'batch.finished']);
 });
 
+test('a batch whose items ask for extract waits while extraction is unavailable, then runs by itself', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  let unavailable = 'budget_exhausted';
+  const ctx = await platformFor(store, {script: () => (unavailable ? {extract_unavailable: unavailable} : {step: 'http', extract: {name: 'Lamp'}})});
+  const {call, platform, webhooks} = ctx;
+  const extract = {schema: {type: 'object', properties: {name: {type: 'string', description: 'Product name'}}}};
+  const {body: batch} = await call('POST', '/v1/batches', {body: {items: ['https://a.example.com/1', 'https://a.example.com/2'],
+    defaults: {extract}, webhook_url: HOOK}});
+  await drain(ctx);
+  const paused = (await call('GET', `/v1/batches/${batch.id}`)).body;
+  assert.equal(paused.status, 'paused');
+  assert.equal(paused.paused_reason, 'extract_unavailable');
+  assert.equal(paused.items.queued, 2, 'nothing failed, nothing is lost');
+  assert.equal(await reservations(store), 0);
+  await deliverHooks(platform);
+  assert.deepEqual(webhooks.map(hook => hook.headers['x-fetchx-event']), ['batch.paused']);
+  // Extraction is back, but the wait is not over: still paused.
+  unavailable = null;
+  await drain(ctx);
+  assert.equal((await call('GET', `/v1/batches/${batch.id}`)).body.status, 'paused');
+  await store.pool.query(`UPDATE fetch_batches SET paused_until = clock_timestamp() - interval '1 second' WHERE id = $1`, [batch.id]);
+  await drain(ctx);
+  const done = (await call('GET', `/v1/batches/${batch.id}`)).body;
+  assert.equal(done.status, 'finished');
+  assert.equal(done.paused_reason, null);
+  assert.equal(done.items.succeeded, 2);
+});
+
 test('an item refused at its start fails alone and is free; canceling stops the rest', {skip}, async t => {
   const store = await openStore();
   t.after(() => store.close());

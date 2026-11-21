@@ -78,6 +78,15 @@ test('estimates price each request from site history, the price table, max_credi
   assert.equal(item.credits.typical, 25 + 20 * 5, '4 screens past 10 add 10 MB');
   assert.deepEqual(item.seconds, {typical: 62, high: 92});
 
+  // extract adds one unit to typical and the most a page can cost to high; the hold covers both.
+  const extract = {schema: {type: 'object', properties: {name: {type: 'string', description: 'Name'}}}};
+  answer = await estimate({url: 'https://new.example.org/', render: 'never', extract});
+  [item] = answer.body.items;
+  assert.deepEqual(item.credits, {expected: 11, typical: 11, high: 61, hold: item.credits.hold});
+  assert.ok(item.credits.hold >= 61);
+  assert.deepEqual(item.notes.map(note => note.code), ['no_history', 'extract_priced_by_text']);
+  assert.match(item.notes[1].message, /10 credits per started 25,000 tokens/);
+
   // No history: figures from other sites for the first planned step, or assumed.
   answer = await estimate({url: 'https://new.example.org/', render: 'never'});
   [item] = answer.body.items;

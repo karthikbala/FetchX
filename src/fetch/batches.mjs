@@ -57,6 +57,8 @@ export const ITEM_KEY_PREFIX = 'batch.';
 const itemKey = (batch, index) => `${ITEM_KEY_PREFIX}${batch}.${index}`;
 // Refusals that end an item before it starts (nothing sent, nothing charged).
 const ITEM_REFUSALS = new Set(['invalid_request', 'url_not_allowed', 'request_too_large', 'max_credits_too_low', 'idempotency_conflict']);
+// How long a batch waits when its items ask for extract and extraction can't run.
+const EXTRACT_RETRY_SECONDS = 300;
 
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const invalid = (field, reason) => Object.assign(new GatewayError('invalid_request', 400), {details: {field, ...(reason ? {reason} : {})}});
@@ -122,11 +124,14 @@ export async function initBatches(pool) {
       status text NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'paused', 'finished', 'canceled')),
       paused_reason text,
       paused_needed bigint,
+      -- extract_unavailable: when to try the batch's items again.
+      paused_until timestamptz,
       created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
       finished_at timestamptz,
       canceled_at timestamptz,
       UNIQUE (project, idempotency_key)
     );
+    ALTER TABLE fetch_batches ADD COLUMN IF NOT EXISTS paused_until timestamptz;
     CREATE INDEX IF NOT EXISTS fetch_batches_project_created ON fetch_batches (project, created_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS fetch_batches_paused ON fetch_batches (created_at) WHERE status = 'paused';
     CREATE TABLE IF NOT EXISTS fetch_batch_items (
@@ -561,6 +566,12 @@ export class BatchService {
         await this.#pause(batch.id, error.code, error.details?.needed ?? null);
         return 'paused';
       }
+      // The items ask for extract and extraction can't run now: the batch
+      // waits (paused, with a reason) and tries again after the wait.
+      if (error.code === 'extract_unavailable') {
+        await this.#pause(batch.id, error.code, null, error.details?.retry_after_seconds ?? EXTRACT_RETRY_SECONDS);
+        return 'paused';
+      }
       if (ITEM_REFUSALS.has(error.code)) {
         await this.#refuse(batch.id, item.n, error);
         return 'refused';
@@ -569,11 +580,12 @@ export class BatchService {
     }
   }
 
-  async #pause(id, reason, needed) {
+  async #pause(id, reason, needed, retrySeconds = null) {
     let queued = false;
     await this.store.tx(async client => {
-      const batch = (await client.query(`UPDATE fetch_batches SET status = 'paused', paused_reason = $2, paused_needed = $3
-        WHERE id = $1 AND status = 'running' RETURNING *`, [id, reason, needed])).rows[0];
+      const batch = (await client.query(`UPDATE fetch_batches SET status = 'paused', paused_reason = $2, paused_needed = $3,
+        paused_until = CASE WHEN $4::float8 IS NULL THEN NULL ELSE clock_timestamp() + make_interval(secs => $4::float8) END
+        WHERE id = $1 AND status = 'running' RETURNING *`, [id, reason, needed, retrySeconds])).rows[0];
       if (batch) queued = await this.#queueEvent(client, batch, 'batch.paused');
     });
     if (queued) this.front.onSettled();
@@ -592,19 +604,24 @@ export class BatchService {
   }
 
   // Paused batches start again once the project's balance covers what their
-  // next item needed (or the payment hold is gone).
+  // next item needed (or the payment hold is gone), or, when extraction was
+  // unavailable, once the wait is over.
   async resumePaused() {
-    const rows = (await this.store.pool.query(`SELECT id, project, paused_reason, paused_needed FROM fetch_batches WHERE status = 'paused'
-      ORDER BY created_at LIMIT 500`)).rows;
+    const rows = (await this.store.pool.query(`SELECT id, project, paused_reason, paused_needed, paused_until <= clock_timestamp() AS due
+      FROM fetch_batches WHERE status = 'paused' ORDER BY created_at LIMIT 500`)).rows;
     let resumed = 0;
     const balances = new Map();
     for (const row of rows) {
-      if (!balances.has(row.project)) balances.set(row.project, await this.ledger.balance(row.project));
-      const balance = balances.get(row.project);
-      const needed = Number(row.paused_needed ?? Math.min(...Object.values(this.#stepPrices())));
-      if (balance && (balance.held || balance.available < needed)) continue;
-      const updated = await this.store.pool.query(`UPDATE fetch_batches SET status = 'running', paused_reason = NULL, paused_needed = NULL
-        WHERE id = $1 AND status = 'paused'`, [row.id]);
+      if (row.paused_reason === 'extract_unavailable') {
+        if (!row.due) continue;
+      } else {
+        if (!balances.has(row.project)) balances.set(row.project, await this.ledger.balance(row.project));
+        const balance = balances.get(row.project);
+        const needed = Number(row.paused_needed ?? Math.min(...Object.values(this.#stepPrices())));
+        if (balance && (balance.held || balance.available < needed)) continue;
+      }
+      const updated = await this.store.pool.query(`UPDATE fetch_batches SET status = 'running', paused_reason = NULL, paused_needed = NULL,
+        paused_until = NULL WHERE id = $1 AND status = 'paused'`, [row.id]);
       resumed += updated.rowCount;
     }
     return resumed;

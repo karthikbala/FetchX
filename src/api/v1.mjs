@@ -41,6 +41,7 @@ const MESSAGES = {
   content_expired: 'The stored content has expired or was deleted.',
   no_next_page: 'That request has no next page to open; error.details.reason says why.',
   credit_account_unavailable: 'The project has no credit account.',
+  extract_unavailable: 'FetchX cannot read pages into JSON right now, so nothing was fetched or charged. Retry after retry_after_seconds, or send the request without extract.',
   maintenance: 'FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.',
   route_retired: 'This route was retired; error.details.replacement says what to use instead.',
   route_not_found: 'There is no such route. Check the method and path against the docs (error.details.docs_url).',
