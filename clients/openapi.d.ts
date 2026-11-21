@@ -215,7 +215,7 @@ export interface components {
                 ms?: number;
             };
             /**
-             * @description How far a page opened in a browser is scrolled before it is read. auto (the default): once the page has filled in, keep scrolling while scrolling loads more, up to 10 screens. off: read the page once it has filled in, without scrolling. A number from 1 to 50: scroll up to that many screens, stopping early at the end of the page; implies a browser, and more screens take more time (raise timeout_ms for many). Scrolling has no fee of its own, but what a scrolled page loads is traffic like any other: on a residential route it counts toward the per-MB charge beyond the included traffic, so off is the cheapest choice when the first screen is enough.
+             * @description How far a page opened in a browser is scrolled before it is read. auto (the default): once the page has filled in, keep scrolling while scrolling loads more, up to 10 screens. off: read the page once it has filled in, without scrolling. A number from 1 to 50: scroll up to that many screens, stopping early at the end of the page; implies a browser, and more screens take more time (raise timeout_ms for many). Scrolling has no fee of its own, but what a scrolled page loads is traffic like any other: on a residential route it counts toward the per-MB charge beyond the included traffic, so off is the cheapest choice when the first screen is enough. A number past 10 reserves credits for 2.5 MB more traffic a screen while the request runs; only what the page used is charged.
              * @default auto
              */
             scroll?: ("auto" | "off") | number;
@@ -276,7 +276,7 @@ export interface components {
              * @default auto
              */
             scroll?: ("auto" | "off") | number;
-            /** @description The most this page may cost. Not taken from the earlier request: without it, the page may use any step, like a new request. */
+            /** @description The most this page may cost. Not taken from the earlier request: without it, the page may use any step, like a new request. A next page holds credits for the deepest page's traffic (150 MB) while it runs and is charged only for what it used; max_credits caps both. */
             max_credits?: number;
             /**
              * @description As in FetchRequest; defaults to the earlier request's. A next page reached by clicking or scrolling opens the list again and repeats the earlier steps first, so deep pages of a long list may need more time.

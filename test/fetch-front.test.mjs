@@ -194,6 +194,28 @@ test('a next page is a new request: reserved, charged only when it succeeds, ref
   assert.equal(usage.body.used.credits, 22, 'page 1 and page 2 at the browser price, two plain pages at 1: 10 + 10 + 1 + 1');
 });
 
+test('a deeper page reserves for the traffic it may load; a next page for the deepest replay', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const {call} = await platformFor(store, {script: () => ({planned: ['browser_residential'], step: 'browser_residential',
+    next_page: {how: 'click'}})});
+  await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 100000 WHERE project = $1', [PROJECT]);
+  // Residential browser 25 + captcha 10 + 5 a MB past the 5 included: 30 MB by default,
+  // 2.5 MB more for each screen past 10, at most 150 MB.
+  const auto = await call('POST', '/v1/fetch', {body: {url: 'https://list.example.com/a'}});
+  assert.equal(auto.body.credits.max, 160);
+  const ten = await call('POST', '/v1/fetch', {body: {url: 'https://list.example.com/b', scroll: 10}});
+  assert.equal(ten.body.credits.max, 160);
+  const thirty = await call('POST', '/v1/fetch', {body: {url: 'https://list.example.com/c', scroll: 30}});
+  assert.equal(thirty.body.credits.max, 410, '80 MB');
+  const next = await call('POST', `/v1/fetch/${auto.body.id}/next`, {body: {}});
+  assert.equal(next.status, 200, JSON.stringify(next.body));
+  assert.equal(next.body.credits.max, 760, '150 MB');
+  const capped = await call('POST', `/v1/fetch/${next.body.id}/next`, {body: {max_credits: 200}});
+  assert.equal(capped.body.credits.max, 200, 'max_credits still caps it');
+  assert.equal(await reservations(store), 0);
+});
+
 test('a project with too many jobs running is told to wait', {skip}, async t => {
   const store = await openStore();
   t.after(() => store.close());

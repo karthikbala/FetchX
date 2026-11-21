@@ -294,6 +294,7 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         blocks: [
           { kind: 'text', text: 'In a browser, FetchX waits for a page to fill itself in, then scrolls it like a reader while scrolling loads more, up to 10 screens. `scroll: off` reads it without scrolling; a number from 1 to 50 scrolls that many screens (raise `timeout_ms` for many). Scrolling has no fee of its own, but a scrolled page loads more, and residential traffic beyond the included 5 MB is charged per MB, so `off` is the cheapest choice when the first screen is enough.' },
           { kind: 'text', text: 'A successful result says how the page leads on in `data.next_page`: a `link` to the next page, a Next or Load more button to `click`, or more to `scroll`; `null` when there is none. `data.page` says which page this is and how far it was scrolled.' },
+          { kind: 'text', text: 'A page read deeper than 10 screens, and every next page, may load more traffic, so it holds enough credits for it while it runs (up to 150 MB) and is charged only for what it used, and only when it succeeds. Set `max_credits` to hold and spend less.' },
         ],
       },
       operationSection(createNextPage),
