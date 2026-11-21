@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# fx-cloudflare: FetchX's Cloudflare deploys from porttrack, without the Mac. Run as root (sudo -n fx-cloudflare ...).
+# Token: /opt/crawling-platform/secrets/cloudflare/api-token (root-only). Code comes from a release tag via fx-git.
+# Wrangler runs inside a Node container; the token only reaches the deploy step, never the npm install/build step.
+#
+#   fx-cloudflare verify                                  token is active and sees the Pages project, Workers and D1 (read-only)
+#   fx-cloudflare deployments [production|preview]        recent Pages deployments, newest first (ids for rollback)
+#   fx-cloudflare website <release-tag> [--preview]       build website/ and deploy it (production = fetchx.ai; --preview = staging)
+#   fx-cloudflare rollback <deployment-id>                make an earlier production Pages deployment live again
+#   fx-cloudflare payments-worker <release-tag>           deploy payments-worker/ (fetchx-stripe-broker)
+#   fx-cloudflare retention-worker <release-tag>          deploy website/wrangler.retention.jsonc (fetchx-enquiry-retention)
+#   fx-cloudflare d1-migrate <release-tag> <preview|production>   apply website/migrations to that D1 database
+set -euo pipefail
+umask 077
+
+TOKEN_FILE=/opt/crawling-platform/secrets/cloudflare/api-token
+ACCOUNT=9ecc416f47f6a620665eb552ae29df2b
+PROJECT=fetchx-marketing
+NODE_IMAGE=${FX_NODE_IMAGE:-node:24-bookworm-slim}
+API=https://api.cloudflare.com/client/v4
+
+usage() { sed -n '2,14p' "$0" >&2; exit 2; }
+die() { echo "fx-cloudflare: $*" >&2; exit 1; }
+[ "$(id -u)" = 0 ] || die "run as root: sudo -n fx-cloudflare ..."
+[ $# -ge 1 ] || usage
+[ -s "$TOKEN_FILE" ] || die "no token in $TOKEN_FILE"
+
+# curl with the token in a header read from stdin, so it never appears in argv or the process list.
+cf() {  # cf <METHOD> <path> -> prints body, exits non-zero on HTTP >= 400
+  local method=$1 path=$2 body code
+  body=$(printf 'Authorization: Bearer %s\n' "$(tr -d '[:space:]' < "$TOKEN_FILE")" |
+    curl -sS -m 60 -X "$method" -H @- -w '\n%{http_code}' "$API$path")
+  code=${body##*$'\n'}; body=${body%$'\n'*}
+  printf '%s\n' "$body"
+  [ "$code" -lt 400 ] || { echo "fx-cloudflare: $method $path -> HTTP $code" >&2; return 1; }
+}
+
+summarize() { python3 -c "$1"; }
+
+work=""
+cleanup() { [ -n "$work" ] && rm -rf "$work"; }
+trap cleanup EXIT
+
+checkout() {  # checkout <release-tag>: unpacks the tag into $work/src, sets $commit
+  local tag=$1
+  [[ "$tag" =~ ^release-[0-9]{8}-[0-9a-f]{7}$ ]] || die "need a platform release tag (release-YYYYMMDD-<sha7>), got: $tag"
+  work=$(mktemp -d /var/tmp/fx-cloudflare.XXXXXX)
+  chmod 755 "$work"
+  local line
+  line=$(fx-git archive platform "$tag" "$work/src.tar.gz")
+  commit=${line##*commit=}
+  mkdir "$work/src"
+  tar -xzf "$work/src.tar.gz" -C "$work/src"
+}
+
+node_run() {  # node_run <with-token|no-token> <workdir-in-src> <shell command...>; extra -e flags via $NODE_ENV_FLAGS
+  local mode=$1 wd=$2; shift 2
+  local flags=(--rm -v "$work/src:/src" -w "/src/$wd" -e WRANGLER_SEND_METRICS=false -e CI=1)
+  if [ "$mode" = with-token ]; then
+    CLOUDFLARE_API_TOKEN=$(tr -d '[:space:]' < "$TOKEN_FILE") CLOUDFLARE_ACCOUNT_ID=$ACCOUNT \
+      timeout 900 docker run "${flags[@]}" -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID ${NODE_ENV_FLAGS:-} "$NODE_IMAGE" sh -c "$*"
+  else
+    timeout 900 docker run "${flags[@]}" ${NODE_ENV_FLAGS:-} "$NODE_IMAGE" sh -c "$*"
+  fi
+}
+
+install_deps() { node_run no-token website 'npm ci --no-audit --no-fund --loglevel=error'; }
+
+case "$1" in
+  verify)
+    cf GET /user/tokens/verify | summarize 'import json,sys; r=json.load(sys.stdin)["result"]; print("token:", r["status"], "expires:", r.get("expires_on") or "never")'
+    cf GET "/accounts/$ACCOUNT/pages/projects/$PROJECT" | summarize 'import json,sys; r=json.load(sys.stdin)["result"]; d=r.get("latest_deployment") or {}; print("pages:", r["name"], "production branch:", r.get("production_branch"), "latest:", d.get("short_id"), d.get("environment"), d.get("created_on"))'
+    cf GET "/accounts/$ACCOUNT/workers/scripts" | summarize 'import json,sys; print("workers:", ", ".join(sorted(s["id"] for s in json.load(sys.stdin)["result"])))'
+    cf GET "/accounts/$ACCOUNT/d1/database" | summarize 'import json,sys; print("d1:", ", ".join(sorted(d["name"] for d in json.load(sys.stdin)["result"])))'
+    ;;
+
+  deployments)
+    env=${2:-production}
+    [[ "$env" =~ ^(production|preview)$ ]] || usage
+    cf GET "/accounts/$ACCOUNT/pages/projects/$PROJECT/deployments?env=$env&per_page=10" | summarize '
+import json,sys
+for d in json.load(sys.stdin)["result"]:
+    m=(d.get("deployment_trigger") or {}).get("metadata") or {}
+    s=(d.get("latest_stage") or {})
+    print(d["id"], d.get("created_on","")[:19], d.get("environment"), m.get("branch"), (m.get("commit_hash") or "")[:7], m.get("commit_message") or "", s.get("status"))'
+    ;;
+
+  website)
+    [ $# -ge 2 ] || usage
+    tag=$2 branch=main site_env=production
+    if [ "${3:-}" = --preview ]; then branch=staging site_env=preview; elif [ -n "${3:-}" ]; then usage; fi
+    checkout "$tag"
+    install_deps
+    # Launch flag stays false until Karthik approves the public launch (see website/README.md).
+    NODE_ENV_FLAGS="-e PUBLIC_SITE_ENV=$site_env -e PUBLIC_PRODUCT_LAUNCH_READY=false" \
+      node_run no-token website 'npm run build --silent'
+    echo "previous $branch deployment:"
+    cf GET "/accounts/$ACCOUNT/pages/projects/$PROJECT/deployments?env=$([ "$branch" = main ] && echo production || echo preview)&per_page=1" |
+      summarize 'import json,sys; [print(" ", d["id"], d.get("created_on","")[:19]) for d in json.load(sys.stdin)["result"]]'
+    node_run with-token website "npx --no-install wrangler pages deploy dist --project-name $PROJECT --branch $branch --commit-hash $commit --commit-message $tag --commit-dirty=false"
+    ;;
+
+  rollback)
+    [ $# -eq 2 ] || usage
+    [[ "$2" =~ ^[0-9a-f-]{36}$ ]] || die "give the full deployment id from: fx-cloudflare deployments"
+    cf POST "/accounts/$ACCOUNT/pages/projects/$PROJECT/deployments/$2/rollback" |
+      summarize 'import json,sys; r=json.load(sys.stdin)["result"]; print("live now:", r["id"], r.get("environment"), r.get("url"))'
+    ;;
+
+  payments-worker)
+    [ $# -eq 2 ] || usage
+    checkout "$2"
+    install_deps
+    node_run with-token . 'website/node_modules/.bin/wrangler deploy --config payments-worker/wrangler.jsonc'
+    ;;
+
+  retention-worker)
+    [ $# -eq 2 ] || usage
+    checkout "$2"
+    install_deps
+    node_run with-token website 'npx --no-install wrangler deploy --config wrangler.retention.jsonc'
+    ;;
+
+  d1-migrate)
+    [ $# -eq 3 ] || usage
+    case "$3" in
+      preview) db=fetchx-enquiries-preview ;;
+      production) db=fetchx-enquiries ;;
+      *) usage ;;
+    esac
+    checkout "$2"
+    install_deps
+    node_run with-token website "npx --no-install wrangler d1 migrations apply $db --remote --env $3"
+    ;;
+
+  *) usage ;;
+esac

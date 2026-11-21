@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# fx-git: FetchX git operations on porttrack, without the Mac. Run as root (sudo -n fx-git ...).
+# Uses the per-repo GitHub deploy keys in /root/.ssh (Host aliases github-fetchx and github-fetchx-engine).
+# Keeps bare mirrors in /opt/crawling-platform/git. Repos: platform (karthikbala/FetchX), engine (karthikbala/fetchx-engine).
+#
+#   fx-git fetch    <platform|engine>                          refresh the mirror, print main's commit
+#   fx-git tag      <platform|engine> <sha40> "<message>" [tag]  annotated release tag on a commit on main, pushed
+#                                                              (default name release-/engine-YYYYMMDD-<sha7>, today in UTC)
+#   fx-git archive  <platform|engine> <tag> <out.tar.gz>        git archive of a release tag that is on main (for deploys)
+#   fx-git snapshot <platform|engine> <branch|sha> <out.tar.gz> git archive of any branch or commit (tests only, never deploys)
+set -euo pipefail
+umask 022
+
+usage() { sed -n '2,12p' "$0" >&2; exit 2; }
+die() { echo "fx-git: $*" >&2; exit 1; }
+[ "$(id -u)" = 0 ] || die "run as root: sudo -n fx-git ..."
+[ $# -ge 2 ] || usage
+cmd=$1 repo=$2
+
+case "$repo" in
+  platform) url=git@github-fetchx:karthikbala/FetchX.git; dir=/opt/crawling-platform/git/FetchX.git; prefix=release ;;
+  engine)   url=git@github-fetchx-engine:karthikbala/fetchx-engine.git; dir=/opt/crawling-platform/git/fetchx-engine.git; prefix=engine ;;
+  *) usage ;;
+esac
+
+g() { git -C "$dir" "$@"; }
+
+sync() {
+  if [ ! -d "$dir" ]; then
+    mkdir -p "$(dirname "$dir")"
+    git init -q --bare "$dir"
+    g remote add origin "$url"
+  fi
+  timeout 300 git -C "$dir" fetch -q --prune --prune-tags origin \
+    '+refs/heads/main:refs/heads/main' '+refs/tags/*:refs/tags/*'
+}
+
+own_like_dir() {  # hand the output to whoever owns the folder it was written to (e.g. ops)
+  chown --reference="$(dirname "$1")" "$1" 2>/dev/null || true
+}
+
+case "$cmd" in
+  fetch)
+    [ $# -eq 2 ] || usage
+    sync
+    echo "main $(g rev-parse main)"
+    ;;
+
+  tag)
+    [ $# -eq 4 ] || [ $# -eq 5 ] || usage
+    sha=$3 msg=$4
+    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || die "give the full 40-character commit sha"
+    [ -n "$msg" ] || die "give a tag message"
+    tag=${5:-$prefix-$(date -u +%Y%m%d)-${sha:0:7}}
+    [[ "$tag" =~ ^$prefix-[0-9]{8}-[0-9a-f]{7}$ ]] || die "tag must look like $prefix-YYYYMMDD-<sha7>"
+    [ "${tag: -7}" = "${sha:0:7}" ] || die "tag $tag does not end in ${sha:0:7}"
+    sync
+    g cat-file -e "$sha^{commit}" 2>/dev/null || die "$sha is not on main (or not fetched)"
+    g merge-base --is-ancestor "$sha" main || die "$sha is not on main"
+    if g rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+      [ "$(g rev-parse "$tag^{commit}")" = "$sha" ] || die "$tag already exists on another commit"
+      echo "$tag already exists on $sha"
+    else
+      g -c user.name="FetchX release (porttrack)" -c user.email="hello@fetchx.ai" tag -a "$tag" -m "$msg" "$sha"
+      timeout 120 git -C "$dir" push -q origin "refs/tags/$tag" || { g tag -d "$tag" >/dev/null; die "push of $tag failed"; }
+    fi
+    echo "$tag -> $sha"
+    ;;
+
+  archive)
+    [ $# -eq 4 ] || usage
+    tag=$3 out=$4
+    [[ "$tag" =~ ^$prefix-[0-9]{8}-[0-9a-f]{7}$ ]] || die "not a $prefix tag: $tag"
+    sync
+    g rev-parse -q --verify "refs/tags/$tag^{commit}" >/dev/null || die "no tag $tag on GitHub"
+    g merge-base --is-ancestor "$tag^{commit}" main || die "$tag is not on main"
+    g archive --format=tar.gz -o "$out" "$tag"
+    own_like_dir "$out"
+    echo "$out sha256=$(sha256sum "$out" | cut -d' ' -f1) commit=$(g rev-parse "$tag^{commit}")"
+    ;;
+
+  snapshot)
+    [ $# -eq 4 ] || usage
+    ref=$3 out=$4
+    [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]] || die "bad branch or sha: $ref"
+    sync
+    if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+      g cat-file -e "$ref^{commit}" 2>/dev/null || timeout 300 git -C "$dir" fetch -q origin "$ref"
+      commit=$ref
+    else
+      timeout 300 git -C "$dir" fetch -q origin "+refs/heads/$ref:refs/snapshots/$ref"
+      commit=$(g rev-parse "refs/snapshots/$ref")
+    fi
+    g archive --format=tar.gz -o "$out" "$commit"
+    own_like_dir "$out"
+    echo "$out sha256=$(sha256sum "$out" | cut -d' ' -f1) commit=$commit"
+    ;;
+
+  *) usage ;;
+esac

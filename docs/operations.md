@@ -23,6 +23,17 @@ Deploy only from a tag on `main` (platform tags are `release-YYYYMMDD-<sha>`, en
 3. **Recreate the platform** (`docker compose up -d gateway`). Wait for `healthy` with no restarts; roll back to the previous image if it is not healthy within two minutes. Jobs that finish while it restarts are not lost: the engine retries their events, and the reconciler settles any it gives up on.
 4. **Website.** Build and deploy `website/` to Pages after the platform, since the console needs the new API.
 
+### Releasing from porttrack
+
+Every release step runs on porttrack as root; no laptop is involved. Two helpers in `ops/porttrack/` are installed in `/usr/local/sbin`:
+
+- `fx-git` tags, fetches and archives both repositories with a per-repository GitHub deploy key (`/root/.ssh/github-fetchx`, `/root/.ssh/github-fetchx-engine`, write access, so it can push tags). `sudo fx-git tag platform <sha> "<message>"` creates and pushes `release-YYYYMMDD-<sha7>` after checking the commit is on `main`; `sudo fx-git archive platform <tag> <file>` writes the tarball an image is built from. `snapshot` archives any branch for tests, never for deploys.
+- `fx-cloudflare` deploys the Cloudflare parts from a release tag with the token in `/opt/crawling-platform/secrets/cloudflare/api-token` (Pages, Workers Scripts and D1 edit on the FetchX account). Wrangler runs in a Node container, and the token reaches only the deploy step, not the install or build. `website <tag>` deploys fetchx.ai (`--preview` deploys the staging branch); `deployments` and `rollback <id>` list and restore earlier Pages deployments; `payments-worker`, `retention-worker` and `d1-migrate` cover the rest. `verify` checks the token without changing anything.
+
+Claude Code reaches porttrack through Remote Control, kept running by `ops/porttrack/claude-remote-control.service` so it comes back after a crash or reboot. SSH is only for emergencies.
+
+The website build keeps `PUBLIC_PRODUCT_LAUNCH_READY=false` until the public launch is approved. To change a helper, change it here, then reinstall it with `install -m 755 -o root -g root`.
+
 ## Rollback
 
 A release that changed no tables rolls back to the previous image. One that changed tables needs the pre-release backup restored into the database first, then the previous image; requests made in between are lost, and purchases made in between are re-applied from Stripe (`node src/stripe-reconcile-cli.mjs`).
