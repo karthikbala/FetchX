@@ -2593,7 +2593,7 @@
           },
           "country": {
             "type": "string",
-            "description": "The exit country for proxy routes (ISO 3166-1 alpha-2). Defaults to the country that worked for this site before, else US.",
+            "description": "The exit country for proxy routes (ISO 3166-1 alpha-2). Defaults to the country that worked for this site before, else US. When it is left to FetchX and a site keeps walling one country's exit IPs (two walls in a row on residential browsers), the next fresh IPs come from another country; each attempt reports the country it used. Set it to stay in one country.",
             "pattern": "^[A-Z]{2}$"
           },
           "route": {

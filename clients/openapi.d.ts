@@ -456,7 +456,7 @@ export interface components {
              * @default auto
              */
             scroll?: ("auto" | "off") | number;
-            /** @description The exit country for proxy routes (ISO 3166-1 alpha-2). Defaults to the country that worked for this site before, else US. */
+            /** @description The exit country for proxy routes (ISO 3166-1 alpha-2). Defaults to the country that worked for this site before, else US. When you leave it to FetchX and a site keeps blocking one country's IPs, FetchX moves to another country's IPs; attempts[].country says which country each attempt used. Set it to stay in one country. */
             country?: string;
             /** @description One fixed route; turns auto mode off: one attempt, with a precise error. */
             route?: {
