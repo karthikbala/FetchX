@@ -608,7 +608,7 @@ export interface components {
         };
         /** @description Blocks, bot challenges and rate limits met on the way, and on the page that answered (a captcha, a wall that cleared). FetchX handles them itself; this says what it met and how it got past. */
         Challenge: {
-            /** @description The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, recaptcha, hcaptcha), or null when the page did not say. */
+            /** @description The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, kasada, or the captcha provider when nothing else names one: arkose, recaptcha, hcaptcha), named from the wall page, its headers and cookies, also when the wall came as a rate limit (429); null when nothing said. */
             vendor: string | null;
             /** @description How many attempts met one. */
             walls: number;
@@ -738,7 +738,7 @@ export interface components {
             result: "success" | "answered" | "blocked" | "rate_limited" | "login_required" | "site_error" | "needs_browser" | "content_missing" | "unreachable" | "failed" | "too_large" | "uncertain" | "not_admitted" | "url_not_allowed";
             /** @description The underlying error, when result is not_admitted or failed. */
             code?: string;
-            /** @description On a blocked or rate-limited step, the bot-protection vendor whose page it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf). */
+            /** @description On a blocked or rate-limited step, the bot-protection vendor whose wall it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf, kasada; or arkose, recaptcha, hcaptcha when only its captcha says). */
             challenge?: string;
             /** @description On a content_missing step, the expect conditions the page did not meet, and extract:<field> for each required extract field it did not show. */
             missing?: (string | ("selector" | "text" | "min_markdown_length") | unknown)[];
@@ -749,10 +749,10 @@ export interface components {
             /** @description Captchas met on this step, as type:outcome. */
             captcha?: string[];
             /**
-             * @description Browser steps on sites that have refused FetchX before start at the site's home page. passed: it loaded; cleared: a bot check there cleared by itself; challenged: the check stayed, so this step ended there and the next one used a fresh IP; failed: the home page did not load, and the page was visited directly.
+             * @description Browser steps on sites that have refused FetchX before start at the site's home page. passed: it loaded; cleared: a bot check there cleared by itself; solved: the check there was a captcha, which was solved, and the visit went on (see captcha); challenged: the check stayed, so this step ended there and the next one used a fresh IP; failed: the home page did not load, and the page was visited directly.
              * @enum {string}
              */
-            warmup?: "passed" | "cleared" | "challenged" | "failed";
+            warmup?: "passed" | "cleared" | "solved" | "challenged" | "failed";
             /**
              * @description A bot check on the page itself: whether it cleared by itself before any captcha was solved.
              * @enum {string}

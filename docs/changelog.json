@@ -6,6 +6,15 @@
   },
   "releases": [
     {
+      "version": "1.6.1",
+      "date": "2026-11-21",
+      "title": "Captchas on a site's home page are solved, and walls say whose they are",
+      "changes": [
+        {"type": "changed", "text": "When a browser step starts at a protected site's home page and meets a captcha there, FetchX now solves it and goes on to your page, instead of giving up that IP. attempts[].warmup says solved, and attempts[].captcha lists the solve (10 credits, charged only when the request succeeds)."},
+        {"type": "fixed", "text": "challenge.vendor and attempts[].challenge now name the bot protection behind a wall more often: also when the wall came as a 429, when its captcha frame sits far down a large page, and from the protection's own headers and cookies. New values: kasada, and arkose when only the captcha provider is known."}
+      ]
+    },
+    {
       "version": "1.6.0",
       "date": "2026-11-21",
       "title": "Pages as JSON in your own shape",
