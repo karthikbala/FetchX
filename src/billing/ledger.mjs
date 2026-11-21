@@ -20,6 +20,11 @@ export const DEFAULT_PRICES = Object.freeze({
   // Residential bandwidth is paid per GB, so large pages pay for it.
   residential_included_mb: {http_residential: 1, browser_residential: 5},
   residential_overage_per_mb: 5,
+  // Reading a page into JSON (`extract`): per started unit of page text the
+  // models read, in tokens of 4 characters, up to what the engine reads.
+  extract: 10,
+  extract_unit_tokens: 25_000,
+  extract_max_tokens: 150_000,
 });
 const MB = 1_000_000;
 
@@ -27,33 +32,49 @@ export function prices(config) {
   const custom = config?.pricing ?? {};
   const merged = {...DEFAULT_PRICES, ...custom,
     residential_included_mb: {...DEFAULT_PRICES.residential_included_mb, ...custom.residential_included_mb}};
-  for (const key of [...STEPS, 'captcha', 'residential_overage_per_mb']) {
+  for (const key of [...STEPS, 'captcha', 'residential_overage_per_mb', 'extract']) {
     if (!Number.isSafeInteger(merged[key]) || merged[key] < 0 || merged[key] > 100_000) fail('pricing_configuration_invalid', 500);
+  }
+  for (const key of ['extract_unit_tokens', 'extract_max_tokens']) {
+    if (!Number.isSafeInteger(merged[key]) || merged[key] < 1 || merged[key] > 10_000_000) fail('pricing_configuration_invalid', 500);
   }
   return merged;
 }
 
+// Extraction's price for the page text the models read: every started unit,
+// at least one, up to the most the engine reads. null: no extraction.
+export function extractCredits(table, tokens) {
+  if (tokens === null || tokens === undefined) return 0;
+  const read = Math.min(Number.isSafeInteger(tokens) && tokens > 0 ? tokens : 0, table.extract_max_tokens);
+  return Math.max(1, Math.ceil(read / table.extract_unit_tokens)) * table.extract;
+}
+
 // How the price of one successful step adds up: the step, a solved captcha,
-// and residential traffic past what the step includes (per started MB). Bytes
-// are the wire bytes of that step.
-export function priceParts(table, {step, captchaSolved = false, wireBytes = 0}) {
+// residential traffic past what the step includes (per started MB), and the
+// page text read for `extract`. Bytes are the wire bytes of that step;
+// extractTokens is null when the request had no extract.
+export function priceParts(table, {step, captchaSolved = false, wireBytes = 0, extractTokens = null}) {
   const included = table.residential_included_mb[step];
   const bytes = Number.isSafeInteger(wireBytes) && wireBytes > 0 ? wireBytes : 0;
   const traffic = included !== undefined && bytes > included * MB
     ? Math.ceil((bytes - included * MB) / MB) * table.residential_overage_per_mb : 0;
   return {step, step_credits: table[step], captcha_credits: captchaSolved ? table.captcha : 0, traffic_mb: Math.round(bytes / (MB / 10)) / 10,
-    included_mb: included ?? null, traffic_credits: traffic};
+    included_mb: included ?? null, traffic_credits: traffic,
+    extract_tokens: extractTokens === null || extractTokens === undefined ? null : Math.max(0, extractTokens),
+    extract_credits: extractCredits(table, extractTokens)};
 }
 
 // The price of one successful step.
 export function priceOf(table, options) {
   const parts = priceParts(table, options);
-  return parts.step_credits + parts.captcha_credits + parts.traffic_credits;
+  return parts.step_credits + parts.captcha_credits + parts.traffic_credits + parts.extract_credits;
 }
 
-// The most a step can cost given the response size cap.
-export function worstCaseOf(table, step, {captcha = false, maxWireBytes}) {
-  return priceOf(table, {step, captchaSolved: captcha && step.startsWith('browser'), wireBytes: maxWireBytes});
+// The most a step can cost given the response size cap, and with extract, the
+// most page text the engine reads.
+export function worstCaseOf(table, step, {captcha = false, maxWireBytes, extract = false}) {
+  return priceOf(table, {step, captchaSolved: captcha && step.startsWith('browser'), wireBytes: maxWireBytes,
+    extractTokens: extract ? table.extract_max_tokens : null});
 }
 
 export async function initLedger(pool) {

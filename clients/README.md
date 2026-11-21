@@ -87,3 +87,15 @@ A fetch that ran returns its result whether it succeeded or not: check `status`.
 A refused call (4xx) throws `FetchXError` with `code`, `status`, `details` and `retryAfterSeconds` (`retry_after_seconds` in Python). Nothing was sent to the site and nothing was charged.
 
 `fetch` and `nextPage` always send an `idempotency_key`, generated when you leave it out. After a lost response, a `429` or a `503` it resends the same body with the same key up to `retries` times (default 2). FetchX returns the first result for a key and never charges twice, so a resend is safe. Keep the key with your own record of the request if you need to find it later with `list({idempotency_key})`.
+
+## JSON in your own shape
+
+Pass `extract` with a small JSON Schema; each field's `description` says what it is. `data.extract` holds the result, and `data.extract_report` says how each field was read. A root `array` (with a `description` of one record) returns every record of that kind on a list page, and a next page reads its page with the same `extract`.
+
+```js
+const result = await fetchx.fetch({url: 'https://shop.example.com/p/42', extract: {schema: {type: 'object', required: ['price'],
+  properties: {name: {type: 'string', description: 'Product name'}, price: {type: 'number', description: 'Price in the page currency'}}}}});
+if (result.status === 'succeeded') console.log(result.data.extract); // {name: '...', price: 19.99}
+```
+
+A value the page does not show is `null`, never guessed. A `required` field the page does not show fails the request with `content_missing`, uncharged, after FetchX has tried a browser and fresh IPs. Extraction adds 10 credits per started 25,000 tokens of page text read (`credits.breakdown.extract_credits`). When it is unavailable, the call is refused with `extract_unavailable` (503) before anything is fetched; the clients do not retry it on their own.

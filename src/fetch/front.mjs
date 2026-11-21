@@ -18,7 +18,7 @@
 import {randomBytes, randomUUID} from 'node:crypto';
 import {GatewayError, fail} from '../policy.mjs';
 import {Sealer} from '../crypto.mjs';
-import {STEPS, priceOf, priceParts, worstCaseOf} from '../billing/ledger.mjs';
+import {STEPS, extractCredits, priceOf, priceParts, worstCaseOf} from '../billing/ledger.mjs';
 import {budget} from '../budgets.mjs';
 
 // Credits one request may reserve and requests at once per project are
@@ -59,6 +59,10 @@ export async function initFetchFront(pool) {
     );
     -- The winning step's wire bytes, for the price breakdown results show.
     ALTER TABLE fetch_settlements ADD COLUMN IF NOT EXISTS wire_bytes bigint;
+    -- Whether the request reads its page into JSON (a next page inherits it),
+    -- and how much page text the models read on success.
+    ALTER TABLE fetch_settlements ADD COLUMN IF NOT EXISTS extract boolean NOT NULL DEFAULT false;
+    ALTER TABLE fetch_settlements ADD COLUMN IF NOT EXISTS extract_tokens integer;
     CREATE INDEX IF NOT EXISTS fetch_settlements_project_created ON fetch_settlements (project, created_at);
     CREATE INDEX IF NOT EXISTS fetch_settlements_pending ON fetch_settlements (deadline) WHERE status = 'pending';
     CREATE TABLE IF NOT EXISTS webhook_secrets (
@@ -105,16 +109,16 @@ export class FetchFront {
     }
     const method = typeof raw.method === 'string' ? raw.method.toUpperCase() : 'GET';
     const deeper = Number.isSafeInteger(raw.scroll) ? Math.max(0, raw.scroll - PAGE_DEPTH.screens) : 0;
-    return {maxCredits, method, maxWireBytes: deeper ? Math.min(this.#deepestWireBytes(),
+    return {maxCredits, method, extract: raw.extract !== undefined && raw.extract !== null, maxWireBytes: deeper ? Math.min(this.#deepestWireBytes(),
       this.limits.maxWireBytes + PAGE_DEPTH.wireBytes * deeper) : this.limits.maxWireBytes};
   }
 
   #deepestWireBytes() { return Math.max(this.limits.maxWireBytes, PAGE_DEPTH.maxWireBytes); }
 
   // The most any step could cost this request: the ceiling of its reservation.
-  #ceiling({maxCredits, method, maxWireBytes}) {
+  #ceiling({maxCredits, method, maxWireBytes, extract}) {
     const table = this.ledger.prices;
-    const worst = Math.max(...STEPS.map(step => worstCaseOf(table, step, {captcha: method === 'GET', maxWireBytes})));
+    const worst = Math.max(...STEPS.map(step => worstCaseOf(table, step, {captcha: method === 'GET', maxWireBytes, extract})));
     return Math.min(maxCredits ?? Infinity, worst, budget(this.config, 'fetch.maxCreditsPerRequest'));
   }
 
@@ -128,7 +132,10 @@ export class FetchFront {
   // builds it from the earlier request, so only what may change per page is
   // sent; a next page is always a GET, which sets the reservation's ceiling.
   async submitNext(project, previous, raw = {}, {keyId = null} = {}) {
-    const billing = {...this.#billingInput(raw), method: 'GET', maxWireBytes: this.#deepestWireBytes()};
+    // A next page reads its page into JSON when the earlier one did.
+    const earlier = UUID.test(previous ?? '') ? (await this.store.pool.query(
+      'SELECT extract FROM fetch_settlements WHERE request = $1 AND project = $2', [previous, project])).rows[0] : null;
+    const billing = {...this.#billingInput(raw), method: 'GET', maxWireBytes: this.#deepestWireBytes(), extract: earlier?.extract === true};
     return this.#start(project, billing, {keyId},
       (id, allowed) => this.engine.startNextJob(previous, {id, tenant: project, request: raw, allowed_steps: allowed}));
   }
@@ -147,8 +154,9 @@ export class FetchFront {
       await this.ledger.lock(client, project);
       const running = (await client.query(`SELECT count(*)::int AS n FROM fetch_settlements WHERE project = $1 AND status = 'pending'`,
         [project])).rows[0].n;
-      await client.query(`INSERT INTO fetch_settlements (request, project, key_id, deadline) VALUES ($1, $2, $3, clock_timestamp() + make_interval(secs => $4))`,
-        [id, project, keyId, this.limits.provisionalDeadlineMs / 1000]);
+      await client.query(`INSERT INTO fetch_settlements (request, project, key_id, deadline, extract)
+        VALUES ($1, $2, $3, clock_timestamp() + make_interval(secs => $4), $5)`,
+        [id, project, keyId, this.limits.provisionalDeadlineMs / 1000, billing.extract]);
       const cap = this.config.projects?.[project]?.maxConcurrentRequests ?? budget(this.config, 'fetch.maxConcurrentPerProject');
       if (running >= cap) {
         admission.busy = running;
@@ -169,7 +177,9 @@ export class FetchFront {
         await client.query('UPDATE fetch_settlements SET credits_max = $2 WHERE request = $1', [id, credits]);
         admission.reserved = credits;
       }
-      allowed = STEPS.filter(step => table[step] <= (admission.reserved ?? 0));
+      // A step is allowed when it and the least extraction can cost both fit.
+      const least = billing.extract ? extractCredits(table, 0) : 0;
+      allowed = STEPS.filter(step => table[step] + least <= (admission.reserved ?? 0));
     });
 
     let answer;
@@ -181,6 +191,9 @@ export class FetchFront {
       if (error.fromEngine || error.sent === false) await this.#discard(id);
       if (error.code === 'budget_too_low') throw this.#budgetError(error, billing, admission);
       if (error.code === 'job_id_conflict') fail('unavailable', 503);
+      if (error.code === 'extract_unavailable') {
+        error.details = {...error.details, retry_after_seconds: 300};
+      }
       throw error;
     }
     const {envelope} = answer;
@@ -194,12 +207,14 @@ export class FetchFront {
     return this.#viewOf(project, envelope);
   }
 
-  #budgetError(error, {maxCredits}, {held, busy, available}) {
+  #budgetError(error, billing, {held, busy, available}) {
+    const {maxCredits} = billing;
     if (busy !== null) return Object.assign(new GatewayError('too_many_requests', 429), {details: {retry_after_seconds: 5, running: busy}});
     if (held) return new GatewayError('payment_hold', 402);
     const table = this.ledger.prices;
     const planned = (error.details?.planned_steps ?? []).filter(step => STEPS.includes(step));
-    const minimum = Math.min(...(planned.length ? planned : STEPS).map(step => table[step]));
+    const least = billing.extract ? extractCredits(table, 0) : 0;
+    const minimum = Math.min(...(planned.length ? planned : STEPS).map(step => table[step])) + least;
     // The request's own max_credits, or the per-request budget, is below the cheapest planned step.
     if (Math.min(maxCredits ?? Infinity, budget(this.config, 'fetch.maxCreditsPerRequest')) < minimum) {
       return Object.assign(new GatewayError('max_credits_too_low', 402), {details: {min_credits: minimum}});
@@ -231,16 +246,20 @@ export class FetchFront {
       const step = status === 'succeeded' && STEPS.includes(usage?.step) ? usage.step : null;
       const captcha = step !== null && usage.captcha_solved === true;
       const wireBytes = step !== null && Number.isSafeInteger(usage.wire_bytes) && usage.wire_bytes >= 0 ? usage.wire_bytes : null;
+      // The page text read for extract; a request with extract whose job read
+      // nothing (the site's 404) pays no extraction.
+      const extractTokens = step !== null && Number.isSafeInteger(usage.extract?.page_tokens) && usage.extract.page_tokens >= 0
+        ? usage.extract.page_tokens : null;
       if (step && this.ledger.metered(current.project) && current.credits_max !== null) {
-        const price = priceOf(this.ledger.prices, {step, captchaSolved: captcha, wireBytes: wireBytes ?? 0});
+        const price = priceOf(this.ledger.prices, {step, captchaSolved: captcha, wireBytes: wireBytes ?? 0, extractTokens});
         charged = await this.ledger.charge(client, {project: current.project, request: id, step,
           credits: Math.min(price, Number(current.credits_max)), captcha});
       } else {
         await this.ledger.release(client, {request: id});
       }
       const updated = (await client.query(`UPDATE fetch_settlements SET status = $2, error_code = $3, step = $4, captcha = $5,
-        credits_charged = $6, wire_bytes = $7, settled_at = clock_timestamp() WHERE request = $1 RETURNING *`,
-      [id, status, status === 'succeeded' ? null : errorCode, step, captcha, charged, wireBytes])).rows[0];
+        credits_charged = $6, wire_bytes = $7, extract_tokens = $8, settled_at = clock_timestamp() WHERE request = $1 RETURNING *`,
+      [id, status, status === 'succeeded' ? null : errorCode, step, captcha, charged, wireBytes, extractTokens])).rows[0];
       if (typeof webhookUrl === 'string' && webhookUrl) {
         await client.query('INSERT INTO webhook_deliveries (request, project, url) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
           [id, current.project, this.sealer.seal(webhookUrl)]);
@@ -311,7 +330,8 @@ export class FetchFront {
   #breakdownOf(settlement) {
     if (settlement?.status !== 'succeeded' || !STEPS.includes(settlement.step) || settlement.wire_bytes === null
       || settlement.wire_bytes === undefined) return null;
-    return priceParts(this.ledger.prices, {step: settlement.step, captchaSolved: settlement.captcha, wireBytes: Number(settlement.wire_bytes)});
+    return priceParts(this.ledger.prices, {step: settlement.step, captchaSolved: settlement.captcha, wireBytes: Number(settlement.wire_bytes),
+      extractTokens: settlement.extract_tokens === null || settlement.extract_tokens === undefined ? null : Number(settlement.extract_tokens)});
   }
 
   // The project's credits now, for GET /v1/balance.

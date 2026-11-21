@@ -251,12 +251,12 @@ export interface components {
                 render?: boolean;
             };
             /**
-             * @description What to return. body: the response as received (the rendered page after a browser), the default when formats is left out. markdown, text, links, metadata and json are derived from it; screenshot needs a browser. Ask only for what you use: a rendered page can be megabytes of HTML. The body is stored either way and can be downloaded from /v1/fetch/{id}/content.
+             * @description What to return. body: the response as received (the rendered page after a browser), the default when formats is left out. markdown, text, links and metadata are derived from it (for JSON, see extract); screenshot needs a browser. Ask only for what you use: a rendered page can be megabytes of HTML. The body is stored either way and can be downloaded from /v1/fetch/{id}/content.
              * @default [
              *       "body"
              *     ]
              */
-            formats?: ("body" | "markdown" | "text" | "links" | "metadata" | "json" | "screenshot")[];
+            formats?: ("body" | "markdown" | "text" | "links" | "metadata" | "screenshot")[];
             /** @description In a browser, do not download images, video, audio or web fonts on the page. They carry none of the text but a good part of a rendered page’s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. Defaults to true, or false when formats has screenshot. */
             block_resources?: boolean;
             /** @description What the page must show to be the content you want. Every condition given must hold, or the step is not a success: auto mode tries a browser, then one fresh IP, and a request that never gets it fails with content_missing and is not charged. A browser waits up to 10 s for the selector after the page settles. A real 404 or 410 is the site’s answer and is not checked. */
@@ -267,6 +267,13 @@ export interface components {
                 text?: string;
                 /** @description The page’s markdown (a non-HTML body’s text) must have at least this many characters. */
                 min_markdown_length?: number;
+            };
+            /** @description Read the page into JSON. schema is a small JSON Schema whose descriptions say what each field is: a root object asks for one record (a product, an article), a root array of objects (with a description of one record) asks for every record of that kind on a list page. Fields: string (format date, date-time or uri), number, integer, boolean, enum of strings, and arrays of strings or numbers; up to 30 per record. Every value is checked against the page: one the page does not show is null, never guessed. A field listed in required that the page does not show is treated like a missed expect: FetchX tries a browser, then a fresh IP, and a request that never gets it fails with content_missing and is not charged. Costs `extract` credits per started 25,000 tokens (about 100,000 characters) of page text read, up to 150,000 tokens, on top of the step; see credits.breakdown. Only page text is sent to the models, never your headers or cookies. If extraction is unavailable, the request is refused with 503 extract_unavailable before anything is fetched. A next page reads its page with the same extract. Not with HEAD. */
+            extract?: {
+                /** @description type object (one record) or array (items: an object, description required, maxItems up to 200). additionalProperties may only be false. At most 16 KB. */
+                schema: Record<string, never>;
+                /** @description Optional context for every field, for example which of several prices to take. */
+                instructions?: string;
             };
             /**
              * @description The most attempts that may reach the site. Steps refused before anything is sent do not count.
@@ -389,7 +396,7 @@ export interface components {
              */
             passed_by: "rotation" | "captcha" | "wait" | null;
         };
-        /** @description charged = step_credits + captcha_credits + traffic_credits, capped at max. */
+        /** @description charged = step_credits + captcha_credits + traffic_credits + extract_credits, capped at max. */
         CreditBreakdown: {
             /** @enum {string} */
             step: "http" | "http_residential" | "browser" | "browser_residential";
@@ -403,6 +410,10 @@ export interface components {
             included_mb: number | null;
             /** @description Per started MB past included_mb, on residential steps. block_resources keeps it down. */
             traffic_credits: number;
+            /** @description Page text the models read for extract, in tokens of 4 characters; null without extract. */
+            extract_tokens: number | null;
+            /** @description For extract: per started 25,000 tokens of page text read (at least one), up to 150,000 tokens; else 0. */
+            extract_credits: number;
         };
         FetchData: {
             /** @description The site's HTTP status. */
@@ -440,8 +451,9 @@ export interface components {
                 text: string;
             }[];
             metadata?: components["schemas"]["PageMetadata"];
-            /** @description formats: json, the body parsed as JSON (null when it is not JSON). */
-            json?: unknown;
+            /** @description The JSON read from the page for the request's extract: an object for a one-record schema (fields the page does not show are null), an array of records for a list schema. null when the site answered 404 or 410. Only on requests with extract. */
+            extract?: Record<string, never> | Record<string, never>[] | null;
+            extract_report?: components["schemas"]["ExtractReport"];
             /** @description formats: screenshot, base64 JPEG. Also at /v1/fetch/{id}/screenshot. */
             screenshot?: string;
         };
@@ -504,8 +516,8 @@ export interface components {
             code?: string;
             /** @description On a blocked or rate-limited step, the bot-protection vendor whose page it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf). */
             challenge?: string;
-            /** @description On a content_missing step, the expect conditions the page did not meet. */
-            missing?: ("selector" | "text" | "min_markdown_length")[];
+            /** @description On a content_missing step, the expect conditions the page did not meet, and extract:<field> for each required extract field it did not show. */
+            missing?: (string | ("selector" | "text" | "min_markdown_length") | unknown)[];
             status_code: number | null;
             ms?: number | null;
             /** @description Bytes this step moved over the network, requests and responses together. On a residential route this is the traffic billed past the included megabytes. */
@@ -539,7 +551,7 @@ export interface components {
         };
         FetchError: {
             /** @enum {string} */
-            code: "blocked" | "rate_limited" | "content_missing" | "login_required" | "site_error" | "unreachable" | "cooling_down" | "timeout" | "too_large" | "uncertain" | "route_unavailable" | "url_not_allowed" | "next_page_missing";
+            code: "blocked" | "rate_limited" | "content_missing" | "login_required" | "site_error" | "unreachable" | "cooling_down" | "timeout" | "too_large" | "uncertain" | "route_unavailable" | "url_not_allowed" | "next_page_missing" | "extract_unavailable";
             message: string;
             retry_after_seconds?: number;
             /** @description What to do next. A request key replays its first result, failures included, so a retry always needs a new idempotency_key. */
@@ -625,6 +637,49 @@ export interface components {
             purchased: number;
             /** @description True while spending is paused over a payment issue. */
             payment_hold: boolean;
+        };
+        /** @description How the page was read for extract. On a failed request, why its page did not give the JSON. */
+        ExtractReport: {
+            /**
+             * @description complete: every required field was found. missing_required: a required field was not on the page (the step was content_missing). unavailable: the models could not run. skipped: the site answered 404 or 410, so nothing was read.
+             * @enum {string}
+             */
+            status: "complete" | "missing_required" | "unavailable" | "skipped";
+            /** @description For unavailable or skipped: why (budget_exhausted, calls_exhausted, error, not_found...). */
+            reason?: string;
+            /** @description Page text the models read, in tokens of 4 characters. */
+            page_tokens?: number;
+            /** @description True when the page was longer than extraction reads (150,000 tokens), or the call cap or deadline stopped it; fields not reached are null. */
+            truncated?: boolean;
+            /** @description Records returned for a list schema; null for one record. */
+            records?: number | null;
+            /** @description List blocks left out: empty, repeated, or missing a required field. */
+            dropped?: number;
+            /**
+             * @description List schema: records read one by one from the page's repeated blocks, or the whole list read at once.
+             * @enum {string}
+             */
+            source?: "blocks" | "chat";
+            /** @description List schema: the share of records with each field found. */
+            fill?: {
+                [key: string]: number;
+            };
+            /** @description One record: the fields that are null. */
+            missing?: string[];
+            /** @description Why each missing field is null: not_found (the page does not show it), unsure (the models disagreed or were not confident), ungrounded (a value was read that is not on the page). */
+            reasons?: {
+                [key: string]: "not_found" | "unsure" | "ungrounded";
+            };
+            /** @description One record: for each value found, how sure the model was and where on the page it was. */
+            fields?: {
+                [key: string]: {
+                    confidence?: number;
+                    /** @description The page text the value was read from. */
+                    evidence?: string;
+                };
+            };
+            /** @description The required fields the page did not show. */
+            required_missing?: string[];
         };
     };
     responses: never;
@@ -786,7 +841,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description FetchX cannot take work right now. Nothing was charged. */
+            /** @description FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1022,7 +1077,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description FetchX cannot take work right now. Nothing was charged. */
+            /** @description FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. */
             503: {
                 headers: {
                     [name: string]: unknown;

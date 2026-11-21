@@ -30,6 +30,7 @@ const MESSAGES = {
   content_expired: 'The stored content has expired or was deleted.',
   no_next_page: 'That request has no next page to open; error.details.reason says why.',
   credit_account_unavailable: 'The project has no credit account.',
+  extract_unavailable: 'FetchX cannot read pages into JSON right now, so nothing was fetched or charged. Retry after retry_after_seconds, or send the request without extract.',
 };
 const STATUS = {invalid_request: 400, url_not_allowed: 400, unauthorized: 401, api_key_scope_forbidden: 403, insufficient_credits: 402,
   max_credits_too_low: 402, payment_hold: 402, not_found: 404, idempotency_conflict: 409, request_too_large: 413, too_many_requests: 429,

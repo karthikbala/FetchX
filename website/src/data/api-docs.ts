@@ -116,11 +116,12 @@ const requestErrorRows = [
   ['413', '`request_too_large`', 'The request body is over 1 MB.'],
   ['429', '`too_many_requests`', 'The project has too many requests running. Wait `retry_after_seconds`.'],
   ['503', '`unavailable`', 'FetchX cannot take work right now. Wait and resend with the same key.'],
+  ['503', '`extract_unavailable`', 'The request asks for `extract`, and FetchX cannot read pages into JSON right now. Nothing was fetched or charged. Wait `retry_after_seconds`, or send it without `extract`.'],
 ];
 const fetchErrorRows = [
   ['`blocked`', 'The site refused every route FetchX was allowed to try: a 403, a challenge page, or a captcha that could not be solved.', '`retry_later` (900 s, or the site’s own wait). With `route` set: `use_auto`.', 'Yes, after the wait. With `use_auto`: no, remove `route` first.'],
   ['`rate_limited`', 'The site returned 429, even after fresh residential IPs.', '`retry_after`, with the site’s own wait (60 s when it gives none)', 'Yes, after the wait'],
-  ['`content_missing`', 'The page loaded on every route tried, but without what `expect` asked for. `data` shows what came back.', '`check_expect` (300 s)', 'Yes, after the wait, if `expect` is right for this page. Otherwise fix `expect` first.'],
+  ['`content_missing`', 'The page loaded on every route tried, but without what `expect` asked for, or without a required `extract` field. `data` shows what came back; `data.extract_report` names the fields.', '`check_expect` (300 s)', 'Yes, after the wait, if `expect` and `required` are right for this page. Otherwise fix them first.'],
   ['`login_required`', 'The site returned 401.', '`provide_credentials`: send its cookie or Authorization header', 'No: add the credentials first'],
   ['`site_error`', 'The site returned a 5xx error.', '`retry_later` (300 s)', 'Yes, after the wait'],
   ['`unreachable`', 'DNS, connection or TLS failed on every route.', '`check_url` (300 s)', 'Yes, once the URL is right, after the wait'],
@@ -303,6 +304,17 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         ],
       },
       {
+        id: 'extract',
+        title: 'Get JSON in your own shape',
+        blocks: [
+          { kind: 'text', text: 'Pass `extract` with a small JSON Schema and FetchX reads the page into it. Give each field a `description` of what it is; that is what the models read. A root `object` asks for one record (a product, an article, a hotel). A root `array` of objects, with a `description` of one record such as "each hotel in the results", asks for every record of that kind on a list page.' },
+          { kind: 'code', title: 'One record', snippets: [{ label: 'JSON', language: 'json', code: json({ url: 'https://shop.example.com/p/42', extract: { schema: { type: 'object', required: ['price'], properties: { name: { type: 'string', description: 'Product name' }, price: { type: 'number', description: 'Price in the page currency' }, in_stock: { type: 'boolean', description: 'Can be ordered now' } } } } }) }] },
+          { kind: 'text', text: 'Fields can be strings (with `format` date, date-time or uri), numbers, integers, booleans, an `enum` of strings, or arrays of strings or numbers, up to 30 per record. `instructions` adds context for every field, such as which of several prices to take.' },
+          { kind: 'text', text: 'Every value is checked against the page: one the page does not show comes back `null`, never guessed, and `data.extract_report` says why (`not_found`, `unsure` or `ungrounded`). A field you list in `required` works like `expect`: if the page does not show it, FetchX tries a browser and fresh IPs, and if no route shows it the request fails with `content_missing` and is not charged.' },
+          { kind: 'text', text: 'Extraction costs 10 credits per started 25,000 tokens (about 100,000 characters) of page text read, up to 150,000 tokens, on top of the step; most pages are one unit. `credits.breakdown` shows `extract_tokens` and `extract_credits`. Only the page text is sent to the models, never your headers or cookies. If extraction is unavailable, the request is refused with 503 `extract_unavailable` before anything is fetched.' },
+        ],
+      },
+      {
         id: 'traffic',
         title: 'What a browser downloads',
         blocks: [
@@ -385,7 +397,7 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         id: 'charging',
         title: 'How charging works',
         blocks: [
-          { kind: 'text', text: 'When a request is admitted, FetchX reserves up to `max_credits` or the price of the most expensive step it might use. If the balance cannot cover the cheapest step, the request is refused with 402 before anything is sent. On success it charges the price of the step that got the data, plus 10 for a solved captcha, plus 5 per MB of residential transfer beyond the first 1 MB (HTTP) or 5 MB (browser), and releases the rest. Failed requests, uncertain ones, pages without what `expect` asked for and every earlier failed step cost nothing.' },
+          { kind: 'text', text: 'When a request is admitted, FetchX reserves up to `max_credits` or the price of the most expensive step it might use. If the balance cannot cover the cheapest step, the request is refused with 402 before anything is sent. On success it charges the price of the step that got the data, plus 10 for a solved captcha, plus 5 per MB of residential transfer beyond the first 1 MB (HTTP) or 5 MB (browser), plus 10 per started 25,000 tokens of page text read for `extract`, and releases the rest. Failed requests, uncertain ones, pages without what `expect` asked for and every earlier failed step cost nothing.' },
           { kind: 'text', text: 'Every answer carries `credits`: `charged`, `max` (what was reserved), `balance` (what the project has left) and, on success, a `breakdown` of the step price, captcha credits, traffic in MB, the MB included and the traffic credits. A browser page that costs far more than its step is paying for traffic: `block_resources` (on by default) cuts the images, video and fonts out of it.' },
           { kind: 'text', text: 'Scrolling within a page has no fee, but what it loads counts as transfer. Each next page (`POST /v1/fetch/{id}/next`) is a request of its own, charged the same way: only when it succeeds, at the price of the step that got it.' },
           { kind: 'text', text: 'Trial credits and purchased credits share one balance. Purchased credits do not expire.' },

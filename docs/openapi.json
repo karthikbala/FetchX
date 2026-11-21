@@ -3,7 +3,7 @@
  "info": {
   "title": "FetchX API",
   "version": "1.0.0",
-  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one; the other endpoints read results, download files, list, delete and report credits.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data. Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for. Every result says what it cost in `credits`, with a breakdown."
+  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one; the other endpoints read results, download files, list, delete and report credits.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown."
  },
  "servers": [
   {
@@ -147,7 +147,9 @@
              "captcha_credits": 10,
              "traffic_mb": 3.1,
              "included_mb": 5,
-             "traffic_credits": 0
+             "traffic_credits": 0,
+             "extract_tokens": null,
+             "extract_credits": 0
             }
            },
            "challenge": {
@@ -585,7 +587,7 @@
       }
      },
      "503": {
-      "description": "FetchX cannot take work right now. Nothing was charged.",
+      "description": "FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged.",
       "content": {
        "application/json": {
         "schema": {
@@ -597,6 +599,19 @@
            "error": {
             "code": "unavailable",
             "message": "FetchX cannot take work right now; wait and retry."
+           }
+          }
+         },
+         "extract_unavailable": {
+          "value": {
+           "error": {
+            "code": "extract_unavailable",
+            "message": "FetchX cannot read pages into JSON right now, so nothing was fetched or charged. Retry after retry_after_seconds, or send the request without extract.",
+            "details": {
+             "reason": "budget_exhausted",
+             "retry_after_seconds": 300
+            },
+            "retry_after_seconds": 300
            }
           }
          }
@@ -829,7 +844,9 @@
              "captcha_credits": 10,
              "traffic_mb": 0.9,
              "included_mb": 5,
-             "traffic_credits": 0
+             "traffic_credits": 0,
+             "extract_tokens": null,
+             "extract_credits": 0
             }
            },
            "challenge": {
@@ -1197,7 +1214,9 @@
              "captcha_credits": 0,
              "traffic_mb": 4.2,
              "included_mb": 5,
-             "traffic_credits": 0
+             "traffic_credits": 0,
+             "extract_tokens": null,
+             "extract_credits": 0
             }
            },
            "challenge": null,
@@ -1515,7 +1534,7 @@
       }
      },
      "503": {
-      "description": "FetchX cannot take work right now. Nothing was charged.",
+      "description": "FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged.",
       "content": {
        "application/json": {
         "schema": {
@@ -1527,6 +1546,19 @@
            "error": {
             "code": "unavailable",
             "message": "FetchX cannot take work right now; wait and retry."
+           }
+          }
+         },
+         "extract_unavailable": {
+          "value": {
+           "error": {
+            "code": "extract_unavailable",
+            "message": "FetchX cannot read pages into JSON right now, so nothing was fetched or charged. Retry after retry_after_seconds, or send the request without extract.",
+            "details": {
+             "reason": "budget_exhausted",
+             "retry_after_seconds": 300
+            },
+            "retry_after_seconds": 300
            }
           }
          }
@@ -2185,11 +2217,10 @@
         "text",
         "links",
         "metadata",
-        "json",
         "screenshot"
        ]
       },
-      "description": "What to return. body: the response as received (the rendered page after a browser), the default when formats is left out. markdown, text, links, metadata and json are derived from it; screenshot needs a browser. Ask only for what you use: a rendered page can be megabytes of HTML. The body is stored either way and can be downloaded from /v1/fetch/{id}/content.",
+      "description": "What to return. body: the response as received (the rendered page after a browser), the default when formats is left out. markdown, text, links and metadata are derived from it (for JSON, see extract); screenshot needs a browser. Ask only for what you use: a rendered page can be megabytes of HTML. The body is stored either way and can be downloaded from /v1/fetch/{id}/content.",
       "default": [
        "body"
       ]
@@ -2220,6 +2251,25 @@
         "minimum": 1,
         "maximum": 1000000,
         "description": "The page’s markdown (a non-HTML body’s text) must have at least this many characters."
+       }
+      }
+     },
+     "extract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "schema"
+      ],
+      "description": "Read the page into JSON. schema is a small JSON Schema whose descriptions say what each field is: a root object asks for one record (a product, an article), a root array of objects (with a description of one record) asks for every record of that kind on a list page. Fields: string (format date, date-time or uri), number, integer, boolean, enum of strings, and arrays of strings or numbers; up to 30 per record. Every value is checked against the page: one the page does not show is null, never guessed. A field listed in required that the page does not show is treated like a missed expect: FetchX tries a browser, then a fresh IP, and a request that never gets it fails with content_missing and is not charged. Costs `extract` credits per started 25,000 tokens (about 100,000 characters) of page text read, up to 150,000 tokens, on top of the step; see credits.breakdown. Only page text is sent to the models, never your headers or cookies. If extraction is unavailable, the request is refused with 503 extract_unavailable before anything is fetched. A next page reads its page with the same extract. Not with HEAD.",
+      "properties": {
+       "schema": {
+        "type": "object",
+        "description": "type object (one record) or array (items: an object, description required, maxItems up to 200). additionalProperties may only be false. At most 16 KB."
+       },
+       "instructions": {
+        "type": "string",
+        "maxLength": 500,
+        "description": "Optional context for every field, for example which of several prices to take."
        }
       }
      },
@@ -2588,9 +2638,11 @@
      "captcha_credits",
      "traffic_mb",
      "included_mb",
-     "traffic_credits"
+     "traffic_credits",
+     "extract_tokens",
+     "extract_credits"
     ],
-    "description": "charged = step_credits + captcha_credits + traffic_credits, capped at max.",
+    "description": "charged = step_credits + captcha_credits + traffic_credits + extract_credits, capped at max.",
     "properties": {
      "step": {
       "type": "string",
@@ -2623,6 +2675,19 @@
      "traffic_credits": {
       "type": "integer",
       "description": "Per started MB past included_mb, on residential steps. block_resources keeps it down."
+     },
+     "extract_tokens": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "minimum": 0,
+      "description": "Page text the models read for extract, in tokens of 4 characters; null without extract."
+     },
+     "extract_credits": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "For extract: per started 25,000 tokens of page text read (at least one), up to 150,000 tokens; else 0."
      }
     }
    },
@@ -2737,8 +2802,25 @@
      "metadata": {
       "$ref": "#/components/schemas/PageMetadata"
      },
-     "json": {
-      "description": "formats: json, the body parsed as JSON (null when it is not JSON)."
+     "extract": {
+      "description": "The JSON read from the page for the request's extract: an object for a one-record schema (fields the page does not show are null), an array of records for a list schema. null when the site answered 404 or 410. Only on requests with extract.",
+      "oneOf": [
+       {
+        "type": "object"
+       },
+       {
+        "type": "array",
+        "items": {
+         "type": "object"
+        }
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "extract_report": {
+      "$ref": "#/components/schemas/ExtractReport"
      },
      "screenshot": {
       "type": "string",
@@ -2927,13 +3009,20 @@
       "type": "array",
       "items": {
        "type": "string",
-       "enum": [
-        "selector",
-        "text",
-        "min_markdown_length"
+       "anyOf": [
+        {
+         "enum": [
+          "selector",
+          "text",
+          "min_markdown_length"
+         ]
+        },
+        {
+         "pattern": "^extract:[A-Za-z_][A-Za-z0-9_]{0,63}$"
+        }
        ]
       },
-      "description": "On a content_missing step, the expect conditions the page did not meet."
+      "description": "On a content_missing step, the expect conditions the page did not meet, and extract:<field> for each required extract field it did not show."
      },
      "status_code": {
       "type": [
@@ -3048,7 +3137,8 @@
        "uncertain",
        "route_unavailable",
        "url_not_allowed",
-       "next_page_missing"
+       "next_page_missing",
+       "extract_unavailable"
       ]
      },
      "message": {
@@ -3387,6 +3477,114 @@
      "payment_hold": {
       "type": "boolean",
       "description": "True while spending is paused over a payment issue."
+     }
+    }
+   },
+   "ExtractReport": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "status"
+    ],
+    "description": "How the page was read for extract. On a failed request, why its page did not give the JSON.",
+    "properties": {
+     "status": {
+      "type": "string",
+      "enum": [
+       "complete",
+       "missing_required",
+       "unavailable",
+       "skipped"
+      ],
+      "description": "complete: every required field was found. missing_required: a required field was not on the page (the step was content_missing). unavailable: the models could not run. skipped: the site answered 404 or 410, so nothing was read."
+     },
+     "reason": {
+      "type": "string",
+      "description": "For unavailable or skipped: why (budget_exhausted, calls_exhausted, error, not_found...)."
+     },
+     "page_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Page text the models read, in tokens of 4 characters."
+     },
+     "truncated": {
+      "type": "boolean",
+      "description": "True when the page was longer than extraction reads (150,000 tokens), or the call cap or deadline stopped it; fields not reached are null."
+     },
+     "records": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "minimum": 0,
+      "description": "Records returned for a list schema; null for one record."
+     },
+     "dropped": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "List blocks left out: empty, repeated, or missing a required field."
+     },
+     "source": {
+      "type": "string",
+      "enum": [
+       "blocks",
+       "chat"
+      ],
+      "description": "List schema: records read one by one from the page's repeated blocks, or the whole list read at once."
+     },
+     "fill": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "number",
+       "minimum": 0,
+       "maximum": 1
+      },
+      "description": "List schema: the share of records with each field found."
+     },
+     "missing": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "One record: the fields that are null."
+     },
+     "reasons": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string",
+       "enum": [
+        "not_found",
+        "unsure",
+        "ungrounded"
+       ]
+      },
+      "description": "Why each missing field is null: not_found (the page does not show it), unsure (the models disagreed or were not confident), ungrounded (a value was read that is not on the page)."
+     },
+     "fields": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "object",
+       "additionalProperties": false,
+       "properties": {
+        "confidence": {
+         "type": "number",
+         "minimum": 0,
+         "maximum": 1
+        },
+        "evidence": {
+         "type": "string",
+         "description": "The page text the value was read from."
+        }
+       }
+      },
+      "description": "One record: for each value found, how sure the model was and where on the page it was."
+     },
+     "required_missing": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "The required fields the page did not show."
      }
     }
    }

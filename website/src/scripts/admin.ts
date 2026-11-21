@@ -115,7 +115,7 @@ async function showRuleAudit(id: string) {
 }
 
 // ---- Budgets ----
-const GROUPS: [string, string][] = [['captcha', 'Captcha solving (2Captcha)'], ['residential', 'Residential proxies'], ['autoscaler', 'Browser worker VMs'],
+const GROUPS: [string, string][] = [['captcha', 'Captcha solving (2Captcha)'], ['extract', 'Reading pages into JSON (OpenRouter)'], ['residential', 'Residential proxies'], ['autoscaler', 'Browser worker VMs'],
   ['requests', 'Requests'], ['probes', 'Reachability probes'], ['accounts', 'Accounts']];
 const CURRENCY: Record<string, string> = { usd_micro: '$', eur_micro: '€' };
 const WINDOWS: Record<string, string> = { '24h': 'in 24 h', month: 'this month', total: 'in total' };

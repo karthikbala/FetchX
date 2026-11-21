@@ -10,7 +10,10 @@
 // `next_page` ({how, url?} or null, the default) is what the page leads on to;
 // POST /internal/v1/jobs/{id}/next builds the next job's request from it (a
 // link's url, else the same url) and calls `script(request, {allowed, previous})`.
-// Requested formats are filled in crudely from the body.
+// Requested formats are filled in crudely from the body. With `extract`, a
+// successful job returns `extract` (default {}) and reports `extract_tokens`
+// (default 1000) of page text read; `extract_unavailable` (a reason) refuses
+// the job with 503, as the engine does when extraction can't run.
 // test/engine-contract.test.mjs validates what it answers against the contract.
 import Fastify from 'fastify';
 import {createHmac, randomUUID} from 'node:crypto';
@@ -72,12 +75,16 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
     if (formats.includes('text')) job.data.text = text;
     if (formats.includes('links')) job.data.links = [];
     if (formats.includes('metadata')) job.data.metadata = {title: /<title>([^<]*)<\/title>/.exec(job.body)?.[1] ?? ''};
-    if (formats.includes('json')) { try { job.data.json = JSON.parse(job.body); } catch { job.data.json = null; } }
     job.screenshot = outcome.screenshot ?? (transport === 'browser' && formats.includes('screenshot') ? Buffer.from('jpeg') : null);
     if (job.screenshot && formats.includes('screenshot')) job.data.screenshot = Buffer.from(job.screenshot).toString('base64');
     if (succeeded) {
       job.data.page = {number: job.page?.number ?? 1, previous_id: job.page?.previous ?? null, screens: 0, end: null};
       job.data.next_page = outcome.next_page ?? null;
+    }
+    const extracted = succeeded && job.request.extract;
+    if (extracted) {
+      job.data.extract = outcome.extract ?? {};
+      job.data.extract_report = {status: 'complete', page_tokens: outcome.extract_tokens ?? 1000};
     }
     Object.assign(job.data, outcome.data);
     job.attempts = blocked ? [] : [{transport, class: routeClass, country: null, result: succeeded ? 'success' : 'blocked', status_code: job.data.status_code,
@@ -87,7 +94,8 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
     job.challenge = outcome.challenge ?? null;
     job.error = succeeded ? null : {code: outcome.error_code ?? 'blocked', message: 'The site refused every route FetchX was allowed to try.',
       next: {action: 'retry_later', retry_with_new_key: true, detail: 'Retry later.'}};
-    job.usage = succeeded ? {step, captcha_solved: outcome.captcha === true, wire_bytes: outcome.wire_bytes ?? 1000} : null;
+    job.usage = succeeded ? {step, captcha_solved: outcome.captcha === true, wire_bytes: outcome.wire_bytes ?? 1000,
+      ...(extracted ? {extract: {page_tokens: outcome.extract_tokens ?? 1000, calls: 2}} : {})} : null;
     outbox.push(job.id);
   }
 
@@ -117,6 +125,7 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
     if (jobs.has(id)) return refuse(reply, 409, 'job_id_conflict');
     const outcome = await script(request, {allowed: allowed ? [...allowed] : null, ...(previous ? {previous} : {})}) ?? {};
     const planned = outcome.planned ?? plannedFor(request);
+    if (request.extract && outcome.extract_unavailable) return refuse(reply, 503, 'extract_unavailable', {reason: outcome.extract_unavailable});
     if (allowed && !planned.some(step => allowed.has(step))) return refuse(reply, 402, 'budget_too_low', {planned_steps: planned});
     const timeout = request.timeout_ms ?? 120_000;
     const job = {id, tenant, request, key, hash, page, allowed: allowed ? [...allowed] : null, status: 'pending', created_at: new Date().toISOString(),
