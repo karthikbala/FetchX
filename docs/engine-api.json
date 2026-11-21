@@ -2301,7 +2301,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Captchas met on this step, as type:outcome."
+            "description": "Captchas met on this step, as type:outcome. passed: the page let the visitor through; still_challenged: the same captcha came back; still_blocked: the captcha went away but the site kept refusing; other outcomes say why no solve was made (for example captcha_timeout). Only a request that succeeds is charged for its captchas."
           },
           "warmup": {
             "type": "string",
@@ -2647,7 +2647,7 @@
           },
           "block_resources": {
             "type": "boolean",
-            "description": "In a browser, do not download images, video, audio or web fonts on the page. They carry none of the text but a good part of a rendered page\u2019s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. Defaults to true, or false when formats has screenshot."
+            "description": "In a browser, do not download images, video, audio or web fonts on the page. They carry none of the text but a good part of a rendered page\u2019s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. On a site whose bot protection has walled FetchX, and on any attempt after a wall, the browser loads everything anyway, since a bot check can notice an image or font that never loads. Defaults to true, or false when formats has screenshot."
           },
           "expect": {
             "type": "object",

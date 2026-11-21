@@ -474,7 +474,7 @@ export interface components {
              *     ]
              */
             formats?: ("body" | "markdown" | "text" | "links" | "metadata" | "screenshot")[];
-            /** @description In a browser, do not download images, video, audio or web fonts on the page. They carry none of the text but a good part of a rendered page’s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. Defaults to true, or false when formats has screenshot. */
+            /** @description In a browser, do not download images, video, audio or web fonts on the page. They carry none of the text but a good part of a rendered page’s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. On a site whose bot protection has walled FetchX, and on any attempt after a wall, the browser loads everything anyway, since a bot check can notice an image or font that never loads. Defaults to true, or false when formats has screenshot. */
             block_resources?: boolean;
             /** @description What the page must show to be the content you want. Every condition given must hold, or the step is not a success: auto mode tries a browser, then one fresh IP, and a request that never gets it fails with content_missing and is not charged. A browser waits up to 10 s for the selector after the page settles. A real 404 or 410 is the site’s answer and is not checked. */
             expect?: {
