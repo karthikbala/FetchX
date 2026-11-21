@@ -2,6 +2,7 @@
 
     fetchx = FetchXClient(os.environ['FETCHX_URL'], os.environ['FETCHX_TOKEN'])
     result = fetchx.fetch(url='https://example.com', formats=['markdown'])
+    page2 = fetchx.next_page(result['id']) if (result.get('data') or {}).get('next_page') else None
 
 Every POST carries an idempotency_key (generated when you leave it out), so the
 client can safely resend the same request after a lost response, a 429 or a
@@ -66,20 +67,30 @@ class FetchXClient:
                               idempotency_key=idempotency_key, response=data)
         return data
 
-    def fetch(self, **request):
-        """POST /v1/fetch. Returns the result: succeeded, failed, or pending (use wait)."""
-        if not isinstance(request.get('url'), str):
-            raise FetchXError('url_required')
+    def _start(self, path, request):
         body = {**request, 'idempotency_key': request.get('idempotency_key') or str(uuid.uuid4())}
         attempt = 0
         while True:
             try:
-                return self._send('POST', '/v1/fetch', body=body, idempotency_key=body['idempotency_key'])
+                return self._send('POST', path, body=body, idempotency_key=body['idempotency_key'])
             except FetchXError as error:
                 if error.code not in RETRYABLE or attempt >= self.retries:
                     raise
                 time.sleep(min(30, error.retry_after_seconds or 2 ** attempt))
                 attempt += 1
+
+    def fetch(self, **request):
+        """POST /v1/fetch. Returns the result: succeeded, failed, or pending (use wait)."""
+        if not isinstance(request.get('url'), str):
+            raise FetchXError('url_required')
+        return self._start('/v1/fetch', request)
+
+    def next_page(self, id, **request):
+        """POST /v1/fetch/{id}/next: the page after a result whose data.next_page is set, as a new request.
+
+        request may hold scroll, max_credits, timeout_ms, async, webhook_url, idempotency_key and tags.
+        """
+        return self._start('/v1/fetch/' + quote(id, safe='') + '/next', request)
 
     def get(self, id, *, include_body=True):
         return self._send('GET', '/v1/fetch/' + quote(id, safe='') + ('' if include_body else '?include_body=false'))

@@ -118,6 +118,104 @@ test('failures are free; the reservation shapes allowed_steps and refusals say w
   assert.equal((await store.pool.query(`SELECT count(*)::int AS n FROM fetch_settlements WHERE status = 'pending'`)).rows[0].n, 0);
 });
 
+test('a next page is a new request: reserved, charged only when it succeeds, refused for free', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const pages = new Map();
+  // Page 1 links to page 2; page 2 has a Load more button; the click on it fails.
+  const {call, engine} = await platformFor(store, {script: (request, {previous} = {}) => {
+    if (request.url.includes('/slow')) return {hold: gate};
+    if (request.url.includes('/single')) return {step: 'http'};
+    if (previous && previous === pages.get(2)) return {status: 'failed', planned: ['browser']};
+    return {planned: ['browser', 'browser_residential'], step: 'browser',
+      next_page: request.url.endsWith('page=2') ? {how: 'click'} : {how: 'link', url: 'https://shop.example.com/list?page=2'}};
+  }});
+  const first = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/list', formats: ['markdown'], tags: ['crawl']}});
+  assert.equal(first.body.status, 'succeeded');
+  assert.deepEqual(first.body.data.page, {number: 1, previous_id: null, screens: 0, end: null});
+  assert.deepEqual(first.body.data.next_page, {how: 'link', url: 'https://shop.example.com/list?page=2'});
+  assert.equal(await balance(store), 90);
+
+  // The next page: a new request with its own id, billed at its own step.
+  const second = await call('POST', `/v1/fetch/${first.body.id}/next`, {body: {idempotency_key: 'page-2'}});
+  assert.equal(second.status, 200, JSON.stringify(second.body));
+  assert.notEqual(second.body.id, first.body.id);
+  assert.equal(second.body.url, 'https://shop.example.com/list?page=2');
+  assert.deepEqual(second.body.data.page, {number: 2, previous_id: first.body.id, screens: 0, end: null});
+  assert.deepEqual(second.body.tags, ['crawl'], 'settings come from the earlier request');
+  assert.deepEqual(second.body.credits, {charged: 10, max: 90});
+  assert.equal(await balance(store), 80);
+  pages.set(2, second.body.id);
+  assert.ok(engine.calls.some(c => c.method === 'POST' && c.url === `/internal/v1/jobs/${first.body.id}/next`));
+  assert.deepEqual(engine.jobs.get(second.body.id).allowed, ['http', 'http_residential', 'browser', 'browser_residential']);
+  // Replaying the key returns the same page and charges nothing more; another body under it is refused.
+  const again = await call('POST', `/v1/fetch/${first.body.id}/next`, {body: {idempotency_key: 'page-2'}});
+  assert.equal(again.body.id, second.body.id);
+  assert.equal(await balance(store), 80);
+  assert.equal((await call('POST', `/v1/fetch/${first.body.id}/next`, {body: {idempotency_key: 'page-2', scroll: 3}})).body.error.code,
+    'idempotency_conflict');
+
+  // A next page that fails costs nothing, and has no next page of its own.
+  const third = await call('POST', `/v1/fetch/${second.body.id}/next`);
+  assert.equal(third.status, 200, JSON.stringify(third.body));
+  assert.equal(third.body.status, 'failed');
+  assert.equal(third.body.credits.charged, 0);
+  assert.equal(await balance(store), 80);
+  const afterFailed = await call('POST', `/v1/fetch/${third.body.id}/next`, {body: {}});
+  assert.equal(afterFailed.status, 409);
+  assert.deepEqual([afterFailed.body.error.code, afterFailed.body.error.details], ['no_next_page', {reason: 'failed'}]);
+
+  // Refusals are 4xx, free, and leave nothing reserved.
+  const single = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/single'}});
+  assert.equal(single.body.data.next_page, null);
+  const none = await call('POST', `/v1/fetch/${single.body.id}/next`, {body: {}});
+  assert.deepEqual([none.status, none.body.error.details], [409, {reason: 'none_found'}]);
+  assert.equal((await call('POST', '/v1/fetch/00000000-0000-4000-8000-000000000000/next', {body: {}})).status, 404);
+  const field = await call('POST', `/v1/fetch/${first.body.id}/next`, {body: {url: 'https://shop.example.com/other'}});
+  assert.deepEqual([field.status, field.body.error.details.field], [400, 'url']);
+  const low = await call('POST', `/v1/fetch/${first.body.id}/next`, {body: {max_credits: 5}});
+  assert.deepEqual([low.status, low.body.error.code, low.body.error.details.min_credits], [402, 'max_credits_too_low', 10]);
+  const slow = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/slow', async: true}});
+  const running = await call('POST', `/v1/fetch/${slow.body.id}/next`, {body: {}});
+  assert.deepEqual([running.status, running.body.error.code], [409, 'pending']);
+  release();
+  await engine.jobs.get(slow.body.id).done;
+  await call('GET', `/v1/fetch/${slow.body.id}`);
+  assert.equal((await call('DELETE', `/v1/fetch/${second.body.id}`)).status, 204);
+  const expired = await call('POST', `/v1/fetch/${second.body.id}/next`, {body: {idempotency_key: 'page-3-again'}});
+  assert.deepEqual([expired.status, expired.body.error.code], [410, 'content_expired']);
+  // Another project never reaches this project's requests.
+  assert.equal((await call('POST', `/v1/fetch/${first.body.id}/next`, {token: UNMETERED_TOKEN, body: {}})).status, 404);
+  assert.equal(await reservations(store), 0);
+  assert.equal((await store.pool.query(`SELECT count(*)::int AS n FROM fetch_settlements WHERE status = 'pending'`)).rows[0].n, 0);
+  const usage = await call('GET', '/v1/usage');
+  assert.equal(usage.body.used.credits, 22, 'page 1 and page 2 at the browser price, two plain pages at 1: 10 + 10 + 1 + 1');
+});
+
+test('a deeper page reserves for the traffic it may load; a next page for the deepest replay', {skip}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const {call} = await platformFor(store, {script: () => ({planned: ['browser_residential'], step: 'browser_residential',
+    next_page: {how: 'click'}})});
+  await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 100000 WHERE project = $1', [PROJECT]);
+  // Residential browser 25 + captcha 10 + 5 a MB past the 5 included: 30 MB by default,
+  // 2.5 MB more for each screen past 10, at most 150 MB.
+  const auto = await call('POST', '/v1/fetch', {body: {url: 'https://list.example.com/a'}});
+  assert.equal(auto.body.credits.max, 160);
+  const ten = await call('POST', '/v1/fetch', {body: {url: 'https://list.example.com/b', scroll: 10}});
+  assert.equal(ten.body.credits.max, 160);
+  const thirty = await call('POST', '/v1/fetch', {body: {url: 'https://list.example.com/c', scroll: 30}});
+  assert.equal(thirty.body.credits.max, 410, '80 MB');
+  const next = await call('POST', `/v1/fetch/${auto.body.id}/next`, {body: {}});
+  assert.equal(next.status, 200, JSON.stringify(next.body));
+  assert.equal(next.body.credits.max, 760, '150 MB');
+  const capped = await call('POST', `/v1/fetch/${next.body.id}/next`, {body: {max_credits: 200}});
+  assert.equal(capped.body.credits.max, 200, 'max_credits still caps it');
+  assert.equal(await reservations(store), 0);
+});
+
 test('a project with too many jobs running is told to wait', {skip}, async t => {
   const store = await openStore();
   t.after(() => store.close());

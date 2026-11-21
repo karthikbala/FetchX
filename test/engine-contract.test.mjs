@@ -9,7 +9,7 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import spec from '../docs/engine-api.json' with {type: 'json'};
 import {ENGINE_CONTRACT} from '../src/engine/client.mjs';
 import {ADMIN_ROUTES, MERGED_ADMIN_ROUTES} from '../src/control-admin.mjs';
-import {databaseUrl, html, openStore, platformFor} from './helpers.mjs';
+import {databaseUrl, html, openStore, platformFor, PROJECT} from './helpers.mjs';
 
 const ajv = new Ajv2020({allErrors: true, strict: false, validateFormats: false});
 const schemaId = 'urn:fetchx:engine-contract';
@@ -53,7 +53,9 @@ test('engine client requests and fake engine answers and events match the contra
   const held = new Promise(resolve => { release = resolve; });
   const {call, engine, events, platform} = await platformFor(store, {
     script: request => request.url.includes('/wall') ? {status: 'failed', planned: ['http']}
-      : request.url.includes('/held') ? {hold: held} : {body: html('ok')},
+      : request.url.includes('/held') ? {hold: held}
+        : request.url.includes('/list') ? {body: html('list'), next_page: {how: 'link', url: 'https://shop.example.com/list?page=2'}}
+          : {body: html('ok')},
     wrapEngineFetch: fakeFetch => async (url, init) => {
       const response = await fakeFetch(url, init);
       exchanges.push({url: new URL(url), init, status: response.status, body: response.status === 204 ? null : await response.clone().arrayBuffer()});
@@ -70,6 +72,17 @@ test('engine client requests and fake engine answers and events match the contra
   await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/a', idempotency_key: ok.body.idempotency_key}});
   await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/a', max_attempts: 9}});
   await call('POST', '/v1/fetch', {body: {url: 'http://127.0.0.1/'}});
+  // Next pages: one that runs, the refusals, and one whose content is gone.
+  await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 1000 WHERE project = $1', [PROJECT]);
+  const list = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/list', tags: ['t']}});
+  const page2 = await call('POST', `/v1/fetch/${list.body.id}/next`, {body: {scroll: 3, idempotency_key: 'list-2'}});
+  assert.equal(page2.status, 200, JSON.stringify(page2.body));
+  await call('POST', `/v1/fetch/${list.body.id}/next`, {body: {idempotency_key: 'list-2'}});
+  await call('POST', `/v1/fetch/${ok.body.id}/next`);
+  await call('POST', '/v1/fetch/00000000-0000-4000-8000-000000000000/next', {body: {}});
+  await call('POST', `/v1/fetch/${list.body.id}/next`, {body: {url: 'https://shop.example.com/x'}});
+  await call('DELETE', `/v1/fetch/${page2.body.id}`);
+  await call('POST', `/v1/fetch/${page2.body.id}/next`, {body: {}});
   const pending = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/held', async: true}});
   assert.equal(pending.status, 202);
   await call('GET', `/v1/fetch/${pending.body.id}`);
@@ -101,7 +114,7 @@ test('engine client requests and fake engine answers and events match the contra
       // The engine validates the customer's request; the platform passes it on as
       // sent, so a refused one is only checked for the platform's own fields.
       const input = JSON.parse(init.body);
-      const checked = [400, 413].includes(status) ? {...input, request: {url: 'https://shop.example.com/'}} : input;
+      const checked = [400, 413].includes(status) ? {...input, request: found.template.endsWith('/next') ? {} : {url: 'https://shop.example.com/'}} : input;
       assertValid(operation.requestBody.content['application/json'].schema, checked, `${label} request`);
     }
     const response = operation.responses[status] ?? operation.responses[`${String(status)[0]}XX`];
@@ -115,7 +128,9 @@ test('engine client requests and fake engine answers and events match the contra
     'POST /internal/v1/jobs 409', 'GET /internal/v1/jobs 200', 'GET /internal/v1/jobs/{id} 200', 'GET /internal/v1/jobs/{id} 202',
     'GET /internal/v1/jobs/{id} 404', 'GET /internal/v1/jobs/{id}/content 200', 'GET /internal/v1/jobs/{id}/content 409',
     'GET /internal/v1/jobs/{id}/content 410', 'GET /internal/v1/jobs/{id}/screenshot 404', 'DELETE /internal/v1/jobs/{id} 204',
-    'DELETE /internal/v1/jobs/{id} 409', 'GET /internal/v1/status 200']) {
+    'DELETE /internal/v1/jobs/{id} 409', 'GET /internal/v1/status 200', 'POST /internal/v1/jobs/{id}/next 200',
+    'POST /internal/v1/jobs/{id}/next 400', 'POST /internal/v1/jobs/{id}/next 404', 'POST /internal/v1/jobs/{id}/next 409',
+    'POST /internal/v1/jobs/{id}/next 410']) {
     assert.ok(statuses.has(expected), `not exercised: ${expected}`);
   }
 

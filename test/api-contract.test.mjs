@@ -7,7 +7,7 @@ import Fastify from 'fastify';
 import Ajv2020 from 'ajv/dist/2020.js';
 import spec from '../docs/openapi.json' with {type: 'json'};
 import {registerApi, API_SCOPES} from '../src/api/v1.mjs';
-import {databaseUrl, html, openStore, platformFor} from './helpers.mjs';
+import {databaseUrl, html, openStore, platformFor, PROJECT} from './helpers.mjs';
 
 const ajv = new Ajv2020({allErrors: true, strict: false, validateFormats: false});
 const schemaId = 'urn:fetchx:contract';
@@ -84,6 +84,7 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   t.after(() => store.close());
   const {call, engine} = await platformFor(store, {script: request => request.url.includes('/wall') ? {status: 'failed', body: 'denied'}
     : request.url.includes('/pdf') ? {content_type: 'application/pdf', body: '%PDF-1.4'}
+      : request.url.includes('/list') ? {body: html('list'), step: 'browser', next_page: {how: 'click'}}
       : {body: html('hello'), data: {headers: {'set-cookie': 'sid=1; Path=/'}, cookies: [{name: 'sid', value: '1', domain: 'shop.example.com', path: '/'}]}}});
   const expect = async (method, path, status, request, specUrl = path.split('?')[0]) => {
     const response = await call(method.toUpperCase(), path, request);
@@ -117,4 +118,19 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   await expect('post', '/v1/fetch', 409, {body: {url: 'https://shop.example.com/other', idempotency_key: ok.idempotency_key}});
   await expect('post', '/v1/fetch', 413, {body: {url: 'https://shop.example.com/', method: 'POST', body: 'x'.repeat(1_000_001)}});
   await expect('get', '/v1/usage?period=year', 400);
+  // Next pages, with credits to spare.
+  await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 1000 WHERE project = $1', [PROJECT]);
+  const next = '/v1/fetch/{id}/next';
+  const list = await expect('post', '/v1/fetch', 200, {body: {url: 'https://shop.example.com/list', render: 'always'}});
+  assert.deepEqual(list.data.next_page, {how: 'click'});
+  const page2 = await expect('post', `/v1/fetch/${list.id}/next`, 200, {body: {scroll: 5}}, next);
+  assert.equal(page2.data.page.number, 2);
+  await expect('post', `/v1/fetch/${page2.id}/next`, 202, {body: {async: true}}, next);
+  await expect('post', `/v1/fetch/${failed.id}/next`, 409, {body: {}}, next);
+  await expect('post', '/v1/fetch/00000000-0000-4000-8000-000000000000/next', 404, {body: {}}, next);
+  await expect('post', `/v1/fetch/${list.id}/next`, 400, {body: {scroll: 0}}, next);
+  await expect('post', `/v1/fetch/${list.id}/next`, 402, {body: {max_credits: 1}}, next);
+  await expect('post', `/v1/fetch/${list.id}/next`, 401, {token: 'wrong', body: {}}, next);
+  await expect('delete', `/v1/fetch/${list.id}`, 204, undefined, one);
+  await expect('post', `/v1/fetch/${list.id}/next`, 410, {body: {}}, next);
 });

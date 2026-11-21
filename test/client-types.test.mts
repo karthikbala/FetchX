@@ -10,6 +10,10 @@ async function checkClientTypes() {
   const charged: number = result.credits.charged;
   const next: string | undefined = result.error?.next.action;
   const finished: FetchResult = await client.wait(result.id, {intervalMs: 1000});
+  const how: 'link' | 'click' | 'scroll' | undefined = result.data?.next_page?.how;
+  const second: FetchResult = await client.nextPage(result.id, {scroll: 20, max_credits: 60});
+  const pageNumber: number | undefined = second.data?.page?.number;
+  await client.fetch({url: 'https://shop.example.com/', scroll: 'off'});
   const page = await client.list({status: 'failed', limit: 10});
   const cursor: string | null = page.next_cursor;
   const usage: Usage = await client.usage({period: 'day'});
@@ -21,13 +25,16 @@ async function checkClientTypes() {
   } catch (error) {
     if (error instanceof FetchXError) console.log(error.code, error.status, error.retryAfterSeconds, error.idempotencyKey);
   }
-  console.log(status, markdown, charged, next, finished.status, cursor, usage.balance?.credits, bytes.length);
+  console.log(status, markdown, charged, next, finished.status, cursor, usage.balance?.credits, bytes.length, how, pageNumber);
 }
 
 // @ts-expect-error: url is required.
 const missingUrl: FetchRequest = {formats: ['markdown']};
+// @ts-expect-error: scroll is auto, off or a number of screens.
+const badScroll: FetchRequest = {url: 'https://shop.example.com/', scroll: 'all'};
 // @ts-expect-error: only documented formats are accepted.
 const badFormat: FetchRequest = {url: 'https://shop.example.com/', formats: ['pdf']};
 void checkClientTypes;
 void missingUrl;
 void badFormat;
+void badScroll;

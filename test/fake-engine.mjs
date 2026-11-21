@@ -7,6 +7,9 @@
 // is allowed the job is refused with budget_too_low, as the engine does. `step`
 // (default the cheapest allowed planned tier) wins; a step outside allowed_steps
 // fails the job. `hold` is a promise the job waits on before it finishes.
+// `next_page` ({how, url?} or null, the default) is what the page leads on to;
+// POST /internal/v1/jobs/{id}/next builds the next job's request from it (a
+// link's url, else the same url) and calls `script(request, {allowed, previous})`.
 // Requested formats are filled in crudely from the body.
 // test/engine-contract.test.mjs validates what it answers against the contract.
 import Fastify from 'fastify';
@@ -23,6 +26,7 @@ const within = (promise, ms) => {
   let timer;
   return Promise.race([promise, new Promise(resolve => { timer = setTimeout(resolve, ms); })]).finally(() => clearTimeout(timer));
 };
+const scrollValid = scroll => scroll === undefined || ['auto', 'off'].includes(scroll) || (Number.isInteger(scroll) && scroll >= 1 && scroll <= 50);
 const canonical = value => JSON.stringify(value, (key, item) => (item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(name => [name, item[name]])) : item));
 
@@ -71,6 +75,10 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
     if (formats.includes('json')) { try { job.data.json = JSON.parse(job.body); } catch { job.data.json = null; } }
     job.screenshot = outcome.screenshot ?? (transport === 'browser' && formats.includes('screenshot') ? Buffer.from('jpeg') : null);
     if (job.screenshot && formats.includes('screenshot')) job.data.screenshot = Buffer.from(job.screenshot).toString('base64');
+    if (succeeded) {
+      job.data.page = {number: job.page?.number ?? 1, previous_id: job.page?.previous ?? null, screens: 0, end: null};
+      job.data.next_page = outcome.next_page ?? null;
+    }
     Object.assign(job.data, outcome.data);
     job.attempts = blocked ? [] : [{transport, class: routeClass, country: null, result: succeeded ? 'success' : 'blocked', status_code: job.data.status_code}];
     job.skipped = blocked ? [{transport, class: routeClass, country: null, reason: 'over_max_credits'}] : [];
@@ -80,14 +88,47 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
     outbox.push(job.id);
   }
 
-  app.post('/internal/v1/jobs', async (req, reply) => {
+  // The envelope's own fields, checked as the engine does; a refusal is sent and null returned.
+  const envelopeOf = (req, reply) => {
     const {id, tenant, request, allowed_steps: steps, wait_ms: waitMs = 60_000} = req.body ?? {};
-    if (!UUID.test(id ?? '')) return refuse(reply, 400, 'invalid_request', {field: 'id'});
-    if (typeof tenant !== 'string' || !/^[A-Za-z0-9_.:-]{1,100}$/.test(tenant)) return refuse(reply, 400, 'invalid_request', {field: 'tenant'});
-    if (!request || typeof request !== 'object' || Array.isArray(request)) return refuse(reply, 400, 'invalid_request', {field: 'request'});
+    if (!UUID.test(id ?? '')) { refuse(reply, 400, 'invalid_request', {field: 'id'}); return null; }
+    if (typeof tenant !== 'string' || !/^[A-Za-z0-9_.:-]{1,100}$/.test(tenant)) { refuse(reply, 400, 'invalid_request', {field: 'tenant'}); return null; }
+    if (!request || typeof request !== 'object' || Array.isArray(request)) { refuse(reply, 400, 'invalid_request', {field: 'request'}); return null; }
     if (steps !== undefined && steps !== null && (!Array.isArray(steps) || steps.some(step => !STEPS.includes(step)))) {
-      return refuse(reply, 400, 'invalid_request', {field: 'allowed_steps'});
+      refuse(reply, 400, 'invalid_request', {field: 'allowed_steps'});
+      return null;
     }
+    return {id, tenant, request, allowed: steps === undefined || steps === null ? null : new Set(steps), waitMs};
+  };
+  // The job for an idempotency key, if it has one: answered (or refused) here.
+  const replay = async (reply, {tenant, key, hash, async: isAsync, includeBody, waitMs}) => {
+    const existingId = byKey.get(`${tenant}\0${key}`);
+    if (!existingId) return false;
+    const existing = jobs.get(existingId);
+    if (existing.hash !== hash) { refuse(reply, 409, 'idempotency_conflict'); return true; }
+    if (existing.status === 'pending' && !isAsync) await within(existing.done, waitMs);
+    reply.code(existing.status === 'pending' ? 202 : 200).send({...envelope(existing, {includeBody}), created: false});
+    return true;
+  };
+  const start = async (reply, {id, tenant, request, allowed, waitMs, key, hash, page = null, previous = null}) => {
+    if (jobs.has(id)) return refuse(reply, 409, 'job_id_conflict');
+    const outcome = await script(request, {allowed: allowed ? [...allowed] : null, ...(previous ? {previous} : {})}) ?? {};
+    const planned = outcome.planned ?? plannedFor(request);
+    if (allowed && !planned.some(step => allowed.has(step))) return refuse(reply, 402, 'budget_too_low', {planned_steps: planned});
+    const timeout = request.timeout_ms ?? 120_000;
+    const job = {id, tenant, request, key, hash, page, allowed: allowed ? [...allowed] : null, status: 'pending', created_at: new Date().toISOString(),
+      finished_at: null, deadline: new Date(Date.now() + timeout).toISOString(), webhook_url: request.webhook_url ?? null, usage: null, deleted: false};
+    jobs.set(id, job);
+    byKey.set(`${tenant}\0${key}`, id);
+    job.done = Promise.resolve(outcome.hold).then(() => finish(job, outcome, allowed));
+    if (!request.async) await within(job.done, waitMs);
+    return reply.code(job.status === 'pending' ? 202 : 200).send({...envelope(job, {includeBody: request.include_body !== false}), created: true});
+  };
+
+  app.post('/internal/v1/jobs', async (req, reply) => {
+    const input = envelopeOf(req, reply);
+    if (!input) return reply;
+    const {request} = input;
     let url;
     try { url = new URL(request.url); } catch { return refuse(reply, 400, 'invalid_request', {field: 'url'}); }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || /^(10\.|127\.|localhost$)/.test(url.hostname)
@@ -95,32 +136,51 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
     if (request.max_attempts !== undefined && (!Number.isInteger(request.max_attempts) || request.max_attempts < 1 || request.max_attempts > 5)) {
       return refuse(reply, 400, 'invalid_request', {field: 'max_attempts', reason: '1 to 5'});
     }
+    if (!scrollValid(request.scroll)) {
+      return refuse(reply, 400, 'invalid_request', {field: 'scroll', reason: 'auto, off, or 1 to 50'});
+    }
     if (typeof request.body === 'string' && Buffer.byteLength(request.body) > 1_000_000) {
       return refuse(reply, 413, 'request_too_large', {field: 'body', max_bytes: 1_000_000});
     }
     const key = request.idempotency_key ?? `auto_${randomUUID()}`;
     const {idempotency_key: _key, ...hashed} = request;
     const hash = canonical(hashed);
-    const existingId = byKey.get(`${tenant}\0${key}`);
-    if (existingId) {
-      const existing = jobs.get(existingId);
-      if (existing.hash !== hash) return refuse(reply, 409, 'idempotency_conflict');
-      if (existing.status === 'pending' && !request.async) await within(existing.done, waitMs);
-      return reply.code(existing.status === 'pending' ? 202 : 200).send({...envelope(existing, {includeBody: request.include_body !== false}), created: false});
+    if (await replay(reply, {tenant: input.tenant, key, hash, async: request.async, includeBody: request.include_body !== false, waitMs: input.waitMs})) return reply;
+    return start(reply, {...input, key, hash});
+  });
+
+  // The page after job :id's. Like the engine: the idempotency key first, then
+  // the earlier job (the tenant's, finished, succeeded, with a next page and
+  // its content); the new request keeps the earlier one's settings.
+  const NEXT_FIELDS = ['scroll', 'max_credits', 'timeout_ms', 'async', 'webhook_url', 'idempotency_key', 'tags'];
+  app.post('/internal/v1/jobs/:id/next', async (req, reply) => {
+    const input = envelopeOf(req, reply);
+    if (!input) return reply;
+    const {request: changes} = input;
+    const unknown = Object.keys(changes).find(name => !NEXT_FIELDS.includes(name));
+    if (unknown) return refuse(reply, 400, 'invalid_request', {field: unknown});
+    if (!scrollValid(changes.scroll)) return refuse(reply, 400, 'invalid_request', {field: 'scroll', reason: 'auto, off, or 1 to 50'});
+    const previous = jobs.get(req.params.id);
+    if (!previous || previous.tenant !== input.tenant) return refuse(reply, 404, 'not_found');
+    const key = changes.idempotency_key ?? `auto_${randomUUID()}`;
+    const {idempotency_key: _key, ...hashed} = changes;
+    const hash = canonical({next_of: previous.id, ...hashed});
+    const isAsync = changes.async ?? previous.request.async;
+    if (await replay(reply, {tenant: input.tenant, key, hash, async: isAsync, includeBody: previous.request.include_body !== false, waitMs: input.waitMs})) {
+      return reply;
     }
-    if (jobs.has(id)) return refuse(reply, 409, 'job_id_conflict');
-    const allowed = steps === undefined || steps === null ? null : new Set(steps);
-    const outcome = await script(request, {allowed: allowed ? [...allowed] : null}) ?? {};
-    const planned = outcome.planned ?? plannedFor(request);
-    if (allowed && !planned.some(step => allowed.has(step))) return refuse(reply, 402, 'budget_too_low', {planned_steps: planned});
-    const timeout = request.timeout_ms ?? 120_000;
-    const job = {id, tenant, request, key, hash, allowed: allowed ? [...allowed] : null, status: 'pending', created_at: new Date().toISOString(), finished_at: null,
-      deadline: new Date(Date.now() + timeout).toISOString(), webhook_url: request.webhook_url ?? null, usage: null, deleted: false};
-    jobs.set(id, job);
-    byKey.set(`${tenant}\0${key}`, id);
-    job.done = Promise.resolve(outcome.hold).then(() => finish(job, outcome, allowed));
-    if (!request.async) await within(job.done, waitMs);
-    return reply.code(job.status === 'pending' ? 202 : 200).send({...envelope(job, {includeBody: request.include_body !== false}), created: true});
+    if (previous.status === 'pending') return refuse(reply, 409, 'pending');
+    if (previous.status !== 'succeeded') return refuse(reply, 409, 'no_next_page', {reason: 'failed'});
+    const next = previous.data.next_page;
+    if (!next) return refuse(reply, 409, 'no_next_page', {reason: 'none_found'});
+    if (previous.deleted) return refuse(reply, 410, 'content_expired');
+    if (next.how === 'scroll' && (changes.scroll ?? previous.request.scroll) === 'off') {
+      return refuse(reply, 400, 'invalid_request', {field: 'scroll', reason: 'this next page loads as the page is scrolled; use auto or a number of screens'});
+    }
+    const {idempotency_key: _old, max_credits: _credits, ...kept} = previous.request;
+    const request = {...kept, ...hashed, url: next.how === 'link' ? next.url : previous.request.url};
+    return start(reply, {...input, request, key, hash, page: {previous: previous.id, number: (previous.page?.number ?? 1) + 1},
+      previous: previous.id});
   });
 
   const own = (req, reply) => {
@@ -162,7 +222,7 @@ export function fakeEngine({script = () => ({}), token, eventKey} = {}) {
     job.deleted = true;
     return reply.code(204).send();
   });
-  app.get('/internal/v1/status', async () => ({service: 'FetchX engine', release: 'fake', contract: '1.3', browser: {}, captcha: {},
+  app.get('/internal/v1/status', async () => ({service: 'FetchX engine', release: 'fake', contract: '1.4', browser: {}, captcha: {},
     events: {undelivered: outbox.length, oldest_undelivered: null}}));
   // Admin: every call is recorded. Budgets (one engine budget) and the audit
   // trail are kept in memory, enough for the platform's merged list and log;
