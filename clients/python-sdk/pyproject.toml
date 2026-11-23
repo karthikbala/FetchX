@@ -10,6 +10,7 @@ dynamic = ["version"]
 description = "Python SDK for the FetchX API: get any public URL with one API call."
 license = "MIT"
 license-files = ["LICENSE"]
+authors = [{ name = "FetchAll Inc." }]
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["httpx>=0.27,<1"]
