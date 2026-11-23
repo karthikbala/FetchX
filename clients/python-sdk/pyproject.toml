@@ -18,6 +18,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+[project.scripts]
+fetchx-connect = "fetchx._connect:main"
+
 [project.urls]
 Homepage = "https://fetchx.ai"
 Documentation = "https://fetchx.ai/docs"
