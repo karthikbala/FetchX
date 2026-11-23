@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Seque
 import httpx
 
 from ._core import Flow, _Call, _Core, _Send, _Sleep, _Yield, _network_query, log
-from .models import (Balance, Batch, BatchItem, Content, Estimate, FetchResult, FetchSummary, ListPage, Me,
+from .models import (Balance, Batch, BatchItem, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Me,
                      NetworkCall, NetworkPage, ServiceStatus, Usage)
 
 _SIX_HOURS = 6 * 3600.0
@@ -312,6 +312,18 @@ class FetchX(_Core):
     def me(self) -> Me:
         """``GET /v1/me``: the project (the same after a key is rotated) and this key's id, name, prefix and scopes."""
         return self._call(*self._plan_me())
+
+    def send_feedback(self, body: Optional[Mapping[str, Any]] = None, **fields: Any) -> Feedback:
+        """``POST /v1/feedback``: tell FetchX how it handled a page. Name the request (``fetch_id``) or the
+        ``url`` (and ``method``), say what you saw (``kind``: ``blocked_via_fetchx_ok_from_home``,
+        ``wrong_content``, ``extract_wrong`` or ``other``), and add ``message`` and ``evidence`` from where it
+        worked (``status_code``, ``final_url``, ``content_type``, ``body_excerpt``, ``client``). Free. An open
+        report of the same kind about the same request comes back instead of a new one."""
+        return self._call(*self._plan_send_feedback(body, fields))
+
+    def get_feedback(self, feedback_id: Any) -> Feedback:
+        """``GET /v1/feedback/{id}``: where a report stands and FetchX staff's reply. Takes an id or a Feedback."""
+        return self._call(*self._plan_get_feedback(feedback_id))
 
     def usage(self, period: Optional[str] = None, since: Optional[str] = None, until: Optional[str] = None) -> Usage:
         """``GET /v1/usage``: balance and usage for a day, a month (default) or a range."""

@@ -194,6 +194,18 @@ describe('same-origin control bridge',()=>{
   for(const [path,method,body] of ok)expect((await send(path,{method,body})).status).toBe(200);
   expect(calls.map(({url,init})=>[url.replace('https://gateway.example/control',''),init.method])).toEqual(ok.map(([path,method])=>[path,method]));
  });
+ it('forwards only the admin feedback routes',async()=>{
+  const report='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  for(const path of ['/admin/feedback/12','/admin/feedback/not-a-uuid',`/admin/feedback/${report}/extra`,`/admin/feedback/${report}%2Fx`])expect((await send(path)).status).toBe(404);
+  expect((await send('/admin/feedback',{method:'POST',body:'{}'})).status).toBe(405);
+  expect((await send(`/admin/feedback/${report}`)).status).toBe(405);
+  expect((await send(`/admin/feedback/${report}`,{method:'DELETE'})).status).toBe(405);
+  expect((await send('/admin/feedback?status=received')).status).toBe(400);
+  expect(calls).toHaveLength(0);
+  const ok:[string,string,string?][]=[['/admin/feedback','GET'],[`/admin/feedback/${report}`,'PUT','{"status":"resolved","reply":"r"}']];
+  for(const [path,method,body] of ok)expect((await send(path,{method,body})).status).toBe(200);
+  expect(calls.map(({url,init})=>[url.replace('https://gateway.example/control',''),init.method])).toEqual(ok.map(([path,method])=>[path,method]));
+ });
  it('allows only the project-scoped Stripe checkout methods',async()=>{
   const stripe=`/projects/${project}/billing/stripe`,key='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const checkout=JSON.stringify({plan_id:'developer',idempotency_key:key});

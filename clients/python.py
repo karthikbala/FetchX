@@ -196,8 +196,16 @@ class FetchXClient:
         return self._send('GET', '/v1/balance')
 
     def me(self):
-        """The project and key making the call: {'project_id', 'key_id', 'key_name', 'key_prefix', 'scopes'}. Any valid key."""
+        """The project and key making the call: {'project_id', 'key_id', 'key_name', 'key_prefix', 'scopes', 'limits'}. Any valid key."""
         return self._send('GET', '/v1/me')
+
+    def send_feedback(self, **body):
+        """Report how FetchX handled a page: fetch_id= (or url= and method=), kind=, message=, evidence=. Free."""
+        return self._send('POST', '/v1/feedback', body=body)
+
+    def get_feedback(self, id):
+        """Where a report stands ('status') and FetchX staff's 'reply'."""
+        return self._send('GET', '/v1/feedback/' + quote(id, safe=''))
 
     def usage(self, *, period=None, since=None, until=None):
         return self._send('GET', '/v1/usage' + _query({'period': period, 'since': since, 'until': until}))

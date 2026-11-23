@@ -44,6 +44,8 @@ const batchOperations = contractOperations.filter(operation => operation.path.st
 const createEstimate = contractOperation('createEstimate');
 const getStatus = contractOperation('getStatus');
 const getMe = contractOperation('getMe');
+const sendFeedback = contractOperation('sendFeedback');
+const getFeedback = contractOperation('getFeedback');
 const scopeText = (scope: string | undefined) => scope === 'any' ? 'any valid API key' : scope ? '`' + scope + '`' : 'none';
 const hostedApi = 'https://app.fetchx.ai';
 const json = (value: unknown) => JSON.stringify(value, null, 2);
@@ -448,7 +450,7 @@ for item in fetchx.batch_results(batch['id']):
     description: 'Read a result, download its body or screenshot, list requests and delete stored content.',
     group: 'API reference',
     sections: [
-      ...contractOperations.filter(operation => ![createFetch, createNextPage, getUsage, getBalance, createEstimate, getStatus, getMe, ...batchOperations]
+      ...contractOperations.filter(operation => ![createFetch, createNextPage, getUsage, getBalance, createEstimate, getStatus, getMe, sendFeedback, getFeedback, ...batchOperations]
         .includes(operation)).map(operationSection),
       {
         id: 'retention',
@@ -482,6 +484,16 @@ for item in fetchx.batch_results(batch['id']):
           { kind: 'text', text: 'With `route` set there is exactly one attempt, so the error is precise about that route and suggests auto mode.' },
         ],
       },
+      {
+        id: 'feedback',
+        title: 'Tell us when FetchX gets a page wrong',
+        blocks: [
+          { kind: 'text', text: 'When a page fails through FetchX but loads from your own connection, or comes back with the wrong content or wrong extracted fields, send `POST /v1/feedback` with the request\'s `fetch_id` (or the `url`), what you saw as `kind`, and evidence from where it worked if you have it: the status code, a short part of the body, and how you fetched it. FetchX keeps a copy of what it tried for that request, and the team uses the reports to tune routes. `GET /v1/feedback/{id}` shows when it was looked at and the reply.' },
+          { kind: 'text', text: 'Reports are free, up to 100 a day per project, and kept 90 days. Sending the same report again while it is open returns the first one. Leave secrets and personal data out of `message` and `evidence`: FetchX staff read them.' },
+        ],
+      },
+      operationSection(sendFeedback),
+      operationSection(getFeedback),
     ],
   },
   {

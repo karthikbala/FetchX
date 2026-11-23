@@ -379,6 +379,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report how FetchX handled a page
+         * @description Tell FetchX about a page it could not get, or got wrong: name the request (fetch_id) or the URL, say what you saw (kind), and add evidence from where it worked if you have it. FetchX staff review reports to tune routes; GET /v1/feedback/{id} shows the status and their reply. An open report of the same kind about the same request (or URL and method) is returned instead of a new one (200). Free; up to 100 reports a day per project; kept 90 days.
+         */
+        post: operations["sendFeedback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/feedback/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a report
+         * @description Where a report stands and FetchX staff's reply.
+         */
+        get: operations["getFeedback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export interface webhooks {
     fetchFinished: {
@@ -1475,6 +1515,81 @@ export interface components {
              * @description When the period ends: the next midnight UTC, or the first of next month UTC.
              */
             resets_at: string;
+        };
+        /** @description A report about one request: give fetch_id (one of your requests, kept 90 days) or url, not both. */
+        FeedbackRequest: {
+            /**
+             * Format: uuid
+             * @description The request the report is about. FetchX keeps a copy of what it did with it, so the report stays useful after the result expires.
+             */
+            fetch_id?: string;
+            /** @description The page, when there is no request to name: an http or https URL. */
+            url?: string;
+            /**
+             * @description With url only.
+             * @default GET
+             * @enum {string}
+             */
+            method?: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
+            /**
+             * @description What you saw. blocked_via_fetchx_ok_from_home: the request failed or was walled through FetchX and works from your own connection. wrong_content: FetchX returned a page that is not the one you see (a different, empty or challenge page). extract_wrong: extract returned wrong or missing fields. other: anything else; say what in message.
+             * @enum {string}
+             */
+            kind: "blocked_via_fetchx_ok_from_home" | "wrong_content" | "extract_wrong" | "other";
+            /** @description What happened, in your words. */
+            message?: string;
+            /** @description Optional: what the request returned where it worked. Leave out secrets and personal data; FetchX staff read it. */
+            evidence?: {
+                /** @description The HTTP status you got. */
+                status_code?: number;
+                /** @description The URL after redirects. */
+                final_url?: string;
+                content_type?: string;
+                /** @description A short part of the body you got, such as the title or the data you expected. */
+                body_excerpt?: string;
+                /** @description Where and how it worked, for example "curl 8.5 from a home connection in DE". */
+                client?: string;
+            };
+        };
+        /** @description A report and where it stands. */
+        Feedback: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description What you saw. blocked_via_fetchx_ok_from_home: the request failed or was walled through FetchX and works from your own connection. wrong_content: FetchX returned a page that is not the one you see (a different, empty or challenge page). extract_wrong: extract returned wrong or missing fields. other: anything else; say what in message.
+             * @enum {string}
+             */
+            kind: "blocked_via_fetchx_ok_from_home" | "wrong_content" | "extract_wrong" | "other";
+            /** Format: uuid */
+            fetch_id: string | null;
+            /** @description The page: the request's URL when the report names fetch_id. */
+            url: string;
+            /** @description The method; null for a report that names fetch_id. */
+            method: string | null;
+            message: string | null;
+            /** @description Optional: what the request returned where it worked. Leave out secrets and personal data; FetchX staff read it. */
+            evidence: {
+                /** @description The HTTP status you got. */
+                status_code?: number;
+                /** @description The URL after redirects. */
+                final_url?: string;
+                content_type?: string;
+                /** @description A short part of the body you got, such as the title or the data you expected. */
+                body_excerpt?: string;
+                /** @description Where and how it worked, for example "curl 8.5 from a home connection in DE". */
+                client?: string;
+            };
+            /**
+             * @description received: not looked at yet. reviewing: FetchX staff are on it. resolved: changed or explained (see reply). dismissed: nothing to change (see reply).
+             * @enum {string}
+             */
+            status: "received" | "reviewing" | "resolved" | "dismissed";
+            /** @description FetchX staff's answer, when there is one. */
+            reply: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
         };
     };
     responses: never;
@@ -2993,6 +3108,154 @@ export interface operations {
             };
             /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    sendFeedback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackRequest"];
+            };
+        };
+        responses: {
+            /** @description The same report is already open; this is it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Feedback"];
+                };
+            };
+            /** @description The report was received. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Feedback"];
+                };
+            };
+            /** @description A field is missing or wrong; error.details.field names it. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description fetch_id is not a request of this project, or it is no longer kept (90 days). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The project sent 100 reports today (UTC). Wait `retry_after_seconds`, until midnight UTC. */
+            429: {
+                headers: {
+                    /** @description Seconds until the cap resets. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getFeedback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The report id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The report. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Feedback"];
+                };
+            };
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No report with that id in this project. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, Optional, 
 import httpx
 
 from ._core import Flow, _Call, _Core, _Send, _Sleep, _Yield, _network_query, log
-from .models import (Balance, Batch, BatchItem, Content, Estimate, FetchResult, FetchSummary, ListPage, Me,
+from .models import (Balance, Batch, BatchItem, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Me,
                      NetworkCall, NetworkPage, ServiceStatus, Usage)
 
 _SIX_HOURS = 6 * 3600.0
@@ -243,6 +243,14 @@ class AsyncFetchX(_Core):
 
     async def me(self) -> Me:
         return await self._call(*self._plan_me())
+
+    async def send_feedback(self, body: Optional[Mapping[str, Any]] = None, **fields: Any) -> Feedback:
+        """``POST /v1/feedback``: see ``FetchX.send_feedback``."""
+        return await self._call(*self._plan_send_feedback(body, fields))
+
+    async def get_feedback(self, feedback_id: Any) -> Feedback:
+        """``GET /v1/feedback/{id}``: see ``FetchX.get_feedback``."""
+        return await self._call(*self._plan_get_feedback(feedback_id))
 
     async def usage(self, period: Optional[str] = None, since: Optional[str] = None,
                     until: Optional[str] = None) -> Usage:

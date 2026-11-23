@@ -100,6 +100,8 @@ function allowedMethods(path:string):string[]|null {
  if(new RegExp(`^/admin/budgets/${ADMIN_BUDGET}$`).test(path))return ['PUT'];
  if(new RegExp(`^/admin/budgets/${ADMIN_BUDGET}/(?:reset)$`).test(path))return ['POST'];
  if(new RegExp(`^/admin/budgets/${ADMIN_BUDGET}/audit$`).test(path))return ['GET'];
+ if(path==='/admin/feedback')return ['GET'];
+ if(new RegExp(`^/admin/feedback/${UUID}$`).test(path))return ['PUT'];
  if(path==='/admin/notices')return ['GET','POST'];
  if(new RegExp(`^/admin/notices/${ADMIN_NOTICE}$`).test(path))return ['PUT'];
  if(new RegExp(`^/admin/notices/${ADMIN_NOTICE}/resolve$`).test(path))return ['POST'];

@@ -888,6 +888,45 @@ class Me(Model):
         return {"project_id": self.project_id, "key_prefix": self.key_prefix, "scopes": self.scopes}
 
 
+class Feedback(Model):
+    """``POST /v1/feedback`` and ``GET /v1/feedback/{id}``: a report about how FetchX handled a page, and where it stands."""
+
+    @property
+    def id(self) -> str:
+        return self.raw.get("id") or ""
+
+    @property
+    def kind(self) -> str:
+        """``blocked_via_fetchx_ok_from_home``, ``wrong_content``, ``extract_wrong`` or ``other``."""
+        return self.raw.get("kind") or ""
+
+    @property
+    def fetch_id(self) -> Optional[str]:
+        return self.raw.get("fetch_id")
+
+    @property
+    def url(self) -> str:
+        return self.raw.get("url") or ""
+
+    @property
+    def status(self) -> str:
+        """``received``, ``reviewing``, ``resolved`` or ``dismissed``."""
+        return self.raw.get("status") or ""
+
+    @property
+    def reply(self) -> Optional[str]:
+        """FetchX staff's answer, when there is one."""
+        return self.raw.get("reply")
+
+    @property
+    def open(self) -> bool:
+        """Not resolved or dismissed yet."""
+        return self.status in ("received", "reviewing")
+
+    def _repr_fields(self):
+        return {"id": self.id, "kind": self.kind, "status": self.status}
+
+
 class Balance(Model):
     @property
     def credits(self) -> Optional[int]:
