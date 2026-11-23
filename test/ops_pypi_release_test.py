@@ -35,11 +35,13 @@ class ReleaseCheckTests(unittest.TestCase):
             release.sdk_version(self.sdk)
 
     def test_a_release_needs_a_license_the_pypi_install_line_and_absolute_links(self):
+        (self.sdk / "LICENSE").unlink()
+        self.assertTrue(any("no LICENSE file" in problem for problem in release.source_problems(self.sdk)))
+        (self.sdk / "LICENSE").write_text("MIT License\n")
+        self.edit("pyproject.toml", 'license = "MIT"\n', "")
         problems = release.source_problems(self.sdk)
         self.assertTrue(any("no license" in problem for problem in problems), problems)
         self.edit("pyproject.toml", 'name = "fetchx-sdk"', 'name = "fetchx-sdk"\nlicense = "MIT"')
-        self.assertTrue(any("no LICENSE file" in problem for problem in release.source_problems(self.sdk)))
-        (self.sdk / "LICENSE").write_text("MIT License\n")
         readme = (self.sdk / "README.md").read_text()
         start = readme.index('pip install "fetchx-sdk @ git+https://')
         end = readme.index("\n", start)

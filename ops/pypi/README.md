@@ -4,7 +4,7 @@ The SDK in `clients/python-sdk` is published as `fetchx-sdk` (imported as `fetch
 
 ## Once, before the first release
 
-1. Choose the SDK's license. Add `license = "<SPDX id>"` to `clients/python-sdk/pyproject.toml` and the license text as `clients/python-sdk/LICENSE`.
+1. The SDK is MIT-licensed (Karthik, 2026-11-23): `license = "MIT"` in `clients/python-sdk/pyproject.toml` and the text in `clients/python-sdk/LICENSE`.
 2. On pypi.org, sign in to the account that will own `fetchx-sdk`, turn on two-factor sign-in, and create an API token. The first upload needs a token for the whole account, because a token for one project can only be made once the project exists.
 3. On porttrack, save the token where only root can read it:
 
