@@ -42,6 +42,7 @@ class ClientTests(unittest.TestCase):
         client.usage(period='day')
         client.estimate(items=['https://shop.example.com/a'], defaults={'render': 'never'})
         client.status()
+        client.prices()
         client.me()
         client.send_feedback(fetch_id=RESULT['id'], kind='blocked_via_fetchx_ok_from_home', evidence={'status_code': 200})
         client.get_feedback(RESULT['id'])
@@ -61,7 +62,7 @@ class ClientTests(unittest.TestCase):
             ('GET', base + '/v1/fetch?status=failed&limit=5'), ('GET', base + '/v1/fetch/' + RESULT['id'] + '/content'),
             ('DELETE', base + '/v1/fetch/' + RESULT['id']), ('GET', base + '/v1/balance'),
             ('GET', base + '/v1/usage?period=day'), ('POST', base + '/v1/estimate'), ('GET', base + '/v1/status'),
-            ('GET', base + '/v1/me'), ('POST', base + '/v1/feedback'), ('GET', base + '/v1/feedback/' + RESULT['id']),
+            ('GET', base + '/v1/prices'), ('GET', base + '/v1/me'), ('POST', base + '/v1/feedback'), ('GET', base + '/v1/feedback/' + RESULT['id']),
             ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network?first_party=true&contains=Lamp&contains=19.99&limit=5'),
             ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network/2'), ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network/2/body'),
             ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network.har?page=1'),

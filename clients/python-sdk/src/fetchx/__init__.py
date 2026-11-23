@@ -18,7 +18,7 @@ from .client import FetchX
 from .errors import FetchFailed, FetchXError, SpendLimitReached
 from .models import (Balance, Batch, BatchItem, CallEvent, Challenge, Content, CreditBreakdown, Estimate,
                      EstimateCredits, Feedback, FetchFailure, FetchResult, FetchSummary, ListPage, Me, NetworkCall, NetworkPage,
-                     NextPage, NextStep, PageInfo, ServiceStatus, Usage)
+                     NextPage, NextStep, PageInfo, Prices, ServiceStatus, Usage)
 
 _logging.getLogger("fetchx").addHandler(_logging.NullHandler())
 
@@ -26,6 +26,6 @@ __all__ = [
     "AsyncFetchX", "Balance", "Batch", "BatchItem", "CallEvent", "Challenge", "Content", "CreditBreakdown",
     "DEFAULT_URL", "Estimate", "EstimateCredits", "Feedback", "FetchFailed", "FetchFailure", "FetchResult", "FetchSummary",
     "FetchX", "FetchXError", "ListPage", "Me", "NetworkCall", "NetworkPage", "NextPage", "NextStep", "PageInfo",
-    "ServiceStatus", "SpendLimitReached",
+    "Prices", "ServiceStatus", "SpendLimitReached",
     "Usage", "__version__", "new_key", "site_of",
 ]

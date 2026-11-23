@@ -196,6 +196,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/prices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Prices and trial credits
+         * @description What each step costs in credits, what a solved captcha, residential traffic and extraction add, and the trial credits a new account gets. No API key needed and any origin may call it, so a tool can quote a site's cost before the user has an account. Only a successful request is charged: the price of the step that got the data, plus a solved captcha (browser steps), plus each started MB of residential traffic past the step's included_mb, plus extraction when the request asks for extract. POST /v1/estimate prices a particular request or batch. Cached for 5 minutes. Credit packs and their local prices are at pricing_url.
+         */
+        get: operations["getPrices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/batches": {
         parameters: {
             query?: never;
@@ -1618,6 +1638,53 @@ export interface components {
             /** @description Fields past 150, or deeper or longer than the limits, were left out, or the sample was cut further to fit. */
             truncated: boolean;
         };
+        PriceStep: {
+            /** @description The price of a successful request that this step got. */
+            credits: number;
+            /** @description The step goes out through a residential IP. */
+            residential: boolean;
+            /** @description The step loads the page in a browser. */
+            browser: boolean;
+            /** @description The route classes (route.class on a request) this step's price covers. */
+            route_classes: ("direct" | "datacenter" | "residential")[];
+            /** @description Traffic included in the step's price, in MB; each started MB past it costs traffic.credits_per_mb. Null: traffic is not charged on this step. */
+            included_mb: number | null;
+        };
+        /** @description FetchX's price table, in credits. */
+        Prices: {
+            /** @constant */
+            unit: "credits";
+            /** @description Each step auto mode can climb through, cheapest first. A request is charged for the step that got the data, never for the ones before it. */
+            steps: {
+                http: components["schemas"]["PriceStep"];
+                http_residential: components["schemas"]["PriceStep"];
+                browser: components["schemas"]["PriceStep"];
+                browser_residential: components["schemas"]["PriceStep"];
+            };
+            captcha: {
+                /** @description Added for each captcha solved on a browser step that succeeded. */
+                credits: number;
+            };
+            traffic: {
+                /** @description Added per started MB of residential traffic past the step's included_mb. block_resources (on by default) keeps most pages inside it. */
+                credits_per_mb: number;
+            };
+            /** @description Reading a page into JSON with extract: credits per started unit of page text read, at least one unit. */
+            extract: {
+                /** @description Credits per started unit. */
+                credits: number;
+                /** @description Tokens of page text in one unit (a token is about 4 characters). */
+                unit_tokens: number;
+                /** @description The most page text read; text past it is not read or charged. */
+                max_tokens: number;
+                /** @description The most extraction adds to one page. */
+                max_credits: number;
+            };
+            /** @description Trial credits a new account gets once, on its first project. They share one balance with purchased credits and pay for every step. Null when this server grants none. */
+            trial_credits: number | null;
+            /** @description Credit packs and their prices in your currency. */
+            pricing_url: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -2390,6 +2457,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceStatus"];
+                };
+            };
+        };
+    };
+    getPrices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The price table. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Prices"];
                 };
             };
         };

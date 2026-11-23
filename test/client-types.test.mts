@@ -1,5 +1,5 @@
 import {FetchXClient, FetchXError, type FetchRequest, type FetchResult, type Usage, type Balance, type Batch, type BatchItem,
-  type BatchRequest, type NetworkList, type NetworkCall, type Me, type Feedback} from '../clients/javascript.mjs';
+  type BatchRequest, type NetworkList, type NetworkCall, type Me, type Feedback, type Prices} from '../clients/javascript.mjs';
 
 async function checkClientTypes() {
   const client = new FetchXClient({url: 'https://app.fetchx.ai', token: 'fxk_fixture'});
@@ -36,6 +36,10 @@ async function checkClientTypes() {
   const firstPath: string | undefined = shaped.data?.skeleton?.fields[0]?.path;
   const arrayItems: number | undefined = shaped.data?.skeleton?.fields.find(row => row.type === 'array')?.items;
   console.log(firstPath, arrayItems);
+  const prices: Prices = await client.prices();
+  const residentialBrowser: number = prices.steps.browser_residential.credits;
+  const trial: number | null = prices.trial_credits;
+  console.log(residentialBrowser, trial);
   const me: Me = await client.me();
   const scopes: string[] = me.scopes;
   const monthLeft: number | undefined = me.limits.credits_per_month?.remaining;

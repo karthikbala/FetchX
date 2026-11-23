@@ -23,7 +23,7 @@ import httpx
 from ._version import __version__
 from .errors import FetchXError, SpendLimitReached
 from .models import (Balance, Batch, BatchItem, CallEvent, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Me,
-                     NetworkCall, NetworkPage, ServiceStatus, Usage)
+                     NetworkCall, NetworkPage, Prices, ServiceStatus, Usage)
 
 log = logging.getLogger("fetchx")
 
@@ -761,3 +761,6 @@ class _Core:
 
     def _plan_status(self) -> Plan:
         return self._plan_get_model("status", "/v1/status", ServiceStatus)
+
+    def _plan_prices(self) -> Plan:
+        return self._plan_get_model("prices", "/v1/prices", Prices)

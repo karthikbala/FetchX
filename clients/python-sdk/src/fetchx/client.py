@@ -10,7 +10,7 @@ import httpx
 
 from ._core import Flow, _Call, _Core, _Send, _Sleep, _Yield, _network_query, log
 from .models import (Balance, Batch, BatchItem, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Me,
-                     NetworkCall, NetworkPage, ServiceStatus, Usage)
+                     NetworkCall, NetworkPage, Prices, ServiceStatus, Usage)
 
 _SIX_HOURS = 6 * 3600.0
 
@@ -332,3 +332,8 @@ class FetchX(_Core):
     def status(self) -> ServiceStatus:
         """``GET /v1/status``: the API's state and notices."""
         return self._call(*self._plan_status())
+
+    def prices(self) -> Prices:
+        """``GET /v1/prices``: what each step, a solved captcha, residential traffic and extraction cost in
+        credits, and the trial credits a new account gets. The route needs no key."""
+        return self._call(*self._plan_prices())

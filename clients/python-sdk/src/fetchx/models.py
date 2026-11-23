@@ -988,6 +988,48 @@ class Usage(Model):
         return {"credits_used": self.credits_used}
 
 
+class Prices(Model):
+    """``GET /v1/prices``: FetchX's price table in credits, and the trial credits a new account gets."""
+
+    @property
+    def steps(self) -> Dict[str, dict]:
+        """``http``, ``http_residential``, ``browser`` and ``browser_residential``, cheapest first: each with
+        ``credits`` (the price of a successful request that step got), ``residential``, ``browser``,
+        ``route_classes`` and ``included_mb`` (residential traffic in the price, or None)."""
+        return dict(self.raw.get("steps") or {})
+
+    def step(self, name: str) -> Optional[int]:
+        """The credits a successful request on one step costs, e.g. ``prices.step("browser_residential")``."""
+        return (self.steps.get(name) or {}).get("credits")
+
+    @property
+    def captcha(self) -> Optional[int]:
+        """Added for each captcha solved on a browser step that succeeded."""
+        return (self.raw.get("captcha") or {}).get("credits")
+
+    @property
+    def credits_per_mb(self) -> Optional[int]:
+        """Added per started MB of residential traffic past a step's ``included_mb``."""
+        return (self.raw.get("traffic") or {}).get("credits_per_mb")
+
+    @property
+    def extract(self) -> dict:
+        """``credits`` per started ``unit_tokens`` of page text read, up to ``max_tokens`` and ``max_credits``."""
+        return dict(self.raw.get("extract") or {})
+
+    @property
+    def trial_credits(self) -> Optional[int]:
+        """Trial credits a new account gets once (None when the server grants none). They pay for every step."""
+        return self.raw.get("trial_credits")
+
+    @property
+    def pricing_url(self) -> str:
+        return self.raw.get("pricing_url") or ""
+
+    def _repr_fields(self):
+        return {"steps": {name: step.get("credits") for name, step in self.steps.items()}, "trial_credits": self.trial_credits}
+
+
 class ServiceStatus(Model):
     @property
     def status(self) -> str:

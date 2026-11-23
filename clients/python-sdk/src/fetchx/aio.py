@@ -10,7 +10,7 @@ import httpx
 
 from ._core import Flow, _Call, _Core, _Send, _Sleep, _Yield, _network_query, log
 from .models import (Balance, Batch, BatchItem, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Me,
-                     NetworkCall, NetworkPage, ServiceStatus, Usage)
+                     NetworkCall, NetworkPage, Prices, ServiceStatus, Usage)
 
 _SIX_HOURS = 6 * 3600.0
 
@@ -258,3 +258,7 @@ class AsyncFetchX(_Core):
 
     async def status(self) -> ServiceStatus:
         return await self._call(*self._plan_status())
+
+    async def prices(self) -> Prices:
+        """``GET /v1/prices``: see ``FetchX.prices``."""
+        return await self._call(*self._plan_prices())

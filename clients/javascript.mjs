@@ -194,6 +194,10 @@ export class FetchXClient {
   // GET /v1/status: service status and notices (needs no key, but sends it).
   status() { return this.#send('GET', '/v1/status'); }
 
+  // GET /v1/prices: what each step, a captcha, residential traffic and extraction cost in credits,
+  // and the trial credits a new account gets (needs no key, but sends it).
+  prices() { return this.#send('GET', '/v1/prices'); }
+
   // GET /v1/balance: {credits, reserved, trial, purchased, payment_hold}
   balance() { return this.#send('GET', '/v1/balance'); }
 

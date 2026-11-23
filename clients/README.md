@@ -76,6 +76,7 @@ else:
 | `POST /v1/feedback` | `sendFeedback(input)` | `send_feedback(**input)` | `fetch:write` |
 | `GET /v1/feedback/{id}` | `getFeedback(id)` | `get_feedback(id)` | `fetch:read` |
 | `GET /v1/status` | `status()` | `status()` | none |
+| `GET /v1/prices` | `prices()` | `prices()` | none |
 
 ## Python SDK
 

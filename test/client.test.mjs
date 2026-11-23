@@ -52,6 +52,8 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   assert.equal(estimate.kind, 'batch');
   assert.equal(estimate.estimated, 2);
   assert.equal((await client.status()).status, 'operational');
+  const prices = await client.prices();
+  assert.deepEqual([prices.steps.http.credits, prices.steps.browser_residential.credits, prices.trial_credits], [1, 25, 1000]);
   // A network capture, and who is calling.
   await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 1000 WHERE project = $1', [PROJECT]);
   const captured = await client.fetch({url: 'https://shop.example.com/data', render: 'always', capture: {types: ['document', 'fetch']}});
