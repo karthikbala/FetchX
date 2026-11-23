@@ -121,8 +121,10 @@ test('extract is priced per started 25,000 tokens of page text read, reserved fo
   assert.equal(tight.status, 402);
   assert.equal(tight.body.error.code, 'max_credits_too_low');
   assert.equal(tight.body.error.details.min_credits, 11);
-  assert.equal((await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/', formats: ['json']}})).status, 200,
-    'formats is the engine\'s to check');
+  // formats is the engine's to check: a format it knows passes, one it does not comes back as its refusal.
+  assert.equal((await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/', formats: ['skeleton']}})).status, 200);
+  const unknown = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/', formats: ['json']}});
+  assert.deepEqual([unknown.status, unknown.body.error.code, unknown.body.error.details.field], [400, 'invalid_request', 'formats']);
 });
 
 test('failures are free; the reservation shapes allowed_steps and refusals say why', {skip}, async t => {

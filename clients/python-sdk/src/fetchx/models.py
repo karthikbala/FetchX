@@ -347,6 +347,12 @@ class FetchResult(Model):
         return self.data.get("metadata") or {}
 
     @property
+    def skeleton(self) -> Optional[dict]:
+        """``formats: skeleton``: the shape of a JSON body (``root``, ``fields`` with ``path``, ``type``, ``seen`` and
+        ``items``, a ``sample`` with one element per array, ``truncated``), or None when the body is not JSON."""
+        return self.data.get("skeleton")
+
+    @property
     def extract(self) -> Any:
         return self.data.get("extract")
 

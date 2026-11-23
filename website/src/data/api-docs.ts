@@ -173,7 +173,7 @@ export const docPages: DocPage[] = [
         blocks: [
           { kind: 'text', text: 'Only `url` is required. FetchX starts with the cheapest route, moves to a residential IP or a browser when the site blocks it, and remembers what worked for that site so the next request starts there.' },
           { kind: 'code', title: 'POST /v1/fetch', snippets: fetchSnippets(minimal) },
-          { kind: 'text', text: '`formats` picks what comes back: the raw `body` (the default when you leave `formats` out), markdown, plain text, links, page metadata, parsed JSON or a screenshot. The body is only returned when you list it, so ask for what you will use.' },
+          { kind: 'text', text: '`formats` picks what comes back: the raw `body` (the default when you leave `formats` out), markdown, plain text, links, page metadata, a screenshot, or for a JSON API its `skeleton`: every field with its type, array sizes and a one-element sample, a few KB however large the body. The body is only returned when you list it, so ask for what you will use. For structured data from a page, use `extract`.' },
           { kind: 'code', title: 'Markdown from a page that needs a browser', snippets: fetchSnippets(markdownRequest) },
         ],
       },

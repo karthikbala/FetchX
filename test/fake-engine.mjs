@@ -10,10 +10,11 @@
 // `next_page` ({how, url?} or null, the default) is what the page leads on to;
 // POST /internal/v1/jobs/{id}/next builds the next job's request from it (a
 // link's url, else the same url) and calls `script(request, {allowed, previous})`.
-// Requested formats are filled in crudely from the body. With `extract`, a
-// successful job returns `extract` (default {}) and reports `extract_tokens`
-// (default 1000) of page text read; `extract_unavailable` (a reason) refuses
-// the job with 503, as the engine does when extraction can't run.
+// Requested formats are filled in crudely from the body (skeleton: top-level
+// keys only). With `extract`, a successful job returns `extract` (default {})
+// and reports `extract_tokens` (default 1000) of page text read;
+// `extract_unavailable` (a reason) refuses the job with 503, as the engine does
+// when extraction can't run.
 // With `capture`, a job records `network` (calls as the engine stores them, by
 // default the page's document and one JSON call) and is read through the
 // /network routes; capture without a browser (render: never, not GET) is refused.
@@ -40,7 +41,17 @@ const scrollValid = scroll => scroll === undefined || ['auto', 'off'].includes(s
 const canonical = value => JSON.stringify(value, (key, item) => (item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(name => [name, item[name]])) : item));
 
-const FORMATS = ['body', 'markdown', 'text', 'links', 'metadata', 'json', 'screenshot'];
+// A crude skeleton: the top-level keys of a JSON body, the document as its sample.
+function skeletonOf(body) {
+  let value;
+  try { value = JSON.parse(body); } catch { return null; }
+  const type = item => item === null ? 'null' : Array.isArray(item) ? 'array' : typeof item;
+  const top = type(value) === 'object' ? Object.entries(value).map(([key, item]) => ({path: `$.${key}`, type: type(item), seen: 1,
+    ...(Array.isArray(item) ? {items: item.length} : {})})) : [];
+  return {bytes: Buffer.byteLength(body), root: type(value), fields: [{path: '$', type: type(value), seen: 1,
+    ...(Array.isArray(value) ? {items: value.length} : {})}, ...top], sample: value, truncated: false};
+}
+const FORMATS = ['body', 'markdown', 'text', 'links', 'metadata', 'skeleton', 'screenshot'];
 // The crude checks a fake job gets: a refusal {status, code, details} or null.
 function refusalOf(request) {
   let url;
@@ -128,6 +139,7 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     if (formats.includes('text')) job.data.text = text;
     if (formats.includes('links')) job.data.links = [];
     if (formats.includes('metadata')) job.data.metadata = {title: /<title>([^<]*)<\/title>/.exec(job.body)?.[1] ?? ''};
+    if (formats.includes('skeleton')) job.data.skeleton = skeletonOf(job.body);
     job.screenshot = outcome.screenshot ?? (transport === 'browser' && formats.includes('screenshot') ? Buffer.from('jpeg') : null);
     if (job.screenshot && formats.includes('screenshot')) job.data.screenshot = Buffer.from(job.screenshot).toString('base64');
     if (succeeded) {

@@ -605,12 +605,12 @@ export interface components {
                 render?: boolean;
             };
             /**
-             * @description What to return. body: the response as received (the rendered page after a browser), the default when formats is left out. markdown, text, links and metadata are derived from it (for JSON, see extract); screenshot needs a browser. Ask only for what you use: a rendered page can be megabytes of HTML. The body is stored either way and can be downloaded from /v1/fetch/{id}/content.
+             * @description What to return. body: the response as received (the rendered page after a browser), the default when formats is left out. markdown, text, links and metadata are derived from it (for data from a page, see extract); skeleton: the shape of a JSON body (keys, types, array lengths and a small sample), a few KB instead of the whole body, null when the body is not JSON; screenshot needs a browser. Ask only for what you use: a rendered page can be megabytes of HTML. The body is stored either way and can be downloaded from /v1/fetch/{id}/content.
              * @default [
              *       "body"
              *     ]
              */
-            formats?: ("body" | "markdown" | "text" | "links" | "metadata" | "screenshot")[];
+            formats?: ("body" | "markdown" | "text" | "links" | "metadata" | "skeleton" | "screenshot")[];
             /** @description In a browser, do not download images, video, audio or web fonts on the page. They carry none of the text but a good part of a rendered page’s traffic, and residential traffic past the included megabytes is charged per MB; the text and every image URL stay in the page. Captcha widgets still load theirs. On a site whose bot protection has walled FetchX, and on any attempt after a wall, the browser loads everything anyway, since a bot check can notice an image or font that never loads. Defaults to true, or false when formats has screenshot. */
             block_resources?: boolean;
             /** @description What the page must show to be the content you want. Every condition given must hold, or the step is not a success: auto mode tries a browser, then one fresh IP, and a request that never gets it fails with content_missing and is not charged. A browser waits up to 10 s for the selector after the page settles. A real 404 or 410 is the site’s answer and is not checked. */
@@ -818,6 +818,8 @@ export interface components {
                 text: string;
             }[];
             metadata?: components["schemas"]["PageMetadata"];
+            /** @description With formats: skeleton, the shape of a JSON body; null when the body is not JSON. */
+            skeleton?: components["schemas"]["JsonSkeleton"] | null;
             /** @description The JSON read from the page for the request's extract: an object for a one-record schema (fields the page does not show are null), an array of records for a list schema. null when the site answered 404 or 410. Only on requests with extract. */
             extract?: Record<string, never> | Record<string, never>[] | null;
             extract_report?: components["schemas"]["ExtractReport"];
@@ -1590,6 +1592,31 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        /** @description The shape of a JSON body (formats: skeleton), a few KB however large the body. Fields are read from the first 100 elements of each array. A JSON document a browser shows inside a lone <pre> is read from there. */
+        JsonSkeleton: {
+            /** @description Size of the body. */
+            bytes: number;
+            /**
+             * @description The type of the whole document.
+             * @enum {string}
+             */
+            root: "object" | "array" | "string" | "number" | "boolean" | "null";
+            /** @description Each path once, in the order first seen. */
+            fields: {
+                /** @description JSONPath: $ for the document, $.items for a key, $.items[*].price for a key of each element, $['a.b'] for a key that needs quoting. */
+                path: string;
+                /** @description object, array, string, number, boolean or null; several joined with | when it varies (string|null). */
+                type: string;
+                /** @description How many times the path was seen: compare with the parent array's items to spot optional keys. */
+                seen: number;
+                /** @description For an array: elements across every time it was seen. */
+                items?: number;
+            }[];
+            /** @description The body with every array cut to its first element and long strings cut short (null when even that is too large). */
+            sample: unknown;
+            /** @description Fields past 150, or deeper or longer than the limits, were left out, or the sample was cut further to fit. */
+            truncated: boolean;
         };
     };
     responses: never;

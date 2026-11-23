@@ -39,7 +39,7 @@ FETCH_FIELDS = frozenset({"url", "method", "headers", "body", "body_base64", "re
                           "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key", "tags", "capture"})
 NEXT_FIELDS = frozenset({"scroll", "expect", "capture", "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key",
                          "tags"})
-FORMATS = frozenset({"body", "markdown", "text", "links", "metadata", "screenshot"})
+FORMATS = frozenset({"body", "markdown", "text", "links", "metadata", "skeleton", "screenshot"})
 FEEDBACK_FIELDS = frozenset({"fetch_id", "url", "method", "kind", "message", "evidence"})
 FEEDBACK_KINDS = frozenset({"blocked_via_fetchx_ok_from_home", "wrong_content", "extract_wrong", "other"})
 FEEDBACK_EVIDENCE = frozenset({"status_code", "final_url", "content_type", "body_excerpt", "client"})
@@ -483,6 +483,8 @@ class FakeFetchX:
                 data["links"] = list(page.links or [])
             if "metadata" in formats:
                 data["metadata"] = dict(page.metadata or {})
+            if "skeleton" in formats:
+                data["skeleton"] = _skeleton(page.content)
             if "screenshot" in formats:
                 data["screenshot"] = base64.b64encode(page.screenshot or FAKE_JPEG).decode()
             if "extract" in request:
@@ -1018,6 +1020,55 @@ def _paged(items: list, params: dict, view: Callable[[Any], dict]) -> httpx.Resp
     chunk = items[start:start + limit]
     more = start + limit < len(items)
     return _json(200, {"items": [view(item) for item in chunk], "next_cursor": str(start + limit) if more else None})
+
+
+def _skeleton(content: bytes) -> Optional[dict]:
+    """formats: skeleton, as the engine builds it (without its size trimming or the <pre> case): fields read from
+    the first 100 elements of each array, at most 150, and a sample with one element per array."""
+    try:
+        value = json.loads(content.decode("utf-8-sig"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+    def kind(item: Any) -> str:
+        return ("null" if item is None else "array" if isinstance(item, list) else "boolean" if isinstance(item, bool)
+                else "number" if isinstance(item, (int, float)) else "string" if isinstance(item, str) else "object")
+
+    fields: Dict[str, dict] = {}
+    truncated = False
+
+    def visit(item: Any, path: str) -> None:
+        nonlocal truncated
+        row = fields.get(path)
+        if row is None:
+            if len(fields) >= 150:
+                truncated = True
+                return
+            row = fields[path] = {"path": path, "types": set(), "seen": 0, "items": 0}
+        row["types"].add(kind(item))
+        row["seen"] += 1
+        if isinstance(item, list):
+            row["items"] += len(item)
+            for element in item[:100]:
+                visit(element, path + "[*]")
+        elif isinstance(item, dict):
+            for key, child in item.items():
+                plain = re.fullmatch(r"[A-Za-z_$][\w$]*", key)
+                visit(child, f"{path}.{key}" if plain else path + "['" + key.replace("\\", "\\\\").replace("'", "\\'") + "']")
+
+    def sample(item: Any, depth: int = 0) -> Any:
+        if isinstance(item, str):
+            return item[:80] + "…" if len(item) > 80 else item
+        if isinstance(item, list):
+            return [sample(item[0], depth + 1)] if item and depth < 10 else []
+        if isinstance(item, dict):
+            return {} if depth >= 10 else {key: sample(child, depth + 1) for key, child in list(item.items())[:40]}
+        return item
+
+    visit(value, "$")
+    rows = [{"path": row["path"], "type": "|".join(sorted(row["types"])), "seen": row["seen"],
+             **({"items": row["items"]} if "array" in row["types"] else {})} for row in fields.values()]
+    return {"bytes": len(content), "root": kind(value), "fields": rows, "sample": sample(value), "truncated": truncated}
 
 
 def _json(status: int, body: dict) -> httpx.Response:

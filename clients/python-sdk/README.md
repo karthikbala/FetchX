@@ -29,7 +29,7 @@ A request is a `POST /v1/fetch` body, given as a dict, as keyword fields, or bot
 | --- | --- |
 | `ok`, `failed`, `pending`, `status` | The outcome |
 | `page_status` | `content`, `not_found`, `empty`, `challenge` or `error` |
-| `markdown`, `text`, `links`, `metadata`, `extract`, `screenshot` | What `formats` and `extract` asked for |
+| `markdown`, `text`, `links`, `metadata`, `skeleton`, `extract`, `screenshot` | What `formats` and `extract` asked for (`skeleton`: the shape of a JSON body, or None) |
 | `body`, `content` | The site's body as text and as bytes, when it was asked for (see below) |
 | `source_status`, `final_url`, `content_type`, `headers`, `cookies`, `rendered` | What the site answered |
 | `next_page`, `page` | How the page leads on, and where it sits in a list |
