@@ -132,6 +132,7 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
     defaults: {formats: ['markdown']}}});
   await expect('post', '/v1/estimate', 400, {body: {items: []}});
   await expect('get', '/v1/status', 200);
+  await expect('get', '/v1/prices', 200);
   const pause = await platform.board.create({kind: 'maintenance', title: 'Upgrade', pause_api: true}, 'ops@example.com');
   for (const [method, path, specUrl] of [['post', '/v1/fetch'], ['get', '/v1/usage'], ['get', `/v1/fetch/${ok.id}`, one],
     ['post', '/v1/estimate']]) {

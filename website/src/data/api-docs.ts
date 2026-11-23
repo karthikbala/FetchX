@@ -43,6 +43,7 @@ const createBatch = contractOperation('createBatch');
 const batchOperations = contractOperations.filter(operation => operation.path.startsWith('/v1/batches'));
 const createEstimate = contractOperation('createEstimate');
 const getStatus = contractOperation('getStatus');
+const getPrices = contractOperation('getPrices');
 const getMe = contractOperation('getMe');
 const sendFeedback = contractOperation('sendFeedback');
 const getFeedback = contractOperation('getFeedback');
@@ -526,7 +527,16 @@ for item in fetchx.batch_results(batch['id']):
   -d '${JSON.stringify(requestExample(createEstimate, 'batch'))}'` }, { label: 'Answer', language: 'json', code: json(responseExample(createEstimate, 'batch')) }] },
         ],
       },
+      {
+        id: 'prices',
+        title: 'Prices without a key',
+        blocks: [
+          { kind: 'text', text: '`GET /v1/prices` needs no API key and any origin may call it, so a tool can quote what a site will cost before the user has an account. It returns the credits each step costs, what a solved captcha, residential traffic and extraction add, and `trial_credits`, what a new account gets once. Read it rather than keeping your own copy of the table.' },
+          { kind: 'code', title: 'Read the price table', snippets: [{ label: 'cURL', language: 'bash', code: `curl ${hostedApi}/v1/prices` }, { label: 'Answer', language: 'json', code: json(responseExample(getPrices, 'default')) }] },
+        ],
+      },
       operationSection(createEstimate),
+      operationSection(getPrices),
       operationSection(getBalance),
       operationSection(getUsage),
     ],
@@ -597,7 +607,7 @@ export function verify(rawBody, headers, secret) {
         id: 'endpoints',
         title: 'Endpoints',
         blocks: [
-          { kind: 'text', text: '`/v1` is the only version. Every change is in the changelog at https://fetchx.ai/changelog; a breaking change is announced there as a deprecation at least 30 days before the route is retired. `GET /v1/status` needs no API key.' },
+          { kind: 'text', text: '`/v1` is the only version. Every change is in the changelog at https://fetchx.ai/changelog; a breaking change is announced there as a deprecation at least 30 days before the route is retired. `GET /v1/status` and `GET /v1/prices` need no API key.' },
           { kind: 'table', headers: ['Method and path', 'Key scope', 'Purpose'], rows: contractOperations.map(operation => [
             '`' + operation.method + ' ' + operation.path + '`', scopeText(operation.scope), operation.summary]) },
           openApiLink,

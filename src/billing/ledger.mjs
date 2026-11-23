@@ -9,6 +9,7 @@
 // reservation). Everything else is released. An active payment hold (dispute,
 // refund in progress) stops new spending. src/fetch/front.mjs drives this.
 import {fail} from '../policy.mjs';
+import {trialCredits} from './trial.mjs';
 
 export const STEPS = Object.freeze(['http', 'http_residential', 'browser', 'browser_residential']);
 export const DEFAULT_PRICES = Object.freeze({
@@ -77,6 +78,28 @@ export function worstCaseOf(table, step, {captcha = false, maxWireBytes, extract
     extractTokens: extract ? table.extract_max_tokens : null});
 }
 
+// GET /v1/prices (no key): the price table in credits, and the trial credits a
+// new account gets (null when no credit policy is configured).
+export function pricesView(table, trial) {
+  const step = (name, residential, browser, routeClasses) => ({credits: table[name], residential, browser,
+    route_classes: routeClasses, included_mb: table.residential_included_mb[name] ?? null});
+  return {
+    unit: 'credits',
+    steps: {
+      http: step('http', false, false, ['direct', 'datacenter']),
+      http_residential: step('http_residential', true, false, ['residential']),
+      browser: step('browser', false, true, ['direct', 'datacenter']),
+      browser_residential: step('browser_residential', true, true, ['residential']),
+    },
+    captcha: {credits: table.captcha},
+    traffic: {credits_per_mb: table.residential_overage_per_mb},
+    extract: {credits: table.extract, unit_tokens: table.extract_unit_tokens, max_tokens: table.extract_max_tokens,
+      max_credits: extractCredits(table, table.extract_max_tokens)},
+    trial_credits: trial,
+    pricing_url: 'https://fetchx.ai/pricing',
+  };
+}
+
 export async function initLedger(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS credit_adjustments (
@@ -125,6 +148,12 @@ export class Ledger {
   }
 
   get prices() { return prices(this.config); }
+
+  publicPrices() {
+    let trial = null;
+    try { trial = trialCredits(this.config); } catch { /* no valid credit policy: no trial to show */ }
+    return pricesView(this.prices, trial);
+  }
 
   // Projects provisioned in config (not through the console) are unmetered.
   metered(project) { return typeof project === 'string' && project.startsWith('cp_'); }

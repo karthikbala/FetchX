@@ -6,6 +6,17 @@
   },
   "releases": [
     {
+      "version": "1.11.0",
+      "date": "2026-11-23",
+      "title": "Prices without a key",
+      "changes": [
+        {
+          "type": "added",
+          "text": "GET /v1/prices needs no API key: the credits each step costs (with the route classes it covers and the traffic it includes), what a solved captcha, residential traffic past the included MB and extraction add, and the trial credits a new account gets. Any origin may call it, so a tool can quote a site's cost before the user signs up."
+        }
+      ]
+    },
+    {
       "version": "1.10.0",
       "date": "2026-11-23",
       "title": "The shape of a JSON body",
