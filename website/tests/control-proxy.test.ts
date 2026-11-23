@@ -79,7 +79,8 @@ describe('same-origin control bridge',()=>{
  });
  it('requires browser session, same origin and CSRF for Connect review and decision, and strips private response fields',async()=>{
   const requestId='00000000-0000-4000-8000-000000000002';
-  const review={state:'pending',client_name:'Synthetic agent',scopes:['fetch:read'],expires_at:'2030-01-01T00:00:00Z'};
+  const review={state:'pending',client_name:'Synthetic agent',scopes:['fetch:read'],expires_at:'2030-01-01T00:00:00Z',
+   limits:{credits_per_day:100,credits_per_month:null,expires_at:'2030-02-01T00:00:00.000Z'}};
   for(const path of ['/connect/review','/connect/decision']){
    const body=JSON.stringify(path.endsWith('/review')?{request_id:requestId}:{request_id:requestId,user_code:'TEST-CODE',decision:'approve',project_id:project});
    expect((await send(path,{method:'POST',body,headers:{Origin:''}})).status).toBe(403);
@@ -96,6 +97,15 @@ describe('same-origin control bridge',()=>{
    expect(headers.get('X-CSRF-Token')).toBe('c'.repeat(43));expect(headers.get('Authorization')).toBeNull();
   }
   expect(calls).toHaveLength(2);
+  // A review from an older service has no limits (none); malformed limits are not passed on.
+  const reviewBody=JSON.stringify({request_id:requestId});
+  const {limits:_omitted,...older}=review;
+  upstream=()=>Response.json(older);
+  expect(await (await send('/connect/review',{method:'POST',body:reviewBody})).json()).toEqual({...older,limits:{credits_per_day:null,credits_per_month:null,expires_at:null}});
+  for(const limits of [{credits_per_day:0,credits_per_month:null,expires_at:null},{credits_per_day:null,credits_per_month:'5',expires_at:null},{credits_per_day:null,credits_per_month:null,expires_at:'soon'},[]]){
+   upstream=()=>Response.json({...older,limits});
+   expect((await send('/connect/review',{method:'POST',body:reviewBody})).status).toBe(502);
+  }
   const body=JSON.stringify({request_id:requestId,user_code:'TEST-CODE',decision:'deny'});
   for(const [upstreamCode,publicCode] of [['connect_code_invalid','connect_code_invalid'],['synthetic-secret','connect_unavailable']]){
    upstream=()=>Response.json({error:{code:upstreamCode,message:'private upstream detail'},device_code:'synthetic-device-code'},{status:400});

@@ -84,6 +84,8 @@ function message(code){
  if(code==='key_limits_invalid')return 'Credit limits must be whole numbers from 1 to 100,000,000, or empty for no limit.';
  if(code==='key_expiry_invalid')return 'The expiry must be a date and time in the future, at most 5 years away.';
  if(code==='key_revoked')return 'This key is revoked.';
+ if(code==='project_limit')return 'This account has reached its project limit. Use an existing project.';
+ if(code==='project_name_invalid')return 'Give the project a name of up to 80 characters.';
  if(/rate|limit/.test(code))return 'This request exceeds an account limit. Try again later.';
  if(/not_found|forbidden|membership/.test(code))return 'This resource is unavailable for this account.';
  if(/code|challenge/.test(code))return 'The verification code could not be accepted. Request a new code if needed.';
@@ -143,7 +145,7 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,le
   });
   const clientIp=req=>typeof req.headers['x-fetchx-client-ip']==='string'&&/^[a-fA-F0-9:.]{3,64}$/.test(req.headers['x-fetchx-client-ip'])?req.headers['x-fetchx-client-ip']:req.ip;
   route('POST','/connect/start',async req=>{
-   requireConnect(req);query(req);const body=input(req,['client_name']);
+   requireConnect(req);query(req);const body=input(req,['client_name','limits']);
    return connect.start({...body,origin:req.headers.origin,ip:clientIp(req)});
   });
   route('POST','/connect/claim',async req=>{
@@ -155,7 +157,7 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,le
    return connect.review({...body,origin:req.headers.origin,userId:auth.user.id,ip:clientIp(req)});
   });
   route('POST','/connect/decision',async req=>{
-   requireConnect(req);query(req);const auth=await authenticated(req),body=input(req,['request_id','user_code','decision','project_id']);
+   requireConnect(req);query(req);const auth=await authenticated(req),body=input(req,['request_id','user_code','decision','project_id','project_name','limits']);
    return connect.decision({...body,origin:req.headers.origin,userId:auth.user.id,ip:clientIp(req)});
   });
   route('POST','/auth/code',async req=>{query(req);const body=input(req,['email']);return identity.requestCode({email:body.email,ip:clientIp(req)});});

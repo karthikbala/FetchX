@@ -6,6 +6,33 @@
   },
   "releases": [
     {
+      "version": "1.12.0",
+      "date": "2026-11-23",
+      "title": "Capped keys and one-step approval in Connect",
+      "changes": [
+        {
+          "type": "added",
+          "text": "Connect: POST /api/control/connect/start takes limits (credits_per_day, credits_per_month, and expires_at or expires_in_days), the same limits a console key can have. The approval page shows them and the user may change or remove them before approving; the key gets the limits the user approved, returned as limits on start and on the connected claim, and by GET /v1/me."
+        },
+        {
+          "type": "added",
+          "text": "Connect: start returns verification_uri_complete (RFC 8628), a link that carries the user code in its fragment. The approval page shows the code for the user to check against their tool instead of typing it, and keeps it across signing in."
+        },
+        {
+          "type": "added",
+          "text": "Connect: a user with no project, or who wants a new one, creates it on the approval page and approves in one step (decision with project_name instead of project_id). A new account's first project gets the trial credits, as in the console."
+        },
+        {
+          "type": "changed",
+          "text": "Connect requests last 20 minutes (expires_in 1200), time to sign up and approve. Clients should accept expires_in up to 3600."
+        },
+        {
+          "type": "added",
+          "text": "The JavaScript Connect helper takes limits (CLI: --credits-per-day, --credits-per-month, --expires-in-days), prints the link that carries the code, and returns the key's limits."
+        }
+      ]
+    },
+    {
       "version": "1.11.0",
       "date": "2026-11-23",
       "title": "Prices without a key",

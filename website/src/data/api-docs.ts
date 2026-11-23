@@ -220,9 +220,9 @@ export const docPages: DocPage[] = [
         id: 'get-a-key',
         title: '1. Get a key',
         blocks: [
-          { kind: 'text', text: 'If `FETCHX_URL` and `FETCHX_TOKEN` are already set, go to step 2. Otherwise run the Connect helper (Node.js 24) around the agent command. It shows a link and a short code; the user signs in, enters the code and picks a project. The helper then starts the command with `FETCHX_URL` and `FETCHX_TOKEN` set. The key can send and read requests and read usage.' },
+          { kind: 'text', text: 'If `FETCHX_URL` and `FETCHX_TOKEN` are already set, go to step 2. Otherwise run the Connect helper (Node.js 24) around the agent command. It shows a link and a short code; the user opens the link, signs in or signs up, checks that the page shows the same code, picks a project or creates one, and approves within 20 minutes. The helper then starts the command with `FETCHX_URL` and `FETCHX_TOKEN` set. The key can send and read requests and read usage, up to the credit limits asked for (`--credits-per-day`, `--credits-per-month`, `--expires-in-days`) and approved by the user.' },
           { kind: 'code', title: 'Download the helper and connect', snippets: [{ label: 'Shell', language: 'bash', code: `curl --fail --silent --show-error --proto '=https' --output connect-client.mjs https://fetchx.ai/connect-client.mjs
-node ./connect-client.mjs -- codex` }] },
+node ./connect-client.mjs --credits-per-day 500 -- codex` }] },
           { kind: 'text', text: 'Without Connect, the user creates a key under API keys and stores it as the secret `FETCHX_TOKEN`, with `FETCHX_URL` set to `' + hostedApi + '`.' },
           { kind: 'note', title: 'Keep the key private', text: 'Share only the Connect link and its short code. Keep the key out of chat, command arguments, files and logs, and send it only to `FETCHX_URL`.' },
         ],
@@ -290,7 +290,13 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         id: 'connect',
         title: 'Connect for agents and CLIs',
         blocks: [
-          { kind: 'text', text: 'Connect gives a tool a key after the user approves it in the browser, without copying secrets. See the coding agent guide.' },
+          { kind: 'text', text: 'Connect gives a tool a key after the user approves it in the browser, without copying secrets. The tool never receives the key: it works it out from a private device code once the user approves. The JavaScript helper (`connect-client.mjs`) does all of this; see the coding agent guide. Any language can do it in three steps.' },
+          { kind: 'table', headers: ['Step', 'What to do'], rows: [
+            ['1. Start', '`POST https://fetchx.ai/api/control/connect/start` with `{"client_name": "My tool"}` and, for a capped key, `limits`: `credits_per_day`, `credits_per_month`, and `expires_at` or `expires_in_days`. Send no Origin, Cookie or Authorization header. The answer has `request_id`, `device_code` (keep it private), `user_code`, `verification_uri`, `verification_uri_complete`, `expires_in` (seconds, 1,200 today), `interval` (seconds) and the `limits` asked for.'],
+            ['2. Show the link', 'Show the user `verification_uri_complete`. It carries the code, so the approval page shows it and the user checks that it matches the `user_code` your tool shows. The user signs in or signs up, picks a project or creates one there, may change or remove the limits, and approves.'],
+            ['3. Claim', 'Every `interval` seconds, `POST https://fetchx.ai/api/control/connect/claim` with `{"request_id", "device_code"}`. `state` is `pending`, `denied`, `expired` or `connected`; on 429 `connect_slow_down`, wait 5 seconds longer each time. `connected` brings `project_id`, `key_id`, `api_base_url` and the key\'s `limits`. The key is `fxk_` followed by the unpadded base64url SHA-256 of `fetchx-connect-key-v1`, a zero byte, and the device code.'],
+          ] },
+          { kind: 'text', text: 'The key has the scopes `fetch:read`, `fetch:write` and `usage:read`, and its name is the `client_name`. The user can change its limits or revoke it in the console; a revoked key answers 401 `unauthorized`, an expired one 401 `api_key_expired`. Store it like a password: in an owner-only file or a secret store, never in a project folder, a command line or a log.' },
           { kind: 'link', label: 'FetchX for coding agents', href: codingAgentGuidePath },
         ],
       },
