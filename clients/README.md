@@ -70,6 +70,24 @@ else:
 | `GET /v1/usage` | `usage(query)` | `usage(...)` | `usage:read` |
 | `GET /v1/status` | `status()` | `status()` | none |
 
+## Python SDK
+
+For applications and crawlers there is also a Python package in [`python-sdk/`](python-sdk/README.md) (`import fetchx`, Python 3.9+). On top of the endpoints it waits through 202s, resends with the same key, can follow `error.next` with a new key when FetchX says that helps, sends one request at a time per site, caps credits per request and per client, calls a hook after every call, has an asyncio client, and ships an in-memory `FakeFetchX` for offline tests:
+
+```sh
+pip install "fetchx-sdk @ git+https://github.com/karthikbala/FetchX#subdirectory=clients/python-sdk"
+```
+
+```python
+from fetchx import FetchX
+
+fx = FetchX(max_credits=60)  # FETCHX_TOKEN from the environment
+result = fx.fetch(url='https://shop.example.com/p/42', formats=['markdown'])
+print(result.markdown if result.ok else (result.error_code, result.next_action))
+```
+
+`python.py` stays the single file to copy, returning the API's JSON as dicts.
+
 ## Scrolling and next pages
 
 A page opened in a browser is scrolled up to 10 screens by default while scrolling loads more. Pass `scroll: 'off'` to read only what loads without scrolling (the cheapest choice when the first screen is enough), or a number from 1 to 50 for more screens (with a higher `timeout_ms` for many).

@@ -38,7 +38,7 @@ The platform calls the engine over a private network with a service token ([the 
 | `src/budgets.mjs` | The platform's budgets, adjustable in the admin portal ([budgets](docs/budgets.md)) |
 | `src/api/v1.mjs` | The public API routes and error format |
 | `src/control*.mjs` | Console accounts, projects, keys, Connect, Stripe and the admin portal (forwarded to the engine) |
-| `clients/` | JavaScript and Python clients, and the Connect helper for agents |
+| `clients/` | JavaScript and Python clients, the Python SDK (`clients/python-sdk/`), and the Connect helper for agents |
 | `website/` | fetchx.ai: marketing pages, docs and the console (Astro on Cloudflare Pages) |
 
 ## Run it locally
@@ -68,7 +68,7 @@ createdb gateway_test_fetchx
 TEST_DATABASE_URL=postgresql:///gateway_test_fetchx npm test
 ```
 
-Tests run serially against a database whose name starts with `gateway_test_`; they never touch the network, a paid service or a real engine. Platform tests use the fake engine in `test/fake-engine.mjs`, which `test/engine-contract.test.mjs` holds to the pinned contract. `npm run api:check` keeps the TypeScript client types in step with the public contract. The website has its own `npm run check`, `npm test` and `npm run test:browser` in `website/`.
+Tests run serially against a database whose name starts with `gateway_test_`; they never touch the network, a paid service or a real engine. Platform tests use the fake engine in `test/fake-engine.mjs`, which `test/engine-contract.test.mjs` holds to the pinned contract. `npm run api:check` keeps the TypeScript client types in step with the public contract. The Python clients' tests run offline with `python -m unittest discover -s test -p '*_test.py'` (they need `httpx`); `test/python_sdk_contract_test.py` holds the Python SDK's requests and its fake to the contract. The website has its own `npm run check`, `npm test` and `npm run test:browser` in `website/`.
 
 ## Operating
 

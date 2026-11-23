@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# "fetchx" on PyPI belongs to an unrelated project, so the distribution has its own name.
+# The import name is fetchx.
+name = "fetchx-sdk"
+dynamic = ["version"]
+description = "Python SDK for the FetchX API: get any public URL with one API call."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["httpx>=0.27,<1"]
+keywords = ["fetchx", "web scraping", "crawler", "api client"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Framework :: AsyncIO",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://fetchx.ai"
+Documentation = "https://fetchx.ai/docs"
+Source = "https://github.com/karthikbala/FetchX/tree/main/clients/python-sdk"
+Changelog = "https://fetchx.ai/changelog"
+
+[tool.setuptools.dynamic]
+version = {attr = "fetchx._version.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+fetchx = ["py.typed"]
