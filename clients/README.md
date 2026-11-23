@@ -5,10 +5,12 @@
 On a deployment with FetchX Connect enabled, use Node.js 24 to run a command with an approved project's credentials in its environment.
 
 ```sh
-node clients/connect.mjs -- codex
+node clients/connect.mjs --credits-per-day 500 --expires-in-days 30 -- codex
 ```
 
-Use your own agent command in place of `codex`. Share the displayed link and short code with the user. The user signs in, enters the short code and approves a project within ten minutes. Keep the Connect process running while they approve.
+Use your own agent command in place of `codex`. Share the displayed link with the user; it carries the short code, which the approval page shows for the user to check against the one printed here. The user signs in (or signs up), picks a project or creates one on the spot, and approves within 20 minutes. Keep the Connect process running while they approve.
+
+Ask for a capped key with `--credits-per-day`, `--credits-per-month` and `--expires-in-days` (helper option `limits`: `credits_per_day`, `credits_per_month`, and `expires_at` or `expires_in_days`). The approval page shows the limits and the user may change or remove them; the key gets what the user approved, returned as `limits`.
 
 The wrapper starts the command with `FETCHX_URL` and `FETCHX_TOKEN` in its environment. The command must keep `FETCHX_TOKEN` private and use it only for requests to `FETCHX_URL`. A Node.js integration can call the helper directly:
 
@@ -16,13 +18,17 @@ The wrapper starts the command with `FETCHX_URL` and `FETCHX_TOKEN` in its envir
 import {connectFetchX} from './connect.mjs';
 import {FetchXClient} from './javascript.mjs';
 
-const {token, apiBaseUrl} = await connectFetchX({
+const {token, apiBaseUrl, limits} = await connectFetchX({
   clientName: 'My coding agent',
-  onApproval: ({verificationUri, userCode}) => console.error(`Open ${verificationUri}\nFetchX code: ${userCode}`),
+  limits: {credits_per_day: 500, expires_in_days: 30},
+  onApproval: ({verificationUriComplete, verificationUri, userCode}) =>
+    console.error(`Open ${verificationUriComplete ?? verificationUri}\nFetchX code: ${userCode}`),
 });
 const fetchx = new FetchXClient({url: apiBaseUrl, token});
 console.log((await fetchx.balance()).credits);
 ```
+
+In Python, the SDK has the same flow: `fetchx.connect(client_name=..., limits=..., save=True)`, or `connect_start()` and `connect_finish()` for agents whose tool calls must return quickly, or `python -m fetchx connect` from a shell. It keeps the key in an owner-only `~/.config/fetchx/credentials` file that `FetchX()` reads when `FETCHX_TOKEN` is not set (see [the SDK guide](python-sdk/README.md#getting-a-key-with-connect)).
 
 The hosted helper is published as [connect-client.mjs](https://fetchx.ai/connect-client.mjs). For a self-hosted deployment, pass `--origin` (helper option `origin`) and, if the API uses another origin, `--api-origin` (`apiOrigin`). If Connect is not available, make a key in the console and set `FETCHX_TOKEN` and `FETCHX_URL` through your runtime's secret settings.
 

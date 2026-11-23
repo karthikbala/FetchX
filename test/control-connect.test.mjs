@@ -13,6 +13,7 @@ const API='http://127.0.0.1:8789';
 const SCOPES=['fetch:read','fetch:write','usage:read'];
 const sha256=value=>createHash('sha256').update(value,'utf8');
 const deriveKey=code=>'fxk_'+sha256('fetchx-connect-key-v1\0'+code).digest('base64url');
+const NO_LIMITS={credits_per_day:null,credits_per_month:null,expires_at:null};
 
 test('Connect requires explicit enablement and canonical HTTPS origins, with an explicit loopback exception',()=>{
  const origin='https://fetchx.example',api='https://api.fetchx.example';
@@ -84,17 +85,19 @@ test('Connect requires account approval, issues once under concurrency, and hono
  const owner=await actor('owner'),stranger=await actor('stranger');
  const project=await identity.createProject(owner.id,{name:'Agent project'});
  const flow=await start(),token=deriveKey(flow.device_code);
- assert.deepEqual(Object.keys(flow).sort(),['device_code','expires_in','interval','request_id','user_code','verification_uri']);
+ assert.deepEqual(Object.keys(flow).sort(),['device_code','expires_in','interval','limits','request_id','user_code','verification_uri','verification_uri_complete']);
  assert.match(flow.request_id,/^[0-9a-f-]{36}$/);assert.match(flow.device_code,/^[A-Za-z0-9_-]{43}$/);assert.match(flow.user_code,/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
- assert.equal(flow.verification_uri,`${ORIGIN}/connect#${flow.request_id}`);assert.equal(flow.expires_in,600);assert.equal(flow.interval,5);
+ assert.equal(flow.verification_uri,`${ORIGIN}/connect#${flow.request_id}`);assert.equal(flow.expires_in,1200);assert.equal(flow.interval,5);
+ assert.equal(flow.verification_uri_complete,`${ORIGIN}/connect#${flow.request_id}&code=${flow.user_code}`);assert.deepEqual(flow.limits,NO_LIMITS);
  const stored=(await store.pool.query('SELECT * FROM control_connect_requests WHERE id=$1',[flow.request_id])).rows[0];
  assert.equal(stored.device_hash,sha256(flow.device_code).digest('hex'));
  assert.notEqual(stored.user_code_hash,sha256(flow.user_code).digest('hex'));
  for(const secret of [flow.device_code,flow.user_code,token])assert.ok(!JSON.stringify(stored).includes(secret));
+ assert.ok(Math.abs(stored.expires_at-Date.now()-1200_000)<60_000,'a request lasts 20 minutes');
  await error(review(flow,null),401,'unauthorized');
  await error(review(flow,{headers:{...owner.headers,'x-csrf-token':stranger.headers['x-csrf-token']}}),403,'csrf_rejected');
  const pending=await review(flow,owner);
- assert.deepEqual(pending.body,{state:'pending',client_name:'Synthetic agent',scopes:SCOPES,expires_at:stored.expires_at.toISOString()});
+ assert.deepEqual(pending.body,{state:'pending',client_name:'Synthetic agent',scopes:SCOPES,expires_at:stored.expires_at.toISOString(),limits:NO_LIMITS});
  const wrongProof=await error(claim(flow,{device_code:'X'.repeat(43)}),404,'connect_not_found');
  assert.deepEqual((await error(claim(flow,{request_id:'bad',device_code:''}),404,'connect_not_found')).body,wrongProof.body);
  assert.deepEqual((await error(claim(flow,{}, {origin:otherOrigin}),404,'connect_not_found')).body,wrongProof.body);
@@ -113,13 +116,13 @@ test('Connect requires account approval, issues once under concurrency, and hono
  const receipts=await Promise.all(Array.from({length:8},()=>claim(flow)));
  const receipt=receipts[0].body;
  assert.match(receipt.key_id,/^[0-9a-f-]{36}$/);
- assert.deepEqual(receipt,{state:'connected',project_id:project.id,key_id:receipt.key_id,api_base_url:API});
+ assert.deepEqual(receipt,{state:'connected',project_id:project.id,key_id:receipt.key_id,api_base_url:API,limits:NO_LIMITS});
  for(const result of receipts){assert.equal(result.status,200);assert.deepEqual(result.body,receipt);}
  assert.deepEqual((await claim(flow)).body,receipt);
  assert.equal(await count(project.id),1);
  assert.equal((await review(flow,owner)).body.state,'connected');
- const persisted=(await store.pool.query('SELECT token_hash,scopes FROM control_keys WHERE id=$1',[receipt.key_id])).rows[0];
- assert.deepEqual(persisted,{token_hash:sha256(token).digest('hex'),scopes:SCOPES});
+ const persisted=(await store.pool.query('SELECT token_hash,scopes,credit_limit_day,credit_limit_month,expires_at FROM control_keys WHERE id=$1',[receipt.key_id])).rows[0];
+ assert.deepEqual(persisted,{token_hash:sha256(token).digest('hex'),scopes:SCOPES,credit_limit_day:null,credit_limit_month:null,expires_at:null});
  assert.equal(await identity.isCredential(token),true);
  assert.equal((await native('/v1/fetch',token)).statusCode,200);
  assert.equal((await native('/v1/usage',token)).statusCode,200);
@@ -129,6 +132,64 @@ test('Connect requires account approval, issues once under concurrency, and hono
  assert.equal((await native('/v1/fetch',rotated.token)).statusCode,200);
  await identity.revokeKey(owner.id,project.id,rotated.id);
  assert.equal((await native('/v1/fetch',rotated.token)).statusCode,401);
+
+ await t.test('a client asks for key limits; the user sees them and approves them as they are or changed',async()=>{
+  // Its own user and project: decisions are rate limited per user.
+  const capper=await actor('capper'),capProject=await identity.createProject(capper.id,{name:'Capped project'});
+  const startWith=limits=>request('/connect/start',{client_name:'Capped agent',limits});
+  await error(startWith({credits_per_day:0}),400,'key_limits_invalid');
+  await error(startWith({credits_per_hour:5}),400,'key_limits_invalid');
+  await error(startWith({expires_in_days:0}),400,'key_expiry_invalid');
+  await error(startWith({expires_in_days:30,expires_at:new Date(Date.now()+86400_000).toISOString()}),400,'key_limits_invalid');
+  await error(startWith({expires_at:'2020-01-01T00:00:00Z'}),400,'key_expiry_invalid');
+  const asked=(await startWith({credits_per_day:200,credits_per_month:3000,expires_in_days:30})).body;
+  assert.equal(asked.limits.credits_per_day,200);assert.equal(asked.limits.credits_per_month,3000);
+  assert.ok(Math.abs(Date.parse(asked.limits.expires_at)-Date.now()-30*86400_000)<60_000,'expires_in_days becomes a date');
+  assert.deepEqual((await review(asked,capper)).body.limits,asked.limits);
+  // Approved as requested: the key carries them, and GET /v1/me shows them.
+  assert.equal((await approve(asked,capper,capProject.id)).body.state,'approved');
+  const capped=(await claim(asked)).body;
+  assert.deepEqual(capped.limits,asked.limits);
+  const me=(await native('/v1/me',deriveKey(asked.device_code))).json();
+  assert.equal(me.limits.credits_per_day.limit,200);assert.equal(me.limits.credits_per_month.limit,3000);
+  assert.equal(me.limits.expires_at,new Date(asked.limits.expires_at).toISOString());
+  assert.equal(me.key_name,'Capped agent');
+  // The user lowers one, removes the others; a deny takes no limits.
+  const changed=(await startWith({credits_per_day:200,expires_in_days:7})).body;
+  await error(approve(changed,capper,capProject.id,{limits:{credits_per_day:-1}}),400,'key_limits_invalid');
+  await error(approve(changed,capper,capProject.id,{limits:{expires_in_days:3}}),400,'key_limits_invalid');
+  assert.equal((await approve(changed,capper,capProject.id,{limits:{credits_per_day:50,credits_per_month:null,expires_at:null}})).body.state,'approved');
+  assert.deepEqual((await review(changed,capper)).body.limits,{credits_per_day:50,credits_per_month:null,expires_at:null});
+  const row=(await store.pool.query('SELECT credit_limit_day,credit_limit_month,expires_at FROM control_keys WHERE id=$1',[(await claim(changed)).body.key_id])).rows[0];
+  assert.deepEqual(row,{credit_limit_day:'50',credit_limit_month:null,expires_at:null});
+  const denied=await start();
+  await error(request('/connect/decision',{request_id:denied.request_id,user_code:denied.user_code,decision:'deny',limits:{credits_per_day:5}},capper),400,'request_invalid');
+ });
+
+ await t.test('a user with no project creates one while approving, with the trial, once',async()=>{
+  const newcomer=await actor('newcomer');
+  const flow=await start();
+  await error(approve(flow,newcomer,undefined,{project_id:project.id,project_name:'Synthetic agent'}),400,'request_invalid');
+  await error(approve(flow,newcomer,undefined,{project_name:' '}),400,'project_name_invalid');
+  assert.deepEqual((await approve(flow,newcomer,undefined,{project_name:'Synthetic agent'})).body,{state:'approved'});
+  assert.deepEqual((await approve(flow,newcomer,undefined,{project_name:'Synthetic agent'})).body,{state:'approved'},'a retry gets the same answer');
+  await error(approve(flow,newcomer,undefined,{project_name:'Another name'}),409,'connect_request_closed');
+  const projects=await identity.projects(newcomer.id);
+  assert.deepEqual(projects.map(p=>[p.name,p.status]),[['Synthetic agent','active']]);
+  assert.equal(Number((await store.pool.query('SELECT granted_credits FROM control_credit_accounts WHERE project=$1',[projects[0].id])).rows[0].granted_credits),10);
+  const receipt=(await claim(flow)).body;
+  assert.equal(receipt.state,'connected');assert.equal(receipt.project_id,projects[0].id);
+  assert.equal((await native('/v1/balance',deriveKey(flow.device_code))).json().credits,10);
+  // A second project made the same way gets no second trial.
+  const again=await start();
+  assert.equal((await approve(again,newcomer,undefined,{project_name:'Second'})).body.state,'approved');
+  const second=(await identity.projects(newcomer.id)).find(p=>p.name==='Second');
+  assert.equal(Number((await store.pool.query('SELECT granted_credits FROM control_credit_accounts WHERE project=$1',[second.id])).rows[0].granted_credits),0);
+  // A wrong code creates nothing.
+  const guarded=await start(),bad=guarded.user_code==='ZZZZ-ZZZZ'?'AAAA-AAAA':'ZZZZ-ZZZZ';
+  await error(approve(guarded,newcomer,undefined,{project_name:'Never',user_code:bad}),400,'connect_code_invalid');
+  assert.equal((await identity.projects(newcomer.id)).length,2);
+ });
 
  await t.test('expired, denied, and exhausted user-code requests cannot issue a key',async()=>{
   const expired=await start();await approve(expired,owner,project.id);await expire(expired);
