@@ -174,7 +174,7 @@ test('self-service: identity, isolation, keys, idempotency and success-only cred
       const me = await api('GET', '/v1/me', undefined, readOnly.token);
       assert.equal(me.status, 200, JSON.stringify(me.body));
       assert.deepEqual(me.body, {project_id: projectA.id, key_id: readOnly.key.id, key_name: 'usage only', key_prefix: readOnly.key.prefix,
-        scopes: ['usage:read']});
+        scopes: ['usage:read'], limits: {credits_per_day: null, credits_per_month: null, expires_at: null}});
       assert.equal(readOnly.token.slice(0, 12), me.body.key_prefix);
     });
     const viaKey = await api('POST', '/v1/fetch', {url: 'https://shop.example.com/k'}, keyA.token);
@@ -191,6 +191,63 @@ test('self-service: identity, isolation, keys, idempotency and success-only cred
     });
     assert.equal((await console_('DELETE', `/projects/${projectA.id}/keys/${keyA.key.id}`, undefined, a)).body.revoked, true);
     await noDispatch(async () => assert.equal((await api('POST', '/v1/fetch', {url: 'https://shop.example.com/'}, keyA.token)).status, 401));
+  });
+
+  await t.test('a key with credit limits spends no more than them, keeps them when rotated, and an expired key says so', async () => {
+    const start = (await balance(projectA.id, a)).available;
+    assert.ok(start >= 4, 'the trial still has credits for this test');
+    for (const limits of [{credits_per_day: 0}, {credits_per_month: 1.5}, {expires_at: '2020-01-01T00:00:00Z'}, {expires_at: 'tomorrow'}, {other: 1}]) {
+      const refused = await console_('POST', `/projects/${projectA.id}/keys`, {name: 'bad', scopes: SCOPES, limits}, a);
+      assert.equal(refused.status, 400, JSON.stringify(limits));
+      assert.match(refused.body.error.code, /^key_(limits|expiry)_invalid$|^key_invalid$/);
+    }
+    const capped = (await console_('POST', `/projects/${projectA.id}/keys`, {name: 'crawler', scopes: SCOPES,
+      limits: {credits_per_day: 2, credits_per_month: 50}}, a)).body;
+    assert.deepEqual(capped.key.limits, {credits_per_day: 2, credits_per_month: 50, expires_at: null});
+    for (let i = 0; i < 2; i++) {
+      const ok = await api('POST', '/v1/fetch', {url: `https://shop.example.com/capped/${i}`}, capped.token);
+      assert.equal(ok.body.status, 'succeeded', JSON.stringify(ok.body));
+      assert.equal(ok.body.credits.max, 2 - i, 'a request reserves no more than the day has left');
+    }
+    const me = (await api('GET', '/v1/me', undefined, capped.token)).body;
+    assert.deepEqual([me.limits.credits_per_day.limit, me.limits.credits_per_day.used, me.limits.credits_per_day.remaining], [2, 2, 0]);
+    assert.deepEqual([me.limits.credits_per_month.used, me.limits.credits_per_month.remaining], [2, 48]);
+    assert.ok(Date.parse(me.limits.credits_per_day.resets_at) > Date.now());
+    await noDispatch(async () => {
+      const over = await api('POST', '/v1/fetch', {url: 'https://shop.example.com/capped/over'}, capped.token);
+      assert.equal(over.status, 402, JSON.stringify(over.body));
+      assert.equal(over.body.error.code, 'key_limit_reached');
+      assert.deepEqual([over.body.error.details.limit, over.body.error.details.credits, over.body.error.details.used, over.body.error.details.needed],
+        ['credits_per_day', 2, 2, 1]);
+      const batch = await api('POST', '/v1/batches', {items: ['https://shop.example.com/capped/batch']}, capped.token);
+      assert.equal(batch.status, 402);
+      assert.equal(batch.body.error.code, 'key_limit_reached');
+    });
+    // Rotating keeps the limits and what the key has spent.
+    const rotated = (await console_('POST', `/projects/${projectA.id}/keys/${capped.key.id}/rotate`, {}, a)).body;
+    assert.deepEqual(rotated.key.limits, capped.key.limits);
+    assert.equal((await api('GET', '/v1/me', undefined, rotated.token)).body.limits.credits_per_day.used, 2);
+    await noDispatch(async () => assert.equal((await api('POST', '/v1/fetch', {url: 'https://shop.example.com/capped/r'}, rotated.token)).status, 402));
+    // Raising the day's limit lets it spend again; other keys never had a limit.
+    const raised = await console_('PUT', `/projects/${projectA.id}/keys/${rotated.key.id}/limits`, {credits_per_day: 3}, a);
+    assert.deepEqual(raised.body.key.limits, {credits_per_day: 3, credits_per_month: null, expires_at: null});
+    assert.equal((await api('POST', '/v1/fetch', {url: 'https://shop.example.com/capped/3'}, rotated.token)).body.status, 'succeeded');
+    assert.equal((await console_('PUT', `/projects/${projectA.id}/keys/${rotated.key.id}/limits`, {credits_per_day: -1}, a)).status, 400);
+    assert.equal((await console_('PUT', `/projects/${projectA.id}/keys/${capped.key.id}/limits`, {}, a)).status, 409, 'a revoked key keeps its limits');
+    assert.equal((await console_('PUT', `/projects/${projectA.id}/keys/${rotated.key.id}/limits`, {}, b)).status, 404, 'only members');
+    // An expired key answers api_key_expired.
+    const soon = new Date(Date.now() + 120_000).toISOString();
+    assert.equal((await console_('PUT', `/projects/${projectA.id}/keys/${rotated.key.id}/limits`, {expires_at: soon}, a)).body.key.limits.expires_at, soon);
+    assert.equal((await api('GET', '/v1/me', undefined, rotated.token)).body.limits.expires_at, soon);
+    await store.pool.query(`UPDATE control_keys SET expires_at = clock_timestamp() - interval '1 second' WHERE id = $1`, [rotated.key.id]);
+    await noDispatch(async () => {
+      const expired = await api('GET', '/v1/me', undefined, rotated.token);
+      assert.equal(expired.status, 401);
+      assert.equal(expired.body.error.code, 'api_key_expired');
+      assert.ok(Date.parse(expired.body.error.details.expired_at) < Date.now());
+    });
+    assert.equal((await balance(projectA.id, a)).available, start - 3, 'charged only for the three that ran');
+    assert.equal((await console_('DELETE', `/projects/${projectA.id}/keys/${rotated.key.id}`, undefined, a)).body.revoked, true);
   });
 
   await t.test('one idempotency key runs once; a different body cannot reuse it', async () => {

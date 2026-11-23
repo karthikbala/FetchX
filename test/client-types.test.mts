@@ -34,6 +34,9 @@ async function checkClientTypes() {
   const har = await client.networkHar(captured.id);
   const me: Me = await client.me();
   const scopes: string[] = me.scopes;
+  const monthLeft: number | undefined = me.limits.credits_per_month?.remaining;
+  const expires: string | null = me.limits.expires_at;
+  console.log(monthLeft, expires);
   console.log(calls, callBody, har.log, scopes, (await client.networkBody(captured.id, 1)).contentType);
   const batchInput = {items: ['https://shop.example.com/a', {url: 'https://shop.example.com/b', formats: ['text']}],
     defaults: {formats: ['markdown'], render: 'auto'}, webhook_url: 'https://hooks.example.com/fetchx', tags: ['nightly']} satisfies BatchRequest;

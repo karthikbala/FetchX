@@ -20,6 +20,7 @@
 // whose credits run out pauses until the balance covers its next item.
 import {randomUUID} from 'node:crypto';
 import {GatewayError, ID} from '../policy.mjs';
+import {keyLimitError, keyLimitState} from './key-limits.mjs';
 import {sha} from '../crypto.mjs';
 import {budget} from '../budgets.mjs';
 import {blockedHosts, checkUrl} from './destination.mjs';
@@ -236,6 +237,9 @@ export class BatchService {
       if ((balance?.available ?? 0) < cheapest) {
         throw Object.assign(new GatewayError('insufficient_credits', 402), {details: {available: balance?.available ?? 0, needed: cheapest}});
       }
+      // The key's own credit limit (set in the console) has no room left for even one item.
+      const limits = await keyLimitState(this.store.pool, keyId);
+      if (limits.room < cheapest) throw keyLimitError(limits, cheapest);
     }
     const hosts = await this.#check(batch);
     const id = randomUUID();
@@ -572,6 +576,13 @@ export class BatchService {
         await this.#pause(batch.id, error.code, null, error.details?.retry_after_seconds ?? EXTRACT_RETRY_SECONDS);
         return 'paused';
       }
+      // The key that submitted the batch has spent its day's or month's
+      // credits: the batch waits until that limit resets.
+      if (error.code === 'key_limit_reached') {
+        const resetsIn = (Date.parse(error.details?.resets_at ?? '') - Date.now()) / 1000;
+        await this.#pause(batch.id, error.code, null, Number.isFinite(resetsIn) ? Math.max(60, Math.ceil(resetsIn)) : EXTRACT_RETRY_SECONDS);
+        return 'paused';
+      }
       if (ITEM_REFUSALS.has(error.code)) {
         await this.#refuse(batch.id, item.n, error);
         return 'refused';
@@ -612,7 +623,7 @@ export class BatchService {
     let resumed = 0;
     const balances = new Map();
     for (const row of rows) {
-      if (row.paused_reason === 'extract_unavailable') {
+      if (row.paused_reason === 'extract_unavailable' || row.paused_reason === 'key_limit_reached') {
         if (!row.due) continue;
       } else {
         if (!balances.has(row.project)) balances.set(row.project, await this.ledger.balance(row.project));

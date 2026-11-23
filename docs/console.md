@@ -20,7 +20,8 @@ All responses are `no-store`; errors are `{error: {code, message}}`.
 | `/auth/code`, `/auth/verify`, `/auth/logout` | POST | Email code sign-in; `/auth/google/*` and `/auth/github/*` for the others |
 | `/session` | GET | The signed-in user, CSRF token and projects |
 | `/projects`, `/projects/{id}` | GET, POST | List, create and read projects |
-| `/projects/{id}/keys`, `/keys/{key}/rotate`, `/keys/{key}` | GET, POST, DELETE | Create (secret shown once), rotate and revoke keys |
+| `/projects/{id}/keys`, `/keys/{key}/rotate`, `/keys/{key}` | GET, POST, DELETE | Create (secret shown once, optional `limits`), rotate (keeps the limits) and revoke keys |
+| `/projects/{id}/keys/{key}/limits` | PUT | Replace a key's `credits_per_day`, `credits_per_month` and `expires_at` (left out or null: no limit) |
 | `/projects/{id}/fetch` | GET, POST | The playground (`POST`, same body as `POST /v1/fetch`, key id `console`) and request history (`GET`, same query as `GET /v1/fetch`) |
 | `/projects/{id}/fetch/{rid}` | GET, DELETE | One result; delete its content |
 | `/projects/{id}/usage` | GET | Same as `GET /v1/usage` |

@@ -134,7 +134,7 @@ Capture adds nothing to the price, but it needs a browser: the request is billed
 
 ## Who is calling
 
-`me()` returns the project, key id, name, prefix and scopes of the key making the call. Any valid key may call it. `project_id` stays the same when a key is rotated, so a tool can recognise the customer by it.
+`me()` returns the project, key id, name, prefix and scopes of the key making the call, and the key's `limits`: the credit limits per day and month set on it in the console (each with `limit`, `used`, `remaining` and `resets_at`, or `null`) and `expires_at`. Any valid key may call it. `project_id` stays the same when a key is rotated, so a tool can recognise the customer by it. A request over a key's limit is refused with `key_limit_reached` (402), naming the limit and when it resets; an expired key gets `api_key_expired` (401).
 
 ## Outcomes, errors and retries
 

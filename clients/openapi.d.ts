@@ -368,7 +368,7 @@ export interface paths {
         };
         /**
          * The calling project and key
-         * @description Which project and key are making the call, and what the key may do. Any valid key may call it, whatever its scopes: a tool can check a key it was given before it starts, and recognise the customer by project_id even after the key is rotated.
+         * @description Which project and key are making the call, what the key may do, and the credit limits and expiry set on it in the console with what it has used. Any valid key may call it, whatever its scopes: a tool can check a key it was given before it starts, and recognise the customer by project_id even after the key is rotated.
          */
         get: operations["getMe"];
         put?: never;
@@ -1183,15 +1183,15 @@ export interface components {
             /** Format: uuid */
             id: string;
             /**
-             * @description running: items are queued or running. paused: the balance does not cover the next item (or spending is on hold), or its items ask for extract and extraction is unavailable for now (paused_reason says which); it starts again by itself once that clears. finished: every item has finished. canceled: you canceled it; items that were running still finish.
+             * @description running: items are queued or running. paused: the balance does not cover the next item (or spending is on hold), its items ask for extract and extraction is unavailable for now, or the key that submitted it has used its credit limit (paused_reason says which); it starts again by itself once that clears. finished: every item has finished. canceled: you canceled it; items that were running still finish.
              * @enum {string}
              */
             status: "running" | "paused" | "finished" | "canceled";
             /**
-             * @description Why the batch is paused: insufficient_credits or payment_hold until the balance covers the next item; extract_unavailable when its items ask for extract and FetchX cannot read pages into JSON right now (it tries again by itself after 5 minutes; nothing is charged meanwhile).
+             * @description Why the batch is paused: insufficient_credits or payment_hold until the balance covers the next item; extract_unavailable when its items ask for extract and FetchX cannot read pages into JSON right now (it tries again by itself after 5 minutes; nothing is charged meanwhile); key_limit_reached when the API key that submitted it has used its credit limit for the day or month (it starts again by itself when the limit resets).
              * @enum {string|null}
              */
-            paused_reason: "insufficient_credits" | "payment_hold" | "extract_unavailable" | null;
+            paused_reason: "insufficient_credits" | "payment_hold" | "extract_unavailable" | "key_limit_reached" | null;
             idempotency_key: string;
             tags: string[];
             /** Format: date-time */
@@ -1449,6 +1449,32 @@ export interface components {
             key_prefix: string | null;
             /** @description What this key may call: fetch:write (POST /v1/fetch, next pages, batches, estimates), fetch:read (results, content, network captures, DELETE) and usage:read (balance and usage). */
             scopes: ("fetch:write" | "fetch:read" | "usage:read")[];
+            /** @description The limits set on this key in the console. Null fields have no limit, and all are null for a key from the server configuration. */
+            limits: {
+                /** @description Credits per UTC day. */
+                credits_per_day: components["schemas"]["KeyLimit"] | null;
+                /** @description Credits per UTC month. */
+                credits_per_month: components["schemas"]["KeyLimit"] | null;
+                /**
+                 * Format: date-time
+                 * @description When the key stops working; after it, calls answer 401 api_key_expired.
+                 */
+                expires_at: string | null;
+            };
+        };
+        /** @description One of the key's credit limits and where the key stands against it now. */
+        KeyLimit: {
+            /** @description Credits the key may spend in the period. */
+            limit: number;
+            /** @description Credits its requests were charged in the period, plus what its running requests hold. A request counts in the period it started; requests made with the keys this one was rotated from count too. */
+            used: number;
+            /** @description limit minus used, at least 0. A request reserves at most this much. */
+            remaining: number;
+            /**
+             * Format: date-time
+             * @description When the period ends: the next midnight UTC, or the first of next month UTC.
+             */
+            resets_at: string;
         };
     };
     responses: never;
@@ -1496,7 +1522,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1565,7 +1591,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1574,7 +1600,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Not enough credits for the cheapest step, max_credits below it, or spending paused by a payment issue. Nothing was sent. */
+            /** @description Not enough credits for the cheapest step, max_credits below it, or spending paused by a payment issue. Nothing was sent. key_limit_reached: the API key's own credit limit per day or month (set in the console) has less left than the cheapest step; error.details names the limit and when it resets. */
             402: {
                 headers: {
                     [name: string]: unknown;
@@ -1663,7 +1689,7 @@ export interface operations {
                     "application/json": components["schemas"]["FetchResult"];
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1720,7 +1746,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1810,7 +1836,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1819,7 +1845,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Not enough credits for the cheapest step, max_credits below it, or spending paused by a payment issue. Nothing was sent. */
+            /** @description Not enough credits for the cheapest step, max_credits below it, or spending paused by a payment issue. Nothing was sent. key_limit_reached: the API key's own credit limit per day or month (set in the console) has less left than the cheapest step; error.details names the limit and when it resets. */
             402: {
                 headers: {
                     [name: string]: unknown;
@@ -1905,7 +1931,7 @@ export interface operations {
                     "*/*": string;
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1982,7 +2008,7 @@ export interface operations {
                     "image/jpeg": string;
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2069,7 +2095,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2116,7 +2142,7 @@ export interface operations {
                     "application/json": components["schemas"]["Balance"];
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2177,7 +2203,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2258,7 +2284,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2327,7 +2353,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2336,7 +2362,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The balance is below the cheapest step, or spending is paused by a payment issue. Nothing was queued. */
+            /** @description The balance is below the cheapest step, or spending is paused by a payment issue. Nothing was queued. key_limit_reached: the API key's own credit limit per day or month (set in the console) has less left than the cheapest step; error.details names the limit and when it resets. */
             402: {
                 headers: {
                     [name: string]: unknown;
@@ -2413,7 +2439,7 @@ export interface operations {
                     "application/json": components["schemas"]["Batch"];
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2489,7 +2515,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2548,7 +2574,7 @@ export interface operations {
                     "application/json": components["schemas"]["Batch"];
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2633,7 +2659,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description No valid API key. Codes: unauthorized. */
+            /** @description No valid API key. Codes: unauthorized, api_key_expired. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2724,7 +2750,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description No valid API key. Codes: unauthorized. */
+            /** @description No valid API key. Codes: unauthorized, api_key_expired. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2812,7 +2838,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description No valid API key. Codes: unauthorized. */
+            /** @description No valid API key. Codes: unauthorized, api_key_expired. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2891,7 +2917,7 @@ export interface operations {
                     "*/*": string;
                 };
             };
-            /** @description No valid API key. Codes: unauthorized. */
+            /** @description No valid API key. Codes: unauthorized, api_key_expired. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2965,7 +2991,7 @@ export interface operations {
                     "application/json": components["schemas"]["Me"];
                 };
             };
-            /** @description The API key is missing, wrong or revoked. */
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
             401: {
                 headers: {
                     [name: string]: unknown;

@@ -1,5 +1,6 @@
 import {createHash,createHmac,randomBytes,randomInt,randomUUID,timingSafeEqual} from 'node:crypto';
-import {fail} from './policy.mjs';
+import {GatewayError,fail} from './policy.mjs';
+import {KEY_LIMIT_MAX} from './fetch/key-limits.mjs';
 import {createControlMail} from './control-mail.mjs';
 import {grantTrial,initTrialAccounts,openAccount,trialCredits} from './billing/trial.mjs';
 import {createControlGoogle,googleConfiguration} from './control-google.mjs';
@@ -23,7 +24,25 @@ function emailAddress(value){
 function label(value,code){if(typeof value!=='string'||!value.trim()||value.trim().length>80||/[\u0000-\u001f\u007f]/.test(value))fail(code);return value.trim();}
 const userView=row=>({id:row.id,email:row.email});
 const projectView=row=>({id:row.id,name:row.name,status:row.status,created_at:row.created_at});
-const keyView=row=>({id:row.id,project:row.project,name:row.name,prefix:row.prefix,scopes:row.scopes,created_at:row.created_at,last_used_at:row.last_used_at,revoked_at:row.revoked_at});
+const credits=value=>value===null||value===undefined?null:Number(value);
+// A key's own limits (fetch/key-limits.mjs): credits per UTC day and month, and an expiry.
+const limitsView=row=>({credits_per_day:credits(row.credit_limit_day),credits_per_month:credits(row.credit_limit_month),expires_at:row.expires_at?new Date(row.expires_at).toISOString():null});
+const keyView=row=>({id:row.id,project:row.project,name:row.name,prefix:row.prefix,scopes:row.scopes,limits:limitsView(row),created_at:row.created_at,last_used_at:row.last_used_at,revoked_at:row.revoked_at});
+const LIMIT_FIELDS=Object.freeze(['credits_per_day','credits_per_month','expires_at']);
+const ISO_TIME=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+// {credits_per_day?, credits_per_month?, expires_at?}: a field left out or null has no limit.
+function limitsInput(value){
+ if(value===undefined||value===null)return {credit_limit_day:null,credit_limit_month:null,expires_at:null};
+ if(!plain(value)||Object.keys(value).some(k=>!LIMIT_FIELDS.includes(k)))fail('key_limits_invalid');
+ const amount=v=>{if(v===undefined||v===null)return null;if(!Number.isSafeInteger(v)||v<1||v>KEY_LIMIT_MAX)fail('key_limits_invalid');return v;};
+ let expires=null;
+ if(value.expires_at!==undefined&&value.expires_at!==null){
+  const at=typeof value.expires_at==='string'&&ISO_TIME.test(value.expires_at)?Date.parse(value.expires_at):NaN;
+  if(!Number.isFinite(at)||at<=Date.now()+60_000||at>Date.now()+5*366*86400_000)fail('key_expiry_invalid');
+  expires=new Date(at).toISOString();
+ }
+ return {credit_limit_day:amount(value.credits_per_day),credit_limit_month:amount(value.credits_per_month),expires_at:expires};
+}
 const tokenValid=(token,prefix)=>typeof token==='string'&&new RegExp(`^${prefix}_[A-Za-z0-9_-]{43}$`).test(token);
 const tokenFor=prefix=>`${prefix}_${randomBytes(32).toString('base64url')}`;
 const equalDigest=(left,right)=>typeof left==='string'&&typeof right==='string'&&/^[a-f0-9]{64}$/.test(left)&&/^[a-f0-9]{64}$/.test(right)&&timingSafeEqual(Buffer.from(left,'hex'),Buffer.from(right,'hex'));
@@ -39,6 +58,10 @@ export async function initControlIdentity(pool){await pool.query(`
  CREATE INDEX IF NOT EXISTS control_memberships_project ON control_memberships(project);
  CREATE TABLE IF NOT EXISTS control_keys(id uuid PRIMARY KEY,project text NOT NULL REFERENCES control_projects(id),name text NOT NULL,prefix text NOT NULL,token_hash text NOT NULL UNIQUE,scopes jsonb NOT NULL CHECK(jsonb_typeof(scopes)='array'),created_at timestamptz NOT NULL DEFAULT now(),last_used_at timestamptz,revoked_at timestamptz);
  CREATE INDEX IF NOT EXISTS control_keys_project_created ON control_keys(project,created_at,id);
+ ALTER TABLE control_keys ADD COLUMN IF NOT EXISTS credit_limit_day bigint CHECK(credit_limit_day IS NULL OR credit_limit_day>0);
+ ALTER TABLE control_keys ADD COLUMN IF NOT EXISTS credit_limit_month bigint CHECK(credit_limit_month IS NULL OR credit_limit_month>0);
+ ALTER TABLE control_keys ADD COLUMN IF NOT EXISTS expires_at timestamptz;
+ ALTER TABLE control_keys ADD COLUMN IF NOT EXISTS lineage uuid;
  CREATE TABLE IF NOT EXISTS control_rates(bucket text PRIMARY KEY,attempts int NOT NULL CHECK(attempts>0),expires_at timestamptz NOT NULL);
  CREATE INDEX IF NOT EXISTS control_rates_expiry ON control_rates(expires_at);
  CREATE TABLE IF NOT EXISTS control_google_challenges(id uuid PRIMARY KEY,client_id text NOT NULL,nonce_hash text NOT NULL CHECK(nonce_hash ~ '^[a-f0-9]{64}$'),binding_hash text NOT NULL CHECK(binding_hash ~ '^[a-f0-9]{64}$'),attempts int NOT NULL DEFAULT 0 CHECK(attempts>=0 AND attempts<=5),expires_at timestamptz NOT NULL,consumed_at timestamptz,created_at timestamptz NOT NULL DEFAULT now());
@@ -282,12 +305,14 @@ export class ControlIdentity{
  }
  async keys(userId,projectId){await this.projectRow(userId,projectId);return (await this.store.pool.query('SELECT * FROM control_keys WHERE project=$1 ORDER BY created_at,id',[projectId])).rows.map(keyView);}
  keyInput(input){
-  if(!plain(input)||Object.keys(input).some(k=>!['name','scopes'].includes(k)))fail('key_invalid');const name=label(input.name,'key_name_invalid');
+  if(!plain(input)||Object.keys(input).some(k=>!['name','scopes','limits'].includes(k)))fail('key_invalid');const name=label(input.name,'key_name_invalid');
   if(!Array.isArray(input.scopes)||!input.scopes.length||input.scopes.length>SCOPES.length||input.scopes.some(scope=>!SCOPES.includes(scope))||new Set(input.scopes).size!==input.scopes.length)fail('key_scopes_invalid');
-  return {name,scopes:[...input.scopes].sort()};
+  return {name,scopes:[...input.scopes].sort(),...limitsInput(input.limits)};
  }
  async insertKey(c,project,input,token){
-  const row=(await c.query('INSERT INTO control_keys(id,project,name,prefix,token_hash,scopes) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[randomUUID(),project,input.name,token.slice(0,12),hash(token),JSON.stringify(input.scopes)])).rows[0];
+  // A rotated key keeps its limits and lineage, so its spend so far still counts.
+  const row=(await c.query('INSERT INTO control_keys(id,project,name,prefix,token_hash,scopes,credit_limit_day,credit_limit_month,expires_at,lineage) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *',
+   [randomUUID(),project,input.name,token.slice(0,12),hash(token),JSON.stringify(input.scopes),input.credit_limit_day??null,input.credit_limit_month??null,input.expires_at??null,input.lineage??null])).rows[0];
   return keyView(row);
  }
  async assertCanCreateKey(c,userId,projectId){
@@ -309,8 +334,20 @@ export class ControlIdentity{
    await this.projectRow(userId,projectId,c,{lock:true});
    const row=(await c.query('SELECT * FROM control_keys WHERE id=$1 AND project=$2 FOR UPDATE',[keyId,projectId])).rows[0];
    if(!row)fail('key_not_found',404);if(row.revoked_at)fail('key_revoked',409);
-   const token=tokenFor('fxk'),next=await this.insertKey(c,projectId,row,token);
+   const token=tokenFor('fxk'),next=await this.insertKey(c,projectId,{...row,lineage:row.lineage??row.id},token);
    await c.query('UPDATE control_keys SET revoked_at=clock_timestamp() WHERE id=$1',[row.id]);return {...next,token};
+  });
+ }
+ // Replaces a key's limits (a field left out or null removes that limit).
+ async setKeyLimits(userId,projectId,keyId,input){
+  if(typeof keyId!=='string'||!UUID.test(keyId))fail('key_not_found',404);
+  const value=limitsInput(input??{});
+  return this.store.tx(async c=>{
+   await this.projectRow(userId,projectId,c);
+   const row=(await c.query('UPDATE control_keys SET credit_limit_day=$3,credit_limit_month=$4,expires_at=$5 WHERE id=$1 AND project=$2 AND revoked_at IS NULL RETURNING *',
+    [keyId,projectId,value.credit_limit_day,value.credit_limit_month,value.expires_at])).rows[0];
+   if(!row){if((await c.query('SELECT 1 FROM control_keys WHERE id=$1 AND project=$2',[keyId,projectId])).rowCount)fail('key_revoked',409);fail('key_not_found',404);}
+   return keyView(row);
   });
  }
  async revokeKey(userId,projectId,keyId){
@@ -323,8 +360,11 @@ export class ControlIdentity{
  }
  async authenticateKey(token){
   this.settings();if(!tokenValid(token,'fxk'))fail('unauthorized',401);
-  const row=(await this.store.pool.query('SELECT k.id,k.project,k.scopes,k.prefix,k.name,p.status FROM control_keys k JOIN control_projects p ON p.id=k.project WHERE k.token_hash=$1 AND k.revoked_at IS NULL',[hash(token)])).rows[0];
-  if(!row)fail('unauthorized',401);this.assertProject(row);await this.hydrateProject(row.project);
+  const row=(await this.store.pool.query('SELECT k.id,k.project,k.scopes,k.prefix,k.name,k.expires_at,k.expires_at<=clock_timestamp() AS expired,p.status FROM control_keys k JOIN control_projects p ON p.id=k.project WHERE k.token_hash=$1 AND k.revoked_at IS NULL',[hash(token)])).rows[0];
+  if(!row)fail('unauthorized',401);
+  // An expired key says so, so its owner knows to renew it rather than look for a typo.
+  if(row.expired)throw Object.assign(new GatewayError('api_key_expired',401),{details:{expired_at:new Date(row.expires_at).toISOString()}});
+  this.assertProject(row);await this.hydrateProject(row.project);
   if(!(await this.store.pool.query('UPDATE control_keys SET last_used_at=clock_timestamp() WHERE id=$1 AND revoked_at IS NULL RETURNING id',[row.id])).rowCount)fail('unauthorized',401);
   return {project:row.project,key_id:row.id,scopes:row.scopes,prefix:row.prefix,name:row.name};
  }

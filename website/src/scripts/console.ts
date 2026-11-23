@@ -47,6 +47,7 @@ async function initConsole(root: HTMLElement) {
   let toastTimer: ReturnType<typeof setTimeout>;
   let confirmCallback: (() => void) | null = null;
   let lastFocus: HTMLElement | null = null;
+  let limitsKey: Json | null = null;
   let disposeGoogle: (() => void) | undefined;
   let disposeGithub: (() => void) | undefined;
   let githubInProgress = false;
@@ -183,6 +184,34 @@ async function initConsole(root: HTMLElement) {
       node.classList.toggle('is-complete', Number(node.dataset.signupProgress) < index);
     });
     q(`[data-signup-stage="${index}"] input`)?.focus();
+  }
+  // A key's limits from a form: whole credits per UTC day and month, and an
+  // expiry in local time; an empty field is no limit.
+  function keyLimits(values: FormData) {
+    const amount = (name: string, label: string) => {
+      const raw = String(values.get(name) || '').trim();
+      if (!raw) return null;
+      const value = Number(raw);
+      if (!Number.isSafeInteger(value) || value < 1 || value > 100_000_000) throw new ControlError(`${label} must be a whole number from 1 to 100,000,000.`, 'key_limits_invalid');
+      return value;
+    };
+    const expires = String(values.get('expires_at') || '').trim(), at = expires ? new Date(expires) : null;
+    if (at && !Number.isFinite(at.getTime())) throw new ControlError('Choose a valid expiry date and time.', 'key_expiry_invalid');
+    return { credits_per_day: amount('credits_per_day', 'Credits per day'), credits_per_month: amount('credits_per_month', 'Credits per month'),
+      expires_at: at ? at.toISOString() : null };
+  }
+  const expiredKey = (key: Json) => typeof key.limits?.expires_at === 'string' && Date.parse(key.limits.expires_at) <= Date.now();
+  function limitsText(key: Json) {
+    const limits = key.limits || {}, parts: string[] = [];
+    if (limits.credits_per_day) parts.push(`${Number(limits.credits_per_day).toLocaleString()} credits a day`);
+    if (limits.credits_per_month) parts.push(`${Number(limits.credits_per_month).toLocaleString()} credits a month`);
+    if (limits.expires_at) parts.push(`${expiredKey(key) ? 'expired' : 'expires'} ${date(limits.expires_at)}`);
+    return parts.length ? parts.join(' · ') : 'no limits';
+  }
+  // A date-time input's value (local time) for an ISO time.
+  function localInput(value: string) {
+    const at = new Date(value), pad = (n: number) => String(n).padStart(2, '0');
+    return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}`;
   }
   function scopes(values: FormData) {
     const selected = values.getAll('scope').map(String);
@@ -343,7 +372,7 @@ async function initConsole(root: HTMLElement) {
     }
     const version = ++loadVersion;
     project = selected; ready = false; usage = billing = null; currentResult = null;
-    stripeBilling?.reset(); concealSecret(); q<HTMLDialogElement>('[data-key-dialog]')?.close(); q<HTMLDialogElement>('[data-request-dialog]')?.close();
+    stripeBilling?.reset(); concealSecret(); q<HTMLDialogElement>('[data-key-dialog]')?.close(); q<HTMLDialogElement>('[data-request-dialog]')?.close(); q<HTMLDialogElement>('[data-limits-dialog]')?.close();
     saveProject(id); setProjectOptions(); clearError(); renderBalance(true); renderResult(null);
     gate('Loading project…', 'Reading keys, requests and credits.'); textAll('[data-project-name]', selected.name);
     const [detail, keyList, history, usageReport, billingReport] = await Promise.allSettled([api(projectPath()), api(projectPath('/keys')),
@@ -426,9 +455,27 @@ async function initConsole(root: HTMLElement) {
 
   // ---------- keys ----------
   onForm('[data-create-key]', async (form, values) => {
-    showSecret((await api(projectPath('/keys'), { method: 'POST', body: { name: String(values.get('name') || '').trim(), scopes: scopes(values) } })).token);
+    const limits = keyLimits(values), limited = Object.values(limits).some(value => value !== null);
+    showSecret((await api(projectPath('/keys'), { method: 'POST', body: { name: String(values.get('name') || '').trim(), scopes: scopes(values),
+      ...(limited ? { limits } : {}) } })).token);
     form.reset(); await refreshKeys();
   });
+  function openLimits(key: Json) {
+    limitsKey = key; lastFocus = document.activeElement as HTMLElement;
+    const limits = key.limits || {};
+    textAll('[data-limits-key-name]', key.name || 'this key');
+    q<HTMLInputElement>('[data-limit-day]')!.value = limits.credits_per_day ? String(limits.credits_per_day) : '';
+    q<HTMLInputElement>('[data-limit-month]')!.value = limits.credits_per_month ? String(limits.credits_per_month) : '';
+    q<HTMLInputElement>('[data-limit-expires]')!.value = limits.expires_at ? localInput(limits.expires_at) : '';
+    clearError('[data-limits-error]'); q<HTMLDialogElement>('[data-limits-dialog]')?.showModal();
+  }
+  onForm('[data-key-limits]', async (_form, values) => {
+    if (!limitsKey) return;
+    await api(projectPath('/keys/' + encodeURIComponent(limitsKey.id) + '/limits'), { method: 'PUT', body: keyLimits(values) });
+    q<HTMLDialogElement>('[data-limits-dialog]')?.close(); await refreshKeys();
+  }, '[data-limits-error]');
+  q('[data-close-limits]')?.addEventListener('click', () => q<HTMLDialogElement>('[data-limits-dialog]')?.close());
+  q<HTMLDialogElement>('[data-limits-dialog]')?.addEventListener('close', () => { limitsKey = null; lastFocus?.focus(); });
   q('[data-copy-key]')?.addEventListener('click', () => { if (revealedSecret) void copy(revealedSecret); });
   q('[data-close-key]')?.addEventListener('click', () => { concealSecret(); q<HTMLDialogElement>('[data-key-dialog]')?.close(); });
   q<HTMLDialogElement>('[data-key-dialog]')?.addEventListener('close', () => { concealSecret(); lastFocus?.focus(); });
@@ -456,11 +503,15 @@ async function initConsole(root: HTMLElement) {
     if (!keys.length) { parent.append(element('p', 'pp-live-empty', 'No keys yet. Create one for your server.')); return; }
     for (const key of keys) {
       const row = element('div', 'pp-key-row'), identity = element('div', 'pp-key-identity');
-      identity.append(element('strong', '', key.name || 'API key'), element('code', '', key.id), element('small', '', `Created ${date(key.created_at)} · ${(key.scopes || []).join(', ')}`));
-      const revoked = Boolean(key.revoked_at);
-      row.append(identity, element('span', 'pp-status ' + (revoked ? 'pp-status-failed' : 'pp-status-completed'), revoked ? 'Revoked' : 'Active'));
+      identity.append(element('strong', '', key.name || 'API key'), element('code', '', key.id),
+        element('small', '', `Created ${date(key.created_at)} · ${(key.scopes || []).join(', ')} · ${limitsText(key)}`));
+      const revoked = Boolean(key.revoked_at), expired = !revoked && expiredKey(key);
+      row.append(identity, element('span', 'pp-status ' + (revoked || expired ? 'pp-status-failed' : 'pp-status-completed'), revoked ? 'Revoked' : expired ? 'Expired' : 'Active'));
       if (!revoked) {
         const actions = element('div', 'pp-key-actions');
+        const limitsButton = element('button', 'pp-button pp-button-secondary', 'Limits');
+        limitsButton.type = 'button'; limitsButton.addEventListener('click', () => openLimits(key));
+        actions.append(limitsButton);
         for (const action of ['rotate', 'revoke'] as const) {
           const button = element('button', 'pp-button pp-button-secondary', action === 'rotate' ? 'Rotate' : 'Revoke');
           button.type = 'button';

@@ -21,7 +21,7 @@ const exact=(v,keys)=>plain(v)&&Object.keys(v).every(k=>keys.includes(k));
 const pick=(v,keys)=>Object.fromEntries(keys.filter(k=>v?.[k]!==undefined).map(k=>[k,v[k]]));
 const safeUser=v=>pick(v,['id','email','verified_at','created_at']);
 const safeProject=v=>pick(v,['id','name','status','created_at']);
-const safeKey=v=>pick(v,['id','project','name','prefix','scopes','created_at','last_used_at','revoked_at']);
+const safeKey=v=>pick(v,['id','project','name','prefix','scopes','limits','created_at','last_used_at','revoked_at']);
 export const isControlRequest=req=>/^\/control(?:\/|\?|$)/.test(req.url);
 const constantEqual=(a,b)=>typeof a==='string'&&typeof b==='string'&&timingSafeEqual(createHash('sha256').update(a).digest(),createHash('sha256').update(b).digest());
 export const controlCsrf=(token,secret)=>createHmac('sha256',secret).update('fetchx-control-csrf\0'+token).digest('base64url');
@@ -77,6 +77,9 @@ function message(code){
  if(code==='notice_resolved')return 'This notice is already resolved.';
  if(code==='notice_pause_api_invalid')return 'Only a maintenance notice can pause the API.';
  if(code==='notice_not_found')return 'This notice does not exist.';
+ if(code==='key_limits_invalid')return 'Credit limits must be whole numbers from 1 to 100,000,000, or empty for no limit.';
+ if(code==='key_expiry_invalid')return 'The expiry must be a date and time in the future, at most 5 years away.';
+ if(code==='key_revoked')return 'This key is revoked.';
  if(/rate|limit/.test(code))return 'This request exceeds an account limit. Try again later.';
  if(/not_found|forbidden|membership/.test(code))return 'This resource is unavailable for this account.';
  if(/code|challenge/.test(code))return 'The verification code could not be accepted. Request a new code if needed.';
@@ -198,8 +201,10 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,le
   route('POST','/projects',async req=>{query(req);const body=input(req,['name']),auth=await authenticated(req);return {project:safeProject(await identity.createProject(auth.user.id,body))};});
   route('GET','/projects/:id',async req=>{query(req);const auth=await member(req);return {project:safeProject(auth.project)};});
   route('GET','/projects/:id/keys',async req=>{query(req);const auth=await member(req);return {keys:(await identity.keys(auth.user.id,auth.id)).map(safeKey)};});
-  route('POST','/projects/:id/keys',async req=>{query(req);const body=input(req,['name','scopes']),auth=await member(req),result=await identity.createKey(auth.user.id,auth.id,body);return {key:safeKey(result),token:result.token};});
+  route('POST','/projects/:id/keys',async req=>{query(req);const body=input(req,['name','scopes','limits']),auth=await member(req),result=await identity.createKey(auth.user.id,auth.id,body);return {key:safeKey(result),token:result.token};});
   route('POST','/projects/:id/keys/:key/rotate',async req=>{query(req);input(req,[]);const auth=await member(req),result=await identity.rotateKey(auth.user.id,auth.id,pathId(req.params.key,UUID));return {key:safeKey(result),token:result.token};});
+  // A key's credit limits per day and month and its expiry (null fields remove them).
+  route('PUT','/projects/:id/keys/:key/limits',async req=>{query(req);const body=input(req,['credits_per_day','credits_per_month','expires_at']),auth=await member(req);return {key:safeKey(await identity.setKeyLimits(auth.user.id,auth.id,pathId(req.params.key,UUID),body))};});
   route('DELETE','/projects/:id/keys/:key',async req=>{query(req);if(req.body!==undefined)input(req,[]);const auth=await member(req);await identity.revokeKey(auth.user.id,auth.id,pathId(req.params.key,UUID));return {revoked:true};});
   // The playground and request history use the public API's fetch service.
   const requestId=req=>pathId(req.params.rid,UUID);

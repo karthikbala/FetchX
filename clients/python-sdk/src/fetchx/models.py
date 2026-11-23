@@ -878,6 +878,12 @@ class Me(Model):
     def scopes(self) -> List[str]:
         return list(self.raw.get("scopes") or [])
 
+    @property
+    def limits(self) -> dict:
+        """The key's own limits, set in the console: ``credits_per_day`` and ``credits_per_month`` (each
+        ``limit``, ``used``, ``remaining`` and ``resets_at``, or None) and ``expires_at`` (or None)."""
+        return dict(self.raw.get("limits") or {"credits_per_day": None, "credits_per_month": None, "expires_at": None})
+
     def _repr_fields(self):
         return {"project_id": self.project_id, "key_prefix": self.key_prefix, "scopes": self.scopes}
 

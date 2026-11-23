@@ -93,7 +93,7 @@ for url, result in zip(urls, results):
 
 ## Cost and account
 
-`estimate()` takes a fetch body or a batch body and says what it would cost and take, without sending or reserving anything: `estimate.credits.expected`, `.typical`, `.high`, `estimate.covers_expected`, and per item `basis` and `notes`. `balance()`, `usage(period="day")` and `status()` read the account and the service. `me()` says which project and key are calling (`project_id`, `key_id`, `key_name`, `key_prefix`, `scopes`); any valid key may call it, and `project_id` stays the same when the key is rotated.
+`estimate()` takes a fetch body or a batch body and says what it would cost and take, without sending or reserving anything: `estimate.credits.expected`, `.typical`, `.high`, `estimate.covers_expected`, and per item `basis` and `notes`. `balance()`, `usage(period="day")` and `status()` read the account and the service. `me()` says which project and key are calling (`project_id`, `key_id`, `key_name`, `key_prefix`, `scopes`) and the key's `limits` (credits per day and month with what is used and left, and `expires_at`); any valid key may call it, and `project_id` stays the same when the key is rotated. A request over a key's limit raises `FetchXError` with code `key_limit_reached` (402, not resent).
 
 ## Asyncio
 

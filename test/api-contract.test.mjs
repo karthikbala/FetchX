@@ -166,7 +166,8 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   await expect('delete', `/v1/fetch/${captured.id}`, 204, undefined, one);
   await expect('get', `/v1/fetch/${captured.id}/network`, 410, undefined, network);
   const me = await expect('get', '/v1/me', 200);
-  assert.deepEqual(me, {project_id: PROJECT, key_id: null, key_name: null, key_prefix: null, scopes: ['fetch:write', 'fetch:read', 'usage:read']});
+  assert.deepEqual(me, {project_id: PROJECT, key_id: null, key_name: null, key_prefix: null, scopes: ['fetch:write', 'fetch:read', 'usage:read'],
+    limits: {credits_per_day: null, credits_per_month: null, expires_at: null}});
   await expect('get', '/v1/me', 401, {token: 'wrong'});
 });
 
