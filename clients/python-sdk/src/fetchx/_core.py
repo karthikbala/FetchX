@@ -23,7 +23,7 @@ import httpx
 from ._version import __version__
 from .errors import FetchXError, SpendLimitReached
 from .models import (Balance, Batch, BatchItem, CallEvent, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Me,
-                     NetworkCall, NetworkPage, ServiceStatus, Usage)
+                     NetworkCall, NetworkPage, Prices, ServiceStatus, Usage)
 
 log = logging.getLogger("fetchx")
 
@@ -201,9 +201,16 @@ class _Core:
                  max_retry_wait: float = 900.0, want_body: Optional[bool] = None,
                  on_call: Optional[Callable[[CallEvent], Any]] = None, user_agent: Optional[str] = None):
         token = token or os.environ.get("FETCHX_TOKEN") or os.environ.get("FETCHX_API_KEY")
+        saved = None
         if not token:
-            raise FetchXError("client_config_missing", "set FETCHX_TOKEN to a FetchX API key (fxk_...) or pass token=")
-        base = (base_url or os.environ.get("FETCHX_URL") or DEFAULT_URL).rstrip("/")
+            # The key Connect saved (python -m fetchx connect, or connect(save=True)).
+            from ._connect import load_credentials
+            saved = load_credentials()
+            token = saved.token if saved else None
+        if not token:
+            raise FetchXError("client_config_missing", "set FETCHX_TOKEN to a FetchX API key (fxk_...), pass token=, "
+                                                       "or run python -m fetchx connect")
+        base = (base_url or os.environ.get("FETCHX_URL") or (saved.api_base_url if saved else None) or DEFAULT_URL).rstrip("/")
         parts = urlsplit(base)
         if parts.scheme not in ("https", "http") or not parts.hostname:
             raise FetchXError("client_config_missing", "base_url (or FETCHX_URL) must be an http(s) URL")
@@ -761,3 +768,6 @@ class _Core:
 
     def _plan_status(self) -> Plan:
         return self._plan_get_model("status", "/v1/status", ServiceStatus)
+
+    def _plan_prices(self) -> Plan:
+        return self._plan_get_model("prices", "/v1/prices", Prices)

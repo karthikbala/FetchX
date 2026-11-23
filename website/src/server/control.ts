@@ -27,7 +27,19 @@ const CONNECT_ERRORS:Record<string,string>={
  connect_code_invalid:'The code could not be verified.',connect_request_closed:'This connection request is closed.',
  project_not_found:'The selected project was not found.',project_disabled:'The selected project is disabled.',
  project_template_changed:'The selected project cannot currently accept new keys.',key_limit:'The selected project has reached its key limit.',
+ project_limit:'This account has reached its project limit.',project_name_invalid:'Give the project a name of up to 80 characters.',
+ key_limits_invalid:'Credit limits must be whole numbers from 1 to 100,000,000, or empty for no limit.',
+ key_expiry_invalid:'The expiry must be in the future, at most 5 years away.',
 };
+// A Connect request's key limits, as the review shows them (absent from an older service: none).
+function connectLimits(value:unknown):object|null {
+ if(value===undefined||value===null)return {credits_per_day:null,credits_per_month:null,expires_at:null};
+ if(typeof value!=='object'||Array.isArray(value))return null;
+ const {credits_per_day:day,credits_per_month:month,expires_at:expires}=value as Record<string,unknown>;
+ const amount=(v:unknown)=>v===null||Number.isSafeInteger(v)&&(v as number)>=1&&(v as number)<=100_000_000;
+ if(!amount(day)||!amount(month)||!(expires===null||typeof expires==='string'&&expires.length<=40&&Number.isFinite(Date.parse(expires))))return null;
+ return {credits_per_day:day,credits_per_month:month,expires_at:expires};
+}
 const STRIPE_KEY='[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
 export const CONTROL_REQUEST_LIMIT=96*1024;
 // Account responses are small; a fetch result can inline a 10 MB body
@@ -52,8 +64,9 @@ function browserConnectPayload(path:string,status:number,payload:Record<string,u
  }
  const {state,client_name,scopes,expires_at}=payload;
  if(path==='/connect/decision')return state==='approved'||state==='denied'?{state}:null;
- return typeof state==='string'&&CONNECT_STATES.has(state)&&typeof client_name==='string'&&Array.isArray(scopes)&&scopes.every(scope=>typeof scope==='string')&&typeof expires_at==='string'
-  ?{state,client_name,scopes,expires_at}:null;
+ const limits=connectLimits(payload.limits);
+ return typeof state==='string'&&CONNECT_STATES.has(state)&&typeof client_name==='string'&&Array.isArray(scopes)&&scopes.every(scope=>typeof scope==='string')&&typeof expires_at==='string'&&limits
+  ?{state,client_name,scopes,expires_at,limits}:null;
 }
 // The only query strings the console sends: request-history filters and paging,
 // the usage period, and include_body on one result.

@@ -25,6 +25,7 @@
 //   GET    /v1/usage                  credits and usage
 //   GET    /v1/me                     the project and key making the call (any valid key)
 //   GET    /v1/status                 service status and notices (no API key)
+//   GET    /v1/prices                 the price table and the trial (no API key)
 import {GatewayError} from '../policy.mjs';
 
 export const API_SCOPES = Object.freeze({write: 'fetch:write', read: 'fetch:read', usage: 'usage:read'});
@@ -182,5 +183,10 @@ export function registerApi(app, {service, ledger, estimator, board, batches, fe
   app.get('/v1/status', async (req, reply) => {
     reply.header('access-control-allow-origin', '*');
     return board.publicView();
+  });
+  // Public: no API key, any origin. What each step costs, and the trial a new account gets.
+  app.get('/v1/prices', async (req, reply) => {
+    reply.header('access-control-allow-origin', '*').header('cache-control', 'public, max-age=300');
+    return ledger.publicPrices();
   });
 }

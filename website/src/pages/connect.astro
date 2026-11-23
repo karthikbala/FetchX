@@ -29,21 +29,32 @@ import '../styles/product-preview.css';
           </dl>
           <h2>Requested permissions</h2>
           <ul class="connect-scopes" data-connect-scopes></ul>
+          <h2>Key limits</h2>
+          <p class="connect-limits-summary" data-connect-limits-summary></p>
         </div>
         <div class="connect-review" data-connect-review hidden>
-          <div class="connect-no-project" data-connect-no-project hidden>
-            <p>Create an active project to approve this request, or deny it below.</p>
-            <a class="pp-text-link" href="/signup" rel="noopener noreferrer" data-connect-return="create">Create a project</a>
-          </div>
           <div class="pp-field" data-connect-project-field>
             <label for="connect-project">Project</label>
             <select id="connect-project" aria-describedby="connect-project-help" data-connect-project disabled></select>
             <small id="connect-project-help">Access is limited to this project. Its usage counts toward your project limits.</small>
           </div>
+          <div class="pp-field" data-connect-new-project hidden>
+            <label for="connect-project-name">New project name</label>
+            <input type="text" id="connect-project-name" maxlength="80" spellcheck="false" autocomplete="off" aria-describedby="connect-project-name-help" data-connect-project-name disabled/>
+            <small id="connect-project-name-help" data-connect-project-name-help>Approving creates this project, and the key can use only it.</small>
+          </div>
+          <fieldset class="pp-key-limits connect-limits" data-connect-limits>
+            <legend>Key limits<small data-connect-limits-help>Optional. Leave a field empty for no limit.</small></legend>
+            <div class="pp-key-limit-fields">
+              <label class="pp-field">Credits per day<input type="number" min="1" max="100000000" step="1" inputmode="numeric" placeholder="No limit" autocomplete="off" data-connect-limit-day disabled/></label>
+              <label class="pp-field">Credits per month<input type="number" min="1" max="100000000" step="1" inputmode="numeric" placeholder="No limit" autocomplete="off" data-connect-limit-month disabled/></label>
+              <label class="pp-field">Expires<input type="datetime-local" data-connect-limit-expires disabled/></label>
+            </div>
+          </fieldset>
           <div class="pp-field">
             <label for="connect-code">Code shown by your agent</label>
             <input type="text" id="connect-code" placeholder="XXXX-XXXX" maxlength="9" spellcheck="false" autocapitalize="characters" autocomplete="off" aria-describedby="connect-code-help" data-connect-code disabled/>
-            <small id="connect-code-help">Only approve a request you started in your agent. Enter the matching code shown there.</small>
+            <small id="connect-code-help" data-connect-code-help>Only approve a request you started in your agent. Enter the matching code shown there.</small>
           </div>
           <div class="connect-actions">
             <button class="pp-button pp-button-primary" type="button" data-connect-approve disabled>Approve connection</button>
@@ -79,8 +90,8 @@ import '../styles/product-preview.css';
   .connect-review { border-top: 1px solid var(--line); padding-top: 18px; }
   .connect-review .pp-field { margin-bottom: 15px; }
   .connect-review .pp-field small { font-size: 12px; }
-  .connect-card .connect-no-project p { margin: 0 0 6px; }
-  .connect-no-project { margin-bottom: 16px; }
+  .connect-card .connect-limits-summary { margin: 8px 0 0; font-size: 13px; }
+  .connect-limits { margin-bottom: 6px; }
   .connect-actions { display: flex; flex-wrap: wrap; gap: 10px; }
   .connect-refresh { margin-top: 18px; }
   .connect-card [hidden] { display: none !important; }

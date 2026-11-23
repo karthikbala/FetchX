@@ -230,7 +230,7 @@ class FakeFetchX:
             payload = None
         with self._lock:
             self.requests.append(FakeCall(method, path, params, payload))
-            if path != "/v1/status":
+            if path not in ("/v1/status", "/v1/prices"):
                 auth = request.headers.get("authorization", "")
                 if not auth.startswith("Bearer ") or (self.token and auth != "Bearer " + self.token):
                     return _error(401, "unauthorized", "A valid API key is required")
@@ -293,6 +293,8 @@ class FakeFetchX:
             return _json(200, self._usage())
         if rest == ["status"] and method == "GET":
             return _json(200, self._status())
+        if rest == ["prices"] and method == "GET":
+            return _json(200, self._prices())
         if rest == ["me"] and method == "GET":
             return _json(200, self._me(auth))
         if rest == ["feedback"] and method == "POST":
@@ -987,6 +989,20 @@ class FakeFetchX:
                 "notices": [], "api": {"version": "fake"},
                 "links": {"status_page": "https://fetchx.test/status", "changelog": "https://fetchx.test/changelog",
                           "docs": "https://fetchx.test/docs"}}
+
+    def _prices(self) -> dict:
+        """FetchX's default price table (the fake charges each page its own ``credits`` instead)."""
+        def step(credits, residential, browser, classes, included):
+            return {"credits": credits, "residential": residential, "browser": browser, "route_classes": classes,
+                    "included_mb": included}
+        return {"unit": "credits",
+                "steps": {"http": step(1, False, False, ["direct", "datacenter"], None),
+                          "http_residential": step(5, True, False, ["residential"], 1),
+                          "browser": step(10, False, True, ["direct", "datacenter"], None),
+                          "browser_residential": step(25, True, True, ["residential"], 5)},
+                "captcha": {"credits": 10}, "traffic": {"credits_per_mb": 5},
+                "extract": {"credits": 10, "unit_tokens": 25000, "max_tokens": 150000, "max_credits": 60},
+                "trial_credits": 1000, "pricing_url": "https://fetchx.test/pricing"}
 
     def _tick(self) -> datetime:
         self._clock += timedelta(seconds=1)

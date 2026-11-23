@@ -8,7 +8,7 @@ import spec from '../docs/openapi.json' with {type: 'json'};
 import changelog from '../docs/changelog.json' with {type: 'json'};
 import {expandEstimateBody, MAX_ESTIMATE_ITEMS} from '../src/fetch/estimate.mjs';
 import {API_VERSION} from '../src/api/version.mjs';
-import {databaseUrl, openStore, platformFor, PROJECT, UNMETERED_TOKEN} from './helpers.mjs';
+import {databaseUrl, openStore, platformFor, PROJECT, testConfig, UNMETERED_TOKEN} from './helpers.mjs';
 
 const usage = (step, {share = 1, captcha = 0, bytes = [15_000_000, 25_000_000], seconds = [50, 80], rate = 0.9, requests = 40} = {}) => ({
   requests, succeeded: Math.round(requests * rate), success_rate: rate, seconds: {p50: seconds[0], p90: seconds[1]},
@@ -210,6 +210,21 @@ test('status is public, follows the engine and notices, and maintenance pauses t
   view = await status();
   assert.equal(view.status, 'operational');
   assert.ok(view.notices.every(n => n.status === 'resolved'), 'resolved notices stay listed for 14 days');
+});
+
+test('prices are public: no key, any origin, cached, from the live price table', {skip: !databaseUrl}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const {app} = await platformFor(store, {config: testConfig({pricing: {browser_residential: 30}})});
+  const response = await app.inject({method: 'GET', url: '/v1/prices'});
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers['access-control-allow-origin'], '*');
+  assert.equal(response.headers['cache-control'], 'public, max-age=300');
+  const view = response.json();
+  assert.equal(view.steps.browser_residential.credits, 30);
+  assert.equal(view.steps.http.credits, 1);
+  assert.equal(view.trial_credits, 1000);
+  assert.equal((await app.inject({method: 'GET', url: '/v1/prices', headers: {authorization: 'Bearer wrong'}})).statusCode, 200, 'a key is not checked');
 });
 
 test('retired routes answer 410 with their replacement, unknown routes 404 with links, deprecated routes carry headers', {skip: !databaseUrl}, async t => {

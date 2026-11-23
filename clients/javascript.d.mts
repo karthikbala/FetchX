@@ -12,6 +12,7 @@ export type Balance = Schemas['Balance'];
 export type EstimateRequest = Schemas['EstimateRequest'];
 export type Estimate = Schemas['Estimate'];
 export type ServiceStatus = Schemas['ServiceStatus'];
+export type Prices = Schemas['Prices'];
 export type Attempt = Schemas['Attempt'];
 export type CaptureSettings = Schemas['CaptureSettings'];
 export type NetworkSummary = Schemas['NetworkSummary'];
@@ -141,6 +142,8 @@ export class FetchXClient {
   estimate(input: EstimateRequest): Promise<Estimate>;
   /** Service status and notices. */
   status(): Promise<ServiceStatus>;
+  /** What each step, a captcha, residential traffic and extraction cost in credits, and the trial credits a new account gets. */
+  prices(): Promise<Prices>;
   balance(): Promise<Balance>;
   /** The project and key making the call, the key's scopes and its credit limits. Any valid key may call it. */
   me(): Promise<Me>;

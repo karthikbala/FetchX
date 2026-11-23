@@ -277,22 +277,30 @@ export class ControlIdentity{
   this.settings();if(typeof userId!=='string'||!UUID.test(userId))fail('unauthorized',401);
   return (await this.store.pool.query('SELECT p.* FROM control_projects p JOIN control_memberships m ON m.project=p.id WHERE m.user_id=$1 ORDER BY p.created_at,p.id',[userId])).rows.map(projectView);
  }
- async createProject(userId,input){
+ projectInput(userId,input){
   this.settings();
   if(!plain(input)||Object.keys(input).some(k=>k!=='name'))fail('project_invalid');const name=label(input.name,'project_name_invalid');
   if(typeof userId!=='string'||!UUID.test(userId))fail('unauthorized',401);
-  const trial=trialCredits(this.config);
-  const row=await this.store.tx(async c=>{
-   if(!(await c.query('SELECT id FROM control_users WHERE id=$1 FOR UPDATE',[userId])).rowCount)fail('unauthorized',401);
-   const count=Number((await c.query('SELECT count(*) AS n FROM control_projects WHERE user_id=$1',[userId])).rows[0].n);
-   if(count>=10)fail('project_limit',429);
-   const row=(await c.query('INSERT INTO control_projects(id,user_id,name) VALUES($1,$2,$3) RETURNING *',[`cp_${randomUUID()}`,userId,name])).rows[0];
-   await c.query('INSERT INTO control_memberships(user_id,project) VALUES($1,$2)',[userId,row.id]);
-   await openAccount(c,row.id);
-   await grantTrial(c,{userId,targetCredits:trial});
-   return row;
-  });
+  return {name,trial:trialCredits(this.config)};
+ }
+ async createProject(userId,input){
+  this.projectInput(userId,input);
+  const row=await this.store.tx(c=>this.createProjectInTransaction(c,userId,input));
   await this.hydrateProject(row.id);return projectView(row);
+ }
+ // Creates a project with its credit account and the user's trial (once per user),
+ // in the caller's transaction (Connect creates one while approving). Call
+ // hydrateProject(row.id) after the transaction commits.
+ async createProjectInTransaction(c,userId,input){
+  const {name,trial}=this.projectInput(userId,input);
+  if(!(await c.query('SELECT id FROM control_users WHERE id=$1 FOR UPDATE',[userId])).rowCount)fail('unauthorized',401);
+  const count=Number((await c.query('SELECT count(*) AS n FROM control_projects WHERE user_id=$1',[userId])).rows[0].n);
+  if(count>=10)fail('project_limit',429);
+  const row=(await c.query('INSERT INTO control_projects(id,user_id,name) VALUES($1,$2,$3) RETURNING *',[`cp_${randomUUID()}`,userId,name])).rows[0];
+  await c.query('INSERT INTO control_memberships(user_id,project) VALUES($1,$2)',[userId,row.id]);
+  await openAccount(c,row.id);
+  await grantTrial(c,{userId,targetCredits:trial});
+  return row;
  }
  // Grants a user's trial on first use if they never had one, and registers the
  // project for this process.

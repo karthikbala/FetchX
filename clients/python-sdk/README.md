@@ -1,6 +1,6 @@
 # FetchX Python SDK
 
-A Python package for the [FetchX API](../../docs/openapi.json), with a synchronous and an asyncio client, typed results, and an in-memory FetchX for tests. It follows FetchX's rules for you: it waits through 202s, resends safely with the same idempotency key, caps what you spend, and sends one request at a time to each site. It needs Python 3.9 or newer and `httpx`.
+A Python package for the [FetchX API](https://github.com/karthikbala/FetchX/blob/main/docs/openapi.json), with a synchronous and an asyncio client, typed results, and an in-memory FetchX for tests. It follows FetchX's rules for you: it waits through 202s, resends safely with the same idempotency key, caps what you spend, and sends one request at a time to each site. It needs Python 3.9 or newer and `httpx`.
 
 ```sh
 pip install "fetchx-sdk @ git+https://github.com/karthikbala/FetchX#subdirectory=clients/python-sdk"
@@ -17,7 +17,37 @@ else:
     print(result.error_code, result.next_action, result.retry_with_new_key)
 ```
 
-`FetchX(base_url, token)` takes them directly too. `FETCHX_API_KEY` works in place of `FETCHX_TOKEN`, and `node clients/connect.mjs -- python my_crawler.py` sets both variables after a user approves a project (see [the clients guide](../README.md)).
+`FetchX(base_url, token)` takes them directly too. `FETCHX_API_KEY` works in place of `FETCHX_TOKEN`, and `node clients/connect.mjs -- python my_crawler.py` sets both variables after a user approves a project (see [the clients guide](https://github.com/karthikbala/FetchX/blob/main/clients/README.md)). With neither set, `FetchX()` uses the key Connect saved (below).
+
+## Getting a key with Connect
+
+Connect gets a key for your tool after the user approves it on fetchx.ai, so they never copy a key by hand. A user with no project creates one on the same page. The tool never receives the key: FetchX gives it a private device code, and the key is worked out from that code once the user approves.
+
+```python
+from fetchx import FetchX, connect
+
+creds = connect(client_name="My crawler", limits={"credits_per_day": 500, "expires_in_days": 30}, save=True)
+fx = FetchX()  # reads the saved key
+```
+
+`connect()` prints a link (it carries the code, which the page shows for the user to check) and waits until the user approves, denies, or the request ends after 20 minutes. `limits` asks for a capped key: `credits_per_day`, `credits_per_month`, and `expires_in_days` or `expires_at`. The user sees them and may change them before approving; `creds.limits` has what they approved. `on_approval=` replaces the printed line with your own, and `timeout=` stops waiting sooner (`connect_timeout`).
+
+For an agent whose tool calls must end within a minute, start and finish in separate calls:
+
+```python
+from fetchx import connect_finish, connect_start
+
+request = connect_start(client_name="My crawler", save=True)
+print(request.verification_uri_complete, request.user_code)   # show these to the user
+...
+creds = connect_finish(timeout=50, save=True)                  # None until the user approves; call it again
+```
+
+From a shell, `python -m fetchx connect --credits-per-day 500` (or `fetchx-connect`) does the same and saves the key.
+
+**Where the key is kept.** `save=True` writes `~/.config/fetchx/credentials` (`$XDG_CONFIG_HOME/fetchx/credentials` when that is set, `%APPDATA%\fetchx\credentials` on Windows, or the path in `FETCHX_CREDENTIALS_FILE`). The folder is owner-only (0700) and the file too (0600), and the SDK refuses a credentials file that other users can read. The file is JSON: `token`, `api_base_url`, `project_id`, `key_id`, `client_name` and `limits`. `FETCHX_TOKEN` (or `FETCHX_API_KEY`) wins over the file. `load_credentials()`, `save_credentials()` and `forget_credentials()` read, write and delete it; revoke the key in the console too. Keep the key out of project folders and crawler code, and don't keep the device code once connected: it works out the same key. When the key is revoked or expires, FetchX answers 401 (`unauthorized` or `api_key_expired`): connect again then.
+
+A failed Connect raises `ConnectError` (a `FetchXError`) with `code` `connect_denied`, `connect_expired`, `connect_timeout`, `connect_rate_limited`, `connect_unavailable`, `connect_invalid_limits` or `connect_network_error`. The Node.js helper `clients/connect.mjs` speaks the same protocol (see [the clients guide](https://github.com/karthikbala/FetchX/blob/main/clients/README.md)).
 
 ## Requests and results
 
@@ -93,7 +123,7 @@ for url, result in zip(urls, results):
 
 ## Cost and account
 
-`estimate()` takes a fetch body or a batch body and says what it would cost and take, without sending or reserving anything: `estimate.credits.expected`, `.typical`, `.high`, `estimate.covers_expected`, and per item `basis` and `notes`. `balance()`, `usage(period="day")` and `status()` read the account and the service. `me()` says which project and key are calling (`project_id`, `key_id`, `key_name`, `key_prefix`, `scopes`) and the key's `limits` (credits per day and month with what is used and left, and `expires_at`); any valid key may call it, and `project_id` stays the same when the key is rotated. A request over a key's limit raises `FetchXError` with code `key_limit_reached` (402, not resent). `send_feedback(fetch_id=result.id, kind="blocked_via_fetchx_ok_from_home", evidence={...})` reports a page FetchX could not get or got wrong (or `url=` instead of `fetch_id=`); `get_feedback(report)` returns its `status` and staff's `reply`. `FakeFetchX` keeps reports in `fake.feedback`, and `fake.answer_feedback(id, "resolved", "reply")` plays the staff side.
+`estimate()` takes a fetch body or a batch body and says what it would cost and take, without sending or reserving anything: `estimate.credits.expected`, `.typical`, `.high`, `estimate.covers_expected`, and per item `basis` and `notes`. `balance()`, `usage(period="day")` and `status()` read the account and the service. `prices()` returns the price table (`prices.step("browser_residential")`, `captcha`, `credits_per_mb`, `extract`) and the `trial_credits` a new account gets; the route itself needs no key. `me()` says which project and key are calling (`project_id`, `key_id`, `key_name`, `key_prefix`, `scopes`) and the key's `limits` (credits per day and month with what is used and left, and `expires_at`); any valid key may call it, and `project_id` stays the same when the key is rotated. A request over a key's limit raises `FetchXError` with code `key_limit_reached` (402, not resent). `send_feedback(fetch_id=result.id, kind="blocked_via_fetchx_ok_from_home", evidence={...})` reports a page FetchX could not get or got wrong (or `url=` instead of `fetch_id=`); `get_feedback(report)` returns its `status` and staff's `reply`. `FakeFetchX` keeps reports in `fake.feedback`, and `fake.answer_feedback(id, "resolved", "reply")` plays the staff side.
 
 ## Asyncio
 
@@ -112,7 +142,7 @@ Requests to the same site still take turns, so a `gather` over many sites runs o
 
 ## Tests without the network
 
-`fetchx.testing.FakeFetchX` is an in-memory FetchX that answers in the shapes of the public contract, which this repository's tests hold it to: 202 and polling, key replay and conflicts, next pages, stored content and screenshots, network captures, batches, estimates, balance, usage, status and `me`, with credits on every result. It knows nothing about any real site: pages are what you give it, including the calls a page makes (`FakePage(..., network=[{"url": ".../api/items", "type": "xhr", "body": {...}}])`), which a request with `capture` then records.
+`fetchx.testing.FakeFetchX` is an in-memory FetchX that answers in the shapes of the public contract, which this repository's tests hold it to: 202 and polling, key replay and conflicts, next pages, stored content and screenshots, network captures, batches, estimates, balance, usage, status, prices and `me`, with credits on every result. It knows nothing about any real site: pages are what you give it, including the calls a page makes (`FakePage(..., network=[{"url": ".../api/items", "type": "xhr", "body": {...}}])`), which a request with `capture` then records.
 
 ```python
 from fetchx.testing import FakeFetchX, FakePage
@@ -154,13 +184,14 @@ assert [r["url"] for r in fake.site_requests] == ["https://shop.example.com/p/1"
 | `GET /v1/balance` | `balance()` |
 | `GET /v1/usage` | `usage(period=, since=, until=)` |
 | `GET /v1/status` | `status()` |
+| `GET /v1/prices` | `prices()` |
 | `GET /v1/me` | `me()` |
 | `POST /v1/feedback` | `send_feedback(body, **fields)` |
 | `GET /v1/feedback/{id}` | `get_feedback(id)` |
 
 ## The single-file client
 
-[`clients/python.py`](../python.py) stays as it is: one file to copy, returning the API's JSON as dicts, as used in the website's examples. This package is for applications and crawlers that want the rules above handled. Its results read like those dicts (`result["status"]`, `content["body"]`), and the method names match where the endpoints are the same.
+[`clients/python.py`](https://github.com/karthikbala/FetchX/blob/main/clients/python.py) stays as it is: one file to copy, returning the API's JSON as dicts, as used in the website's examples. This package is for applications and crawlers that want the rules above handled. Its results read like those dicts (`result["status"]`, `content["body"]`), and the method names match where the endpoints are the same.
 
 ## Developing
 

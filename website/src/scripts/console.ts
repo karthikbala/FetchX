@@ -234,16 +234,16 @@ async function initConsole(root: HTMLElement) {
     acceptSession(data); email = ''; challenge = ''; clearError();
     const code = q<HTMLInputElement>('[data-signup-verify] input'); if (code) code.value = '';
     if (resumeConnect()) return;
-    if (readConnectReturn()?.purpose === 'create') { stage(2); return; }
     if (projects.length && githubResult?.connectRequired) {
       showExistingAccount(); toast('Signed in. Choose Connect GitHub to connect this account.');
       requestAnimationFrame(() => q('[data-github-connect]')?.focus());
     } else if (projects.length) window.location.assign(authDestination);
     else stage(2);
   }
-  function resumeConnect(projectCreated = false): boolean {
+  // Back to the Connect page that sent the user to sign in.
+  function resumeConnect(): boolean {
     const intent = readConnectReturn();
-    if (!intent || intent.purpose === 'create' && !projectCreated && !projects.some(item => item.status === 'active')) return false;
+    if (!intent) return false;
     clearConnectReturn(); window.location.replace(intent.href); return true;
   }
   function showExistingAccount() {
@@ -304,7 +304,7 @@ async function initConsole(root: HTMLElement) {
     const data = await api('/projects', { method: 'POST', body: { name: String(values.get('project') || '').trim() } });
     project = data.project;
     if (!project || !validProject(project.id)) throw new ControlError('The service did not return the new project.', 'invalid_response');
-    if (resumeConnect(true)) return;
+    if (resumeConnect()) return;
     saveProject(project.id); textAll('[data-project-name]', project.name); stage(3);
   });
   onForm('[data-signup-key]', async (_form, values) => {
@@ -779,7 +779,7 @@ async function initConsole(root: HTMLElement) {
         acceptSession(session);
         if (resumeConnect()) return;
         if (authPage) {
-          if (projects.length && readConnectReturn()?.purpose !== 'create') showExistingAccount(); else stage(2);
+          if (projects.length) showExistingAccount(); else stage(2);
         } else {
           setProjectOptions();
           if (projects.length) await selectProject(projects.some(item => item.id === selectedId()) ? selectedId() : projects[0].id);

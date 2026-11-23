@@ -191,6 +191,10 @@ class FetchXClient:
         """Service status and notices."""
         return self._send('GET', '/v1/status')
 
+    def prices(self):
+        """What each step, a captcha, residential traffic and extraction cost in credits, and the trial credits a new account gets."""
+        return self._send('GET', '/v1/prices')
+
     def balance(self):
         """Credits available now: {'credits', 'reserved', 'trial', 'purchased', 'payment_hold'}."""
         return self._send('GET', '/v1/balance')

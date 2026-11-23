@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {databaseUrl, openStore, PROJECT} from './helpers.mjs';
-import {Ledger, prices, priceOf, worstCaseOf} from '../src/billing/ledger.mjs';
+import {Ledger, prices, priceOf, pricesView, worstCaseOf} from '../src/billing/ledger.mjs';
 import {Purchases, packCredits} from '../src/billing/purchases.mjs';
 
 const skip = !databaseUrl;
@@ -20,6 +20,19 @@ test('prices come from config and charge by the step that succeeded', () => {
   assert.equal(packCredits(200, 'usd'), 10_000);
   assert.equal(packCredits(17_500, 'inr'), 10_000);
   assert.equal(packCredits(201, 'usd'), null);
+});
+
+test('the public price table shows each step, captcha, traffic, extraction and the trial', () => {
+  const view = pricesView(prices({pricing: {browser: 12, residential_included_mb: {browser_residential: 8}}}), 500);
+  assert.deepEqual(view.steps.browser, {credits: 12, residential: false, browser: true, route_classes: ['direct', 'datacenter'], included_mb: null});
+  assert.deepEqual(view.steps.http_residential, {credits: 5, residential: true, browser: false, route_classes: ['residential'], included_mb: 1});
+  assert.equal(view.steps.browser_residential.included_mb, 8);
+  assert.deepEqual([view.captcha, view.traffic], [{credits: 10}, {credits_per_mb: 5}]);
+  assert.deepEqual(view.extract, {credits: 10, unit_tokens: 25_000, max_tokens: 150_000, max_credits: 60});
+  assert.equal(view.trial_credits, 500);
+  // The trial is the billing.trialCredits budget; an invalid policy shows none rather than failing.
+  assert.equal(new Ledger({store: null, config: {}}).publicPrices().trial_credits, 1000);
+  assert.equal(new Ledger({store: null, config: {controlPlane: {creditPolicy: {trialCredits: 5000}}}}).publicPrices().trial_credits, null);
 });
 
 test('the balance is trial + purchases + adjustments - charges - reservations, and holds stop spending', {skip}, async t => {

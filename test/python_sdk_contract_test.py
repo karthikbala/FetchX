@@ -249,6 +249,8 @@ def scenario(fake):
     client.balance()
     client.usage(period="day")
     client.status()
+    prices = client.prices()
+    assert prices.step("browser_residential") == 25 and prices.trial_credits == 1000 and prices.captcha == 10, prices.raw
     fake.unavailable(1, code="maintenance", path="/v1/balance")
     client.balance()
 

@@ -50,7 +50,9 @@ class ConfigTests(unittest.TestCase):
         self.assertNotIn("fxk_env", repr(client))
         with mock.patch.dict(os.environ, {"FETCHX_API_KEY": "fxk_console"}, clear=True):
             self.assertEqual(FetchX().base_url, "https://app.fetchx.ai")
-        with mock.patch.dict(os.environ, {}, clear=True), self.assertRaises(FetchXError) as caught:
+        # No key in the environment and no file saved by Connect.
+        missing = os.path.join(os.path.dirname(__file__), "no-such-credentials-file")
+        with mock.patch.dict(os.environ, {"FETCHX_CREDENTIALS_FILE": missing}, clear=True), self.assertRaises(FetchXError) as caught:
             FetchX()
         self.assertEqual(caught.exception.code, "client_config_missing")
         with self.assertRaises(FetchXError):
