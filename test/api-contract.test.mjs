@@ -87,6 +87,7 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   t.after(() => store.close());
   const {call, engine, platform} = await platformFor(store, {script: request => request.url.includes('/wall') ? {status: 'failed', body: 'denied'}
     : request.url.includes('/pdf') ? {content_type: 'application/pdf', body: '%PDF-1.4'}
+      : request.url.includes('/api') ? {content_type: 'application/json', body: JSON.stringify({items: [{name: 'Lamp'}], total: 1})}
       : request.url.includes('/list') ? {body: html('list'), step: 'browser', next_page: {how: 'click'}}
       : {body: html('hello'), data: {headers: {'set-cookie': 'sid=1; Path=/'}, cookies: [{name: 'sid', value: '1', domain: 'shop.example.com', path: '/'}]}}});
   const expect = async (method, path, status, request, specUrl = path.split('?')[0]) => {
@@ -96,7 +97,11 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
     return response.body;
   };
   const one = '/v1/fetch/{id}';
-  const ok = await expect('post', '/v1/fetch', 200, {body: {url: 'https://shop.example.com/p', formats: ['markdown', 'text', 'links', 'metadata', 'json'], tags: ['t']}});
+  const ok = await expect('post', '/v1/fetch', 200, {body: {url: 'https://shop.example.com/p', formats: ['markdown', 'text', 'links', 'metadata', 'skeleton'], tags: ['t']}});
+  assert.equal(ok.data.skeleton, null, 'an HTML page has no skeleton');
+  const shaped = await expect('post', '/v1/fetch', 200, {body: {url: 'https://shop.example.com/api', render: 'never', formats: ['skeleton']}});
+  assert.deepEqual(shaped.data.skeleton.fields.find(row => row.path === '$.items'), {path: '$.items', type: 'array', seen: 1, items: 1});
+  assert.equal(shaped.data.body, undefined);
   assert.equal(ok.status, 'succeeded');
   await expect('post', '/v1/fetch', 200, {body: {url: 'https://shop.example.com/pdf'}});
   const shot = await expect('post', '/v1/fetch', 200, {body: {url: 'https://shop.example.com/r', render: 'always', formats: ['screenshot']}});

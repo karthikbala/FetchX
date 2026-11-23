@@ -32,6 +32,10 @@ async function checkClientTypes() {
   const call: NetworkCall = await client.networkCall(captured.id, rows.items[0].index);
   const callBody: string | null | undefined = call.response?.body;
   const har = await client.networkHar(captured.id);
+  const shaped = await client.fetch({url: 'https://shop.example.com/api/items', render: 'never', formats: ['skeleton']});
+  const firstPath: string | undefined = shaped.data?.skeleton?.fields[0]?.path;
+  const arrayItems: number | undefined = shaped.data?.skeleton?.fields.find(row => row.type === 'array')?.items;
+  console.log(firstPath, arrayItems);
   const me: Me = await client.me();
   const scopes: string[] = me.scopes;
   const monthLeft: number | undefined = me.limits.credits_per_month?.remaining;

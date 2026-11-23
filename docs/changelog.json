@@ -6,6 +6,17 @@
   },
   "releases": [
     {
+      "version": "1.10.0",
+      "date": "2026-11-23",
+      "title": "The shape of a JSON body",
+      "changes": [
+        {
+          "type": "added",
+          "text": "formats: [\"skeleton\"] returns data.skeleton instead of the whole body: the root type, every field once as a JSONPath ($.items[*].price) with its type (string|null when it varies), how often it was seen and, for arrays, how many elements, and a sample (the body with every array cut to its first element and long strings cut short). A few KB however large the body, so a client or a language model can see the shape of a JSON API before reading megabytes; truncated says when fields were left out. Null when the body is not JSON. Free, like the other formats."
+        }
+      ]
+    },
+    {
       "version": "1.9.0",
       "date": "2026-11-23",
       "title": "Feedback on how FetchX handled a page",

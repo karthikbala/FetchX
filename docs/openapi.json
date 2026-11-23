@@ -2,7 +2,7 @@
  "openapi": "3.1.0",
  "info": {
   "title": "FetchX API",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. A browser request with capture records the page's own network calls, read with GET /v1/fetch/{id}/network or as a HAR file. GET /v1/me says which project and key are calling, and the key's own credit limits per day and month and expiry, set in the console. POST /v1/feedback tells FetchX how it handled a page, for example blocked through FetchX but fine from your own connection, so routes can be tuned with real cases. GET /v1/status needs no key.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
  },
  "servers": [
@@ -103,6 +103,16 @@
            "class": "residential",
            "country": "IN"
           }
+         }
+        },
+        "skeleton": {
+         "summary": "The shape of a JSON API",
+         "value": {
+          "url": "https://shop.example.com/api/products?page=1",
+          "render": "never",
+          "formats": [
+           "skeleton"
+          ]
          }
         }
        }
@@ -368,6 +378,134 @@
              "detail": "The page loaded without what `expect` asked for; `data` shows what came back. If `expect` is right for this page, the site may be holding content back from those IPs: retry with a new idempotency key after the wait. If it is not, fix `expect`."
             }
            },
+           "batch": null
+          }
+         },
+         "skeleton": {
+          "summary": "formats: skeleton on a JSON API",
+          "value": {
+           "id": "9a4e2b1c-7d3f-4e5a-8b6c-0d1e2f3a4b5c",
+           "status": "succeeded",
+           "page_status": "content",
+           "idempotency_key": "products-1",
+           "url": "https://shop.example.com/api/products?page=1",
+           "created_at": "2026-11-19T10:00:00.000Z",
+           "finished_at": "2026-11-19T10:00:00.900Z",
+           "tags": [],
+           "data": {
+            "status_code": 200,
+            "final_url": "https://shop.example.com/api/products?page=1",
+            "content_type": "application/json",
+            "rendered": false,
+            "body_bytes": 1832211,
+            "headers": {
+             "content-type": "application/json"
+            },
+            "cookies": [],
+            "skeleton": {
+             "bytes": 1832211,
+             "root": "object",
+             "fields": [
+              {
+               "path": "$",
+               "type": "object",
+               "seen": 1
+              },
+              {
+               "path": "$.total",
+               "type": "number",
+               "seen": 1
+              },
+              {
+               "path": "$.products",
+               "type": "array",
+               "seen": 1,
+               "items": 2400
+              },
+              {
+               "path": "$.products[*]",
+               "type": "object",
+               "seen": 100
+              },
+              {
+               "path": "$.products[*].id",
+               "type": "string",
+               "seen": 100
+              },
+              {
+               "path": "$.products[*].name",
+               "type": "string",
+               "seen": 100
+              },
+              {
+               "path": "$.products[*].price",
+               "type": "null|number",
+               "seen": 100
+              },
+              {
+               "path": "$.products[*].badges",
+               "type": "array",
+               "seen": 37,
+               "items": 52
+              },
+              {
+               "path": "$.products[*].badges[*]",
+               "type": "string",
+               "seen": 52
+              },
+              {
+               "path": "$.next_page",
+               "type": "null|string",
+               "seen": 1
+              }
+             ],
+             "sample": {
+              "total": 2400,
+              "products": [
+               {
+                "id": "p-1001",
+                "name": "Brass desk lamp",
+                "price": 49.0,
+                "badges": [
+                 "new"
+                ]
+               }
+              ],
+              "next_page": "/api/products?page=2"
+             },
+             "truncated": false
+            }
+           },
+           "credits": {
+            "charged": 1,
+            "max": 160,
+            "balance": 9420,
+            "breakdown": {
+             "step": "http",
+             "step_credits": 1,
+             "captcha_credits": 0,
+             "traffic_mb": 1.8,
+             "included_mb": 0,
+             "traffic_credits": 0,
+             "extract_tokens": null,
+             "extract_credits": 0
+            }
+           },
+           "challenge": null,
+           "attempts": [
+            {
+             "transport": "http",
+             "class": "direct",
+             "country": null,
+             "result": "success",
+             "status_code": 200,
+             "ms": 820,
+             "wire_bytes": 1832211
+            }
+           ],
+           "skipped": [],
+           "fixes": [],
+           "error": null,
            "batch": null
           }
          }
@@ -5392,10 +5530,11 @@
         "text",
         "links",
         "metadata",
+        "skeleton",
         "screenshot"
        ]
       },
-      "description": "What to return. body: the response as received (the rendered page after a browser), the default when formats is left out. markdown, text, links and metadata are derived from it (for JSON, see extract); screenshot needs a browser. Ask only for what you use: a rendered page can be megabytes of HTML. The body is stored either way and can be downloaded from /v1/fetch/{id}/content.",
+      "description": "What to return. body: the response as received (the rendered page after a browser), the default when formats is left out. markdown, text, links and metadata are derived from it (for data from a page, see extract); skeleton: the shape of a JSON body (keys, types, array lengths and a small sample), a few KB instead of the whole body, null when the body is not JSON; screenshot needs a browser. Ask only for what you use: a rendered page can be megabytes of HTML. The body is stored either way and can be downloaded from /v1/fetch/{id}/content.",
       "default": [
        "body"
       ]
@@ -6039,6 +6178,17 @@
      },
      "metadata": {
       "$ref": "#/components/schemas/PageMetadata"
+     },
+     "skeleton": {
+      "oneOf": [
+       {
+        "$ref": "#/components/schemas/JsonSkeleton"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "With formats: skeleton, the shape of a JSON body; null when the body is not JSON."
      },
      "extract": {
       "description": "The JSON read from the page for the request's extract: an object for a one-record schema (fields the page does not show are null), an array of records for a list schema. null when the site answered 404 or 410. Only on requests with extract.",
@@ -8639,6 +8789,75 @@
      "updated_at": {
       "type": "string",
       "format": "date-time"
+     }
+    }
+   },
+   "JsonSkeleton": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "bytes",
+     "root",
+     "fields",
+     "sample",
+     "truncated"
+    ],
+    "description": "The shape of a JSON body (formats: skeleton), a few KB however large the body. Fields are read from the first 100 elements of each array. A JSON document a browser shows inside a lone <pre> is read from there.",
+    "properties": {
+     "bytes": {
+      "type": "integer",
+      "description": "Size of the body."
+     },
+     "root": {
+      "type": "string",
+      "enum": [
+       "object",
+       "array",
+       "string",
+       "number",
+       "boolean",
+       "null"
+      ],
+      "description": "The type of the whole document."
+     },
+     "fields": {
+      "type": "array",
+      "maxItems": 150,
+      "description": "Each path once, in the order first seen.",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "path",
+        "type",
+        "seen"
+       ],
+       "properties": {
+        "path": {
+         "type": "string",
+         "description": "JSONPath: $ for the document, $.items for a key, $.items[*].price for a key of each element, $['a.b'] for a key that needs quoting."
+        },
+        "type": {
+         "type": "string",
+         "description": "object, array, string, number, boolean or null; several joined with | when it varies (string|null)."
+        },
+        "seen": {
+         "type": "integer",
+         "description": "How many times the path was seen: compare with the parent array's items to spot optional keys."
+        },
+        "items": {
+         "type": "integer",
+         "description": "For an array: elements across every time it was seen."
+        }
+       }
+      }
+     },
+     "sample": {
+      "description": "The body with every array cut to its first element and long strings cut short (null when even that is too large)."
+     },
+     "truncated": {
+      "type": "boolean",
+      "description": "Fields past 150, or deeper or longer than the limits, were left out, or the sample was cut further to fit."
      }
     }
    }

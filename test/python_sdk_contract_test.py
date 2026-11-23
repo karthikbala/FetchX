@@ -164,6 +164,11 @@ def scenario(fake):
     client.get(pending_fake_result.id, include_body=False)
     client.wait(pending_fake_result.id)
     client.fetch(url=f"{SHOP}/manual.pdf")
+    shaped = client.fetch(url=f"{SHOP}/api/items", render="never", formats=["skeleton"])
+    assert shaped.skeleton["root"] == "object" and shaped.body is None, shaped.raw
+    assert {"path": "$.items[*].price", "type": "null|number", "seen": 2} in shaped.skeleton["fields"], shaped.skeleton
+    assert shaped.skeleton["sample"] == {"items": [{"name": "Lamp", "price": 19.5}], "total": 2}, shaped.skeleton
+    assert client.fetch(url=f"{SHOP}/p/3", formats=["skeleton"]).skeleton is None
     client.fetch(url=f"{SHOP}/missing")
     client.fetch(url=f"{SHOP}/walled")
     client.fetch(url=f"{SHOP}/broken")
@@ -266,6 +271,8 @@ class ContractTests(unittest.TestCase):
                             f"{SHOP}/p/3": "<html>Chair</html>",
                             f"{SHOP}/slow": "<html>slow</html>",
                             f"{SHOP}/manual.pdf": FakePage(b"%PDF\xff\xfe", content_type="application/pdf"),
+                            f"{SHOP}/api/items": FakePage('{"items": [{"name": "Lamp", "price": 19.5}, {"name": "Desk", "price": null}], "total": 2}',
+                                                          content_type="application/json"),
                             f"{SHOP}/dear": FakePage("<html>dear</html>", credits=90),
                             f"{SHOP}/broken": (500, "text/html", "<html>oops</html>")},
                            pending_polls=1, batch_step=1)
