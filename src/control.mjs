@@ -77,6 +77,10 @@ function message(code){
  if(code==='notice_resolved')return 'This notice is already resolved.';
  if(code==='notice_pause_api_invalid')return 'Only a maintenance notice can pause the API.';
  if(code==='notice_not_found')return 'This notice does not exist.';
+ if(code==='feedback_not_found')return 'This report does not exist.';
+ if(code==='feedback_status_invalid')return 'Choose received, reviewing, resolved or dismissed.';
+ if(code==='feedback_reply_invalid')return 'A reply is at most 2,000 characters.';
+ if(code==='feedback_review_required')return 'Change the status or the reply.';
  if(code==='key_limits_invalid')return 'Credit limits must be whole numbers from 1 to 100,000,000, or empty for no limit.';
  if(code==='key_expiry_invalid')return 'The expiry must be a date and time in the future, at most 5 years away.';
  if(code==='key_revoked')return 'This key is revoked.';

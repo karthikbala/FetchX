@@ -20,6 +20,8 @@ export type NetworkCallRow = Schemas['NetworkCallRow'];
 export type NetworkCall = Schemas['NetworkCall'];
 export type Me = Schemas['Me'];
 export type KeyLimit = Schemas['KeyLimit'];
+export type FeedbackRequest = Schemas['FeedbackRequest'];
+export type Feedback = Schemas['Feedback'];
 // The batch owns async, webhook_url and idempotency_key; the API refuses them on items and defaults.
 type BatchOwned = 'async' | 'webhook_url' | 'idempotency_key';
 export type BatchItemRequest = Omit<FetchRequest, BatchOwned>;
@@ -140,7 +142,11 @@ export class FetchXClient {
   /** Service status and notices. */
   status(): Promise<ServiceStatus>;
   balance(): Promise<Balance>;
-  /** The project and key making the call, and the key's scopes. Any valid key may call it. */
+  /** The project and key making the call, the key's scopes and its credit limits. Any valid key may call it. */
   me(): Promise<Me>;
+  /** Report how FetchX handled a page: a request (fetch_id) or a URL, what you saw (kind), and evidence. Free. */
+  sendFeedback(input: FeedbackRequest): Promise<Feedback>;
+  /** Where a report stands and FetchX staff's reply. */
+  getFeedback(id: string): Promise<Feedback>;
   usage(query?: UsageQuery): Promise<Usage>;
 }

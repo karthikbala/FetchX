@@ -113,7 +113,7 @@ export async function usageReport({service, ledger}, project, query = {}) {
 const idParams = {schema: {params: {type: 'object', required: ['id'], properties: {id: {type: 'string', maxLength: 64}}}}};
 
 // app.authenticate(req, scope) sets req.project, req.keyId and req.key ({id, name, prefix, scopes}).
-export function registerApi(app, {service, ledger, estimator, board, batches}) {
+export function registerApi(app, {service, ledger, estimator, board, batches, feedback}) {
   const guard = scope => async req => app.authenticate(req, scope);
   app.post('/v1/fetch', {preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
     const view = await service.submit(req.project, req.body, {keyId: req.keyId});
@@ -166,6 +166,12 @@ export function registerApi(app, {service, ledger, estimator, board, batches}) {
   app.get('/v1/batches/:id/items', {...idParams, preHandler: guard(API_SCOPES.read)},
     req => batches.items(req.project, req.params.id, req.query ?? {}));
   app.post('/v1/batches/:id/cancel', {...idParams, preHandler: guard(API_SCOPES.write)}, req => batches.cancel(req.project, req.params.id));
+  // Tell FetchX how it handled a page, e.g. blocked through FetchX but fine from your own connection. Free.
+  app.post('/v1/feedback', {preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
+    const {feedback: report, created} = await feedback.submit(req.project, req.body, {keyId: req.keyId});
+    return reply.code(created ? 201 : 200).send(report);
+  });
+  app.get('/v1/feedback/:id', {...idParams, preHandler: guard(API_SCOPES.read)}, req => feedback.get(req.project, req.params.id));
   app.get('/v1/balance', {preHandler: guard(API_SCOPES.usage)}, req => service.balance(req.project));
   app.get('/v1/usage', {preHandler: guard(API_SCOPES.usage)}, req => usageReport({service, ledger}, req.project, req.query ?? {}));
   // Who is calling: the project (the same after a key is rotated) and this key.

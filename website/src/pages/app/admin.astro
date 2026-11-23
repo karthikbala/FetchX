@@ -3,7 +3,7 @@ import Layout from '../../layouts/Layout.astro';
 import Brand from '../../components/Brand.astro';
 import '../../styles/product-preview.css';
 ---
-<Layout title="Admin — FetchX" description="Operator tools for FetchX provider rules, spend budgets, reachability probes, site knowledge and status notices." appMode={true} noindex={true}>
+<Layout title="Admin — FetchX" description="Operator tools for FetchX provider rules, spend budgets, reachability probes, site knowledge, callers' feedback and status notices." appMode={true} noindex={true}>
   <div class="product-preview fx-admin" data-admin>
     <header class="fx-admin-top">
       <a href="/app" class="pp-brand" aria-label="FetchX workspace"><Brand/></a>
@@ -13,7 +13,7 @@ import '../../styles/product-preview.css';
     <main class="fx-admin-main">
       <p class="pp-eyebrow">OPERATOR</p>
       <h1>Administration</h1>
-      <p class="fx-admin-lede">Provider rules, spend budgets, reachability probes, what FetchX has learned per site, and the notices on the status page. Every change is validated, versioned and recorded with your email.</p>
+      <p class="fx-admin-lede">Provider rules, spend budgets, reachability probes, what FetchX has learned per site, what callers report, and the notices on the status page. Every change is validated, versioned and recorded with your email.</p>
       <p class="fx-admin-error" data-admin-error role="alert" hidden></p>
       <section class="fx-admin-gate" data-admin-gate><p data-admin-gate-text>Checking your session…</p><a href="/login" class="pp-button pp-button-primary" data-admin-login hidden>Sign in</a></section>
 
@@ -23,6 +23,7 @@ import '../../styles/product-preview.css';
           <button type="button" role="tab" data-tab="budgets" aria-selected="false">Budgets</button>
           <button type="button" role="tab" data-tab="probes" aria-selected="false">Reachability probes</button>
           <button type="button" role="tab" data-tab="sites" aria-selected="false">Site knowledge</button>
+          <button type="button" role="tab" data-tab="feedback" aria-selected="false">Feedback</button>
           <button type="button" role="tab" data-tab="status" aria-selected="false">Status</button>
           <button type="button" role="tab" data-tab="audit" aria-selected="false">Audit log</button>
         </nav>
@@ -114,6 +115,29 @@ import '../../styles/product-preview.css';
           </div>
         </section>
 
+        <section data-panel="feedback" class="fx-admin-panel" hidden>
+          <div class="fx-admin-card">
+            <h2>Feedback from callers</h2>
+            <p class="fx-admin-hint">Reports sent with <code>POST /v1/feedback</code>: a page that fails through FetchX but loads from the caller's own connection, wrong content or wrong extraction. A report that names a request keeps a copy of what FetchX did. Open reports come first. The reply is shown to the caller in <code>GET /v1/feedback/{"{id}"}</code>. Reports are kept 90 days.</p>
+            <div class="fx-admin-filters"><label>Status <select data-feedback-status><option value="open">Open</option><option value="">All</option><option value="received">Received</option><option value="reviewing">Reviewing</option><option value="resolved">Resolved</option><option value="dismissed">Dismissed</option></select></label><label>Host <input type="search" data-feedback-host maxlength="253" placeholder="shop.example.com"></label><span class="fx-admin-tag" data-feedback-count>0 of 0</span></div>
+            <div class="fx-admin-table-wrap"><table class="fx-admin-table"><thead><tr><th>Sent</th><th>Page</th><th>Kind</th><th>What FetchX did</th><th>What the caller saw</th><th>Status</th><th></th></tr></thead><tbody data-feedback-body></tbody></table></div>
+          </div>
+          <form class="fx-admin-card" data-feedback-form hidden>
+            <h2 data-feedback-title>Report</h2>
+            <dl class="fx-admin-summary" data-feedback-summary></dl>
+            <pre class="fx-admin-excerpt" data-feedback-excerpt hidden></pre>
+            <div data-feedback-attempts-box hidden>
+              <h3>Attempts FetchX made</h3>
+              <div class="fx-admin-table-wrap"><table class="fx-admin-table"><thead><tr><th>#</th><th>Transport</th><th>IP class</th><th>Country</th><th>Result</th><th>Code</th><th>Challenge</th><th>HTTP</th></tr></thead><tbody data-feedback-attempts></tbody></table></div>
+            </div>
+            <div class="fx-admin-grid">
+              <label>Status <select name="status"><option value="received">Received</option><option value="reviewing">Reviewing</option><option value="resolved">Resolved</option><option value="dismissed">Dismissed</option></select></label>
+              <label>Reply to the caller <textarea name="reply" rows="3" maxlength="2000" placeholder="Fixed: FetchX now uses residential IPs in DE for this site."></textarea><small class="fx-admin-field-hint">Optional. Shown in GET /v1/feedback/{"{id}"}; no customer data.</small></label>
+            </div>
+            <div class="fx-admin-actions"><button class="pp-button pp-button-primary" type="submit">Save</button><button class="pp-button pp-button-secondary" type="button" data-feedback-site>Site knowledge</button><button class="pp-button pp-button-secondary" type="button" data-feedback-close>Close</button></div>
+          </form>
+        </section>
+
         <section data-panel="status" class="fx-admin-panel" hidden>
           <div class="fx-admin-card">
             <h2>Status notices</h2>
@@ -188,6 +212,8 @@ import '../../styles/product-preview.css';
     .fx-admin-summary{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;font-size:13px;margin:14px 0}
     .fx-admin-summary dt{color:#9fac9a}.fx-admin-summary dd{margin:0}
     .fx-admin-card textarea{resize:vertical;min-height:72px}.fx-admin .fx-admin-field-hint{color:#9fac9a;font-size:11px}
+    .fx-admin-filters{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin-bottom:6px}.fx-admin-filters .fx-admin-tag{margin-bottom:12px}
+    .fx-admin-excerpt{background:#101718;border:1px solid #2a3527;border-radius:8px;padding:10px 12px;font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;margin:0 0 14px}
     .fx-admin p.fx-admin-hint a{color:#c9f27a;text-decoration:underline}.fx-admin code{font-family:var(--mono);font-size:12px}
     @media(max-width:640px){.fx-admin-main{padding:20px 16px}.fx-admin-top{padding:14px 16px;flex-wrap:wrap}.fx-admin-main h1{font-size:26px}}
   </style>

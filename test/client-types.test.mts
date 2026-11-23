@@ -1,5 +1,5 @@
 import {FetchXClient, FetchXError, type FetchRequest, type FetchResult, type Usage, type Balance, type Batch, type BatchItem,
-  type BatchRequest, type NetworkList, type NetworkCall, type Me} from '../clients/javascript.mjs';
+  type BatchRequest, type NetworkList, type NetworkCall, type Me, type Feedback} from '../clients/javascript.mjs';
 
 async function checkClientTypes() {
   const client = new FetchXClient({url: 'https://app.fetchx.ai', token: 'fxk_fixture'});
@@ -37,6 +37,13 @@ async function checkClientTypes() {
   const monthLeft: number | undefined = me.limits.credits_per_month?.remaining;
   const expires: string | null = me.limits.expires_at;
   console.log(monthLeft, expires);
+  const report: Feedback = await client.sendFeedback({fetch_id: captured.id, kind: 'blocked_via_fetchx_ok_from_home',
+    evidence: {status_code: 200, client: 'curl from a home connection'}});
+  const reply: string | null = (await client.getFeedback(report.id)).reply;
+  const state: 'received' | 'reviewing' | 'resolved' | 'dismissed' = report.status;
+  // @ts-expect-error kind is one of the documented values
+  await client.sendFeedback({url: 'https://shop.example.com/', kind: 'slow'});
+  console.log(reply, state);
   console.log(calls, callBody, har.log, scopes, (await client.networkBody(captured.id, 1)).contentType);
   const batchInput = {items: ['https://shop.example.com/a', {url: 'https://shop.example.com/b', formats: ['text']}],
     defaults: {formats: ['markdown'], render: 'auto'}, webhook_url: 'https://hooks.example.com/fetchx', tags: ['nightly']} satisfies BatchRequest;

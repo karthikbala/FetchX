@@ -6,6 +6,21 @@
   },
   "releases": [
     {
+      "version": "1.9.0",
+      "date": "2026-11-23",
+      "title": "Feedback on how FetchX handled a page",
+      "changes": [
+        {
+          "type": "added",
+          "text": "POST /v1/feedback reports a page FetchX could not get or got wrong: name the request (fetch_id) or the URL and method, say what you saw (kind: blocked_via_fetchx_ok_from_home, wrong_content, extract_wrong or other), and add a message and evidence from where it worked (status_code, final_url, content_type, body_excerpt, client). FetchX keeps a copy of what it did with the request, so the report stays useful after the result expires. Free; up to 100 reports a day per project; kept 90 days."
+        },
+        {
+          "type": "added",
+          "text": "GET /v1/feedback/{id} shows where a report stands (received, reviewing, resolved or dismissed) and FetchX staff's reply."
+        }
+      ]
+    },
+    {
       "version": "1.8.0",
       "date": "2026-11-23",
       "title": "Credit limits and expiry for API keys",

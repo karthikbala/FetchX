@@ -16,6 +16,7 @@ import {eventsServer} from './engine/events.mjs';
 import {FetchFront} from './fetch/front.mjs';
 import {WebhookSender} from './fetch/webhooks.mjs';
 import {BatchRunner, BatchService} from './fetch/batches.mjs';
+import {FeedbackService} from './fetch/feedback.mjs';
 import {registerApi, apiError, API_SCOPES, ANY_SCOPE, UNAVAILABLE_RETRY_SECONDS} from './api/v1.mjs';
 import {registerLifecycle} from './api/lifecycle.mjs';
 import {Estimator} from './fetch/estimate.mjs';
@@ -39,6 +40,8 @@ export function createPlatform({store, config, deps = {}}) {
   // Batches: their items are FetchFront jobs, started by the runner at each site's pace.
   platform.batches = new BatchService({store, config, front: platform.front, engine: platform.engine, ledger: platform.ledger});
   platform.front.batches = platform.batches;
+  // Callers' reports of how FetchX handled a page, read by staff in the admin portal.
+  platform.feedback = new FeedbackService({store, config, engine: platform.engine, metadataDays: platform.front.limits.metadataDays});
   platform.batchRunner = new BatchRunner({batches: platform.batches, engine: platform.engine, intervalMs: deps.batchIntervalMs});
   platform.batches.kickRunner = () => { if (platform.batchRunner.timer) void platform.batchRunner.kick(); };
   platform.webhooks = new WebhookSender({store, front: platform.front, batches: platform.batches, config, intervalMs: deps.webhookIntervalMs,
@@ -105,7 +108,7 @@ export function server(platform, {stripeFetch, stripeAutoProcess = true} = {}) {
   });
   registerLifecycle(app, {board: platform.board, config});
   registerApi(app, {service: platform.front, ledger: platform.ledger, estimator: platform.estimator, board: platform.board,
-    batches: platform.batches});
+    batches: platform.batches, feedback: platform.feedback});
   registerControl(app, platform, {identity: platform.controlIdentity, ledger: platform.ledger, service: platform.front, stripe});
   registerStripeWebhook(app, stripe, {autoProcess: stripeAutoProcess});
   app.addHook('onClose', async () => {
@@ -146,7 +149,7 @@ async function main() {
   const refresh = setInterval(() => loadBudgets(store.pool, config).catch(() => process.stderr.write('budgets_refresh_failed\n')),
     30_000);
   refresh.unref();
-  const retention = setInterval(() => Promise.all([platform.front.prune(), platform.batches.prune()])
+  const retention = setInterval(() => Promise.all([platform.front.prune(), platform.batches.prune(), platform.feedback.prune()])
     .catch(() => process.stderr.write('retention_failed\n')), 3_600_000);
   retention.unref();
   const port = (name, fallback) => {

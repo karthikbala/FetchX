@@ -197,8 +197,14 @@ export class FetchXClient {
   // GET /v1/balance: {credits, reserved, trial, purchased, payment_hold}
   balance() { return this.#send('GET', '/v1/balance'); }
 
-  // GET /v1/me: {project_id, key_id, key_name, key_prefix, scopes}, for any valid key.
+  // GET /v1/me: {project_id, key_id, key_name, key_prefix, scopes, limits}, for any valid key.
   me() { return this.#send('GET', '/v1/me'); }
+
+  // POST /v1/feedback: report how FetchX handled a page ({fetch_id} or {url, method}, kind, message?, evidence?). Free.
+  sendFeedback(input) { return this.#send('POST', '/v1/feedback', {body: input}); }
+
+  // GET /v1/feedback/{id}: where a report stands and FetchX staff's reply.
+  getFeedback(id) { return this.#send('GET', `/v1/feedback/${encodeURIComponent(id)}`); }
 
   // GET /v1/usage: {period: 'day' | 'month'} or {since, until}
   usage(query = {}) {

@@ -104,7 +104,9 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await fx.estimate(url=f"{SHOP}/p/1")).credits.typical, 2)
         self.assertTrue((await fx.status()).operational)
         self.assertEqual((await fx.me()).scopes, ["fetch:write", "fetch:read", "usage:read"])
-        self.assertEqual(events, ["fetch", "fetch", "fetch", "balance", "usage", "estimate", "status", "me"])
+        report = await fx.send_feedback(url=f"{SHOP}/p/1", kind="wrong_content", message="Prices missing.")
+        self.assertEqual(((await fx.get_feedback(report.id)).status, report["method"]), ("received", "GET"))
+        self.assertEqual(events, ["fetch", "fetch", "fetch", "balance", "usage", "estimate", "status", "me", "send_feedback", "get_feedback"])
 
     async def test_reads_content_lists_and_waits(self):
         fake = fake_sites(pending_polls=4)

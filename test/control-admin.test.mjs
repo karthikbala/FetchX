@@ -8,6 +8,7 @@ import {Store} from '../src/store.mjs';
 import {grantOperator,revokeOperator,listOperators,ADMIN_ROUTES} from '../src/control-admin.mjs';
 import {EngineClient} from '../src/engine/client.mjs';
 import {StatusBoard} from '../src/status.mjs';
+import {FeedbackService} from '../src/fetch/feedback.mjs';
 import {fakeEngine} from './fake-engine.mjs';
 import {SERVICE_TOKEN} from './helpers.mjs';
 
@@ -17,7 +18,7 @@ const opToken='fxs_'+'o'.repeat(43),userToken='fxs_'+'u'.repeat(43);
 test('admin portal: operator-only and CSRF-bound; rules, probes and sites are forwarded to the engine with the operator as actor',{skip:!process.env.TEST_DATABASE_URL},async t=>{
  assert.match(new URL(process.env.TEST_DATABASE_URL).pathname,/^\/gateway_test_[A-Za-z0-9_]+$/);
  const store=new Store(process.env.TEST_DATABASE_URL);await store.init();
- await store.pool.query('TRUNCATE control_operators,control_operator_audit,budget_overrides,budget_audit,status_notices RESTART IDENTITY');
+ await store.pool.query('TRUNCATE control_operators,control_operator_audit,budget_overrides,budget_audit,status_notices,fetch_feedback RESTART IDENTITY');
  const op={id:randomUUID(),email:'ops@example.com'},member={id:randomUUID(),email:'member@example.com'};
  for(const u of [op,member])await store.pool.query('INSERT INTO control_users(id,email) VALUES($1,$2) ON CONFLICT(email) DO UPDATE SET id=control_users.id',[u.id,u.email]);
  for(const u of [op,member])u.id=(await store.pool.query('SELECT id FROM control_users WHERE email=$1',[u.email])).rows[0].id;
@@ -25,6 +26,7 @@ test('admin portal: operator-only and CSRF-bound; rules, probes and sites are fo
  const controlPlane={enabled:true,origins:[origin],bridgeSecret:secret,admin:{enabled:true}};
  const gateway={config:{controlPlane},store,engine:new EngineClient({url:'http://engine.test:8790',serviceToken:SERVICE_TOKEN},{fetchImpl:engine.fetchImpl})};
  gateway.board=new StatusBoard({store,config:gateway.config,engine:gateway.engine});
+ gateway.feedback=new FeedbackService({store,config:gateway.config,engine:gateway.engine});
  const identity={session:async value=>{if(value===opToken)return {user:op};if(value===userToken)return {user:member};throw new GatewayError('unauthorized',401);}};
  const app=Fastify();
  registerControl(app,gateway,{identity,ledger:{prices:{},metered:()=>true,balance:async()=>null,usage:async()=>({credits:0,by_step:[],daily:[]})},service:{}});await app.ready();
@@ -90,6 +92,22 @@ test('admin portal: operator-only and CSRF-bound; rules, probes and sites are fo
  assert.equal(engine.admin.length,adminBefore,'notices never reach the engine');
  const view=await gateway.board.publicView();
  assert.doesNotMatch(JSON.stringify(view),/ops@example\.com/,'no operator email on the public status');
+
+ // Callers' feedback: kept by the platform; staff set the status and a reply, and are recorded as the reviewer.
+ const {feedback:sent}=await gateway.feedback.submit('cp_feedback-test',{url:'https://shop.example.com/a',kind:'blocked_via_fetchx_ok_from_home',evidence:{status_code:200}});
+ assert.equal(code(await send('GET','/admin/feedback',undefined,{token:userToken})),'operator_required');
+ assert.equal(code(await send('PUT','/admin/feedback/'+sent.id,{status:'resolved'},{token:userToken})),'operator_required');
+ r=await send('GET','/admin/feedback');assert.equal(r.statusCode,200);
+ assert.deepEqual(r.json().feedback.map(f=>[f.id,f.host,f.project,f.status,f.evidence]),[[sent.id,'shop.example.com','cp_feedback-test','received',{status_code:200}]]);
+ assert.equal((await send('GET','/admin/feedback?status=open')).statusCode,400,'no query strings');
+ assert.equal(code(await send('PUT','/admin/feedback/'+sent.id,{status:'done'})),'feedback_status_invalid');
+ assert.equal(code(await send('PUT','/admin/feedback/'+sent.id,{status:'resolved',note:'x'})),'request_invalid');
+ assert.equal(code(await send('PUT','/admin/feedback/'+randomUUID(),{status:'resolved'})),'feedback_not_found');
+ assert.equal(code(await send('PUT','/admin/feedback/'+sent.id,{status:'resolved'},{csrf:''})),'csrf_rejected');
+ r=await send('PUT','/admin/feedback/'+sent.id,{status:'resolved',reply:'Fixed.'});assert.equal(r.statusCode,200,r.body);
+ assert.deepEqual([r.json().feedback.status,r.json().feedback.reply,r.json().feedback.reviewed_by],['resolved','Fixed.','ops@example.com']);
+ assert.equal((await gateway.feedback.get('cp_feedback-test',sent.id)).reply,'Fixed.');
+ assert.equal(engine.admin.length,adminBefore,'feedback never reaches the engine');
 
  // Revocation takes effect immediately.
  assert.deepEqual((await listOperators(store.pool)).map(o=>o.email),['ops@example.com']);

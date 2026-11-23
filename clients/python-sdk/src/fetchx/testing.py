@@ -40,6 +40,9 @@ FETCH_FIELDS = frozenset({"url", "method", "headers", "body", "body_base64", "re
 NEXT_FIELDS = frozenset({"scroll", "expect", "capture", "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key",
                          "tags"})
 FORMATS = frozenset({"body", "markdown", "text", "links", "metadata", "screenshot"})
+FEEDBACK_FIELDS = frozenset({"fetch_id", "url", "method", "kind", "message", "evidence"})
+FEEDBACK_KINDS = frozenset({"blocked_via_fetchx_ok_from_home", "wrong_content", "extract_wrong", "other"})
+FEEDBACK_EVIDENCE = frozenset({"status_code", "final_url", "content_type", "body_excerpt", "client"})
 FAILURE_CODES = frozenset({"blocked", "rate_limited", "content_missing", "login_required", "site_error", "unreachable",
                            "cooling_down", "timeout", "too_large", "uncertain", "route_unavailable", "url_not_allowed",
                            "next_page_missing", "extract_unavailable"})
@@ -138,6 +141,7 @@ class FakeFetchX:
         self._keys: Dict[str, Tuple[str, str]] = {}
         self._batches: Dict[str, dict] = {}
         self._batch_keys: Dict[str, Tuple[str, str]] = {}
+        self.feedback: Dict[str, dict] = {}      # id -> report, as POST /v1/feedback stored it
         self._failures: Dict[str, List[dict]] = {}
         self._refusals: List[_Rule] = []
         self._drops: List[_Rule] = []
@@ -291,6 +295,11 @@ class FakeFetchX:
             return _json(200, self._status())
         if rest == ["me"] and method == "GET":
             return _json(200, self._me(auth))
+        if rest == ["feedback"] and method == "POST":
+            return self._post_feedback(payload)
+        if len(rest) == 2 and rest[0] == "feedback" and method == "GET":
+            report = self.feedback.get(rest[1])
+            return _json(200, report) if report else _error(404, "not_found", "Nothing with that id in this project")
         return _error(404, "route_not_found", "There is no such route")
 
     # ----------------------------------------------------------------- fetches
@@ -928,6 +937,46 @@ class FakeFetchX:
                 "key_prefix": key[:12] if key.startswith("fxk_") else None,
                 "scopes": ["fetch:write", "fetch:read", "usage:read"],
                 "limits": {"credits_per_day": None, "credits_per_month": None, "expires_at": None}}
+
+    def _post_feedback(self, body: Any) -> httpx.Response:
+        if not isinstance(body, dict):
+            return _invalid("body")
+        for key in body:
+            if key not in FEEDBACK_FIELDS:
+                return _invalid(key)
+        if body.get("kind") not in FEEDBACK_KINDS:
+            return _invalid("kind")
+        evidence = body.get("evidence") or {}
+        if not isinstance(evidence, dict) or set(evidence) - FEEDBACK_EVIDENCE:
+            return _invalid("evidence")
+        fetch_id, url, method = body.get("fetch_id"), body.get("url"), body.get("method")
+        if fetch_id is not None:
+            if url is not None or method is not None:
+                return _invalid("url")
+            state = self._find(fetch_id)
+            if state is None:
+                return _error(404, "not_found", "Nothing with that id in this project")
+            url, method = state["request"]["url"], None
+        else:
+            if not isinstance(url, str) or not re.match(r"^https?://[^/\s]+", url):
+                return _invalid("fetch_id" if url is None else "url")
+            method = method or "GET"
+        for report in self.feedback.values():
+            if (report["status"] in ("received", "reviewing") and report["kind"] == body["kind"]
+                    and (report["fetch_id"] == fetch_id if fetch_id else (report["url"], report["method"]) == (url, method))):
+                return _json(200, report)
+        now = _iso(self._tick())
+        report = {"id": str(uuid.uuid4()), "kind": body["kind"], "fetch_id": fetch_id, "url": url, "method": method,
+                  "message": body.get("message"), "evidence": dict(evidence), "status": "received", "reply": None,
+                  "created_at": now, "updated_at": now}
+        self.feedback[report["id"]] = report
+        return _json(201, report)
+
+    def answer_feedback(self, feedback_id: str, status: str = "resolved", reply: Optional[str] = None) -> dict:
+        """What FetchX staff do in the admin portal: set a report's status and the reply the caller sees."""
+        report = self.feedback[feedback_id]
+        report.update(status=status, reply=reply, updated_at=_iso(self._tick()))
+        return report
 
     def _status(self) -> dict:
         return {"status": "operational", "updated_at": _iso(self._clock),

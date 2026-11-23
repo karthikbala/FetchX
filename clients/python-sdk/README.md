@@ -93,7 +93,7 @@ for url, result in zip(urls, results):
 
 ## Cost and account
 
-`estimate()` takes a fetch body or a batch body and says what it would cost and take, without sending or reserving anything: `estimate.credits.expected`, `.typical`, `.high`, `estimate.covers_expected`, and per item `basis` and `notes`. `balance()`, `usage(period="day")` and `status()` read the account and the service. `me()` says which project and key are calling (`project_id`, `key_id`, `key_name`, `key_prefix`, `scopes`) and the key's `limits` (credits per day and month with what is used and left, and `expires_at`); any valid key may call it, and `project_id` stays the same when the key is rotated. A request over a key's limit raises `FetchXError` with code `key_limit_reached` (402, not resent).
+`estimate()` takes a fetch body or a batch body and says what it would cost and take, without sending or reserving anything: `estimate.credits.expected`, `.typical`, `.high`, `estimate.covers_expected`, and per item `basis` and `notes`. `balance()`, `usage(period="day")` and `status()` read the account and the service. `me()` says which project and key are calling (`project_id`, `key_id`, `key_name`, `key_prefix`, `scopes`) and the key's `limits` (credits per day and month with what is used and left, and `expires_at`); any valid key may call it, and `project_id` stays the same when the key is rotated. A request over a key's limit raises `FetchXError` with code `key_limit_reached` (402, not resent). `send_feedback(fetch_id=result.id, kind="blocked_via_fetchx_ok_from_home", evidence={...})` reports a page FetchX could not get or got wrong (or `url=` instead of `fetch_id=`); `get_feedback(report)` returns its `status` and staff's `reply`. `FakeFetchX` keeps reports in `fake.feedback`, and `fake.answer_feedback(id, "resolved", "reply")` plays the staff side.
 
 ## Asyncio
 
@@ -155,6 +155,8 @@ assert [r["url"] for r in fake.site_requests] == ["https://shop.example.com/p/1"
 | `GET /v1/usage` | `usage(period=, since=, until=)` |
 | `GET /v1/status` | `status()` |
 | `GET /v1/me` | `me()` |
+| `POST /v1/feedback` | `send_feedback(body, **fields)` |
+| `GET /v1/feedback/{id}` | `get_feedback(id)` |
 
 ## The single-file client
 

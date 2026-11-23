@@ -169,6 +169,14 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   assert.deepEqual(me, {project_id: PROJECT, key_id: null, key_name: null, key_prefix: null, scopes: ['fetch:write', 'fetch:read', 'usage:read'],
     limits: {credits_per_day: null, credits_per_month: null, expires_at: null}});
   await expect('get', '/v1/me', 401, {token: 'wrong'});
+  const report = await expect('post', '/v1/feedback', 201, {body: {fetch_id: failed.id, kind: 'blocked_via_fetchx_ok_from_home',
+    message: 'Loads at home.', evidence: {status_code: 200, client: 'curl from home'}}});
+  await expect('post', '/v1/feedback', 200, {body: {fetch_id: failed.id, kind: 'blocked_via_fetchx_ok_from_home'}});
+  await expect('post', '/v1/feedback', 201, {body: {url: 'https://shop.example.com/x', kind: 'other'}});
+  await expect('post', '/v1/feedback', 400, {body: {url: 'https://shop.example.com/x', kind: 'slow'}});
+  await expect('post', '/v1/feedback', 404, {body: {fetch_id: '00000000-0000-4000-8000-000000000000', kind: 'other'}});
+  await expect('get', `/v1/feedback/${report.id}`, 200, undefined, '/v1/feedback/{id}');
+  await expect('get', '/v1/feedback/00000000-0000-4000-8000-000000000000', 404, undefined, '/v1/feedback/{id}');
 });
 
 test('a 503 unavailable says when to retry', {skip: !databaseUrl}, async t => {

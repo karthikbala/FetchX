@@ -117,6 +117,12 @@ export function registerAdminRoutes(route,{gateway,config,authenticated,body,noQ
   if(!own(key))return gateway.engine.admin('GET','/budgets/'+encodeURIComponent(key)+'/audit');
   return {entries:(await budgetAudit(store.pool,{key,limit:200})).map(budgetEntry)};
  });
+ // ---- Callers' feedback (src/fetch/feedback.mjs): read, set a status and reply ----
+ route('GET','/admin/feedback',async req=>{noQuery(req);await operator(req);return {feedback:await gateway.feedback.list()};});
+ route('PUT','/admin/feedback/:fid',async req=>{
+  noQuery(req);const auth=await operator(req),input=body(req,['status','reply']);
+  return {feedback:await gateway.feedback.review(req.params.fid,input,auth.user.email)};
+ });
  // ---- Status notices (src/status.mjs): incidents and maintenance, shown on the status page ----
  const board=gateway.board;
  const NOTICE_FIELDS=['title','body','impact','components','pause_api','starts_at','ends_at','update'];

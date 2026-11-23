@@ -25,6 +25,8 @@ The contract is [`openapi.json`](openapi.json); `test/api-contract.test.mjs` hol
 | `GET /v1/balance` | `usage:read` | Credits available now, reserved, trial and purchased, and whether a payment hold is on |
 | `GET /v1/usage` | `usage:read` | Balance and usage for a day, a month or a range |
 | `GET /v1/me` | any valid key | The calling project (`project_id`, the same after a key is rotated) and key (`key_id`, `key_name`, `key_prefix`, `scopes`), and the key's `limits` with what it has used |
+| `POST /v1/feedback` | `fetch:write` | Report how FetchX handled a page: `fetch_id` or `url`, `kind`, `message`, `evidence`. 201 new, 200 for the same open report. Free, 100 a day per project |
+| `GET /v1/feedback/{id}` | `fetch:read` | A report's `status` (received, reviewing, resolved, dismissed) and staff's `reply` |
 | `POST /v1/estimate` | `fetch:write` | What a request, or a batch of up to 1,000, would cost and how long it would take. Nothing is sent, reserved or charged |
 | `GET /v1/status` | none | The API's state, components and notices; answers during maintenance and to any origin |
 
@@ -48,6 +50,10 @@ A successful result carries `data.page` (number, `previous_id`, screens scrolled
 ## Key limits
 
 A console key can carry a credit limit per UTC day and per UTC month and an expiry (`control_keys.credit_limit_day`, `credit_limit_month`, `expires_at`; set at creation or with `PUT /control/projects/{id}/keys/{key}/limits`). `src/fetch/key-limits.mjs` (`keyLimitState`) counts a key's spend from `fetch_settlements`: `credits_charged` of settled rows plus `credits_max` of pending ones, by `created_at`, over every key of its `lineage` (a rotated key keeps its predecessor's lineage, limits and expiry, so rotation does not reset them). `FetchFront.#start` reads it inside the project's ledger lock and reserves at most the room left; when that leaves no allowed step, the engine's `budget_too_low` is told back as `402 key_limit_reached` (`#budgetError`, details `limit`, `credits`, `used`, `remaining`, `needed`, `resets_at`). A batch item waits (`credits_busy`) while the key's own requests hold credits; a batch whose key has no room pauses with `paused_reason: key_limit_reached` until `resets_at`, and `POST /v1/batches` refuses a batch when the key has no room for one item. `authenticateKey` answers an expired key with `401 api_key_expired`. Keys from `config.projects` have no limits.
+
+## Feedback
+
+`src/fetch/feedback.mjs` keeps callers' reports in `fetch_feedback`. A report names a request of the project (`fetch_id`) or a `url` and `method`; with `fetch_id` it reads the job from the engine (`404 not_found` when it is not the project's or no longer kept) and stores a copy of what FetchX did (`fetch_record`: status, page_status, error code, challenge vendor and up to 12 attempts with transport, IP class, country, result and status code), so the report outlives the result. An open report (`received` or `reviewing`) of the same kind about the same request, or the same URL and method, is returned instead of a new one (200). A project may send `FEEDBACK_PER_DAY` (100) per UTC day, then `429 too_many_requests` until midnight UTC. Rows are pruned with request metadata (90 days). Operators read them in the admin portal's Feedback tab (`GET /control/admin/feedback`, open reports first, with the project name) and set `status` and `reply` (`PUT /control/admin/feedback/{id}`, recorded as `reviewed_by`); the reply is what `GET /v1/feedback/{id}` shows the caller. Nothing about feedback reaches the engine or changes routing by itself.
 
 ## Network capture
 

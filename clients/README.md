@@ -73,6 +73,8 @@ else:
 | `GET /v1/balance` | `balance()` | `balance()` | `usage:read` |
 | `GET /v1/usage` | `usage(query)` | `usage(...)` | `usage:read` |
 | `GET /v1/me` | `me()` | `me()` | any key |
+| `POST /v1/feedback` | `sendFeedback(input)` | `send_feedback(**input)` | `fetch:write` |
+| `GET /v1/feedback/{id}` | `getFeedback(id)` | `get_feedback(id)` | `fetch:read` |
 | `GET /v1/status` | `status()` | `status()` | none |
 
 ## Python SDK
@@ -135,6 +137,8 @@ Capture adds nothing to the price, but it needs a browser: the request is billed
 ## Who is calling
 
 `me()` returns the project, key id, name, prefix and scopes of the key making the call, and the key's `limits`: the credit limits per day and month set on it in the console (each with `limit`, `used`, `remaining` and `resets_at`, or `null`) and `expires_at`. Any valid key may call it. `project_id` stays the same when a key is rotated, so a tool can recognise the customer by it. A request over a key's limit is refused with `key_limit_reached` (402), naming the limit and when it resets; an expired key gets `api_key_expired` (401).
+
+`sendFeedback({fetch_id, kind, message, evidence})` tells FetchX about a page it could not get or got wrong (`kind`: `blocked_via_fetchx_ok_from_home`, `wrong_content`, `extract_wrong` or `other`); give `url` (and `method`) instead of `fetch_id` when there is no request to name. `evidence` is what worked elsewhere: `status_code`, `final_url`, `content_type`, `body_excerpt`, `client`. It is free; the same open report sent again comes back unchanged. `getFeedback(id)` shows its `status` and staff's `reply`.
 
 ## Outcomes, errors and retries
 

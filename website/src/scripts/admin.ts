@@ -328,6 +328,67 @@ async function forgetSite(host: string) {
   await run(async () => { await api(`/admin/sites/${encodeURIComponent(host)}`, { method: 'DELETE' }); toast(`Forgot ${host}.`); $('[data-site-detail]')!.hidden = true; await loadSites(); });
 }
 
+// ---- Callers' feedback ----
+const KIND_NAMES: Record<string, string> = { blocked_via_fetchx_ok_from_home: 'Blocked via FetchX, fine from their connection', wrong_content: 'Wrong content',
+  extract_wrong: 'Extraction wrong', other: 'Other' };
+const OPEN_FEEDBACK = ['received', 'reviewing'];
+let feedback: Json[] = [];
+let reviewing: Json | null = null;
+const feedbackTag = (status: string) => tag(status, status === 'resolved' ? 'is-ok' : status === 'reviewing' ? 'is-warn' : status === 'received' ? 'is-off' : '');
+function fetchSummary(report: Json) {
+  const run = report.fetch;
+  if (!run) return el('span', { text: report.fetch_id ? 'not recorded' : 'no request named' });
+  const attempts = (run.attempts ?? []) as Json[], results = [...new Set(attempts.map(attempt => attempt.result).filter(Boolean))];
+  return el('div', {}, el('span', { text: [run.status, run.error_code, run.challenge].filter(Boolean).join(' · ') || '—' }),
+    el('small', { text: `${attempts.length} attempt${attempts.length === 1 ? '' : 's'}${results.length ? ': ' + results.join(', ') : ''}` }));
+}
+function seenSummary(report: Json) {
+  const evidence = report.evidence ?? {};
+  return el('div', {}, el('span', { text: evidence.status_code ? `HTTP ${evidence.status_code}` : '—' }), evidence.client ? el('small', { text: evidence.client }) : null);
+}
+function renderFeedback() {
+  const status = $<HTMLSelectElement>('[data-feedback-status]')!.value, host = $<HTMLInputElement>('[data-feedback-host]')!.value.trim().toLowerCase();
+  const rows = feedback.filter(report => (status === 'open' ? OPEN_FEEDBACK.includes(report.status) : !status || report.status === status)
+    && (!host || String(report.host).includes(host)));
+  $('[data-feedback-count]')!.textContent = `${rows.length} of ${feedback.length}`;
+  $('[data-feedback-body]')!.replaceChildren(...(rows.length ? rows.map(report => el('tr', {},
+    cell(el('div', {}, el('span', { text: when(report.created_at) }), el('small', { text: report.project_name ?? report.project }))),
+    cell(el('div', {}, el('strong', { text: report.host }), el('small', { text: `${report.method ?? ''} ${report.url}`.trim() }))),
+    cell(KIND_NAMES[report.kind] ?? report.kind), cell(fetchSummary(report)), cell(seenSummary(report)), cell(feedbackTag(report.status)),
+    cell(el('button', { type: 'button', text: 'Review', onclick: () => reviewFeedback(report) }))))
+    : [el('tr', {}, el('td', { colspan: '7', text: feedback.length ? 'No reports match these filters.' : 'No reports yet.' }))]));
+}
+async function loadFeedback() { ({ feedback } = await api('/admin/feedback') as { feedback: Json[] }); renderFeedback(); }
+function reviewFeedback(report: Json) {
+  reviewing = report;
+  const form = $<HTMLFormElement>('[data-feedback-form]')!, evidence = report.evidence ?? {};
+  $('[data-feedback-title]')!.textContent = `${KIND_NAMES[report.kind] ?? report.kind} · ${report.host}`;
+  const rows: [string, string | null | undefined][] = [['Page', `${report.method ?? ''} ${report.url}`.trim()], ['Project', `${report.project_name ?? '—'} (${report.project})`],
+    ['Key', report.key_id], ['Request', report.fetch_id], ['Sent', when(report.created_at)], ['Message', report.message],
+    ['They saw', [evidence.status_code ? `HTTP ${evidence.status_code}` : null, evidence.content_type, evidence.final_url].filter(Boolean).join(' · ') || null],
+    ['From', evidence.client], ['FetchX', report.fetch ? [report.fetch.status, report.fetch.page_status, report.fetch.error_code, report.fetch.challenge].filter(Boolean).join(' · ') : null],
+    ['Reviewed by', report.reviewed_by ? `${report.reviewed_by}, ${when(report.updated_at)}` : null]];
+  $('[data-feedback-summary]')!.replaceChildren(...rows.filter(([, value]) => value).flatMap(([name, value]) => [el('dt', { text: name }), el('dd', { text: value })]));
+  const excerpt = $('[data-feedback-excerpt]')!; excerpt.textContent = evidence.body_excerpt ?? ''; excerpt.hidden = !evidence.body_excerpt;
+  const attempts = (report.fetch?.attempts ?? []) as Json[];
+  $('[data-feedback-attempts-box]')!.hidden = !attempts.length;
+  $('[data-feedback-attempts]')!.replaceChildren(...attempts.map((attempt, index) => el('tr', {}, cell(String(index + 1)), cell(attempt.transport ?? '—'),
+    cell(attempt.class ?? '—'), cell(attempt.country ?? '—'), cell(tag(attempt.result ?? '—', attempt.result === 'success' ? 'is-ok' : 'is-off')),
+    cell(attempt.code ?? '—'), cell(attempt.challenge ?? '—'), cell(attempt.status_code ? String(attempt.status_code) : '—'))));
+  (form.elements.namedItem('status') as HTMLSelectElement).value = report.status;
+  (form.elements.namedItem('reply') as HTMLTextAreaElement).value = report.reply ?? '';
+  form.hidden = false; form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function closeFeedback() { reviewing = null; $<HTMLFormElement>('[data-feedback-form]')!.hidden = true; }
+async function submitFeedback(event: SubmitEvent) {
+  event.preventDefault(); if (!reviewing) return;
+  const form = event.currentTarget as HTMLFormElement, data = new FormData(form), id = reviewing.id, reply = String(data.get('reply') ?? '').trim();
+  await run(async () => {
+    await api(`/admin/feedback/${id}`, { method: 'PUT', body: { status: String(data.get('status')), reply: reply || null } });
+    toast('Report saved.'); closeFeedback(); await loadFeedback();
+  });
+}
+
 // ---- Status notices ----
 const COMPONENT_NAMES: Record<string, string> = { api: 'API', fetching: 'Fetching', console: 'Console and billing' };
 const localInput = (value?: string | null) => {
@@ -429,7 +490,7 @@ async function resolveNotice(notice: Json) {
 }
 
 // ---- Tabs and boot ----
-const loaders: Record<string, () => Promise<void>> = { rules: loadRules, budgets: loadBudgets, probes: loadProbes, sites: loadSites, status: loadNotices, audit: loadAudit };
+const loaders: Record<string, () => Promise<void>> = { rules: loadRules, budgets: loadBudgets, probes: loadProbes, sites: loadSites, feedback: loadFeedback, status: loadNotices, audit: loadAudit };
 function selectTab(name: string) {
   for (const tab of $$('[data-tab]')) tab.setAttribute('aria-selected', String(tab.dataset.tab === name));
   for (const panel of $$('[data-panel]')) panel.hidden = panel.dataset.panel !== name;
@@ -458,6 +519,14 @@ async function boot() {
   $('[data-apply-form]')!.addEventListener('submit', event => void submitApply(event as SubmitEvent));
   $('[data-budget-form]')!.addEventListener('submit', event => void submitBudget(event as SubmitEvent));
   $('[data-budget-cancel]')!.addEventListener('click', () => { $('[data-budget-form]')!.hidden = true; });
+  $('[data-feedback-form]')!.addEventListener('submit', event => void submitFeedback(event as SubmitEvent));
+  $('[data-feedback-close]')!.addEventListener('click', closeFeedback);
+  $('[data-feedback-site]')!.addEventListener('click', () => {
+    const host = reviewing?.host; if (!host) return;
+    selectTab('sites'); void run(async () => { await loadSites(); await showSite(host); });
+  });
+  $('[data-feedback-status]')!.addEventListener('change', renderFeedback);
+  $('[data-feedback-host]')!.addEventListener('input', renderFeedback);
   $('[data-notice-form]')!.addEventListener('submit', event => void submitNotice(event as SubmitEvent));
   $('[data-notice-cancel]')!.addEventListener('click', resetNoticeForm);
   $('[data-notice-kind]')!.addEventListener('change', syncNoticeKind);

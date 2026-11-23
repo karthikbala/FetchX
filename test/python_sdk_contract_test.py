@@ -184,6 +184,14 @@ def scenario(fake):
         f"{SHOP}/api/items?page=1", "https://cdn.example.net/api/stock"]
     me = client.me()
     assert me.key_prefix == "fxk_fake" and "fetch:read" in me.scopes and me.limits["credits_per_day"] is None, me.raw
+    report = client.send_feedback(fetch_id=first.id, kind="blocked_via_fetchx_ok_from_home", message="Loads at home.",
+                                  evidence={"status_code": 200, "client": "curl from a home connection"})
+    assert report.status == "received" and report.open and report.url == f"{SHOP}/p/1" and report.fetch_id == first.id, report.raw
+    assert client.send_feedback(fetch_id=first.id, kind="blocked_via_fetchx_ok_from_home").id == report.id
+    assert client.send_feedback({"url": f"{SHOP}/p/9", "kind": "other"}).raw["method"] == "GET"
+    fake.answer_feedback(report.id, "resolved", "Fixed.")
+    answered = client.get_feedback(report)
+    assert (answered.status, answered.reply, answered.open) == ("resolved", "Fixed.", False), answered.raw
     for bad in (lambda: client.fetch(url="ftp://shop.example.com/"),
                 lambda: client.fetch(url=f"{SHOP}/dear", max_credits=5),
                 lambda: client.fetch(url=f"{SHOP}/p/2", idempotency_key=first.idempotency_key),
@@ -197,7 +205,11 @@ def scenario(fake):
                 lambda: client.network_body(first, 1),
                 lambda: client.network(captured, status="ok"),
                 lambda: client.network_call(captured, 9),
-                lambda: client.network_body(captured, 4)):
+                lambda: client.network_body(captured, 4),
+                lambda: client.send_feedback(url="ftp://shop.example.com/", kind="other"),
+                lambda: client.send_feedback(fetch_id=first.id, url=f"{SHOP}/p/1", kind="other"),
+                lambda: client.send_feedback(fetch_id="00000000-0000-4000-8000-000000000002", kind="other"),
+                lambda: client.get_feedback("00000000-0000-4000-8000-000000000003")):
         try:
             bad()
         except FetchXError:

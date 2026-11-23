@@ -22,7 +22,7 @@ import httpx
 
 from ._version import __version__
 from .errors import FetchXError, SpendLimitReached
-from .models import (Balance, Batch, BatchItem, CallEvent, Content, Estimate, FetchResult, FetchSummary, ListPage, Me,
+from .models import (Balance, Batch, BatchItem, CallEvent, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Me,
                      NetworkCall, NetworkPage, ServiceStatus, Usage)
 
 log = logging.getLogger("fetchx")
@@ -74,7 +74,7 @@ def site_of(url: Optional[str]) -> Optional[str]:
 
 
 def _path_id(value: Any) -> str:
-    text = value.id if isinstance(value, (FetchResult, Batch)) else str(value or "")
+    text = value.id if isinstance(value, (FetchResult, Batch, Feedback)) else str(value or "")
     if not text:
         raise FetchXError("invalid_request", "an id is required", details={"field": "id"})
     return quote(text, safe="")
@@ -741,6 +741,17 @@ class _Core:
 
     def _plan_me(self) -> Plan:
         return self._plan_get_model("me", "/v1/me", Me)
+
+    def _plan_send_feedback(self, body: Optional[Mapping], fields: Mapping) -> Plan:
+        request = _merge(body, fields)
+        call = _Call("send_feedback", request.get("url"))
+
+        def flow() -> Flow:
+            return Feedback((yield from self._send(call, "POST", "/v1/feedback", json=request)))
+        return call, flow(), None
+
+    def _plan_get_feedback(self, feedback_id: Any) -> Plan:
+        return self._plan_get_model("get_feedback", f"/v1/feedback/{_path_id(feedback_id)}", Feedback)
 
     def _plan_balance(self) -> Plan:
         return self._plan_get_model("balance", "/v1/balance", Balance)

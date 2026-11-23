@@ -2,8 +2,8 @@
  "openapi": "3.1.0",
  "info": {
   "title": "FetchX API",
-  "version": "1.8.0",
-  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. A browser request with capture records the page's own network calls, read with GET /v1/fetch/{id}/network or as a HAR file. GET /v1/me says which project and key are calling, and the key's own credit limits per day and month and expiry, set in the console. GET /v1/status needs no key.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
+  "version": "1.9.0",
+  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. A browser request with capture records the page's own network calls, read with GET /v1/fetch/{id}/network or as a HAR file. GET /v1/me says which project and key are calling, and the key's own credit limits per day and month and expiry, set in the console. POST /v1/feedback tells FetchX how it handled a page, for example blocked through FetchX but fine from your own connection, so routes can be tuned with real cases. GET /v1/status needs no key.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
  },
  "servers": [
   {
@@ -33,6 +33,10 @@
   {
    "name": "Usage",
    "description": "Credits and usage."
+  },
+  {
+   "name": "Feedback",
+   "description": "Tell FetchX how it handled a page, and read staff's reply."
   },
   {
    "name": "Service",
@@ -4667,6 +4671,426 @@
      }
     }
    }
+  },
+  "/v1/feedback": {
+   "post": {
+    "operationId": "sendFeedback",
+    "tags": [
+     "Feedback"
+    ],
+    "summary": "Report how FetchX handled a page",
+    "description": "Tell FetchX about a page it could not get, or got wrong: name the request (fetch_id) or the URL, say what you saw (kind), and add evidence from where it worked if you have it. FetchX staff review reports to tune routes; GET /v1/feedback/{id} shows the status and their reply. An open report of the same kind about the same request (or URL and method) is returned instead of a new one (200). Free; up to 100 reports a day per project; kept 90 days.",
+    "x-scope": "fetch:write",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FeedbackRequest"
+       },
+       "examples": {
+        "request": {
+         "value": {
+          "fetch_id": "7d1e9a52-3c4b-4f6e-8a2d-9b0c1e2f3a4b",
+          "kind": "blocked_via_fetchx_ok_from_home",
+          "message": "Loads from my laptop on a home connection.",
+          "evidence": {
+           "status_code": 200,
+           "content_type": "text/html",
+           "body_excerpt": "<title>Lamps | Shop</title>",
+           "client": "curl 8.5, home connection in DE"
+          }
+         }
+        },
+        "url": {
+         "value": {
+          "url": "https://shop.example.com/search?q=lamps",
+          "kind": "other",
+          "message": "Takes a minute every time."
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "The report was received.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Feedback"
+        },
+        "examples": {
+         "received": {
+          "value": {
+           "id": "5f0c2d9e-8b1a-4c3e-9f7d-2a6b8c4d1e0f",
+           "kind": "blocked_via_fetchx_ok_from_home",
+           "fetch_id": "7d1e9a52-3c4b-4f6e-8a2d-9b0c1e2f3a4b",
+           "url": "https://shop.example.com/search?q=lamps",
+           "method": null,
+           "message": "Loads from my laptop on a home connection.",
+           "evidence": {
+            "status_code": 200,
+            "content_type": "text/html",
+            "body_excerpt": "<title>Lamps | Shop</title>",
+            "client": "curl 8.5, home connection in DE"
+           },
+           "status": "received",
+           "reply": null,
+           "created_at": "2026-11-23T09:00:00.000Z",
+           "updated_at": "2026-11-23T09:00:00.000Z"
+          }
+         }
+        }
+       }
+      }
+     },
+     "200": {
+      "description": "The same report is already open; this is it.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Feedback"
+        },
+        "examples": {
+         "open": {
+          "value": {
+           "id": "5f0c2d9e-8b1a-4c3e-9f7d-2a6b8c4d1e0f",
+           "kind": "blocked_via_fetchx_ok_from_home",
+           "fetch_id": "7d1e9a52-3c4b-4f6e-8a2d-9b0c1e2f3a4b",
+           "url": "https://shop.example.com/search?q=lamps",
+           "method": null,
+           "message": "Loads from my laptop on a home connection.",
+           "evidence": {
+            "status_code": 200,
+            "content_type": "text/html",
+            "body_excerpt": "<title>Lamps | Shop</title>",
+            "client": "curl 8.5, home connection in DE"
+           },
+           "status": "received",
+           "reply": null,
+           "created_at": "2026-11-23T09:00:00.000Z",
+           "updated_at": "2026-11-23T09:00:00.000Z"
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "A field is missing or wrong; error.details.field names it.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "kind",
+             "reason": "one of blocked_via_fetchx_ok_from_home, wrong_content, extract_wrong, other"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "fetch_id is not a request of this project, or it is no longer kept (90 days).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "error": {
+            "code": "not_found",
+            "message": "Nothing with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "429": {
+      "description": "The project sent 100 reports today (UTC). Wait `retry_after_seconds`, until midnight UTC.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "too_many_requests": {
+          "value": {
+           "error": {
+            "code": "too_many_requests",
+            "message": "The project has too many requests running; wait and retry.",
+            "details": {
+             "limit": 100,
+             "period": "day",
+             "retry_after_seconds": 3600
+            },
+            "retry_after_seconds": 3600
+           }
+          }
+         }
+        }
+       }
+      },
+      "headers": {
+       "Retry-After": {
+        "description": "Seconds until the cap resets.",
+        "schema": {
+         "type": "integer"
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/feedback/{id}": {
+   "get": {
+    "operationId": "getFeedback",
+    "tags": [
+     "Feedback"
+    ],
+    "summary": "Read a report",
+    "description": "Where a report stands and FetchX staff's reply.",
+    "x-scope": "fetch:read",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The report id.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The report.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Feedback"
+        },
+        "examples": {
+         "answered": {
+          "value": {
+           "id": "5f0c2d9e-8b1a-4c3e-9f7d-2a6b8c4d1e0f",
+           "kind": "blocked_via_fetchx_ok_from_home",
+           "fetch_id": "7d1e9a52-3c4b-4f6e-8a2d-9b0c1e2f3a4b",
+           "url": "https://shop.example.com/search?q=lamps",
+           "method": null,
+           "message": "Loads from my laptop on a home connection.",
+           "evidence": {
+            "status_code": 200,
+            "content_type": "text/html",
+            "body_excerpt": "<title>Lamps | Shop</title>",
+            "client": "curl 8.5, home connection in DE"
+           },
+           "status": "resolved",
+           "reply": "Fixed: FetchX now tries residential IPs in DE first for this site.",
+           "created_at": "2026-11-23T09:00:00.000Z",
+           "updated_at": "2026-11-24T10:30:00.000Z"
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No report with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "error": {
+            "code": "not_found",
+            "message": "Nothing with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
   }
  },
  "webhooks": {
@@ -8019,6 +8443,202 @@
       "type": "string",
       "format": "date-time",
       "description": "When the period ends: the next midnight UTC, or the first of next month UTC."
+     }
+    }
+   },
+   "FeedbackRequest": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "kind"
+    ],
+    "description": "A report about one request: give fetch_id (one of your requests, kept 90 days) or url, not both.",
+    "properties": {
+     "fetch_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The request the report is about. FetchX keeps a copy of what it did with it, so the report stays useful after the result expires."
+     },
+     "url": {
+      "type": "string",
+      "maxLength": 2048,
+      "description": "The page, when there is no request to name: an http or https URL."
+     },
+     "method": {
+      "type": "string",
+      "enum": [
+       "GET",
+       "HEAD",
+       "POST",
+       "PUT",
+       "PATCH",
+       "DELETE",
+       "OPTIONS"
+      ],
+      "default": "GET",
+      "description": "With url only."
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "blocked_via_fetchx_ok_from_home",
+       "wrong_content",
+       "extract_wrong",
+       "other"
+      ],
+      "description": "What you saw. blocked_via_fetchx_ok_from_home: the request failed or was walled through FetchX and works from your own connection. wrong_content: FetchX returned a page that is not the one you see (a different, empty or challenge page). extract_wrong: extract returned wrong or missing fields. other: anything else; say what in message."
+     },
+     "message": {
+      "type": "string",
+      "maxLength": 2000,
+      "description": "What happened, in your words."
+     },
+     "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional: what the request returned where it worked. Leave out secrets and personal data; FetchX staff read it.",
+      "properties": {
+       "status_code": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 599,
+        "description": "The HTTP status you got."
+       },
+       "final_url": {
+        "type": "string",
+        "maxLength": 2048,
+        "description": "The URL after redirects."
+       },
+       "content_type": {
+        "type": "string",
+        "maxLength": 200
+       },
+       "body_excerpt": {
+        "type": "string",
+        "maxLength": 4000,
+        "description": "A short part of the body you got, such as the title or the data you expected."
+       },
+       "client": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "Where and how it worked, for example \"curl 8.5 from a home connection in DE\"."
+       }
+      }
+     }
+    }
+   },
+   "Feedback": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "kind",
+     "fetch_id",
+     "url",
+     "method",
+     "message",
+     "evidence",
+     "status",
+     "reply",
+     "created_at",
+     "updated_at"
+    ],
+    "description": "A report and where it stands.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "blocked_via_fetchx_ok_from_home",
+       "wrong_content",
+       "extract_wrong",
+       "other"
+      ],
+      "description": "What you saw. blocked_via_fetchx_ok_from_home: the request failed or was walled through FetchX and works from your own connection. wrong_content: FetchX returned a page that is not the one you see (a different, empty or challenge page). extract_wrong: extract returned wrong or missing fields. other: anything else; say what in message."
+     },
+     "fetch_id": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "uuid"
+     },
+     "url": {
+      "type": "string",
+      "description": "The page: the request's URL when the report names fetch_id."
+     },
+     "method": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "The method; null for a report that names fetch_id."
+     },
+     "message": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional: what the request returned where it worked. Leave out secrets and personal data; FetchX staff read it.",
+      "properties": {
+       "status_code": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 599,
+        "description": "The HTTP status you got."
+       },
+       "final_url": {
+        "type": "string",
+        "maxLength": 2048,
+        "description": "The URL after redirects."
+       },
+       "content_type": {
+        "type": "string",
+        "maxLength": 200
+       },
+       "body_excerpt": {
+        "type": "string",
+        "maxLength": 4000,
+        "description": "A short part of the body you got, such as the title or the data you expected."
+       },
+       "client": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "Where and how it worked, for example \"curl 8.5 from a home connection in DE\"."
+       }
+      }
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "received",
+       "reviewing",
+       "resolved",
+       "dismissed"
+      ],
+      "description": "received: not looked at yet. reviewing: FetchX staff are on it. resolved: changed or explained (see reply). dismissed: nothing to change (see reply)."
+     },
+     "reply": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "FetchX staff's answer, when there is one."
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "updated_at": {
+      "type": "string",
+      "format": "date-time"
      }
     }
    }
