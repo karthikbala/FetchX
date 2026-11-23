@@ -2828,6 +2828,24 @@
             ],
             "description": "A bot check on the page itself: whether it cleared by itself before any captcha was solved."
           },
+          "client_profile": {
+            "type": "string",
+            "enum": ["node", "chrome136", "camoufox"],
+            "description": "The client the site saw: FetchX's own HTTP client (node), Chrome's TLS and HTTP/2 on a handoff (chrome136), or the Camoufox browser (camoufox)."
+          },
+          "handoff": {
+            "type": "boolean",
+            "description": "An HTTP step on a residential session a browser got through for this project and host earlier (the handoff): same exit IP, the cookies that browser earned and its User-Agent, sent with Chrome's TLS. Only for requests that need no browser and bring no cookie or Authorization of their own: data (not GET or HEAD, or an Accept that is not HTML) or render: never."
+          },
+          "ips_skipped": {
+            "type": "integer",
+            "description": "A residential browser step: fresh draws passed over before the browser opened, because the host had walled their exit IP in the last day."
+          },
+          "warm": {
+            "type": "string",
+            "enum": ["kept", "reused"],
+            "description": "A residential browser step's warm session: kept, the browser that got the session through stays open for the session's next page in this project; reused, the page was read in that open browser (same cookies and exit IP), with no warm-up."
+          },
           "content": {
             "type": "string",
             "enum": [
@@ -2902,7 +2920,7 @@
           },
           "reason": {
             "type": "string",
-            "description": "For example excluded_by_provider_rule, over_max_credits or cooling."
+            "description": "For example excluded_by_provider_rule, over_max_credits, cooling or handoff_unavailable (the handoff's session was taken by a browser meanwhile)."
           }
         }
       },
