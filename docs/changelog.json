@@ -29,6 +29,10 @@
         {
           "type": "added",
           "text": "The JavaScript Connect helper takes limits (CLI: --credits-per-day, --credits-per-month, --expires-in-days), prints the link that carries the code, and returns the key's limits."
+        },
+        {
+          "type": "added",
+          "text": "The Python SDK (0.2.0) has Connect: connect(), or connect_start() and connect_finish() for agents whose tool calls must return quickly, and python -m fetchx connect. It keeps the key in an owner-only ~/.config/fetchx/credentials file (XDG_CONFIG_HOME and %APPDATA% respected), which FetchX() reads when FETCHX_TOKEN is not set."
         }
       ]
     },

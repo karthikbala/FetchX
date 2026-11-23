@@ -28,6 +28,8 @@ const fetchx = new FetchXClient({url: apiBaseUrl, token});
 console.log((await fetchx.balance()).credits);
 ```
 
+In Python, the SDK has the same flow: `fetchx.connect(client_name=..., limits=..., save=True)`, or `connect_start()` and `connect_finish()` for agents whose tool calls must return quickly, or `python -m fetchx connect` from a shell. It keeps the key in an owner-only `~/.config/fetchx/credentials` file that `FetchX()` reads when `FETCHX_TOKEN` is not set (see [the SDK guide](python-sdk/README.md#getting-a-key-with-connect)).
+
 The hosted helper is published as [connect-client.mjs](https://fetchx.ai/connect-client.mjs). For a self-hosted deployment, pass `--origin` (helper option `origin`) and, if the API uses another origin, `--api-origin` (`apiOrigin`). If Connect is not available, make a key in the console and set `FETCHX_TOKEN` and `FETCHX_URL` through your runtime's secret settings.
 
 ## JavaScript and Python
