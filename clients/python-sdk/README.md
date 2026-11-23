@@ -1,6 +1,6 @@
 # FetchX Python SDK
 
-A Python package for the [FetchX API](../../docs/openapi.json), with a synchronous and an asyncio client, typed results, and an in-memory FetchX for tests. It follows FetchX's rules for you: it waits through 202s, resends safely with the same idempotency key, caps what you spend, and sends one request at a time to each site. It needs Python 3.9 or newer and `httpx`.
+A Python package for the [FetchX API](https://github.com/karthikbala/FetchX/blob/main/docs/openapi.json), with a synchronous and an asyncio client, typed results, and an in-memory FetchX for tests. It follows FetchX's rules for you: it waits through 202s, resends safely with the same idempotency key, caps what you spend, and sends one request at a time to each site. It needs Python 3.9 or newer and `httpx`.
 
 ```sh
 pip install "fetchx-sdk @ git+https://github.com/karthikbala/FetchX#subdirectory=clients/python-sdk"
@@ -17,7 +17,7 @@ else:
     print(result.error_code, result.next_action, result.retry_with_new_key)
 ```
 
-`FetchX(base_url, token)` takes them directly too. `FETCHX_API_KEY` works in place of `FETCHX_TOKEN`, and `node clients/connect.mjs -- python my_crawler.py` sets both variables after a user approves a project (see [the clients guide](../README.md)). With neither set, `FetchX()` uses the key Connect saved (below).
+`FetchX(base_url, token)` takes them directly too. `FETCHX_API_KEY` works in place of `FETCHX_TOKEN`, and `node clients/connect.mjs -- python my_crawler.py` sets both variables after a user approves a project (see [the clients guide](https://github.com/karthikbala/FetchX/blob/main/clients/README.md)). With neither set, `FetchX()` uses the key Connect saved (below).
 
 ## Getting a key with Connect
 
@@ -47,7 +47,7 @@ From a shell, `python -m fetchx connect --credits-per-day 500` (or `fetchx-conne
 
 **Where the key is kept.** `save=True` writes `~/.config/fetchx/credentials` (`$XDG_CONFIG_HOME/fetchx/credentials` when that is set, `%APPDATA%\fetchx\credentials` on Windows, or the path in `FETCHX_CREDENTIALS_FILE`). The folder is owner-only (0700) and the file too (0600), and the SDK refuses a credentials file that other users can read. The file is JSON: `token`, `api_base_url`, `project_id`, `key_id`, `client_name` and `limits`. `FETCHX_TOKEN` (or `FETCHX_API_KEY`) wins over the file. `load_credentials()`, `save_credentials()` and `forget_credentials()` read, write and delete it; revoke the key in the console too. Keep the key out of project folders and crawler code, and don't keep the device code once connected: it works out the same key. When the key is revoked or expires, FetchX answers 401 (`unauthorized` or `api_key_expired`): connect again then.
 
-A failed Connect raises `ConnectError` (a `FetchXError`) with `code` `connect_denied`, `connect_expired`, `connect_timeout`, `connect_rate_limited`, `connect_unavailable`, `connect_invalid_limits` or `connect_network_error`. The Node.js helper `clients/connect.mjs` speaks the same protocol (see [the clients guide](../README.md)).
+A failed Connect raises `ConnectError` (a `FetchXError`) with `code` `connect_denied`, `connect_expired`, `connect_timeout`, `connect_rate_limited`, `connect_unavailable`, `connect_invalid_limits` or `connect_network_error`. The Node.js helper `clients/connect.mjs` speaks the same protocol (see [the clients guide](https://github.com/karthikbala/FetchX/blob/main/clients/README.md)).
 
 ## Requests and results
 
@@ -191,7 +191,7 @@ assert [r["url"] for r in fake.site_requests] == ["https://shop.example.com/p/1"
 
 ## The single-file client
 
-[`clients/python.py`](../python.py) stays as it is: one file to copy, returning the API's JSON as dicts, as used in the website's examples. This package is for applications and crawlers that want the rules above handled. Its results read like those dicts (`result["status"]`, `content["body"]`), and the method names match where the endpoints are the same.
+[`clients/python.py`](https://github.com/karthikbala/FetchX/blob/main/clients/python.py) stays as it is: one file to copy, returning the API's JSON as dicts, as used in the website's examples. This package is for applications and crawlers that want the rules above handled. Its results read like those dicts (`result["status"]`, `content["body"]`), and the method names match where the endpoints are the same.
 
 ## Developing
 

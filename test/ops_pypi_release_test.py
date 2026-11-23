@@ -1,0 +1,53 @@
+"""The PyPI release script's checks on the package's own files (no build, no network)."""
+import importlib.util
+import shutil
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "clients" / "python-sdk" / "src"))
+spec = importlib.util.spec_from_file_location("release_python_sdk", ROOT / "ops" / "pypi" / "release_python_sdk.py")
+release = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(release)
+
+
+class ReleaseCheckTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder)
+        self.sdk = Path(folder) / "python-sdk"
+        shutil.copytree(ROOT / "clients" / "python-sdk", self.sdk,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.egg-info", "build", "dist"))
+
+    def edit(self, name, old, new):
+        path = self.sdk / name
+        text = path.read_text()
+        self.assertIn(old, text)
+        path.write_text(text.replace(old, new))
+
+    def test_reads_the_version_the_package_will_have(self):
+        from fetchx import __version__
+        self.assertEqual(release.sdk_version(self.sdk), __version__)
+        self.edit("src/fetchx/_version.py", __version__, "0.2")
+        with self.assertRaises(release.ReleaseError):
+            release.sdk_version(self.sdk)
+
+    def test_a_release_needs_a_license_the_pypi_install_line_and_absolute_links(self):
+        problems = release.source_problems(self.sdk)
+        self.assertTrue(any("no license" in problem for problem in problems), problems)
+        self.edit("pyproject.toml", 'name = "fetchx-sdk"', 'name = "fetchx-sdk"\nlicense = "MIT"')
+        self.assertTrue(any("no LICENSE file" in problem for problem in release.source_problems(self.sdk)))
+        (self.sdk / "LICENSE").write_text("MIT License\n")
+        readme = (self.sdk / "README.md").read_text()
+        start = readme.index('pip install "fetchx-sdk @ git+https://')
+        end = readme.index("\n", start)
+        (self.sdk / "README.md").write_text(readme[:start] + release.INSTALL_LINE + readme[end:])
+        self.assertEqual(release.source_problems(self.sdk), [])
+        self.edit("README.md", "](https://github.com/karthikbala/FetchX/blob/main/clients/python.py)", "](../python.py)")
+        self.assertEqual(release.source_problems(self.sdk), ["README.md has relative links, which break on PyPI"])
+
+
+if __name__ == "__main__":
+    unittest.main()
