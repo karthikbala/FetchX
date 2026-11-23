@@ -13,6 +13,12 @@ export type EstimateRequest = Schemas['EstimateRequest'];
 export type Estimate = Schemas['Estimate'];
 export type ServiceStatus = Schemas['ServiceStatus'];
 export type Attempt = Schemas['Attempt'];
+export type CaptureSettings = Schemas['CaptureSettings'];
+export type NetworkSummary = Schemas['NetworkSummary'];
+export type NetworkList = Schemas['NetworkList'];
+export type NetworkCallRow = Schemas['NetworkCallRow'];
+export type NetworkCall = Schemas['NetworkCall'];
+export type Me = Schemas['Me'];
 // The batch owns async, webhook_url and idempotency_key; the API refuses them on items and defaults.
 type BatchOwned = 'async' | 'webhook_url' | 'idempotency_key';
 export type BatchItemRequest = Omit<FetchRequest, BatchOwned>;
@@ -78,6 +84,20 @@ export interface BatchItemsQuery {
   cursor?: string;
 }
 
+export interface NetworkQuery {
+  type?: 'document' | 'xhr' | 'fetch' | 'script' | 'eventsource' | 'other';
+  content_type?: string;
+  host?: string;
+  first_party?: boolean;
+  status?: string | number;
+  page?: number;
+  phase?: 'warmup' | 'load' | 'scroll' | 'replay';
+  /** Values the response body holds, compared without case: one or up to 5. */
+  contains?: string | string[];
+  limit?: number;
+  cursor?: string;
+}
+
 export interface UsageQuery {
   period?: 'day' | 'month';
   since?: string;
@@ -100,6 +120,12 @@ export class FetchXClient {
   content(id: string): Promise<Download>;
   screenshot(id: string): Promise<Download>;
   delete(id: string): Promise<void>;
+  /** The calls a request made with capture recorded, filtered; contains finds the call that carries the data. */
+  network(id: string, query?: NetworkQuery): Promise<NetworkList>;
+  networkCall(id: string, index: number | string): Promise<NetworkCall>;
+  networkBody(id: string, index: number | string): Promise<Download>;
+  /** The capture as a HAR 1.2 document, for browser developer tools. */
+  networkHar(id: string, options?: {page?: number}): Promise<{log: Record<string, unknown>}>;
   /** Many URLs in one job, run at each site's pace; resolves with the batch at once. */
   submitBatch(input: BatchRequest): Promise<Batch>;
   getBatch(id: string): Promise<Batch>;
@@ -113,5 +139,7 @@ export class FetchXClient {
   /** Service status and notices. */
   status(): Promise<ServiceStatus>;
   balance(): Promise<Balance>;
+  /** The project and key making the call, and the key's scopes. Any valid key may call it. */
+  me(): Promise<Me>;
   usage(query?: UsageQuery): Promise<Usage>;
 }

@@ -103,7 +103,8 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await fx.usage()).credits_used, 4)
         self.assertEqual((await fx.estimate(url=f"{SHOP}/p/1")).credits.typical, 2)
         self.assertTrue((await fx.status()).operational)
-        self.assertEqual(events, ["fetch", "fetch", "fetch", "balance", "usage", "estimate", "status"])
+        self.assertEqual((await fx.me()).scopes, ["fetch:write", "fetch:read", "usage:read"])
+        self.assertEqual(events, ["fetch", "fetch", "fetch", "balance", "usage", "estimate", "status", "me"])
 
     async def test_reads_content_lists_and_waits(self):
         fake = fake_sites(pending_polls=4)
@@ -122,6 +123,12 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(FetchXError) as caught:
             await fx.screenshot(fetch_id)
         self.assertEqual(caught.exception.status, 410)
+        fake.pending_polls = 0
+        captured = await fx.fetch(url=f"{SHOP}/p/2", capture=True)
+        self.assertEqual([row["type"] for row in await fx.network(captured)], ["document"])
+        self.assertEqual((await fx.network_call(captured, 1)).body, "<html>shop 2</html>")
+        self.assertEqual((await fx.network_body(captured, 1)).text, "<html>shop 2</html>")
+        self.assertEqual(len((await fx.network_har(captured))["log"]["entries"]), 1)
         await fx.aclose()
 
 

@@ -127,6 +127,28 @@ export class FetchXClient {
   // DELETE /v1/fetch/{id}
   async delete(id) { await this.#send('DELETE', `/v1/fetch/${encodeURIComponent(id)}`); }
 
+  // GET /v1/fetch/{id}/network: the calls a request made with `capture`
+  // recorded. query: {type, content_type, host, first_party, status, page,
+  // phase, contains (a value or a list), limit, cursor}.
+  network(id, query = {}) {
+    const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null)
+      .flatMap(([key, value]) => [value].flat().map(item => [key, String(item)])));
+    return this.#send('GET', `/v1/fetch/${encodeURIComponent(id)}/network` + (params.size ? `?${params}` : ''));
+  }
+
+  // GET /v1/fetch/{id}/network/{index}: one recorded call in full.
+  networkCall(id, index) { return this.#send('GET', `/v1/fetch/${encodeURIComponent(id)}/network/${encodeURIComponent(index)}`); }
+
+  // GET /v1/fetch/{id}/network/{index}/body: {body: Uint8Array, contentType}
+  networkBody(id, index) {
+    return this.#send('GET', `/v1/fetch/${encodeURIComponent(id)}/network/${encodeURIComponent(index)}/body`, {raw: true});
+  }
+
+  // GET /v1/fetch/{id}/network.har: the capture as a HAR 1.2 document. {page}
+  networkHar(id, {page} = {}) {
+    return this.#send('GET', `/v1/fetch/${encodeURIComponent(id)}/network.har${page === undefined ? '' : `?page=${encodeURIComponent(page)}`}`);
+  }
+
   // POST /v1/batches: {items, defaults, webhook_url, idempotency_key, tags}.
   // Resolves with the batch at once; FetchX runs the items at each site's pace.
   async submitBatch(input) {
@@ -174,6 +196,9 @@ export class FetchXClient {
 
   // GET /v1/balance: {credits, reserved, trial, purchased, payment_hold}
   balance() { return this.#send('GET', '/v1/balance'); }
+
+  // GET /v1/me: {project_id, key_id, key_name, key_prefix, scopes}, for any valid key.
+  me() { return this.#send('GET', '/v1/me'); }
 
   // GET /v1/usage: {period: 'day' | 'month'} or {since, until}
   usage(query = {}) {

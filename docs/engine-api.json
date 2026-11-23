@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FetchX engine private API",
-    "version": "1.9",
+    "version": "1.10",
     "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). POST /internal/v1/estimates says what requests would take before they are sent (planned tiers, per-host history and pace), for the platform to price. Batches are the platform's: it checks a batch's requests with POST /internal/v1/requests/check, asks POST /internal/v1/pace how fast each host may take work, and starts each item as a paced job (JobInput.paced), which the engine refuses with host_busy when the host has no free slot. info.version is the contract version; GET /internal/v1/status and /healthz report it."
   },
   "security": [
@@ -1961,6 +1961,501 @@
           }
         }
       }
+    },
+    "/internal/v1/jobs/{id}/network": {
+      "get": {
+        "operationId": "listJobNetwork",
+        "summary": "The network calls a request recorded",
+        "description": "The calls a request made with capture recorded, in the order the page made them, filtered. Use contains to find the call that carries the data you saw on the page, then read it in full.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "document",
+                "xhr",
+                "fetch",
+                "script",
+                "eventsource",
+                "other"
+              ]
+            }
+          },
+          {
+            "name": "content_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Substring of the content type, without case (json)."
+          },
+          {
+            "name": "host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A host, or *.example.com for it and its subdomains."
+          },
+          {
+            "name": "first_party",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A status (200) or a class (2xx)."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "Only calls of that page (1, or a next page)."
+          },
+          {
+            "name": "phase",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "warmup",
+                "load",
+                "scroll",
+                "replay"
+              ]
+            }
+          },
+          {
+            "name": "contains",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "maxItems": 5
+            },
+            "description": "Repeatable. Keeps calls whose response body holds any of the values, without case (a JSON body is also searched as parsed); each row lists the values it matched. Use a few values the page shows (a name, a price) to find the call that carries the data.",
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "`next_cursor` from the previous page."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The calls.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetworkList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Codes: capture_not_found (the request was made without capture), not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Still running. Codes: pending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad query. Codes: invalid_request (error.details.field names the parameter).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/jobs/{id}/network.har": {
+      "get": {
+        "operationId": "getJobNetworkHar",
+        "summary": "The network calls as a HAR file",
+        "description": "The recorded calls as a HAR 1.2 document, with the same masking, for browser developer tools (Network, Import HAR) and other HAR tools. FetchX's own fields are under _fetchx.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "Only calls of that page."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HAR 1.2.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "log"
+                  ],
+                  "properties": {
+                    "log": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Codes: capture_not_found (the request was made without capture), not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Still running. Codes: pending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad query. Codes: invalid_request (error.details.field names the parameter).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/jobs/{id}/network/{index}": {
+      "get": {
+        "operationId": "getJobNetworkCall",
+        "summary": "One recorded network call in full",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "The call number from the list."
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NetworkCall"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Codes: capture_not_found, not_found (no call with that index).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Still running. Codes: pending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad query. Codes: invalid_request (error.details.field names the parameter).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/jobs/{id}/network/{index}/body": {
+      "get": {
+        "operationId": "getJobNetworkCallBody",
+        "summary": "One recorded call's response body",
+        "description": "The response body as stored (decompressed, cut at max_body_bytes), with its content type. For bodies too large to return inline.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "The call number from the list."
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The body.",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Codes: capture_not_found, not_found (no such call, or it has no stored body).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Still running. Codes: pending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2740,6 +3235,20 @@
               "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
             },
             "description": "Your labels, to filter the list."
+          },
+          "capture": {
+            "description": "Record the page's own network calls (its documents, XHR and fetch requests) while a browser renders it, and keep them with the result for as long as its other content (7 days). Read them with GET /internal/v1/jobs/{id}/network, /internal/v1/jobs/{id}/network/{index} and /internal/v1/jobs/{id}/network.har. true records with the defaults; false or null records nothing. capture needs a browser, so with render: auto it makes the request render, and it is refused (invalid_request, details.field capture) with render: never, a method other than GET, or a route whose render is false. Free: it adds nothing to the price. When several browsers are tried, the calls are the last browser attempt's, also when the request fails.",
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CaptureSettings"
+              }
+            ]
           }
         },
         "description": "The customer request exactly as the platform received it on POST /v1/fetch."
@@ -2871,6 +3380,17 @@
                 "type": "null"
               }
             ]
+          },
+          "network": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NetworkSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on requests made with capture: the network capture (null while pending). Top level, not under data, because a request that failed before any page answered still has its capture."
           }
         },
         "description": "The caller-facing view of a job. The platform adds `credits` and returns it as the public FetchResult."
@@ -3328,6 +3848,20 @@
               "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
             },
             "description": "Defaults to the earlier request's."
+          },
+          "capture": {
+            "description": "As in the fetch request. Left out, the earlier request's capture applies; false or null turns it off. The calls carry this page's number in `page`, so a client can compare page 1's and page 2's calls.",
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CaptureSettings"
+              }
+            ]
           }
         }
       },
@@ -3982,6 +4516,577 @@
           "browser_waiting": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "CaptureSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "What to record. Every field is optional.",
+        "properties": {
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "document",
+                "xhr",
+                "fetch",
+                "script",
+                "eventsource",
+                "other"
+              ]
+            },
+            "minItems": 1,
+            "uniqueItems": true,
+            "default": [
+              "document",
+              "xhr",
+              "fetch"
+            ],
+            "description": "Which calls to record. Images, media, fonts, stylesheets, manifests and beacons are never recorded."
+          },
+          "max_requests": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 200,
+            "description": "Calls past this are counted in network.dropped.over_limit, not stored, and network.truncated is true."
+          },
+          "max_body_bytes": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 10000000,
+            "default": 2000000,
+            "description": "Per response body. A longer body is cut and marked body_truncated. At most 25 MB of bodies are stored per request; later calls keep their headers and sizes, with body_omitted capture_full."
+          },
+          "bodies": {
+            "type": "string",
+            "enum": [
+              "text",
+              "none",
+              "all"
+            ],
+            "default": "text",
+            "description": "text: store bodies that are JSON, HTML, XML, plain text, JavaScript, GraphQL or form data. none: headers and sizes only. all: binary bodies too, as base64."
+          },
+          "first_party_only": {
+            "type": "boolean",
+            "default": false,
+            "description": "Keep only calls to the page's own registrable domain (example.com and *.example.com). Others are counted in network.dropped.third_party."
+          },
+          "include_trackers": {
+            "type": "boolean",
+            "default": false,
+            "description": "Keep calls to known analytics, advertising, tag manager and consent hosts, flagged tracker. By default they are dropped and counted in network.dropped.trackers."
+          },
+          "unmask": {
+            "type": "boolean",
+            "default": false,
+            "description": "Store and return secret header values in full instead of masked (see the headers of a call)."
+          }
+        }
+      },
+      "NetworkSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "captured",
+          "dropped",
+          "truncated",
+          "attempt",
+          "complete",
+          "expires_at",
+          "expired",
+          "list_url",
+          "har_url"
+        ],
+        "description": "A request made with capture: how many calls were recorded and where to read them.",
+        "properties": {
+          "captured": {
+            "type": "integer",
+            "description": "Calls stored."
+          },
+          "dropped": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "trackers",
+              "excluded_types",
+              "third_party",
+              "over_limit"
+            ],
+            "description": "Calls seen and not stored, by reason.",
+            "properties": {
+              "trackers": {
+                "type": "integer"
+              },
+              "excluded_types": {
+                "type": "integer"
+              },
+              "third_party": {
+                "type": "integer"
+              },
+              "over_limit": {
+                "type": "integer"
+              }
+            }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "max_requests was reached: later calls were counted, not stored."
+          },
+          "attempt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The attempt (1 is the first entry of attempts) whose browser recorded these calls; null when no browser ran."
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "false when the browser stopped (a deadline, a crash) before it reported everything: the calls it sent before are kept."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the calls are deleted with the rest of the content."
+          },
+          "expired": {
+            "type": "boolean",
+            "description": "true after DELETE: the calls are gone."
+          },
+          "list_url": {
+            "type": "string",
+            "description": "/internal/v1/jobs/{id}/network"
+          },
+          "har_url": {
+            "type": "string",
+            "description": "/internal/v1/jobs/{id}/network.har"
+          }
+        }
+      },
+      "NetworkCallRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "index",
+          "page",
+          "phase",
+          "type",
+          "method",
+          "url",
+          "status",
+          "content_type",
+          "request_bytes",
+          "response_bytes",
+          "first_party",
+          "frame",
+          "started_ms",
+          "duration_ms",
+          "has_body",
+          "body_truncated",
+          "body_omitted",
+          "flags",
+          "error"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "description": "The call number, from 1 in the order the page made the calls."
+          },
+          "page": {
+            "type": "integer",
+            "description": "1 for the first page, 2 for the first POST /v1/fetch/{id}/next, and so on."
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "warmup",
+              "load",
+              "scroll",
+              "replay"
+            ],
+            "description": "warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "document",
+              "xhr",
+              "fetch",
+              "script",
+              "eventsource",
+              "other"
+            ]
+          },
+          "method": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Null when no response came (see error)."
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_bytes": {
+            "type": "integer"
+          },
+          "response_bytes": {
+            "type": "integer",
+            "description": "Bytes received for the body, as transferred."
+          },
+          "first_party": {
+            "type": "boolean",
+            "description": "Whether the call went to the page's own registrable domain."
+          },
+          "frame": {
+            "type": "string",
+            "enum": [
+              "main",
+              "child"
+            ],
+            "description": "Made by the page itself or by a frame inside it."
+          },
+          "started_ms": {
+            "type": "integer",
+            "description": "When the call started, in ms from the start of the page's load (warm-up calls are negative)."
+          },
+          "duration_ms": {
+            "type": "integer"
+          },
+          "has_body": {
+            "type": "boolean"
+          },
+          "body_truncated": {
+            "type": "boolean"
+          },
+          "body_omitted": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "not_text",
+              "bodies_none",
+              "capture_full",
+              "unavailable",
+              null
+            ],
+            "description": "Why a response body was not stored: not_text (capture.bodies text), bodies_none, capture_full (25 MB per request reached) or unavailable (the browser no longer had it)."
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "tracker",
+                "redirect",
+                "preflight",
+                "service_worker"
+              ]
+            }
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a call got no response: refused:<reason> when FetchX refused it (refused:resource_blocked, refused:request_limit), a browser error such as browser_err_aborted, or not_finished when it was still open at the end."
+          },
+          "matched": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "With contains: the values this call's response body holds."
+          }
+        }
+      },
+      "NetworkList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "next_cursor",
+          "network"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NetworkCallRow"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as cursor for the next page of calls."
+          },
+          "network": {
+            "$ref": "#/components/schemas/NetworkSummary"
+          }
+        }
+      },
+      "NetworkCall": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "index",
+          "page",
+          "phase",
+          "type",
+          "frame",
+          "first_party",
+          "started_ms",
+          "duration_ms",
+          "flags",
+          "error",
+          "request",
+          "response",
+          "redirected_from"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "description": "The call number, from 1 in the order the page made the calls."
+          },
+          "page": {
+            "type": "integer",
+            "description": "1 for the first page, 2 for the first POST /v1/fetch/{id}/next, and so on."
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "warmup",
+              "load",
+              "scroll",
+              "replay"
+            ],
+            "description": "warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "document",
+              "xhr",
+              "fetch",
+              "script",
+              "eventsource",
+              "other"
+            ]
+          },
+          "frame": {
+            "type": "string",
+            "enum": [
+              "main",
+              "child"
+            ],
+            "description": "Made by the page itself or by a frame inside it."
+          },
+          "first_party": {
+            "type": "boolean",
+            "description": "Whether the call went to the page's own registrable domain."
+          },
+          "started_ms": {
+            "type": "integer",
+            "description": "When the call started, in ms from the start of the page's load (warm-up calls are negative)."
+          },
+          "duration_ms": {
+            "type": "integer"
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "tracker",
+                "redirect",
+                "preflight",
+                "service_worker"
+              ]
+            }
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a call got no response: refused:<reason> when FetchX refused it (refused:resource_blocked, refused:request_limit), a browser error such as browser_err_aborted, or not_finished when it was still open at the end."
+          },
+          "request": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "method",
+              "url",
+              "headers",
+              "body",
+              "body_encoding",
+              "body_bytes"
+            ],
+            "properties": {
+              "method": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "headers": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "description": "Name and value pairs in the order sent, so repeated headers survive. Cookie, Set-Cookie, Authorization, Proxy-Authorization and any header whose name contains token, secret, api-key, session, password or credential show `<masked len=N sha=XXXXXX>` instead of the value (a cookie keeps its name), unless the request was made with capture.unmask."
+              },
+              "body": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "body_encoding": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "utf-8",
+                  "base64",
+                  null
+                ]
+              },
+              "body_bytes": {
+                "type": "integer"
+              }
+            }
+          },
+          "response": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "status",
+                  "status_text",
+                  "headers",
+                  "content_type",
+                  "body",
+                  "body_encoding",
+                  "body_bytes",
+                  "transfer_bytes",
+                  "body_truncated",
+                  "body_omitted",
+                  "body_url"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "integer"
+                  },
+                  "status_text": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "headers": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "minItems": 2,
+                      "maxItems": 2
+                    },
+                    "description": "Name and value pairs in the order sent, so repeated headers survive. Cookie, Set-Cookie, Authorization, Proxy-Authorization and any header whose name contains token, secret, api-key, session, password or credential show `<masked len=N sha=XXXXXX>` instead of the value (a cookie keeps its name), unless the request was made with capture.unmask."
+                  },
+                  "content_type": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "body": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Decompressed. Text bodies as UTF-8; binary ones (capture.bodies all) as base64. Null when not stored, or over 1 MB (see body_url)."
+                  },
+                  "body_encoding": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "utf-8",
+                      "base64",
+                      null
+                    ]
+                  },
+                  "body_bytes": {
+                    "type": "integer",
+                    "description": "Size of the stored body."
+                  },
+                  "transfer_bytes": {
+                    "type": "integer"
+                  },
+                  "body_truncated": {
+                    "type": "boolean"
+                  },
+                  "body_omitted": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "not_text",
+                      "bodies_none",
+                      "capture_full",
+                      "unavailable",
+                      null
+                    ],
+                    "description": "Why a response body was not stored: not_text (capture.bodies text), bodies_none, capture_full (25 MB per request reached) or unavailable (the browser no longer had it)."
+                  },
+                  "body_url": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "For a body over 1 MB: /internal/v1/jobs/{id}/network/{index}/body, read with the same key."
+                  }
+                }
+              }
+            ],
+            "description": "Null when no response came (see error)."
+          },
+          "redirected_from": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The index of the call this one is a redirect of."
           }
         }
       }

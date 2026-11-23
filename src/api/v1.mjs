@@ -10,6 +10,10 @@
 //   GET    /v1/fetch/:id              one request's result (poll a pending one)
 //   GET    /v1/fetch/:id/content      the raw body, as received
 //   GET    /v1/fetch/:id/screenshot   the screenshot (JPEG)
+//   GET    /v1/fetch/:id/network      the calls a request made with `capture` recorded (filters, contains search)
+//   GET    /v1/fetch/:id/network/:index  one recorded call in full
+//   GET    /v1/fetch/:id/network/:index/body  one recorded call's response body
+//   GET    /v1/fetch/:id/network.har  the recorded calls as HAR 1.2
 //   DELETE /v1/fetch/:id              delete stored content now
 //   POST   /v1/batches                many URLs in one job, paced per site
 //   GET    /v1/batches                list recent batches
@@ -19,10 +23,15 @@
 //   POST   /v1/estimate               what a request or a batch would cost and take, before sending it
 //   GET    /v1/balance                credits available now
 //   GET    /v1/usage                  credits and usage
+//   GET    /v1/me                     the project and key making the call (any valid key)
 //   GET    /v1/status                 service status and notices (no API key)
 import {GatewayError} from '../policy.mjs';
 
 export const API_SCOPES = Object.freeze({write: 'fetch:write', read: 'fetch:read', usage: 'usage:read'});
+// A route any valid key may call, whatever its scopes (x-scope "any" in the contract).
+export const ANY_SCOPE = 'any';
+// What a 503 unavailable tells the caller to wait when nothing says otherwise.
+export const UNAVAILABLE_RETRY_SECONDS = 30;
 
 const MESSAGES = {
   invalid_request: 'A field is missing or wrong; error.details.field names it.',
@@ -39,6 +48,7 @@ const MESSAGES = {
   unavailable: 'FetchX cannot take work right now; wait and retry.',
   pending: 'The request is still running.',
   content_expired: 'The stored content has expired or was deleted.',
+  capture_not_found: 'That request was made without capture, so it has no network calls to read.',
   no_next_page: 'That request has no next page to open; error.details.reason says why.',
   credit_account_unavailable: 'The project has no credit account.',
   extract_unavailable: 'FetchX cannot read pages into JSON right now, so nothing was fetched or charged. Retry after retry_after_seconds, or send the request without extract.',
@@ -48,7 +58,7 @@ const MESSAGES = {
 };
 const STATUS = {invalid_request: 400, url_not_allowed: 400, unauthorized: 401, api_key_scope_forbidden: 403, insufficient_credits: 402,
   max_credits_too_low: 402, payment_hold: 402, not_found: 404, idempotency_conflict: 409, request_too_large: 413, too_many_requests: 429,
-  pending: 409, content_expired: 410, no_next_page: 409, route_retired: 410, route_not_found: 404, maintenance: 503};
+  pending: 409, content_expired: 410, capture_not_found: 404, no_next_page: 409, route_retired: 410, route_not_found: 404, maintenance: 503};
 
 export function apiError(error) {
   const known = error instanceof GatewayError;
@@ -99,7 +109,7 @@ export async function usageReport({service, ledger}, project, query = {}) {
 
 const idParams = {schema: {params: {type: 'object', required: ['id'], properties: {id: {type: 'string', maxLength: 64}}}}};
 
-// app.authenticate(req, scope) sets req.project and req.keyId.
+// app.authenticate(req, scope) sets req.project, req.keyId and req.key ({id, name, prefix, scopes}).
 export function registerApi(app, {service, ledger, estimator, board, batches}) {
   const guard = scope => async req => app.authenticate(req, scope);
   app.post('/v1/fetch', {preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
@@ -122,6 +132,23 @@ export function registerApi(app, {service, ledger, estimator, board, batches}) {
       return reply.header('content-type', contentType).header('cache-control', 'private, no-store').send(body);
     });
   }
+  // A request's network capture (FetchFront passes these to the engine).
+  const callParams = {schema: {params: {type: 'object', required: ['id', 'index'],
+    properties: {id: {type: 'string', maxLength: 64}, index: {type: 'string', maxLength: 16}}}}};
+  app.get('/v1/fetch/:id/network', {...idParams, preHandler: guard(API_SCOPES.read)},
+    req => service.networkList(req.project, req.params.id, req.query ?? {}));
+  app.get('/v1/fetch/:id/network.har', {...idParams, preHandler: guard(API_SCOPES.read)}, async (req, reply) => {
+    const har = await service.networkHar(req.project, req.params.id, req.query ?? {});
+    return reply.header('content-type', 'application/json').header('cache-control', 'private, no-store')
+      .header('content-disposition', `attachment; filename="fetchx-${req.params.id}.har"`).send(har);
+  });
+  app.get('/v1/fetch/:id/network/:index', {...callParams, preHandler: guard(API_SCOPES.read)},
+    req => service.networkCall(req.project, req.params.id, req.params.index, req.query ?? {}));
+  app.get('/v1/fetch/:id/network/:index/body', {...callParams, preHandler: guard(API_SCOPES.read)}, async (req, reply) => {
+    const {body, contentType} = await service.networkBody(req.project, req.params.id, req.params.index);
+    return reply.header('content-type', contentType).header('cache-control', 'private, no-store')
+      .header('x-content-type-options', 'nosniff').send(body);
+  });
   app.delete('/v1/fetch/:id', {...idParams, preHandler: guard(API_SCOPES.read)}, async (req, reply) => {
     await service.remove(req.project, req.params.id);
     return reply.code(204).send();
@@ -138,6 +165,9 @@ export function registerApi(app, {service, ledger, estimator, board, batches}) {
   app.post('/v1/batches/:id/cancel', {...idParams, preHandler: guard(API_SCOPES.write)}, req => batches.cancel(req.project, req.params.id));
   app.get('/v1/balance', {preHandler: guard(API_SCOPES.usage)}, req => service.balance(req.project));
   app.get('/v1/usage', {preHandler: guard(API_SCOPES.usage)}, req => usageReport({service, ledger}, req.project, req.query ?? {}));
+  // Who is calling: the project (the same after a key is rotated) and this key.
+  app.get('/v1/me', {preHandler: guard(ANY_SCOPE)}, req => ({project_id: req.project, key_id: req.key?.id ?? req.keyId ?? null,
+    key_name: req.key?.name ?? null, key_prefix: req.key?.prefix ?? null, scopes: req.key?.scopes ?? Object.values(API_SCOPES)}));
   // Public: no API key, any origin, and it answers during maintenance.
   app.get('/v1/status', async (req, reply) => {
     reply.header('access-control-allow-origin', '*');

@@ -282,6 +282,103 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/fetch/{id}/network": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The network calls a request recorded
+         * @description The calls a request made with capture recorded, in the order the page made them, filtered. Use contains to find the call that carries the data you saw on the page, then read it in full.
+         */
+        get: operations["listFetchNetwork"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fetch/{id}/network.har": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The network calls as a HAR file
+         * @description The recorded calls as a HAR 1.2 document, with the same masking, for browser developer tools (Network, Import HAR) and other HAR tools. FetchX's own fields are under _fetchx.
+         */
+        get: operations["getFetchNetworkHar"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fetch/{id}/network/{index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One recorded network call in full */
+        get: operations["getFetchNetworkCall"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fetch/{id}/network/{index}/body": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One recorded call's response body
+         * @description The response body as stored (decompressed, cut at max_body_bytes), with its content type. For bodies too large to return inline.
+         */
+        get: operations["getFetchNetworkCallBody"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The calling project and key
+         * @description Which project and key are making the call, and what the key may do. Any valid key may call it, whatever its scopes: a tool can check a key it was given before it starts, and recognise the customer by project_id even after the key is rotated.
+         */
+        get: operations["getMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export interface webhooks {
     fetchFinished: {
@@ -523,6 +620,8 @@ export interface components {
             idempotency_key?: string;
             /** @description Your labels, to filter the list. */
             tags?: string[];
+            /** @description Record the page's own network calls (its documents, XHR and fetch requests) while a browser renders it, and keep them with the result for as long as its other content (7 days). Read them with GET /v1/fetch/{id}/network, /v1/fetch/{id}/network/{index} and /v1/fetch/{id}/network.har. true records with the defaults; false or null records nothing. capture needs a browser, so with render: auto it makes the request render, and it is refused (invalid_request, details.field capture) with render: never, a method other than GET, or a route whose render is false. Free: it adds nothing to the price. When several browsers are tried, the calls are the last browser attempt's, also when the request fails. */
+            capture?: boolean | null | components["schemas"]["CaptureSettings"];
         };
         /** @description What may change for a next page. Everything else (headers, formats, country, render, wait_for, block_resources) comes from the earlier request, and the cookies the site set on the earlier page are sent with it. An empty object is fine. */
         NextPageRequest: {
@@ -558,6 +657,8 @@ export interface components {
             idempotency_key?: string;
             /** @description Defaults to the earlier request's. */
             tags?: string[];
+            /** @description As in the fetch request. Left out, the earlier request's capture applies; false or null turns it off. The calls carry this page's number in `page`, so a client can compare page 1's and page 2's calls. */
+            capture?: boolean | null | components["schemas"]["CaptureSettings"];
         };
         FetchResult: {
             /** Format: uuid */
@@ -605,6 +706,8 @@ export interface components {
                 /** @description The item's place in the batch's items, from 0. */
                 index: number;
             } | null;
+            /** @description Only on requests made with capture: the network capture (null while pending). Top level, not under data, because a request that failed before any page answered still has its capture. */
+            network?: components["schemas"]["NetworkSummary"] | null;
         };
         /** @description Blocks, bot challenges and rate limits met on the way, and on the page that answered (a captcha, a wall that cleared). FetchX handles them itself; this says what it met and how it got past. */
         Challenge: {
@@ -1152,6 +1255,201 @@ export interface components {
             /** @description Pass it as cursor for the next page. With order=finished it is also how to read only what finished since: it stays set while the batch can still change, and is null once the batch is over and everything was read. */
             next_cursor: string | null;
         };
+        /** @description What to record. Every field is optional. */
+        CaptureSettings: {
+            /**
+             * @description Which calls to record. Images, media, fonts, stylesheets, manifests and beacons are never recorded.
+             * @default [
+             *       "document",
+             *       "xhr",
+             *       "fetch"
+             *     ]
+             */
+            types?: ("document" | "xhr" | "fetch" | "script" | "eventsource" | "other")[];
+            /**
+             * @description Calls past this are counted in network.dropped.over_limit, not stored, and network.truncated is true.
+             * @default 200
+             */
+            max_requests?: number;
+            /**
+             * @description Per response body. A longer body is cut and marked body_truncated. At most 25 MB of bodies are stored per request; later calls keep their headers and sizes, with body_omitted capture_full.
+             * @default 2000000
+             */
+            max_body_bytes?: number;
+            /**
+             * @description text: store bodies that are JSON, HTML, XML, plain text, JavaScript, GraphQL or form data. none: headers and sizes only. all: binary bodies too, as base64.
+             * @default text
+             * @enum {string}
+             */
+            bodies?: "text" | "none" | "all";
+            /**
+             * @description Keep only calls to the page's own registrable domain (example.com and *.example.com). Others are counted in network.dropped.third_party.
+             * @default false
+             */
+            first_party_only?: boolean;
+            /**
+             * @description Keep calls to known analytics, advertising, tag manager and consent hosts, flagged tracker. By default they are dropped and counted in network.dropped.trackers.
+             * @default false
+             */
+            include_trackers?: boolean;
+            /**
+             * @description Store and return secret header values in full instead of masked (see the headers of a call).
+             * @default false
+             */
+            unmask?: boolean;
+        };
+        /** @description A request made with capture: how many calls were recorded and where to read them. */
+        NetworkSummary: {
+            /** @description Calls stored. */
+            captured: number;
+            /** @description Calls seen and not stored, by reason. */
+            dropped: {
+                trackers: number;
+                excluded_types: number;
+                third_party: number;
+                over_limit: number;
+            };
+            /** @description max_requests was reached: later calls were counted, not stored. */
+            truncated: boolean;
+            /** @description The attempt (1 is the first entry of attempts) whose browser recorded these calls; null when no browser ran. */
+            attempt: number | null;
+            /** @description false when the browser stopped (a deadline, a crash) before it reported everything: the calls it sent before are kept. */
+            complete: boolean;
+            /**
+             * Format: date-time
+             * @description When the calls are deleted with the rest of the content.
+             */
+            expires_at: string;
+            /** @description true after DELETE: the calls are gone. */
+            expired: boolean;
+            /** @description /v1/fetch/{id}/network */
+            list_url: string;
+            /** @description /v1/fetch/{id}/network.har */
+            har_url: string;
+        };
+        NetworkCallRow: {
+            /** @description The call number, from 1 in the order the page made the calls. */
+            index: number;
+            /** @description 1 for the first page, 2 for the first POST /v1/fetch/{id}/next, and so on. */
+            page: number;
+            /**
+             * @description warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page.
+             * @enum {string}
+             */
+            phase: "warmup" | "load" | "scroll" | "replay";
+            /** @enum {string} */
+            type: "document" | "xhr" | "fetch" | "script" | "eventsource" | "other";
+            method: string;
+            url: string;
+            /** @description Null when no response came (see error). */
+            status: number | null;
+            content_type: string | null;
+            request_bytes: number;
+            /** @description Bytes received for the body, as transferred. */
+            response_bytes: number;
+            /** @description Whether the call went to the page's own registrable domain. */
+            first_party: boolean;
+            /**
+             * @description Made by the page itself or by a frame inside it.
+             * @enum {string}
+             */
+            frame: "main" | "child";
+            /** @description When the call started, in ms from the start of the page's load (warm-up calls are negative). */
+            started_ms: number;
+            duration_ms: number;
+            has_body: boolean;
+            body_truncated: boolean;
+            /**
+             * @description Why a response body was not stored: not_text (capture.bodies text), bodies_none, capture_full (25 MB per request reached) or unavailable (the browser no longer had it).
+             * @enum {string|null}
+             */
+            body_omitted: "not_text" | "bodies_none" | "capture_full" | "unavailable" | null;
+            flags: ("tracker" | "redirect" | "preflight" | "service_worker")[];
+            /** @description Why a call got no response: refused:<reason> when FetchX refused it (refused:resource_blocked, refused:request_limit), a browser error such as browser_err_aborted, or not_finished when it was still open at the end. */
+            error: string | null;
+            /** @description With contains: the values this call's response body holds. */
+            matched?: string[];
+        };
+        NetworkList: {
+            items: components["schemas"]["NetworkCallRow"][];
+            /** @description Pass as cursor for the next page of calls. */
+            next_cursor: string | null;
+            network: components["schemas"]["NetworkSummary"];
+        };
+        NetworkCall: {
+            /** @description The call number, from 1 in the order the page made the calls. */
+            index: number;
+            /** @description 1 for the first page, 2 for the first POST /v1/fetch/{id}/next, and so on. */
+            page: number;
+            /**
+             * @description warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page.
+             * @enum {string}
+             */
+            phase: "warmup" | "load" | "scroll" | "replay";
+            /** @enum {string} */
+            type: "document" | "xhr" | "fetch" | "script" | "eventsource" | "other";
+            /**
+             * @description Made by the page itself or by a frame inside it.
+             * @enum {string}
+             */
+            frame: "main" | "child";
+            /** @description Whether the call went to the page's own registrable domain. */
+            first_party: boolean;
+            /** @description When the call started, in ms from the start of the page's load (warm-up calls are negative). */
+            started_ms: number;
+            duration_ms: number;
+            flags: ("tracker" | "redirect" | "preflight" | "service_worker")[];
+            /** @description Why a call got no response: refused:<reason> when FetchX refused it (refused:resource_blocked, refused:request_limit), a browser error such as browser_err_aborted, or not_finished when it was still open at the end. */
+            error: string | null;
+            request: {
+                method: string;
+                url: string;
+                /** @description Name and value pairs in the order sent, so repeated headers survive. Cookie, Set-Cookie, Authorization, Proxy-Authorization and any header whose name contains token, secret, api-key, session, password or credential show `<masked len=N sha=XXXXXX>` instead of the value (a cookie keeps its name), unless the request was made with capture.unmask. */
+                headers: string[][];
+                body: string | null;
+                /** @enum {string|null} */
+                body_encoding: "utf-8" | "base64" | null;
+                body_bytes: number;
+            };
+            /** @description Null when no response came (see error). */
+            response: null | {
+                status: number;
+                status_text: string | null;
+                /** @description Name and value pairs in the order sent, so repeated headers survive. Cookie, Set-Cookie, Authorization, Proxy-Authorization and any header whose name contains token, secret, api-key, session, password or credential show `<masked len=N sha=XXXXXX>` instead of the value (a cookie keeps its name), unless the request was made with capture.unmask. */
+                headers: string[][];
+                content_type: string | null;
+                /** @description Decompressed. Text bodies as UTF-8; binary ones (capture.bodies all) as base64. Null when not stored, or over 1 MB (see body_url). */
+                body: string | null;
+                /** @enum {string|null} */
+                body_encoding: "utf-8" | "base64" | null;
+                /** @description Size of the stored body. */
+                body_bytes: number;
+                transfer_bytes: number;
+                body_truncated: boolean;
+                /**
+                 * @description Why a response body was not stored: not_text (capture.bodies text), bodies_none, capture_full (25 MB per request reached) or unavailable (the browser no longer had it).
+                 * @enum {string|null}
+                 */
+                body_omitted: "not_text" | "bodies_none" | "capture_full" | "unavailable" | null;
+                /** @description For a body over 1 MB: /v1/fetch/{id}/network/{index}/body, read with the same key. */
+                body_url: string | null;
+            };
+            /** @description The index of the call this one is a redirect of. */
+            redirected_from: number | null;
+        };
+        /** @description The project and API key making the call. */
+        Me: {
+            /** @description The project. It stays the same when a key is rotated or replaced, so use it to recognise the customer. */
+            project_id: string;
+            /** @description This key. Rotating a key makes a new key_id. Null for a key set in the server configuration. */
+            key_id: string | null;
+            /** @description The name given to the key in the console. */
+            key_name: string | null;
+            /** @description The first characters of the key (fxk_ and 8 more), as the console shows them. */
+            key_prefix: string | null;
+            /** @description What this key may call: fetch:write (POST /v1/fetch, next pages, batches, estimates), fetch:read (results, content, network captures, DELETE) and usage:read (balance and usage). */
+            scopes: ("fetch:write" | "fetch:read" | "usage:read")[];
+        };
     };
     responses: never;
     parameters: never;
@@ -1321,7 +1619,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url. */
+            /** @description FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url. A 503 unavailable carries a Retry-After header and retry_after_seconds (30 unless FetchX knows better): resend with the same idempotency_key after it. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1575,7 +1873,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url. */
+            /** @description FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url. A 503 unavailable carries a Retry-After header and retry_after_seconds (30 unless FetchX knows better): resend with the same idempotency_key after it. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1789,7 +2087,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description FetchX cannot estimate right now (the fetching service is not answering). During maintenance that pauses the API, error.code is maintenance. */
+            /** @description FetchX cannot estimate right now (the fetching service is not answering). During maintenance that pauses the API, error.code is maintenance. A 503 unavailable carries a Retry-After header and retry_after_seconds (30 unless FetchX knows better): resend with the same idempotency_key after it. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -2083,7 +2381,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description FetchX cannot take work right now. Nothing was queued. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url. */
+            /** @description FetchX cannot take work right now. Nothing was queued. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url. A 503 unavailable carries a Retry-After header and retry_after_seconds (30 unless FetchX knows better): resend with the same idempotency_key after it. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -2270,6 +2568,405 @@ export interface operations {
             };
             /** @description No batch with that id in this project. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listFetchNetwork: {
+        parameters: {
+            query?: {
+                type?: "document" | "xhr" | "fetch" | "script" | "eventsource" | "other";
+                /** @description Substring of the content type, without case (json). */
+                content_type?: string;
+                /** @description A host, or *.example.com for it and its subdomains. */
+                host?: string;
+                first_party?: "true" | "false";
+                /** @description A status (200) or a class (2xx). */
+                status?: string;
+                /** @description Only calls of that page (1, or a next page). */
+                page?: number;
+                phase?: "warmup" | "load" | "scroll" | "replay";
+                /** @description Repeatable. Keeps calls whose response body holds any of the values, without case (a JSON body is also searched as parsed); each row lists the values it matched. Use a few values the page shows (a name, a price) to find the call that carries the data. */
+                contains?: string[];
+                limit?: number;
+                /** @description `next_cursor` from the previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The request id returned by POST /v1/fetch. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The calls. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkList"];
+                };
+            };
+            /** @description Bad query. Codes: invalid_request (error.details.field names the parameter). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No valid API key. Codes: unauthorized. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The key lacks fetch:read. Codes: api_key_scope_forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not found. Codes: capture_not_found (the request was made without capture), not_found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Still running. Codes: pending. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Deleted (DELETE) or expired after 7 days. Codes: content_expired. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getFetchNetworkHar: {
+        parameters: {
+            query?: {
+                /** @description Only calls of that page. */
+                page?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The request id returned by POST /v1/fetch. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description HAR 1.2. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        log: Record<string, never>;
+                    };
+                };
+            };
+            /** @description Bad query. Codes: invalid_request (error.details.field names the parameter). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No valid API key. Codes: unauthorized. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The key lacks fetch:read. Codes: api_key_scope_forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not found. Codes: capture_not_found (the request was made without capture), not_found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Still running. Codes: pending. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Deleted (DELETE) or expired after 7 days. Codes: content_expired. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getFetchNetworkCall: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The request id returned by POST /v1/fetch. */
+                id: string;
+                /** @description The call number from the list. */
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The call. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkCall"];
+                };
+            };
+            /** @description Bad query. Codes: invalid_request (error.details.field names the parameter). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No valid API key. Codes: unauthorized. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The key lacks fetch:read. Codes: api_key_scope_forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not found. Codes: capture_not_found, not_found (no call with that index). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Still running. Codes: pending. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Deleted (DELETE) or expired after 7 days. Codes: content_expired. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getFetchNetworkCallBody: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The request id returned by POST /v1/fetch. */
+                id: string;
+                /** @description The call number from the list. */
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The body. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": string;
+                };
+            };
+            /** @description No valid API key. Codes: unauthorized. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The key lacks fetch:read. Codes: api_key_scope_forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not found. Codes: capture_not_found, not_found (no such call, or it has no stored body). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Still running. Codes: pending. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Deleted (DELETE) or expired after 7 days. Codes: content_expired. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project and key. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Me"];
+                };
+            };
+            /** @description The API key is missing, wrong or revoked. */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -101,6 +101,20 @@ test('engine client requests and fake engine answers and events match the contra
   await call('GET', `/v1/fetch/${ok.body.id}/content`);
   await call('GET', '/v1/fetch/00000000-0000-4000-8000-000000000000');
   await call('POST', '/v1/estimate', {body: {items: ['https://shop.example.com/1', {url: 'http://127.0.0.1/', render: 'always'}]}});
+  // A network capture: every read, then the refusals.
+  const captured = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/data', render: 'always', capture: {types: ['document', 'fetch']}}});
+  assert.equal(captured.status, 200, JSON.stringify(captured.body));
+  const network = `/v1/fetch/${captured.body.id}/network`;
+  assert.equal((await call('GET', `${network}?content_type=json&contains=lamp&contains=desk&limit=1`)).body.items.length, 1);
+  await call('GET', `${network}?limit=0`);
+  await call('GET', `${network}/2`);
+  await call('GET', `${network}/9`);
+  await call('GET', `${network}/2/body`);
+  await call('GET', `/v1/fetch/${captured.body.id}/network.har`);
+  await call('GET', `/v1/fetch/${list.body.id}/network`);
+  await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/data', render: 'never', capture: true}});
+  await call('DELETE', `/v1/fetch/${captured.body.id}`);
+  await call('GET', network);
   await platform.engine.status();
   // Batches: the check before anything is queued, the pace the queue reads,
   // and paced starts, one of them refused because its host is full.
@@ -144,7 +158,10 @@ test('engine client requests and fake engine answers and events match the contra
     'DELETE /internal/v1/jobs/{id} 409', 'GET /internal/v1/status 200', 'POST /internal/v1/jobs/{id}/next 200',
     'POST /internal/v1/jobs/{id}/next 400', 'POST /internal/v1/jobs/{id}/next 404', 'POST /internal/v1/jobs/{id}/next 409',
     'POST /internal/v1/jobs/{id}/next 410', 'POST /internal/v1/jobs 429', 'POST /internal/v1/requests/check 200',
-    'POST /internal/v1/pace 200', 'POST /internal/v1/estimates 200']) {
+    'POST /internal/v1/pace 200', 'POST /internal/v1/estimates 200', 'GET /internal/v1/jobs/{id}/network 200',
+    'GET /internal/v1/jobs/{id}/network 400', 'GET /internal/v1/jobs/{id}/network 404', 'GET /internal/v1/jobs/{id}/network 410',
+    'GET /internal/v1/jobs/{id}/network/{index} 200', 'GET /internal/v1/jobs/{id}/network/{index} 404',
+    'GET /internal/v1/jobs/{id}/network/{index}/body 200', 'GET /internal/v1/jobs/{id}/network.har 200']) {
     assert.ok(statuses.has(expected), `not exercised: ${expected}`);
   }
 

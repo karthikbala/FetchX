@@ -6,7 +6,7 @@
 // started.
 import {GatewayError} from '../policy.mjs';
 
-export const ENGINE_CONTRACT = '1.9';
+export const ENGINE_CONTRACT = '1.10';
 const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH']);
 // 503 answers that are refusals: nothing was started, and the caller is told why.
 const REFUSED_503 = new Set(['extract_unavailable']);
@@ -31,8 +31,9 @@ export class EngineClient {
 
   async #call(method, path, {query, body, headers = {}, raw = false, timeoutMs = this.timeoutMs} = {}) {
     if (!this.configured) throw unavailable(false, 'not_configured');
+    // A repeated parameter (contains=a&contains=b) is an array.
     const search = query ? new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined)
-      .map(([key, value]) => [key, String(value)])).toString() : '';
+      .flatMap(([key, value]) => [value].flat().map(item => [key, String(item)]))).toString() : '';
     let response;
     try {
       response = await this.fetchImpl(`${this.url}${path}${search ? `?${search}` : ''}`, {method, redirect: 'error',
@@ -95,6 +96,30 @@ export class EngineClient {
 
   async content(tenant, id, kind) {
     const {body, contentType} = await this.#call('GET', `/internal/v1/jobs/${encodeURIComponent(id)}/${kind}`, {query: {tenant}, raw: true});
+    return {body, contentType};
+  }
+
+  // A job's network capture (a job made with `capture`): the list, one call,
+  // one call's body and the HAR document. `query` is passed on as the caller sent it.
+  async networkList(tenant, id, query = {}) {
+    const {tenant: _ignored, ...rest} = query;
+    return (await this.#call('GET', `/internal/v1/jobs/${encodeURIComponent(id)}/network`, {query: {...rest, tenant}})).body;
+  }
+
+  async networkHar(tenant, id, query = {}) {
+    const {tenant: _ignored, ...rest} = query;
+    return (await this.#call('GET', `/internal/v1/jobs/${encodeURIComponent(id)}/network.har`, {query: {...rest, tenant}})).body;
+  }
+
+  async networkCall(tenant, id, index, query = {}) {
+    const {tenant: _ignored, ...rest} = query;
+    return (await this.#call('GET', `/internal/v1/jobs/${encodeURIComponent(id)}/network/${encodeURIComponent(index)}`,
+      {query: {...rest, tenant}})).body;
+  }
+
+  async networkBody(tenant, id, index) {
+    const {body, contentType} = await this.#call('GET', `/internal/v1/jobs/${encodeURIComponent(id)}/network/${encodeURIComponent(index)}/body`,
+      {query: {tenant}, raw: true});
     return {body, contentType};
   }
 

@@ -170,6 +170,12 @@ test('self-service: identity, isolation, keys, idempotency and success-only cred
       const forbidden = await api('POST', '/v1/fetch', {url: 'https://shop.example.com/'}, readOnly.token);
       assert.equal(forbidden.status, 403);
       assert.equal(forbidden.body.error.code, 'api_key_scope_forbidden');
+      // Any valid key may ask who it is, whatever its scopes.
+      const me = await api('GET', '/v1/me', undefined, readOnly.token);
+      assert.equal(me.status, 200, JSON.stringify(me.body));
+      assert.deepEqual(me.body, {project_id: projectA.id, key_id: readOnly.key.id, key_name: 'usage only', key_prefix: readOnly.key.prefix,
+        scopes: ['usage:read']});
+      assert.equal(readOnly.token.slice(0, 12), me.body.key_prefix);
     });
     const viaKey = await api('POST', '/v1/fetch', {url: 'https://shop.example.com/k'}, keyA.token);
     assert.equal(viaKey.body.status, 'succeeded');
@@ -179,6 +185,9 @@ test('self-service: identity, isolation, keys, idempotency and success-only cred
     await noDispatch(async () => {
       assert.equal((await api('GET', '/v1/usage', undefined, old.token)).status, 401);
       assert.equal((await api('GET', '/v1/usage', undefined, keyA.token)).status, 200);
+      const me = (await api('GET', '/v1/me', undefined, keyA.token)).body;
+      assert.deepEqual([me.project_id, me.key_id === old.key.id], [projectA.id, false], 'a rotated key keeps its project, not its id');
+      assert.equal((await api('GET', '/v1/me', undefined, old.token)).status, 401);
     });
     assert.equal((await console_('DELETE', `/projects/${projectA.id}/keys/${keyA.key.id}`, undefined, a)).body.revoked, true);
     await noDispatch(async () => assert.equal((await api('POST', '/v1/fetch', {url: 'https://shop.example.com/'}, keyA.token)).status, 401));

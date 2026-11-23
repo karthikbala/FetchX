@@ -22,8 +22,8 @@ import httpx
 
 from ._version import __version__
 from .errors import FetchXError, SpendLimitReached
-from .models import (Balance, Batch, BatchItem, CallEvent, Content, Estimate, FetchResult, FetchSummary, ListPage,
-                     ServiceStatus, Usage)
+from .models import (Balance, Batch, BatchItem, CallEvent, Content, Estimate, FetchResult, FetchSummary, ListPage, Me,
+                     NetworkCall, NetworkPage, ServiceStatus, Usage)
 
 log = logging.getLogger("fetchx")
 
@@ -97,13 +97,25 @@ def _asks_for_body(request: Mapping, defaults: Optional[Mapping] = None) -> bool
     return formats is None or "body" in formats
 
 
-def _query(**params: Any) -> Dict[str, str]:
-    clean = {}
+def _query(**params: Any) -> Dict[str, Any]:
+    clean: Dict[str, Any] = {}
     for key, value in params.items():
         if value is None:
             continue
-        clean[key] = ("true" if value else "false") if isinstance(value, bool) else str(value)
+        if isinstance(value, (list, tuple)):
+            clean[key] = [str(item) for item in value]  # a repeated parameter: contains=a&contains=b
+        else:
+            clean[key] = ("true" if value else "false") if isinstance(value, bool) else str(value)
     return clean
+
+
+def _network_query(type: Optional[str], content_type: Optional[str], host: Optional[str], first_party: Optional[bool],
+                   status: Any, page: Optional[int], phase: Optional[str], contains: Any, limit: Optional[int],
+                   cursor: Optional[str]) -> Dict[str, Any]:
+    """The query of GET /v1/fetch/{id}/network; contains may be one value or several."""
+    values = [contains] if isinstance(contains, str) else list(contains) if contains is not None else None
+    return _query(type=type, content_type=content_type, host=host, first_party=first_party, status=status, page=page,
+                  phase=phase, contains=values, limit=limit, cursor=cursor)
 
 
 def _retry_after(value: Optional[str]) -> Optional[float]:
@@ -712,6 +724,23 @@ class _Core:
         def flow() -> Flow:
             return model((yield from self._send(call, "GET", path, params=params or None)))
         return call, flow(), None
+
+    def _plan_network(self, fetch_id: Any, params: dict) -> Plan:
+        return self._plan_get_model("network", f"/v1/fetch/{_path_id(fetch_id)}/network", NetworkPage, params)
+
+    def _plan_network_call(self, fetch_id: Any, index: Any) -> Plan:
+        return self._plan_get_model("network_call", f"/v1/fetch/{_path_id(fetch_id)}/network/{_path_id(str(index))}", NetworkCall)
+
+    def _plan_network_body(self, fetch_id: Any, index: Any) -> Plan:
+        call = _Call("network_body")
+        return call, self._send(call, "GET", f"/v1/fetch/{_path_id(fetch_id)}/network/{_path_id(str(index))}/body", raw=True), None
+
+    def _plan_network_har(self, fetch_id: Any, page: Optional[int]) -> Plan:
+        call = _Call("network_har")
+        return call, self._send(call, "GET", f"/v1/fetch/{_path_id(fetch_id)}/network.har", params=_query(page=page) or None), None
+
+    def _plan_me(self) -> Plan:
+        return self._plan_get_model("me", "/v1/me", Me)
 
     def _plan_balance(self) -> Plan:
         return self._plan_get_model("balance", "/v1/balance", Balance)

@@ -52,6 +52,20 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   assert.equal(estimate.kind, 'batch');
   assert.equal(estimate.estimated, 2);
   assert.equal((await client.status()).status, 'operational');
+  // A network capture, and who is calling.
+  await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 1000 WHERE project = $1', [PROJECT]);
+  const captured = await client.fetch({url: 'https://shop.example.com/data', render: 'always', capture: {types: ['document', 'fetch']}});
+  assert.equal(captured.network.captured, 2);
+  const found = await client.network(captured.id, {contains: ['Lamp', 'desk'], first_party: true});
+  assert.deepEqual(found.items.map(item => [item.index, item.matched]), [[2, ['lamp']]]);
+  assert.equal((await client.network(captured.id, {contains: 'lamp', limit: 1})).items.length, 1);
+  assert.equal((await client.networkCall(captured.id, 2)).response.body, '{"items":[{"name":"Lamp"}]}');
+  const raw = await client.networkBody(captured.id, 2);
+  assert.deepEqual([new TextDecoder().decode(raw.body), raw.contentType], ['{"items":[{"name":"Lamp"}]}', 'application/json']);
+  assert.equal((await client.networkHar(captured.id)).log.version, '1.2');
+  await assert.rejects(client.network(page.id), {code: 'capture_not_found', status: 404});
+  assert.deepEqual(await client.me(), {project_id: PROJECT, key_id: null, key_name: null, key_prefix: null,
+    scopes: ['fetch:write', 'fetch:read', 'usage:read']});
   await assert.rejects(client.fetch({url: 'https://shop.example.com/', max_attempts: 9}),
     error => error instanceof FetchXError && error.code === 'invalid_request' && error.status === 400 && error.details.field === 'max_attempts');
   const stranger = new FetchXClient({url: 'https://api.fetchx.test', token: 'fxk_wrong', fetch: transportFor(app)});

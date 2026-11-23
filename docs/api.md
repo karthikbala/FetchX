@@ -12,6 +12,10 @@ The contract is [`openapi.json`](openapi.json); `test/api-contract.test.mjs` hol
 | `GET /v1/fetch/{id}` | `fetch:read` | The result; `include_body=false` for polling (the body only appears when `formats` asked for `body`) |
 | `GET /v1/fetch/{id}/content` | `fetch:read` | The body as received, with its Content-Type |
 | `GET /v1/fetch/{id}/screenshot` | `fetch:read` | The JPEG screenshot |
+| `GET /v1/fetch/{id}/network` | `fetch:read` | A request made with `capture`: the page's recorded calls, filtered (`type`, `content_type`, `host`, `first_party`, `status`, `page`, `phase`), searched (`contains`, up to 5 values) and paged |
+| `GET /v1/fetch/{id}/network/{index}` | `fetch:read` | One recorded call in full: headers (secrets masked unless `unmask`), request and response bodies (over 1 MB by `body_url`) |
+| `GET /v1/fetch/{id}/network/{index}/body` | `fetch:read` | One recorded call's response body, as stored |
+| `GET /v1/fetch/{id}/network.har` | `fetch:read` | The recorded calls as HAR 1.2, optionally one `page` |
 | `DELETE /v1/fetch/{id}` | `fetch:read` | Delete everything the site sent, now |
 | `POST /v1/batches` | `fetch:write` | Many URLs in one job (up to 1000), checked whole, then run at each site's pace. 202 queued, 200 for a replayed key |
 | `GET /v1/batches` | `fetch:read` | List batches, newest first: `status`, `limit`, `cursor` |
@@ -20,10 +24,11 @@ The contract is [`openapi.json`](openapi.json); `test/api-contract.test.mjs` hol
 | `POST /v1/batches/{id}/cancel` | `fetch:write` | Stop the items that have not started |
 | `GET /v1/balance` | `usage:read` | Credits available now, reserved, trial and purchased, and whether a payment hold is on |
 | `GET /v1/usage` | `usage:read` | Balance and usage for a day, a month or a range |
+| `GET /v1/me` | any valid key | The calling project (`project_id`, the same after a key is rotated) and key (`key_id`, `key_name`, `key_prefix`, `scopes`) |
 | `POST /v1/estimate` | `fetch:write` | What a request, or a batch of up to 1,000, would cost and how long it would take. Nothing is sent, reserved or charged |
 | `GET /v1/status` | none | The API's state, components and notices; answers during maintenance and to any origin |
 
-Keys are `fxk_` console keys with scopes, or a `tokenHash` in `config.projects` (unmetered, all scopes). The console API (`/control/...`, behind the website's bridge) mirrors these per project; see [console](console.md).
+Keys are `fxk_` console keys with scopes, or a `tokenHash` in `config.projects` (unmetered, all scopes; `GET /v1/me` shows such a key with null `key_id`, `key_name` and `key_prefix`). An operation's `x-scope` in the contract is the scope it needs, or `any` for one every valid key may call (`ANY_SCOPE` in `src/api/v1.mjs`). The console API (`/control/...`, behind the website's bridge) mirrors these per project; see [console](console.md).
 
 ## A request's life
 
@@ -39,6 +44,10 @@ If the engine's answer is lost after the job may have been sent, the reservation
 `scroll` on a request (`auto` up to 10 screens, `off`, or 1 to 50 screens) is the engine's: the platform passes it on and never prices it. A scrolled page loads more, so on a residential route its extra traffic counts toward the per-MB charge like any other (Karthik, 2026-11-20); `scroll: off` avoids that.
 
 A successful result carries `data.page` (number, `previous_id`, screens scrolled, whether it reached the end) and `data.next_page` (`link`, `click`, `scroll` or `null`). `POST /v1/fetch/{id}/next` (`FetchFront.submitNext`) goes through the same admission as a fetch: a new id, a reservation and a pending settlement row, with the ceiling of a GET that may load the deepest page's traffic (150 MB; `PAGE_DEPTH` in `src/fetch/front.mjs`, the engine's limit). A fetch with `scroll` past 10 reserves for 2.5 MB more a screen. `EngineClient.startNextJob` sends `{id, tenant, request, allowed_steps}` to `/internal/v1/jobs/{previous}/next`, where `request` holds only what may change per page (`scroll`, `max_credits`, `timeout_ms`, `async`, `webhook_url`, `idempotency_key`, `tags`). The engine builds the rest from the earlier job, on the same kept session where it can. Its refusals (`404 not_found`, `409 pending`, `409 no_next_page` with `details.reason`, `410 content_expired`) release the reservation like any other refusal. A next page settles, and is charged, like any job.
+
+## Network capture
+
+`capture` on a request (`true` or settings, see the contract's `CaptureSettings`) is the engine's: the platform passes it on, never prices it, and serves the four `/v1/fetch/{id}/network...` routes from the engine's `/internal/v1/jobs/{id}/network...` with the project as tenant (`EngineClient.networkList`, `networkCall`, `networkBody`, `networkHar`; the query is passed on as sent, `contains` repeated). The engine records the calls in the browser, masks secret headers, drops trackers, stores the calls as content (7 days or `DELETE`, then `410 content_expired`) and answers `404 capture_not_found` for a request made without it; see the engine's `docs/browser.md`. A request with `capture` needs a browser, so the engine refuses it with `render: never`, a method other than GET or a route without a browser (`400 invalid_request`, field `capture`); the platform's reservation is released like any refusal. The result's `network` summary (top level, also on a failed result) comes from the engine unchanged.
 
 ## Batches
 
@@ -67,7 +76,7 @@ Each item gets `credits` (`typical` and `high` for one success, `expected` weigh
 
 ## Errors
 
-Refused calls are `{error: {code, message, details?}}` with a 4xx (`src/api/v1.mjs`). They store nothing under the idempotency key, so the caller can resend with the same key, except after `409 idempotency_conflict`. Failed fetches are HTTP 200 with `status: failed` and `error: {code, message, next: {action, retry_after_seconds?, retry_with_new_key, detail}}`; the engine maps each code to the next step (`nextAction` in the engine's `src/fetch/service.mjs`). A key replays its first result for 90 days, failures included, so `retry_with_new_key` says whether sending the request again with a new key can help. The code lists are in the contract and in the [published errors page](https://fetchx.ai/docs/errors), which has one row per code with its action and whether to retry.
+Refused calls are `{error: {code, message, details?}}` with a 4xx (`src/api/v1.mjs`). A `503 unavailable` (the engine could not be reached or answered badly) carries `Retry-After: 30`, `retry_after_seconds` and `details.status_url`, so a client waits and resends with the same key. They store nothing under the idempotency key, so the caller can resend with the same key, except after `409 idempotency_conflict`. Failed fetches are HTTP 200 with `status: failed` and `error: {code, message, next: {action, retry_after_seconds?, retry_with_new_key, detail}}`; the engine maps each code to the next step (`nextAction` in the engine's `src/fetch/service.mjs`). A key replays its first result for 90 days, failures included, so `retry_with_new_key` says whether sending the request again with a new key can help. The code lists are in the contract and in the [published errors page](https://fetchx.ai/docs/errors), which has one row per code with its action and whether to retry.
 
 Every result has `page_status` (`content`, `not_found`, `empty`, `challenge`, `error`, null while pending) and `challenge` (the bot-protection vendor met, how many attempts met a wall, and whether rotation, a captcha or a wait got past it). Both come from the engine unchanged.
 

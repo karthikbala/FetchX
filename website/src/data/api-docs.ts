@@ -43,6 +43,8 @@ const createBatch = contractOperation('createBatch');
 const batchOperations = contractOperations.filter(operation => operation.path.startsWith('/v1/batches'));
 const createEstimate = contractOperation('createEstimate');
 const getStatus = contractOperation('getStatus');
+const getMe = contractOperation('getMe');
+const scopeText = (scope: string | undefined) => scope === 'any' ? 'any valid API key' : scope ? '`' + scope + '`' : 'none';
 const hostedApi = 'https://app.fetchx.ai';
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 const openApiLink: DocBlock = { kind: 'link', label: 'OpenAPI contract (JSON)', href: '/openapi.json' };
@@ -81,7 +83,7 @@ const isJson = (operation: (typeof contractOperations)[number]) =>
 
 function operationSection(operation: (typeof contractOperations)[number]): DocSection {
   const blocks: DocBlock[] = [{ kind: 'text', text: '`' + operation.method + ' ' + operation.path + '` · '
-    + (operation.scope ? 'key scope `' + operation.scope + '`.' : 'no API key needed.') }];
+    + (operation.scope === 'any' ? 'any valid API key.' : operation.scope ? 'key scope `' + operation.scope + '`.' : 'no API key needed.') }];
   if (operation.description) blocks.push({ kind: 'text', text: operation.description });
   const parameters = parameterRows(operation);
   if (parameters.length) blocks.push({ kind: 'table', headers: ['Parameter', 'In', 'Type', 'Required', 'Description'], rows: parameters });
@@ -116,6 +118,7 @@ const requestErrorRows = [
   ['402', '`payment_hold`', 'Spending is paused while a payment issue is resolved.'],
   ['403', '`api_key_scope_forbidden`', 'The key does not have the scope this endpoint needs.'],
   ['404', '`not_found`', 'No request with that id in this project.'],
+  ['404', '`capture_not_found`', 'The request was made without `capture`, so it has no network calls to read.'],
   ['404', '`route_not_found`', 'No such route. `error.details` links the docs, the changelog and the status page.'],
   ['409', '`idempotency_conflict`', 'The `idempotency_key` was used before with a different body. Use a new key.'],
   ['409', '`no_next_page`', 'A next page was asked for a request that has none. `error.details.reason` is `failed`, `none_found`, `limit` (the list is too deep to reach again) or `url_not_allowed`.'],
@@ -124,7 +127,7 @@ const requestErrorRows = [
   ['410', '`content_expired`', 'The request\'s content expired (7 days) or was deleted, so its body or its next page can no longer be read. Fetch it again.'],
   ['413', '`request_too_large`', 'The request body is over 1 MB.'],
   ['429', '`too_many_requests`', 'The project has too many requests running. Wait `retry_after_seconds`.'],
-  ['503', '`unavailable`', 'FetchX cannot take work right now. Wait and resend with the same key.'],
+  ['503', '`unavailable`', 'FetchX cannot take work right now. Wait for `Retry-After` (also `retry_after_seconds`) and resend with the same key.'],
   ['503', '`extract_unavailable`', 'The request asks for `extract`, and FetchX cannot read pages into JSON right now. Nothing was fetched or charged. Wait `retry_after_seconds`, or send it without `extract`.'],
   ['503', '`maintenance`', 'Planned maintenance has paused the API. Nothing was run or charged. Wait for `Retry-After` and resend with the same key; `error.details.status_url` shows progress.'],
 ];
@@ -257,8 +260,10 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         blocks: [
           { kind: 'text', text: 'Every API call sends `Authorization: Bearer fxk_...`. A key belongs to one project; requests, results and credits are scoped to it. A missing or revoked key returns 401; a key without the endpoint’s scope returns 403.' },
           { kind: 'table', headers: ['Scope', 'Endpoints'], rows: scopeRows },
+          { kind: 'text', text: '`GET /v1/me` works with any valid key, whatever its scopes. It says which project and key are calling and what the key may do, so a tool can check a key before it starts. `project_id` stays the same when a key is rotated or replaced; use it to recognise the customer.' },
         ],
       },
+      operationSection(getMe),
       {
         id: 'lifecycle',
         title: 'Create, rotate and revoke',
@@ -342,6 +347,19 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
       },
       operationSection(createNextPage),
       {
+        id: 'capture',
+        title: 'Read the page’s own API calls',
+        blocks: [
+          { kind: 'text', text: 'Many pages fill themselves in from a JSON API. Pass `capture: true` and the browser records the calls the page makes while it loads and scrolls: its documents, XHR and fetch requests, with their headers and response bodies. The result’s `network` says how many calls were kept and how many were dropped, and why. Read them with `GET /v1/fetch/{id}/network`, and use `contains` with a value the page shows (a name, a price) to find the call that carries the data. `GET /v1/fetch/{id}/network/{index}` returns one call in full, and `GET /v1/fetch/{id}/network.har` all of them as a HAR file for browser developer tools.' },
+          { kind: 'code', title: 'Find the call behind the page', snippets: [{ label: 'cURL', language: 'bash', code: `curl "$FETCHX_URL/v1/fetch" -H "Authorization: Bearer $FETCHX_TOKEN" -H "Content-Type: application/json" \\
+  -d '{"url": "https://shop.example.com/search?q=lamp", "capture": true}'
+curl -G "$FETCHX_URL/v1/fetch/$ID/network" -H "Authorization: Bearer $FETCHX_TOKEN" \\
+  --data-urlencode contains=Lamp --data-urlencode content_type=json` }] },
+          { kind: 'text', text: 'Capture adds nothing to the price, but it needs a browser: with `render: auto` it makes the request render, and it is refused with `render: never` or a method other than GET. Pass an object instead of `true` to choose `types` (document, xhr and fetch by default), `max_requests` (200), `max_body_bytes` (2 MB per body), `bodies` (`text`, `none` or `all`) and `first_party_only`. Calls to analytics, advertising, tag manager and consent hosts are dropped unless `include_trackers` is set. Cookies, Authorization and other secret headers are masked as `<masked len=N sha=XXXXXX>`, so two calls can be seen to carry the same value without showing it, unless `unmask` is set.' },
+          { kind: 'text', text: 'Each call says on which page and when it was made: `phase` is `warmup` (a visit to the site’s home page first), `load`, `scroll`, or `replay` (getting back to the earlier page for a next page). A next page keeps the earlier request’s `capture` unless you send `capture: null`. The calls are stored encrypted with the rest of the content: 7 days, or until you DELETE the request.' },
+        ],
+      },
+      {
         id: 'response',
         title: 'The response',
         blocks: [
@@ -419,12 +437,12 @@ for item in fetchx.batch_results(batch['id']):
     description: 'Read a result, download its body or screenshot, list requests and delete stored content.',
     group: 'API reference',
     sections: [
-      ...contractOperations.filter(operation => ![createFetch, createNextPage, getUsage, getBalance, createEstimate, getStatus, ...batchOperations]
+      ...contractOperations.filter(operation => ![createFetch, createNextPage, getUsage, getBalance, createEstimate, getStatus, getMe, ...batchOperations]
         .includes(operation)).map(operationSection),
       {
         id: 'retention',
         title: 'Retention',
-        blocks: [{ kind: 'text', text: 'Everything the site sent (body, headers, cookies, formats, screenshot) is stored encrypted for 7 days, or until you DELETE it. The summary, attempts and credits stay for 90 days. Reading never contacts the site and is never charged.' }],
+        blocks: [{ kind: 'text', text: 'Everything the site sent (body, headers, cookies, formats, screenshot, and the network calls of a request made with `capture`) is stored encrypted for 7 days, or until you DELETE it. The summary, attempts and credits stay for 90 days. Reading never contacts the site and is never charged.' }],
       },
     ],
   },
@@ -558,7 +576,7 @@ export function verify(rawBody, headers, secret) {
         blocks: [
           { kind: 'text', text: '`/v1` is the only version. Every change is in the changelog at https://fetchx.ai/changelog; a breaking change is announced there as a deprecation at least 30 days before the route is retired. `GET /v1/status` needs no API key.' },
           { kind: 'table', headers: ['Method and path', 'Key scope', 'Purpose'], rows: contractOperations.map(operation => [
-            '`' + operation.method + ' ' + operation.path + '`', operation.scope ? '`' + operation.scope + '`' : 'none', operation.summary]) },
+            '`' + operation.method + ' ' + operation.path + '`', scopeText(operation.scope), operation.summary]) },
           openApiLink,
           { kind: 'link', label: 'JavaScript and Python clients', href: 'https://github.com/karthikbala/FetchX/tree/main/clients' },
         ],
