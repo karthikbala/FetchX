@@ -17,14 +17,15 @@ from .aio import AsyncFetchX
 from .client import FetchX
 from .errors import FetchFailed, FetchXError, SpendLimitReached
 from .models import (Balance, Batch, BatchItem, CallEvent, Challenge, Content, CreditBreakdown, Estimate,
-                     EstimateCredits, FetchFailure, FetchResult, FetchSummary, ListPage, NextPage, NextStep, PageInfo,
-                     ServiceStatus, Usage)
+                     EstimateCredits, FetchFailure, FetchResult, FetchSummary, ListPage, Me, NetworkCall, NetworkPage,
+                     NextPage, NextStep, PageInfo, ServiceStatus, Usage)
 
 _logging.getLogger("fetchx").addHandler(_logging.NullHandler())
 
 __all__ = [
     "AsyncFetchX", "Balance", "Batch", "BatchItem", "CallEvent", "Challenge", "Content", "CreditBreakdown",
     "DEFAULT_URL", "Estimate", "EstimateCredits", "FetchFailed", "FetchFailure", "FetchResult", "FetchSummary",
-    "FetchX", "FetchXError", "ListPage", "NextPage", "NextStep", "PageInfo", "ServiceStatus", "SpendLimitReached",
+    "FetchX", "FetchXError", "ListPage", "Me", "NetworkCall", "NetworkPage", "NextPage", "NextStep", "PageInfo",
+    "ServiceStatus", "SpendLimitReached",
     "Usage", "__version__", "new_key", "site_of",
 ]

@@ -323,10 +323,10 @@ export class ControlIdentity{
  }
  async authenticateKey(token){
   this.settings();if(!tokenValid(token,'fxk'))fail('unauthorized',401);
-  const row=(await this.store.pool.query('SELECT k.id,k.project,k.scopes,p.status FROM control_keys k JOIN control_projects p ON p.id=k.project WHERE k.token_hash=$1 AND k.revoked_at IS NULL',[hash(token)])).rows[0];
+  const row=(await this.store.pool.query('SELECT k.id,k.project,k.scopes,k.prefix,k.name,p.status FROM control_keys k JOIN control_projects p ON p.id=k.project WHERE k.token_hash=$1 AND k.revoked_at IS NULL',[hash(token)])).rows[0];
   if(!row)fail('unauthorized',401);this.assertProject(row);await this.hydrateProject(row.project);
   if(!(await this.store.pool.query('UPDATE control_keys SET last_used_at=clock_timestamp() WHERE id=$1 AND revoked_at IS NULL RETURNING id',[row.id])).rowCount)fail('unauthorized',401);
-  return {project:row.project,key_id:row.id,scopes:row.scopes};
+  return {project:row.project,key_id:row.id,scopes:row.scopes,prefix:row.prefix,name:row.name};
  }
  async isCredential(value){
   if(typeof value!=='string')return false;const token=value.trim().replace(/^Bearer\s+/i,'');

@@ -33,6 +33,7 @@ A request is a `POST /v1/fetch` body, given as a dict, as keyword fields, or bot
 | `body`, `content` | The site's body as text and as bytes, when it was asked for (see below) |
 | `source_status`, `final_url`, `content_type`, `headers`, `cookies`, `rendered` | What the site answered |
 | `next_page`, `page` | How the page leads on, and where it sits in a list |
+| `network` | With `capture`: calls kept and dropped, and where to read them |
 | `credits`, `credits_max`, `balance`, `breakdown`, `step` | What it cost and which step got it |
 | `error`, `error_code`, `next_action`, `retry_with_new_key`, `retry_after_seconds` | Why it failed and what to do |
 | `challenge`, `attempts`, `skipped`, `fixes` | The walls it met and the route it took |
@@ -65,6 +66,20 @@ while page.has_next_page and len(pages) < 5:
 
 Each next page is a new request with its own id, key, `next_page` and charge, on the earlier request's site slot.
 
+## The page's own network calls
+
+`capture=True` (or a dict of settings: `types`, `max_requests`, `max_body_bytes`, `bodies`, `first_party_only`, `include_trackers`, `unmask`) has a browser record the calls the page makes, with their headers and bodies. Use `contains` to find the call that carries a value the page shows:
+
+```python
+result = fx.fetch(url="https://shop.example.com/search?q=lamp", capture=True)
+found = fx.network(result, contains=["Lamp", "19.99"], content_type="json")
+call = fx.network_call(result, found.items[0]["index"])
+print(call.url, call.body)                   # the JSON the page was built from
+har = fx.network_har(result)                 # for browser developer tools
+```
+
+`network()` returns a `NetworkPage` (`items`, `next_cursor`, `network`), `network_call()` a `NetworkCall` (`request`, `response`, `url`, `body`) and `network_body()` the raw `Content` of a body too large to return inline. Secret headers come back masked unless the request set `unmask`. A next page keeps `capture` unless it passes `capture=None`.
+
 ## Batches
 
 ```python
@@ -78,7 +93,7 @@ for url, result in zip(urls, results):
 
 ## Cost and account
 
-`estimate()` takes a fetch body or a batch body and says what it would cost and take, without sending or reserving anything: `estimate.credits.expected`, `.typical`, `.high`, `estimate.covers_expected`, and per item `basis` and `notes`. `balance()`, `usage(period="day")` and `status()` read the account and the service.
+`estimate()` takes a fetch body or a batch body and says what it would cost and take, without sending or reserving anything: `estimate.credits.expected`, `.typical`, `.high`, `estimate.covers_expected`, and per item `basis` and `notes`. `balance()`, `usage(period="day")` and `status()` read the account and the service. `me()` says which project and key are calling (`project_id`, `key_id`, `key_name`, `key_prefix`, `scopes`); any valid key may call it, and `project_id` stays the same when the key is rotated.
 
 ## Asyncio
 
@@ -97,7 +112,7 @@ Requests to the same site still take turns, so a `gather` over many sites runs o
 
 ## Tests without the network
 
-`fetchx.testing.FakeFetchX` is an in-memory FetchX that answers in the shapes of the public contract, which this repository's tests hold it to: 202 and polling, key replay and conflicts, next pages, stored content and screenshots, batches, estimates, balance, usage and status, with credits on every result. It knows nothing about any real site: pages are what you give it.
+`fetchx.testing.FakeFetchX` is an in-memory FetchX that answers in the shapes of the public contract, which this repository's tests hold it to: 202 and polling, key replay and conflicts, next pages, stored content and screenshots, network captures, batches, estimates, balance, usage, status and `me`, with credits on every result. It knows nothing about any real site: pages are what you give it, including the calls a page makes (`FakePage(..., network=[{"url": ".../api/items", "type": "xhr", "body": {...}}])`), which a request with `capture` then records.
 
 ```python
 from fetchx.testing import FakeFetchX, FakePage
@@ -125,6 +140,10 @@ assert [r["url"] for r in fake.site_requests] == ["https://shop.example.com/p/1"
 | `GET /v1/fetch` | `list(status=, tag=, idempotency_key=, since=, limit=, cursor=)` |
 | `GET /v1/fetch/{id}/content` | `content(id)` |
 | `GET /v1/fetch/{id}/screenshot` | `screenshot(id)` |
+| `GET /v1/fetch/{id}/network` | `network(id, type=, content_type=, host=, first_party=, status=, page=, phase=, contains=, limit=, cursor=)` |
+| `GET /v1/fetch/{id}/network/{index}` | `network_call(id, index)` |
+| `GET /v1/fetch/{id}/network/{index}/body` | `network_body(id, index)` |
+| `GET /v1/fetch/{id}/network.har` | `network_har(id, page=)` |
 | `DELETE /v1/fetch/{id}` | `delete(id)` |
 | `POST /v1/batches` | `submit_batch(items, defaults=, idempotency_key=, tags=, webhook_url=)`, `run_batch(...)` |
 | `GET /v1/batches/{id}` | `batch(id)`, also `get_batch`, `wait_batch(id)` |
@@ -135,6 +154,7 @@ assert [r["url"] for r in fake.site_requests] == ["https://shop.example.com/p/1"
 | `GET /v1/balance` | `balance()` |
 | `GET /v1/usage` | `usage(period=, since=, until=)` |
 | `GET /v1/status` | `status()` |
+| `GET /v1/me` | `me()` |
 
 ## The single-file client
 

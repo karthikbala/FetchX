@@ -6,6 +6,20 @@
   },
   "releases": [
     {
+      "version": "1.7.0",
+      "date": "2026-11-23",
+      "title": "Network capture on browser pages, GET /v1/me, and Retry-After when FetchX is busy",
+      "changes": [
+        {"type": "added", "text": "capture on POST /v1/fetch (and /next, and batch items): a page read in a browser records its own network calls, so you can find the JSON or GraphQL call that carries the data and fetch it directly with render: never. capture: true records documents, XHR and fetch calls; an object sets types (also script, eventsource, other), max_requests (up to 1000, default 200), max_body_bytes (up to 10 MB, default 2 MB), bodies (text, none or all), first_party_only, include_trackers and unmask. Capture is free. With render: auto it makes FetchX use a browser, which POST /v1/estimate shows."},
+        {"type": "added", "text": "The result has a top-level network field: calls captured, calls dropped by reason (trackers, excluded_types, third_party, over_limit), truncated, the attempt whose browser recorded them, complete, expires_at, list_url and har_url. A failed request still has its capture."},
+        {"type": "added", "text": "GET /v1/fetch/{id}/network lists the calls in order, filtered by type, content_type, host (or *.example.com), first_party, status (200 or 2xx), page, phase and contains (values the response body holds, compared without case; a JSON body is also searched as parsed). GET /v1/fetch/{id}/network/{index} gives one call with its headers and bodies (a body over 1 MB by body_url, GET /v1/fetch/{id}/network/{index}/body). GET /v1/fetch/{id}/network.har is the capture as a HAR 1.2 file for browser developer tools. All need fetch:read."},
+        {"type": "added", "text": "Each call has phase: warmup (FetchX's own visit to a protected site's home page before yours), load, scroll (after scrolling started) or replay (getting back to the earlier page on /next), and frame: main or child. Cookie, Set-Cookie, Authorization and token, session, password and API-key headers are masked as <masked len=N sha=xxxxxx> unless you send unmask: true. Analytics, advertising and consent calls are left out unless include_trackers is true."},
+        {"type": "added", "text": "Captured calls are kept with the request's content: 7 days, or until DELETE /v1/fetch/{id}, then 410 content_expired. A request made without capture answers 404 capture_not_found. capture with render: never, a method other than GET, or a route without a browser is refused with invalid_request, error.details.field capture."},
+        {"type": "added", "text": "GET /v1/me: the project (project_id stays the same when a key is rotated), this key's id, name and prefix, and its scopes. Any valid key may call it."},
+        {"type": "fixed", "text": "A 503 unavailable now always carries a Retry-After header and retry_after_seconds (30 unless FetchX knows better), also when the API is up but its fetch engine does not answer."}
+      ]
+    },
+    {
       "version": "1.6.1",
       "date": "2026-11-21",
       "title": "Blocked IPs move to another country, captchas on a site's home page are solved, and walls say whose they are",

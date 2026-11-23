@@ -10,21 +10,23 @@
 
 It answers in the shapes of the public contract (docs/openapi.json, which the SDK's tests hold
 it to): 202 and polling, idempotency-key replay and conflicts, next pages, stored content and
-screenshots, batches with paged items, estimates, balance, usage, status and credits on every
-result. Tests can make it fail a fetch (``fail``), refuse calls (``refuse``, ``unavailable``)
+screenshots, network captures (``capture``: the page's own calls, given with ``FakePage(network=...)``),
+batches with paged items, estimates, balance, usage, status, the calling key (``me``) and credits
+on every result. Tests can make it fail a fetch (``fail``), refuse calls (``refuse``, ``unavailable``)
 or lose answers (``drop``) to exercise the rules around them. Pages are whatever you give it;
 it knows nothing about any real site.
 """
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple, Union
-from urllib.parse import parse_qs, unquote
+from urllib.parse import parse_qs, parse_qsl, unquote, urlsplit
 
 import httpx
 
@@ -34,8 +36,8 @@ from .client import FetchX
 
 FETCH_FIELDS = frozenset({"url", "method", "headers", "body", "body_base64", "render", "wait_for", "scroll", "country",
                           "route", "formats", "block_resources", "expect", "extract", "max_attempts", "fix_headers",
-                          "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key", "tags"})
-NEXT_FIELDS = frozenset({"scroll", "expect", "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key",
+                          "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key", "tags", "capture"})
+NEXT_FIELDS = frozenset({"scroll", "expect", "capture", "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key",
                          "tags"})
 FORMATS = frozenset({"body", "markdown", "text", "links", "metadata", "screenshot"})
 FAILURE_CODES = frozenset({"blocked", "rate_limited", "content_missing", "login_required", "site_error", "unreachable",
@@ -46,6 +48,18 @@ NEXT_ACTIONS = frozenset({"retry_after", "retry_later", "check_expect", "use_aut
 _ATTEMPT_RESULTS = frozenset({"blocked", "rate_limited", "login_required", "site_error", "content_missing",
                               "unreachable", "too_large", "uncertain", "url_not_allowed"})
 FAKE_JPEG = b"\xff\xd8\xff\xe0fake-jpeg\xff\xd9"
+CAPTURE_TYPES = ("document", "xhr", "fetch", "script", "eventsource", "other")
+CAPTURE_DEFAULTS: Dict[str, Any] = {"types": ["document", "xhr", "fetch"], "max_requests": 200,
+                                    "max_body_bytes": 2_000_000, "bodies": "text", "first_party_only": False,
+                                    "include_trackers": False, "unmask": False}
+CAPTURE_NEEDS_BROWSER = "capture records what a browser loads: use render always or auto with GET"
+_CAPTURE_TOTAL_BYTES = 25_000_000
+_INLINE_BODY_BYTES = 1_000_000
+_NETWORK_QUERY = frozenset({"type", "content_type", "host", "first_party", "status", "page", "phase", "contains",
+                            "limit", "cursor"})
+_TEXT_BODY = re.compile(r"^(?:text/|application/(?:json|[a-z0-9.+-]+\+json|x-ndjson|ndjson|xml|[a-z0-9.+-]+\+xml|"
+                        r"javascript|x-javascript|ecmascript|graphql|x-www-form-urlencoded))", re.I)
+_SECRET_HEADER = re.compile(r"token|secret|api[-_]?key|session|password|credential", re.I)
 
 
 class FakePage:
@@ -57,7 +71,8 @@ class FakePage:
                  extract: Any = None, next_url: Optional[str] = None, next_how: Optional[str] = None,
                  credits: Optional[int] = None, step: Optional[str] = None, rendered: bool = False,
                  headers: Optional[Dict[str, str]] = None, cookies: Optional[List[dict]] = None,
-                 screenshot: Optional[bytes] = None, page_status: Optional[str] = None):
+                 screenshot: Optional[bytes] = None, page_status: Optional[str] = None,
+                 network: Optional[List[dict]] = None):
         self.content = body.encode("utf-8") if isinstance(body, str) else bytes(body)
         self.status_code = status_code
         self.content_type = content_type
@@ -69,6 +84,12 @@ class FakePage:
         self.headers, self.cookies = headers or {}, cookies or []
         self.screenshot = screenshot
         self.page_status = page_status
+        # The calls the page makes after its own document, as a request made with capture records
+        # them: dicts with "url" and optionally "method" (GET), "type" (fetch), "status" (200),
+        # "content_type" (application/json), "body" (str, bytes, or a dict or list sent as JSON),
+        # "request_headers" and "response_headers" (dicts or name/value pairs), "request_body",
+        # "frame" (main), "tracker" (False) and "error" (None, or why no response came).
+        self.network = network or []
 
 
 PageLike = Union[FakePage, str, bytes, Tuple[int, str, Union[str, bytes]], Callable[[dict], Any], None]
@@ -95,6 +116,8 @@ class FakeFetchX:
     """An in-memory FetchX v1. ``pages`` maps URLs to what the site answers (see ``add``)."""
 
     base_url = "https://fetchx.test"
+    project_id = "cp_00000000-0000-4000-8000-0000000000fa"   # what GET /v1/me names
+    key_id = "00000000-0000-4000-8000-0000000000fb"
 
     def __init__(self, pages: Optional[Dict[str, PageLike]] = None, *, credits: int = 1, step: str = "http",
                  pending_polls: int = 0, balance: Optional[int] = 1_000_000, batch_step: int = 2,
@@ -195,7 +218,8 @@ class FakeFetchX:
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         method, path = request.method, request.url.raw_path.decode("ascii").split("?", 1)[0]
-        params = {key: values[-1] for key, values in parse_qs(request.url.query.decode()).items()}
+        query = parse_qs(request.url.query.decode())
+        params = {key: values[-1] for key, values in query.items()}
         try:
             payload = json.loads(request.content) if request.content else None
         except ValueError:
@@ -214,14 +238,15 @@ class FakeFetchX:
                     headers = {} if after is None else {"retry-after": str(after)}
                     return _error(spec["status"], spec["code"], spec["message"], spec["details"],
                                   spec["retry_after_seconds"], headers)
-            response = self._route(method, path, params, payload)
+            response = self._route(method, path, params, payload, query, request.headers.get("authorization", ""))
             for rule in self._drops:
                 if rule.matches(method, path):
                     rule.left -= 1
                     raise httpx.ReadTimeout("fake FetchX: the answer was lost", request=request)
             return response
 
-    def _route(self, method: str, path: str, params: dict, payload: Any) -> httpx.Response:
+    def _route(self, method: str, path: str, params: dict, payload: Any, query: Optional[dict] = None,
+               auth: str = "") -> httpx.Response:
         parts = [unquote(part) for part in path.strip("/").split("/")]
         if parts[:1] != ["v1"]:
             return _error(404, "route_not_found", "There is no such route")
@@ -238,6 +263,14 @@ class FakeFetchX:
             return self._post_next(rest[1], payload)
         if len(rest) == 3 and rest[0] == "fetch" and rest[2] in ("content", "screenshot") and method == "GET":
             return self._stored(rest[1], rest[2])
+        if len(rest) == 3 and rest[0] == "fetch" and rest[2] == "network" and method == "GET":
+            return self._network_list(rest[1], query or {})
+        if len(rest) == 3 and rest[0] == "fetch" and rest[2] == "network.har" and method == "GET":
+            return self._network_har(rest[1], query or {})
+        if len(rest) == 4 and rest[0] == "fetch" and rest[2] == "network" and method == "GET":
+            return self._network_call(rest[1], rest[3])
+        if len(rest) == 5 and rest[0] == "fetch" and rest[2] == "network" and rest[4] == "body" and method == "GET":
+            return self._network_body(rest[1], rest[3])
         if rest == ["batches"] and method == "POST":
             return self._post_batch(payload)
         if rest == ["batches"] and method == "GET":
@@ -256,6 +289,8 @@ class FakeFetchX:
             return _json(200, self._usage())
         if rest == ["status"] and method == "GET":
             return _json(200, self._status())
+        if rest == ["me"] and method == "GET":
+            return _json(200, self._me(auth))
         return _error(404, "route_not_found", "There is no such route")
 
     # ----------------------------------------------------------------- fetches
@@ -283,7 +318,7 @@ class FakeFetchX:
         url = body.get("url")
         if not isinstance(url, str) or not re.match(r"^https?://[^/\s]+", url):
             return _invalid("url")
-        return self._check_common(body)
+        return self._check_common(body) or _check_capture(body)
 
     def _check_common(self, body: dict) -> Optional[httpx.Response]:
         formats = body.get("formats")
@@ -376,9 +411,14 @@ class FakeFetchX:
                 "attempts": [], "skipped": [], "fixes": [], "challenge": None, "error": None, "data": None}
         credits = {"charged": 0, "max": None if self.balance is None else (cap or self.dearest_step),
                    "balance": self.balance, "breakdown": None}
+        captured = _capture_settings(request.get("capture")) is not None
+        if captured:
+            base["network"] = None
         if state["polls_left"] > 0 and not force:
             return {**base, "status": "pending", "page_status": None, "finished_at": None, "credits": credits}
         base["finished_at"] = _iso(state["finished"])
+        if captured:
+            base["network"] = self._network_summary(state)
         formats = request.get("formats") or ["body"]
         if failure is not None:
             walled = failure["page_status"] == "challenge"
@@ -392,12 +432,12 @@ class FakeFetchX:
             if status_code is not None:
                 wall = b"<html><body>fake wall</body></html>"
                 last = {"status_code": status_code, "final_url": request["url"], "content_type": "text/html",
-                        "rendered": False, "body_bytes": len(wall)}
+                        "rendered": captured, "body_bytes": len(wall)}
                 if state["deleted"]:
                     last["content_expired"] = True
                 elif body and "body" in formats:
                     last.update(body=wall.decode(), body_encoding="utf-8")
-            attempt = {"transport": "http", "class": "datacenter", "country": "US",
+            attempt = {"transport": "browser" if captured else "http", "class": "datacenter", "country": "US",
                        "result": failure["code"] if failure["code"] in _ATTEMPT_RESULTS else "failed",
                        "status_code": status_code, "ms": 100}
             if walled and failure["vendor"]:
@@ -410,7 +450,7 @@ class FakeFetchX:
         page_status = page.page_status or ("content" if status_code < 400 else
                                            "not_found" if status_code in (404, 410) else "error")
         data: Dict[str, Any] = {"status_code": status_code, "final_url": request["url"],
-                                "content_type": page.content_type, "rendered": page.rendered,
+                                "content_type": page.content_type, "rendered": page.rendered or captured,
                                 "body_bytes": len(page.content)}
         if state["deleted"]:
             data["content_expired"] = True
@@ -443,7 +483,7 @@ class FakeFetchX:
         credits["breakdown"] = {"step": step, "step_credits": state["charged"], "captcha_credits": 0,
                                 "traffic_mb": 0.1, "included_mb": None, "traffic_credits": 0,
                                 "extract_tokens": None, "extract_credits": 0}
-        attempt = {"transport": "browser" if step.startswith("browser") else "http",
+        attempt = {"transport": "browser" if step.startswith("browser") or captured else "http",
                    "class": "residential" if step.endswith("residential") else "datacenter", "country": "US",
                    "result": "success", "status_code": status_code, "ms": 100}
         return {**base, "status": "succeeded", "page_status": page_status, "data": data, "credits": credits,
@@ -534,11 +574,151 @@ class FakeFetchX:
         request = {k: v for k, v in previous["request"].items() if k not in ("idempotency_key", "max_credits")}
         request.update({k: v for k, v in body.items() if k != "idempotency_key"})
         request["url"] = previous["page"].next_url or previous["request"]["url"]
+        refused = _check_capture(request)
+        if refused:
+            return refused
         outcome = self._run(request, key, previous=previous)
         if isinstance(outcome, httpx.Response):
             return outcome
         self._keys[scope + key] = (outcome["id"], _fingerprint(body))
         return self._answer(outcome)
+
+    # ----------------------------------------------------------------- network capture
+
+    def _captured_calls(self, state: dict) -> Tuple[List[dict], dict]:
+        """The calls a request made with capture recorded, as stored, and what it left out."""
+        settings = _capture_settings(state["request"].get("capture")) or CAPTURE_DEFAULTS
+        request, page, failure = state["request"], state["page"], state["failure"]
+        url = request["url"]
+        if failure is None:
+            calls = [{"url": url, "type": "document", "status": page.status_code, "content_type": page.content_type,
+                      "body": page.content, "response_headers": page.headers}] + list(page.network)
+        elif failure["page_status"] == "challenge":
+            calls = [{"url": url, "type": "document", "status": 429 if failure["code"] == "rate_limited" else 403,
+                      "content_type": "text/html", "body": b"<html><body>fake wall</body></html>"}]
+        else:
+            calls = [{"url": url, "type": "document", "status": None, "error": failure["code"]}]
+        dropped = {"trackers": 0, "excluded_types": 0, "third_party": 0, "over_limit": 0}
+        site, stored, body_total = _registrable(url), [], 0
+        for call in calls:
+            kind = call.get("type", "fetch")
+            first_party = _registrable(call["url"]) == site
+            if kind not in settings["types"]:
+                dropped["excluded_types"] += 1
+            elif call.get("tracker") and not settings["include_trackers"]:
+                dropped["trackers"] += 1
+            elif settings["first_party_only"] and not first_party:
+                dropped["third_party"] += 1
+            elif len(stored) >= settings["max_requests"]:
+                dropped["over_limit"] += 1
+            else:
+                entry = _stored_call(call, len(stored) + 1, state["number"], first_party, settings, body_total)
+                body_total += entry["body_bytes"]
+                stored.append(entry)
+        return stored, dropped
+
+    def _network_summary(self, state: dict) -> dict:
+        stored, dropped = self._captured_calls(state)
+        return {"captured": len(stored), "dropped": dropped, "truncated": dropped["over_limit"] > 0, "attempt": 1,
+                "complete": True, "expires_at": _iso(state["created"] + timedelta(days=7)),
+                "expired": bool(state["deleted"]), "list_url": f"/v1/fetch/{state['id']}/network",
+                "har_url": f"/v1/fetch/{state['id']}/network.har"}
+
+    def _capture_state(self, fetch_id: str) -> Union[dict, httpx.Response]:
+        state = self._find(fetch_id)
+        if state is None:
+            return _error(404, "not_found", "Nothing with that id in this project")
+        if _capture_settings(state["request"].get("capture")) is None:
+            return _error(404, "capture_not_found", "That request was made without capture, so it has no network calls")
+        if state["polls_left"] > 0:
+            return _error(409, "pending", "The request is still running")
+        if state["deleted"]:
+            return _error(410, "content_expired", "The stored content has expired or was deleted")
+        return state
+
+    def _network_list(self, fetch_id: str, query: dict) -> httpx.Response:
+        for key, values in query.items():
+            if key not in _NETWORK_QUERY:
+                return _invalid(key)
+            if key != "contains" and len(values) > 1:
+                return _invalid(key)
+        one = {key: values[-1] for key, values in query.items() if key != "contains"}
+        contains = query.get("contains", [])
+        checks = {"type": lambda v: v in CAPTURE_TYPES, "first_party": lambda v: v in ("true", "false"),
+                  "status": lambda v: re.fullmatch(r"[1-5](?:\d\d|xx)", v) is not None,
+                  "page": lambda v: re.fullmatch(r"[1-9]\d{0,4}", v) is not None,
+                  "phase": lambda v: v in ("warmup", "load", "scroll", "replay"),
+                  "limit": lambda v: re.fullmatch(r"\d{1,3}", v) is not None and 1 <= int(v) <= 200,
+                  "cursor": lambda v: re.fullmatch(r"[1-9]\d{0,6}", v) is not None,
+                  "content_type": lambda v: 0 < len(v) <= 100,
+                  "host": lambda v: re.fullmatch(r"(?:\*\.)?[a-z0-9.-]{1,253}", v.lower()) is not None}
+        for key, value in one.items():
+            if not checks[key](value):
+                return _invalid(key)
+        if len(contains) > 5 or any(not value.strip() or len(value) > 200 for value in contains):
+            return _invalid("contains")
+        state = self._capture_state(fetch_id)
+        if isinstance(state, httpx.Response):
+            return state
+        stored, _ = self._captured_calls(state)
+        after, limit = int(one.get("cursor") or 0), int(one.get("limit") or 50)
+        items: List[dict] = []
+        more = False
+        for entry in stored:
+            if entry["index"] <= after or not _network_match(entry, one):
+                continue
+            matched = _contains(entry["body"], contains) if contains else None
+            if matched is not None and not matched:
+                continue
+            if len(items) == limit:
+                more = True
+                break
+            items.append(_network_row(entry, matched))
+        return _json(200, {"items": items, "next_cursor": str(items[-1]["index"]) if more else None,
+                           "network": self._network_summary(state)})
+
+    def _network_entry(self, fetch_id: str, index: str) -> Union[Tuple[dict, dict], httpx.Response]:
+        if not re.fullmatch(r"[1-9]\d{0,6}", index):
+            return _error(404, "not_found", "No call with that index")
+        state = self._capture_state(fetch_id)
+        if isinstance(state, httpx.Response):
+            return state
+        stored, _ = self._captured_calls(state)
+        if int(index) > len(stored):
+            return _error(404, "not_found", "No call with that index", {"field": "index"})
+        return state, stored[int(index) - 1]
+
+    def _network_call(self, fetch_id: str, index: str) -> httpx.Response:
+        found = self._network_entry(fetch_id, index)
+        if isinstance(found, httpx.Response):
+            return found
+        state, entry = found
+        return _json(200, _network_detail(entry, state["id"]))
+
+    def _network_body(self, fetch_id: str, index: str) -> httpx.Response:
+        found = self._network_entry(fetch_id, index)
+        if isinstance(found, httpx.Response):
+            return found
+        _, entry = found
+        if entry["body"] is None:
+            return _error(404, "not_found", "That call has no stored body",
+                          {"field": "body", "reason": entry["body_omitted"] or "no_body"})
+        encoding, data = entry["body"]
+        content = base64.b64decode(data) if encoding == "base64" else data.encode("utf-8")
+        return httpx.Response(200, content=content,
+                              headers={"content-type": entry["content_type"] or "application/octet-stream"})
+
+    def _network_har(self, fetch_id: str, query: dict) -> httpx.Response:
+        for key, values in query.items():
+            if key != "page" or len(values) > 1 or not re.fullmatch(r"[1-9]\d{0,4}", values[-1]):
+                return _invalid(key)
+        state = self._capture_state(fetch_id)
+        if isinstance(state, httpx.Response):
+            return state
+        stored, _ = self._captured_calls(state)
+        if "page" in query:
+            stored = [entry for entry in stored if entry["page"] == int(query["page"][-1])]
+        return _json(200, _har(stored, state["created"], state["request"]["url"]))
 
     # ----------------------------------------------------------------- batches
 
@@ -742,6 +922,12 @@ class FakeFetchX:
                 "by_step": [{"step": step, "requests": n, "credits": c} for step, (n, c) in by_step.items()],
                 "daily": [{"date": self._clock.date().isoformat(), "requests": len(finished), "credits": spent}]}
 
+    def _me(self, auth: str) -> dict:
+        key = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
+        return {"project_id": self.project_id, "key_id": self.key_id, "key_name": "fake",
+                "key_prefix": key[:12] if key.startswith("fxk_") else None,
+                "scopes": ["fetch:write", "fetch:read", "usage:read"]}
+
     def _status(self) -> dict:
         return {"status": "operational", "updated_at": _iso(self._clock),
                 "components": [{"id": "api", "name": "API", "status": "operational"},
@@ -801,3 +987,246 @@ def _error(status: int, code: str, message: str, details: Optional[dict] = None,
 def _invalid(field: str) -> httpx.Response:
     return _error(400, "invalid_request", "A field is missing or wrong; error.details.field names it.",
                   {"field": field})
+
+
+# --------------------------------------------------------------------------- network capture helpers
+
+def _capture_settings(value: Any) -> Optional[dict]:
+    """A request's capture as complete settings, or None when it records nothing."""
+    if value is None or value is False:
+        return None
+    return {**CAPTURE_DEFAULTS, **(value if isinstance(value, dict) else {})}
+
+
+def _check_capture(request: dict) -> Optional[httpx.Response]:
+    value = request.get("capture")
+    if value is None or value is False:
+        return None
+    if value is not True:
+        if not isinstance(value, dict):
+            return _invalid("capture")
+        for key in value:
+            if key not in CAPTURE_DEFAULTS:
+                return _invalid(f"capture.{key}")
+        settings = _capture_settings(value) or {}
+        types = settings["types"]
+        if not isinstance(types, list) or not types or not set(types) <= set(CAPTURE_TYPES) \
+                or len(set(types)) != len(types):
+            return _invalid("capture.types")
+        for key, low, high in (("max_requests", 1, 1000), ("max_body_bytes", 1024, 10_000_000)):
+            number = settings[key]
+            if not isinstance(number, int) or isinstance(number, bool) or not low <= number <= high:
+                return _invalid(f"capture.{key}")
+        if settings["bodies"] not in ("text", "none", "all"):
+            return _invalid("capture.bodies")
+        for key in ("first_party_only", "include_trackers", "unmask"):
+            if not isinstance(settings[key], bool):
+                return _invalid(f"capture.{key}")
+    route = request.get("route")
+    if request.get("render") == "never" or str(request.get("method") or "GET").upper() != "GET" \
+            or (isinstance(route, dict) and route.get("render") is False):
+        return _error(400, "invalid_request", "A field is missing or wrong; error.details.field names it.",
+                      {"field": "capture", "reason": CAPTURE_NEEDS_BROWSER})
+    return None
+
+
+def _registrable(url: str) -> str:
+    """The page's own domain, roughly (the last two labels of the host): the fake has no suffix list."""
+    host = site_of(url) or ""
+    if re.fullmatch(r"[\d.]+", host) or ":" in host:
+        return host
+    return ".".join(host.split(".")[-2:])
+
+
+def _masked(value: str) -> str:
+    return f"<masked len={len(value.encode('utf-8'))} sha={hashlib.sha256(value.encode('utf-8')).hexdigest()[:6]}>"
+
+
+def _masked_pair(part: str) -> str:
+    name, equals, value = part.partition("=")
+    return f"{name.strip()}={_masked(value.strip())}" if equals else _masked(part)
+
+
+def _headers(value: Any, unmask: bool) -> List[List[str]]:
+    """Name and value pairs, secrets masked as the real API masks them (a cookie keeps its name)."""
+    pairs = [[str(k), str(v)] for k, v in (value.items() if isinstance(value, dict) else value or [])]
+    if unmask:
+        return pairs
+    out = []
+    for name, text in pairs:
+        lower = name.lower()
+        if lower == "cookie":
+            out.append([name, "; ".join(_masked_pair(part.strip()) for part in text.split(";") if part.strip())])
+        elif lower == "set-cookie":
+            pair, *attributes = text.split(";")
+            out.append([name, "; ".join([_masked_pair(pair.strip())] + [part.strip() for part in attributes])])
+        elif lower in ("authorization", "proxy-authorization") or _SECRET_HEADER.search(name):
+            out.append([name, _masked(text)])
+        else:
+            out.append([name, text])
+    return out
+
+
+def _bytes_of(body: Any) -> Optional[bytes]:
+    if body is None:
+        return None
+    if isinstance(body, (dict, list)):
+        return json.dumps(body).encode("utf-8")
+    return body.encode("utf-8") if isinstance(body, str) else bytes(body)
+
+
+def _encoded(data: bytes, content_type: Optional[str]) -> Tuple[str, str]:
+    """Text when it is UTF-8 of a text type (a body cut at its cap may end inside a character,
+    which is dropped), else base64."""
+    if _TEXT_BODY.match((content_type or "").strip()):
+        for cut in range(min(4, len(data) + 1)):
+            try:
+                return "utf-8", data[:len(data) - cut].decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+    return "base64", base64.b64encode(data).decode()
+
+
+def _stored_call(call: dict, index: int, page: int, first_party: bool, settings: dict, body_total: int) -> dict:
+    status = call.get("status", 200)
+    content_type = call.get("content_type", "application/json") if status is not None else None
+    raw = _bytes_of(call.get("body")) if status is not None else None
+    request_raw = _bytes_of(call.get("request_body"))
+    request_headers = _headers(call.get("request_headers"), settings["unmask"])
+    body, omitted, truncated, kept = None, None, False, b""
+    if raw:
+        if settings["bodies"] == "none":
+            omitted = "bodies_none"
+        elif settings["bodies"] == "text" and not _TEXT_BODY.match((content_type or "").strip()):
+            omitted = "not_text"
+        elif body_total >= _CAPTURE_TOTAL_BYTES:
+            omitted = "capture_full"
+        else:
+            kept = raw[:settings["max_body_bytes"]]
+            truncated = len(kept) < len(raw)
+            body = _encoded(kept, content_type)
+    request_type = next((v for k, v in request_headers if k.lower() == "content-type"), None)
+    return {"index": index, "page": page, "phase": "load", "type": call.get("type", "fetch"),
+            "frame": call.get("frame", "main"), "first_party": first_party, "started_ms": index * 10,
+            "duration_ms": 5, "flags": ["tracker"] if call.get("tracker") else [], "error": call.get("error"),
+            "method": call.get("method", "GET"), "url": call["url"], "request_headers": request_headers,
+            "request_body": _encoded(request_raw, request_type or "text/plain") if request_raw else None,
+            "request_bytes": len(request_raw or b""), "status": status,
+            "status_text": None if status is None else ("OK" if status == 200 else ""),
+            "response_headers": _headers(call.get("response_headers"), settings["unmask"]),
+            "content_type": content_type, "body": body, "body_bytes": len(kept),
+            "response_bytes": len(raw or b""), "body_truncated": truncated, "body_omitted": omitted,
+            "redirected_from": None}
+
+
+def _network_match(entry: dict, query: dict) -> bool:
+    if query.get("type") and entry["type"] != query["type"]:
+        return False
+    if query.get("content_type") and query["content_type"].lower() not in (entry["content_type"] or "").lower():
+        return False
+    if query.get("host"):
+        host, pattern = (site_of(entry["url"]) or "").lower(), query["host"].lower()
+        full = (urlsplit(entry["url"]).hostname or "").lower()
+        if pattern.startswith("*."):
+            if not (full == pattern[2:] or full.endswith(pattern[1:])):
+                return False
+        elif full != pattern and host != pattern:
+            return False
+    if query.get("first_party") and entry["first_party"] != (query["first_party"] == "true"):
+        return False
+    if query.get("status"):
+        status = "" if entry["status"] is None else str(entry["status"])
+        wanted = query["status"]
+        if (status[:1] != wanted[0] or len(status) != 3) if wanted.endswith("xx") else status != wanted:
+            return False
+    if query.get("page") and entry["page"] != int(query["page"]):
+        return False
+    return not (query.get("phase") and entry["phase"] != query["phase"])
+
+
+def _contains(body: Optional[Tuple[str, str]], values: List[str]) -> List[str]:
+    if not body or body[0] != "utf-8":
+        return []
+    texts = [body[1].lower()]
+    if re.match(r"^\s*[\[{]", body[1]):
+        try:
+            texts.append(json.dumps(json.loads(body[1]), ensure_ascii=False).lower())
+        except ValueError:
+            pass
+    return [value for value in values if any(value.strip().lower() in text for text in texts)]
+
+
+def _network_row(entry: dict, matched: Optional[List[str]]) -> dict:
+    row = {key: entry[key] for key in ("index", "page", "phase", "type", "method", "url", "status", "content_type",
+                                       "request_bytes", "response_bytes", "first_party", "frame", "started_ms",
+                                       "duration_ms")}
+    row.update(has_body=entry["body"] is not None, body_truncated=entry["body_truncated"],
+               body_omitted=entry["body_omitted"], flags=list(entry["flags"]), error=entry["error"])
+    if matched is not None:
+        row["matched"] = matched
+    return row
+
+
+def _network_detail(entry: dict, fetch_id: str) -> dict:
+    body = entry["body"]
+    inline = body is not None and entry["body_bytes"] <= _INLINE_BODY_BYTES
+    request_body = entry["request_body"]
+    return {key: entry[key] for key in ("index", "page", "phase", "type", "frame", "first_party", "started_ms",
+                                        "duration_ms", "error")} | {
+        "flags": list(entry["flags"]),
+        "request": {"method": entry["method"], "url": entry["url"], "headers": entry["request_headers"],
+                    "body": request_body[1] if request_body else None,
+                    "body_encoding": request_body[0] if request_body else None, "body_bytes": entry["request_bytes"]},
+        "response": None if entry["status"] is None else {
+            "status": entry["status"], "status_text": entry["status_text"], "headers": entry["response_headers"],
+            "content_type": entry["content_type"], "body": body[1] if inline else None,
+            "body_encoding": body[0] if inline else None, "body_bytes": entry["body_bytes"],
+            "transfer_bytes": entry["response_bytes"], "body_truncated": entry["body_truncated"],
+            "body_omitted": entry["body_omitted"],
+            "body_url": f"/v1/fetch/{fetch_id}/network/{entry['index']}/body" if body and not inline else None},
+        "redirected_from": entry["redirected_from"]}
+
+
+def _har(entries: List[dict], started: datetime, page_url: str) -> dict:
+    """The calls as a HAR 1.2 document, FetchX's own fields under _fetchx."""
+    pages = sorted({entry["page"] for entry in entries})
+
+    def stamp(ms: int) -> str:
+        return (started + timedelta(milliseconds=ms)).strftime("%Y-%m-%dT%H:%M:%S.") + f"{ms % 1000:03d}Z"
+
+    def pairs(headers: List[List[str]]) -> List[dict]:
+        return [{"name": name, "value": value} for name, value in headers]
+
+    out = []
+    for entry in entries:
+        body, answered = entry["body"], entry["status"] is not None
+        content: Dict[str, Any] = {"size": entry["body_bytes"], "mimeType": entry["content_type"] or ""}
+        if body:
+            content["text"] = body[1]
+            if body[0] == "base64":
+                content["encoding"] = "base64"
+        if entry["body_omitted"]:
+            content["comment"] = f"body not stored: {entry['body_omitted']}"
+        request: Dict[str, Any] = {"method": entry["method"], "url": entry["url"], "httpVersion": "", "cookies": [],
+                                   "headers": pairs(entry["request_headers"]),
+                                   "queryString": [{"name": k, "value": v} for k, v in
+                                                   parse_qsl(urlsplit(entry["url"]).query, keep_blank_values=True)],
+                                   "headersSize": -1, "bodySize": entry["request_bytes"]}
+        if entry["request_body"]:
+            request["postData"] = {"mimeType": "", "text": entry["request_body"][1]}
+        response: Dict[str, Any] = {"status": entry["status"] if answered else 0, "statusText": entry["status_text"] or "",
+                                    "httpVersion": "", "cookies": [], "headers": pairs(entry["response_headers"]),
+                                    "content": content, "redirectURL": "", "headersSize": -1,
+                                    "bodySize": entry["response_bytes"] if answered else -1}
+        if entry["error"]:
+            response["_error"] = entry["error"]
+        out.append({"pageref": f"page_{entry['page']}", "startedDateTime": stamp(entry["started_ms"]),
+                    "time": entry["duration_ms"], "request": request, "response": response, "cache": {},
+                    "timings": {"blocked": -1, "dns": -1, "connect": -1, "ssl": -1, "send": 0,
+                                "wait": entry["duration_ms"], "receive": 0},
+                    "_fetchx": {key: entry[key] for key in ("index", "page", "phase", "type", "frame", "first_party",
+                                                            "flags")}})
+    return {"log": {"version": "1.2", "creator": {"name": "FetchX", "version": "fake"},
+                    "pages": [{"startedDateTime": stamp(0), "id": f"page_{page}", "title": page_url,
+                               "pageTimings": {"onContentLoad": -1, "onLoad": -1}} for page in pages],
+                    "entries": out}}

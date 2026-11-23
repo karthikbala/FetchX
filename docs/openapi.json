@@ -2,8 +2,8 @@
  "openapi": "3.1.0",
  "info": {
   "title": "FetchX API",
-  "version": "1.6.1",
-  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. GET /v1/status needs no key.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
+  "version": "1.7.0",
+  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. A browser request with capture records the page's own network calls, read with GET /v1/fetch/{id}/network or as a HAR file. GET /v1/me says which project and key are calling. GET /v1/status needs no key.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
  },
  "servers": [
   {
@@ -599,7 +599,7 @@
       }
      },
      "503": {
-      "description": "FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url.",
+      "description": "FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url. A 503 unavailable carries a Retry-After header and retry_after_seconds (30 unless FetchX knows better): resend with the same idempotency_key after it.",
       "content": {
        "application/json": {
         "schema": {
@@ -610,7 +610,12 @@
           "value": {
            "error": {
             "code": "unavailable",
-            "message": "FetchX cannot take work right now; wait and retry."
+            "message": "FetchX cannot take work right now; wait and retry.",
+            "details": {
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 30
+            },
+            "retry_after_seconds": 30
            }
           }
          },
@@ -1647,7 +1652,7 @@
       }
      },
      "503": {
-      "description": "FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url.",
+      "description": "FetchX cannot take work right now, or (extract_unavailable) cannot read pages into JSON right now. Nothing was fetched or charged. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url. A 503 unavailable carries a Retry-After header and retry_after_seconds (30 unless FetchX knows better): resend with the same idempotency_key after it.",
       "content": {
        "application/json": {
         "schema": {
@@ -1658,7 +1663,12 @@
           "value": {
            "error": {
             "code": "unavailable",
-            "message": "FetchX cannot take work right now; wait and retry."
+            "message": "FetchX cannot take work right now; wait and retry.",
+            "details": {
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 30
+            },
+            "retry_after_seconds": 30
            }
           }
          },
@@ -2371,7 +2381,7 @@
       }
      },
      "503": {
-      "description": "FetchX cannot estimate right now (the fetching service is not answering). During maintenance that pauses the API, error.code is maintenance.",
+      "description": "FetchX cannot estimate right now (the fetching service is not answering). During maintenance that pauses the API, error.code is maintenance. A 503 unavailable carries a Retry-After header and retry_after_seconds (30 unless FetchX knows better): resend with the same idempotency_key after it.",
       "content": {
        "application/json": {
         "schema": {
@@ -2382,7 +2392,12 @@
           "value": {
            "error": {
             "code": "unavailable",
-            "message": "FetchX cannot take work right now; wait and retry."
+            "message": "FetchX cannot take work right now; wait and retry.",
+            "details": {
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 30
+            },
+            "retry_after_seconds": 30
            }
           }
          },
@@ -3048,7 +3063,7 @@
       }
      },
      "503": {
-      "description": "FetchX cannot take work right now. Nothing was queued. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url.",
+      "description": "FetchX cannot take work right now. Nothing was queued. During maintenance that pauses the API, error.code is maintenance, with Retry-After and error.details.status_url. A 503 unavailable carries a Retry-After header and retry_after_seconds (30 unless FetchX knows better): resend with the same idempotency_key after it.",
       "content": {
        "application/json": {
         "schema": {
@@ -3059,7 +3074,12 @@
           "value": {
            "error": {
             "code": "unavailable",
-            "message": "FetchX cannot take work right now; wait and retry."
+            "message": "FetchX cannot take work right now; wait and retry.",
+            "details": {
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 30
+            },
+            "retry_after_seconds": 30
            }
           }
          },
@@ -3698,6 +3718,721 @@
      }
     }
    }
+  },
+  "/v1/fetch/{id}/network": {
+   "get": {
+    "operationId": "listFetchNetwork",
+    "summary": "The network calls a request recorded",
+    "description": "The calls a request made with capture recorded, in the order the page made them, filtered. Use contains to find the call that carries the data you saw on the page, then read it in full.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      },
+      "description": "The request id returned by POST /v1/fetch."
+     },
+     {
+      "name": "type",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "enum": [
+        "document",
+        "xhr",
+        "fetch",
+        "script",
+        "eventsource",
+        "other"
+       ]
+      }
+     },
+     {
+      "name": "content_type",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      },
+      "description": "Substring of the content type, without case (json)."
+     },
+     {
+      "name": "host",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      },
+      "description": "A host, or *.example.com for it and its subdomains."
+     },
+     {
+      "name": "first_party",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "enum": [
+        "true",
+        "false"
+       ]
+      }
+     },
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      },
+      "description": "A status (200) or a class (2xx)."
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "minimum": 1
+      },
+      "description": "Only calls of that page (1, or a next page)."
+     },
+     {
+      "name": "phase",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "enum": [
+        "warmup",
+        "load",
+        "scroll",
+        "replay"
+       ]
+      }
+     },
+     {
+      "name": "contains",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "maxLength": 200
+       },
+       "maxItems": 5
+      },
+      "description": "Repeatable. Keeps calls whose response body holds any of the values, without case (a JSON body is also searched as parsed); each row lists the values it matched. Use a few values the page shows (a name, a price) to find the call that carries the data.",
+      "style": "form",
+      "explode": true
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "minimum": 1,
+       "maximum": 200,
+       "default": 50
+      }
+     },
+     {
+      "name": "cursor",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      },
+      "description": "`next_cursor` from the previous page."
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The calls.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/NetworkList"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "No valid API key. Codes: unauthorized.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Not found. Codes: capture_not_found (the request was made without capture), not_found.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "Still running. Codes: pending.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "410": {
+      "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Bad query. Codes: invalid_request (error.details.field names the parameter).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The key lacks fetch:read. Codes: api_key_scope_forbidden.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "tags": [
+     "Fetch"
+    ],
+    "x-scope": "fetch:read"
+   }
+  },
+  "/v1/fetch/{id}/network.har": {
+   "get": {
+    "operationId": "getFetchNetworkHar",
+    "summary": "The network calls as a HAR file",
+    "description": "The recorded calls as a HAR 1.2 document, with the same masking, for browser developer tools (Network, Import HAR) and other HAR tools. FetchX's own fields are under _fetchx.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      },
+      "description": "The request id returned by POST /v1/fetch."
+     },
+     {
+      "name": "page",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "minimum": 1
+      },
+      "description": "Only calls of that page."
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "HAR 1.2.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "required": [
+          "log"
+         ],
+         "properties": {
+          "log": {
+           "type": "object"
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "No valid API key. Codes: unauthorized.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Not found. Codes: capture_not_found (the request was made without capture), not_found.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "Still running. Codes: pending.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "410": {
+      "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Bad query. Codes: invalid_request (error.details.field names the parameter).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The key lacks fetch:read. Codes: api_key_scope_forbidden.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "tags": [
+     "Fetch"
+    ],
+    "x-scope": "fetch:read"
+   }
+  },
+  "/v1/fetch/{id}/network/{index}": {
+   "get": {
+    "operationId": "getFetchNetworkCall",
+    "summary": "One recorded network call in full",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      },
+      "description": "The request id returned by POST /v1/fetch."
+     },
+     {
+      "name": "index",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "minimum": 1
+      },
+      "description": "The call number from the list."
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The call.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/NetworkCall"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "No valid API key. Codes: unauthorized.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Not found. Codes: capture_not_found, not_found (no call with that index).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "Still running. Codes: pending.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "410": {
+      "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Bad query. Codes: invalid_request (error.details.field names the parameter).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The key lacks fetch:read. Codes: api_key_scope_forbidden.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "tags": [
+     "Fetch"
+    ],
+    "x-scope": "fetch:read"
+   }
+  },
+  "/v1/fetch/{id}/network/{index}/body": {
+   "get": {
+    "operationId": "getFetchNetworkCallBody",
+    "summary": "One recorded call's response body",
+    "description": "The response body as stored (decompressed, cut at max_body_bytes), with its content type. For bodies too large to return inline.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      },
+      "description": "The request id returned by POST /v1/fetch."
+     },
+     {
+      "name": "index",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "minimum": 1
+      },
+      "description": "The call number from the list."
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The body.",
+      "content": {
+       "*/*": {
+        "schema": {
+         "type": "string",
+         "format": "binary"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "No valid API key. Codes: unauthorized.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Not found. Codes: capture_not_found, not_found (no such call, or it has no stored body).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "Still running. Codes: pending.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "410": {
+      "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The key lacks fetch:read. Codes: api_key_scope_forbidden.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "tags": [
+     "Fetch"
+    ],
+    "x-scope": "fetch:read"
+   }
+  },
+  "/v1/me": {
+   "get": {
+    "operationId": "getMe",
+    "tags": [
+     "Usage"
+    ],
+    "summary": "The calling project and key",
+    "description": "Which project and key are making the call, and what the key may do. Any valid key may call it, whatever its scopes: a tool can check a key it was given before it starts, and recognise the customer by project_id even after the key is rotated.",
+    "x-scope": "any",
+    "responses": {
+     "200": {
+      "description": "The project and key.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Me"
+        },
+        "examples": {
+         "key": {
+          "value": {
+           "project_id": "cp_6f1c2d0e-5b7a-4c3e-9d1f-2a8b7c6d5e4f",
+           "key_id": "0f9e8d7c-6b5a-4c3d-8e2f-1a0b9c8d7e6f",
+           "key_name": "crawler",
+           "key_prefix": "fxk_Ab3dE6gH",
+           "scopes": [
+            "fetch:read",
+            "fetch:write"
+           ]
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong or revoked.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
   }
  },
  "webhooks": {
@@ -4103,6 +4838,20 @@
        "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
       },
       "description": "Your labels, to filter the list."
+     },
+     "capture": {
+      "description": "Record the page's own network calls (its documents, XHR and fetch requests) while a browser renders it, and keep them with the result for as long as its other content (7 days). Read them with GET /v1/fetch/{id}/network, /v1/fetch/{id}/network/{index} and /v1/fetch/{id}/network.har. true records with the defaults; false or null records nothing. capture needs a browser, so with render: auto it makes the request render, and it is refused (invalid_request, details.field capture) with render: never, a method other than GET, or a route whose render is false. Free: it adds nothing to the price. When several browsers are tried, the calls are the last browser attempt's, also when the request fails.",
+      "oneOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       },
+       {
+        "$ref": "#/components/schemas/CaptureSettings"
+       }
+      ]
      }
     }
    },
@@ -4192,6 +4941,20 @@
        "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
       },
       "description": "Defaults to the earlier request's."
+     },
+     "capture": {
+      "description": "As in the fetch request. Left out, the earlier request's capture applies; false or null turns it off. The calls carry this page's number in `page`, so a client can compare page 1's and page 2's calls.",
+      "oneOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       },
+       {
+        "$ref": "#/components/schemas/CaptureSettings"
+       }
+      ]
      }
     }
    },
@@ -4390,6 +5153,17 @@
         "description": "The item's place in the batch's items, from 0."
        }
       }
+     },
+     "network": {
+      "oneOf": [
+       {
+        "$ref": "#/components/schemas/NetworkSummary"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Only on requests made with capture: the network capture (null while pending). Top level, not under data, because a request that failed before any page answered still has its capture."
      }
     }
    },
@@ -6315,6 +7089,628 @@
        "null"
       ],
       "description": "Pass it as cursor for the next page. With order=finished it is also how to read only what finished since: it stays set while the batch can still change, and is null once the batch is over and everything was read."
+     }
+    }
+   },
+   "CaptureSettings": {
+    "type": "object",
+    "additionalProperties": false,
+    "description": "What to record. Every field is optional.",
+    "properties": {
+     "types": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "enum": [
+        "document",
+        "xhr",
+        "fetch",
+        "script",
+        "eventsource",
+        "other"
+       ]
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "default": [
+       "document",
+       "xhr",
+       "fetch"
+      ],
+      "description": "Which calls to record. Images, media, fonts, stylesheets, manifests and beacons are never recorded."
+     },
+     "max_requests": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000,
+      "default": 200,
+      "description": "Calls past this are counted in network.dropped.over_limit, not stored, and network.truncated is true."
+     },
+     "max_body_bytes": {
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 10000000,
+      "default": 2000000,
+      "description": "Per response body. A longer body is cut and marked body_truncated. At most 25 MB of bodies are stored per request; later calls keep their headers and sizes, with body_omitted capture_full."
+     },
+     "bodies": {
+      "type": "string",
+      "enum": [
+       "text",
+       "none",
+       "all"
+      ],
+      "default": "text",
+      "description": "text: store bodies that are JSON, HTML, XML, plain text, JavaScript, GraphQL or form data. none: headers and sizes only. all: binary bodies too, as base64."
+     },
+     "first_party_only": {
+      "type": "boolean",
+      "default": false,
+      "description": "Keep only calls to the page's own registrable domain (example.com and *.example.com). Others are counted in network.dropped.third_party."
+     },
+     "include_trackers": {
+      "type": "boolean",
+      "default": false,
+      "description": "Keep calls to known analytics, advertising, tag manager and consent hosts, flagged tracker. By default they are dropped and counted in network.dropped.trackers."
+     },
+     "unmask": {
+      "type": "boolean",
+      "default": false,
+      "description": "Store and return secret header values in full instead of masked (see the headers of a call)."
+     }
+    }
+   },
+   "NetworkSummary": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "captured",
+     "dropped",
+     "truncated",
+     "attempt",
+     "complete",
+     "expires_at",
+     "expired",
+     "list_url",
+     "har_url"
+    ],
+    "description": "A request made with capture: how many calls were recorded and where to read them.",
+    "properties": {
+     "captured": {
+      "type": "integer",
+      "description": "Calls stored."
+     },
+     "dropped": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "trackers",
+       "excluded_types",
+       "third_party",
+       "over_limit"
+      ],
+      "description": "Calls seen and not stored, by reason.",
+      "properties": {
+       "trackers": {
+        "type": "integer"
+       },
+       "excluded_types": {
+        "type": "integer"
+       },
+       "third_party": {
+        "type": "integer"
+       },
+       "over_limit": {
+        "type": "integer"
+       }
+      }
+     },
+     "truncated": {
+      "type": "boolean",
+      "description": "max_requests was reached: later calls were counted, not stored."
+     },
+     "attempt": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "The attempt (1 is the first entry of attempts) whose browser recorded these calls; null when no browser ran."
+     },
+     "complete": {
+      "type": "boolean",
+      "description": "false when the browser stopped (a deadline, a crash) before it reported everything: the calls it sent before are kept."
+     },
+     "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the calls are deleted with the rest of the content."
+     },
+     "expired": {
+      "type": "boolean",
+      "description": "true after DELETE: the calls are gone."
+     },
+     "list_url": {
+      "type": "string",
+      "description": "/v1/fetch/{id}/network"
+     },
+     "har_url": {
+      "type": "string",
+      "description": "/v1/fetch/{id}/network.har"
+     }
+    }
+   },
+   "NetworkCallRow": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "index",
+     "page",
+     "phase",
+     "type",
+     "method",
+     "url",
+     "status",
+     "content_type",
+     "request_bytes",
+     "response_bytes",
+     "first_party",
+     "frame",
+     "started_ms",
+     "duration_ms",
+     "has_body",
+     "body_truncated",
+     "body_omitted",
+     "flags",
+     "error"
+    ],
+    "properties": {
+     "index": {
+      "type": "integer",
+      "description": "The call number, from 1 in the order the page made the calls."
+     },
+     "page": {
+      "type": "integer",
+      "description": "1 for the first page, 2 for the first POST /v1/fetch/{id}/next, and so on."
+     },
+     "phase": {
+      "type": "string",
+      "enum": [
+       "warmup",
+       "load",
+       "scroll",
+       "replay"
+      ],
+      "description": "warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page."
+     },
+     "type": {
+      "type": "string",
+      "enum": [
+       "document",
+       "xhr",
+       "fetch",
+       "script",
+       "eventsource",
+       "other"
+      ]
+     },
+     "method": {
+      "type": "string"
+     },
+     "url": {
+      "type": "string"
+     },
+     "status": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "Null when no response came (see error)."
+     },
+     "content_type": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "request_bytes": {
+      "type": "integer"
+     },
+     "response_bytes": {
+      "type": "integer",
+      "description": "Bytes received for the body, as transferred."
+     },
+     "first_party": {
+      "type": "boolean",
+      "description": "Whether the call went to the page's own registrable domain."
+     },
+     "frame": {
+      "type": "string",
+      "enum": [
+       "main",
+       "child"
+      ],
+      "description": "Made by the page itself or by a frame inside it."
+     },
+     "started_ms": {
+      "type": "integer",
+      "description": "When the call started, in ms from the start of the page's load (warm-up calls are negative)."
+     },
+     "duration_ms": {
+      "type": "integer"
+     },
+     "has_body": {
+      "type": "boolean"
+     },
+     "body_truncated": {
+      "type": "boolean"
+     },
+     "body_omitted": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "enum": [
+       "not_text",
+       "bodies_none",
+       "capture_full",
+       "unavailable",
+       null
+      ],
+      "description": "Why a response body was not stored: not_text (capture.bodies text), bodies_none, capture_full (25 MB per request reached) or unavailable (the browser no longer had it)."
+     },
+     "flags": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "enum": [
+        "tracker",
+        "redirect",
+        "preflight",
+        "service_worker"
+       ]
+      }
+     },
+     "error": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "Why a call got no response: refused:<reason> when FetchX refused it (refused:resource_blocked, refused:request_limit), a browser error such as browser_err_aborted, or not_finished when it was still open at the end."
+     },
+     "matched": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "With contains: the values this call's response body holds."
+     }
+    }
+   },
+   "NetworkList": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "items",
+     "next_cursor",
+     "network"
+    ],
+    "properties": {
+     "items": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/NetworkCallRow"
+      }
+     },
+     "next_cursor": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "Pass as cursor for the next page of calls."
+     },
+     "network": {
+      "$ref": "#/components/schemas/NetworkSummary"
+     }
+    }
+   },
+   "NetworkCall": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "index",
+     "page",
+     "phase",
+     "type",
+     "frame",
+     "first_party",
+     "started_ms",
+     "duration_ms",
+     "flags",
+     "error",
+     "request",
+     "response",
+     "redirected_from"
+    ],
+    "properties": {
+     "index": {
+      "type": "integer",
+      "description": "The call number, from 1 in the order the page made the calls."
+     },
+     "page": {
+      "type": "integer",
+      "description": "1 for the first page, 2 for the first POST /v1/fetch/{id}/next, and so on."
+     },
+     "phase": {
+      "type": "string",
+      "enum": [
+       "warmup",
+       "load",
+       "scroll",
+       "replay"
+      ],
+      "description": "warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page."
+     },
+     "type": {
+      "type": "string",
+      "enum": [
+       "document",
+       "xhr",
+       "fetch",
+       "script",
+       "eventsource",
+       "other"
+      ]
+     },
+     "frame": {
+      "type": "string",
+      "enum": [
+       "main",
+       "child"
+      ],
+      "description": "Made by the page itself or by a frame inside it."
+     },
+     "first_party": {
+      "type": "boolean",
+      "description": "Whether the call went to the page's own registrable domain."
+     },
+     "started_ms": {
+      "type": "integer",
+      "description": "When the call started, in ms from the start of the page's load (warm-up calls are negative)."
+     },
+     "duration_ms": {
+      "type": "integer"
+     },
+     "flags": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "enum": [
+        "tracker",
+        "redirect",
+        "preflight",
+        "service_worker"
+       ]
+      }
+     },
+     "error": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "Why a call got no response: refused:<reason> when FetchX refused it (refused:resource_blocked, refused:request_limit), a browser error such as browser_err_aborted, or not_finished when it was still open at the end."
+     },
+     "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "method",
+       "url",
+       "headers",
+       "body",
+       "body_encoding",
+       "body_bytes"
+      ],
+      "properties": {
+       "method": {
+        "type": "string"
+       },
+       "url": {
+        "type": "string"
+       },
+       "headers": {
+        "type": "array",
+        "items": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         },
+         "minItems": 2,
+         "maxItems": 2
+        },
+        "description": "Name and value pairs in the order sent, so repeated headers survive. Cookie, Set-Cookie, Authorization, Proxy-Authorization and any header whose name contains token, secret, api-key, session, password or credential show `<masked len=N sha=XXXXXX>` instead of the value (a cookie keeps its name), unless the request was made with capture.unmask."
+       },
+       "body": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "body_encoding": {
+        "type": [
+         "string",
+         "null"
+        ],
+        "enum": [
+         "utf-8",
+         "base64",
+         null
+        ]
+       },
+       "body_bytes": {
+        "type": "integer"
+       }
+      }
+     },
+     "response": {
+      "oneOf": [
+       {
+        "type": "null"
+       },
+       {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "status",
+         "status_text",
+         "headers",
+         "content_type",
+         "body",
+         "body_encoding",
+         "body_bytes",
+         "transfer_bytes",
+         "body_truncated",
+         "body_omitted",
+         "body_url"
+        ],
+        "properties": {
+         "status": {
+          "type": "integer"
+         },
+         "status_text": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "headers": {
+          "type": "array",
+          "items": {
+           "type": "array",
+           "items": {
+            "type": "string"
+           },
+           "minItems": 2,
+           "maxItems": 2
+          },
+          "description": "Name and value pairs in the order sent, so repeated headers survive. Cookie, Set-Cookie, Authorization, Proxy-Authorization and any header whose name contains token, secret, api-key, session, password or credential show `<masked len=N sha=XXXXXX>` instead of the value (a cookie keeps its name), unless the request was made with capture.unmask."
+         },
+         "content_type": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "body": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "description": "Decompressed. Text bodies as UTF-8; binary ones (capture.bodies all) as base64. Null when not stored, or over 1 MB (see body_url)."
+         },
+         "body_encoding": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "enum": [
+           "utf-8",
+           "base64",
+           null
+          ]
+         },
+         "body_bytes": {
+          "type": "integer",
+          "description": "Size of the stored body."
+         },
+         "transfer_bytes": {
+          "type": "integer"
+         },
+         "body_truncated": {
+          "type": "boolean"
+         },
+         "body_omitted": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "enum": [
+           "not_text",
+           "bodies_none",
+           "capture_full",
+           "unavailable",
+           null
+          ],
+          "description": "Why a response body was not stored: not_text (capture.bodies text), bodies_none, capture_full (25 MB per request reached) or unavailable (the browser no longer had it)."
+         },
+         "body_url": {
+          "type": [
+           "string",
+           "null"
+          ],
+          "description": "For a body over 1 MB: /v1/fetch/{id}/network/{index}/body, read with the same key."
+         }
+        }
+       }
+      ],
+      "description": "Null when no response came (see error)."
+     },
+     "redirected_from": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "The index of the call this one is a redirect of."
+     }
+    }
+   },
+   "Me": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "project_id",
+     "key_id",
+     "key_name",
+     "key_prefix",
+     "scopes"
+    ],
+    "description": "The project and API key making the call.",
+    "properties": {
+     "project_id": {
+      "type": "string",
+      "description": "The project. It stays the same when a key is rotated or replaced, so use it to recognise the customer."
+     },
+     "key_id": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "This key. Rotating a key makes a new key_id. Null for a key set in the server configuration."
+     },
+     "key_name": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "The name given to the key in the console."
+     },
+     "key_prefix": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "The first characters of the key (fxk_ and 8 more), as the console shows them."
+     },
+     "scopes": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "enum": [
+        "fetch:write",
+        "fetch:read",
+        "usage:read"
+       ]
+      },
+      "description": "What this key may call: fetch:write (POST /v1/fetch, next pages, batches, estimates), fetch:read (results, content, network captures, DELETE) and usage:read (balance and usage)."
      }
     }
    }

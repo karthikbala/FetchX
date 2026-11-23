@@ -33,7 +33,9 @@ class FetchXError(RuntimeError):
 
 def _query(params):
     clean = {key: value for key, value in params.items() if value is not None}
-    return '?' + urlencode(clean) if clean else ''
+    # A list repeats the parameter (contains=a&contains=b); a bool is true or false.
+    clean = {key: ('true' if value else 'false') if isinstance(value, bool) else value for key, value in clean.items()}
+    return '?' + urlencode(clean, doseq=True) if clean else ''
 
 
 class FetchXClient:
@@ -123,6 +125,29 @@ class FetchXClient:
     def delete(self, id):
         self._send('DELETE', '/v1/fetch/' + quote(id, safe=''))
 
+    def network(self, id, *, type=None, content_type=None, host=None, first_party=None, status=None, page=None, phase=None,
+                contains=None, limit=None, cursor=None):
+        """GET /v1/fetch/{id}/network: the calls a request made with capture recorded.
+
+        contains is a value or a list of up to 5 the response body holds (without case): the way to find the call
+        that carries the data you saw on the page.
+        """
+        return self._send('GET', '/v1/fetch/' + quote(id, safe='') + '/network' + _query({
+            'type': type, 'content_type': content_type, 'host': host, 'first_party': first_party, 'status': status, 'page': page,
+            'phase': phase, 'contains': contains, 'limit': limit, 'cursor': cursor}))
+
+    def network_call(self, id, index):
+        """GET /v1/fetch/{id}/network/{index}: one recorded call with its headers and bodies."""
+        return self._send('GET', '/v1/fetch/' + quote(id, safe='') + '/network/' + quote(str(index), safe=''))
+
+    def network_body(self, id, index):
+        """One recorded call's response body: {'body': bytes, 'content_type': str}."""
+        return self._send('GET', '/v1/fetch/' + quote(id, safe='') + '/network/' + quote(str(index), safe='') + '/body', raw=True)
+
+    def network_har(self, id, *, page=None):
+        """The capture as a HAR 1.2 document (a dict), for browser developer tools."""
+        return self._send('GET', '/v1/fetch/' + quote(id, safe='') + '/network.har' + _query({'page': page}))
+
     def submit_batch(self, items, **batch):
         """POST /v1/batches: many URLs in one job, run at each site's pace. Returns the batch at once.
 
@@ -169,6 +194,10 @@ class FetchXClient:
     def balance(self):
         """Credits available now: {'credits', 'reserved', 'trial', 'purchased', 'payment_hold'}."""
         return self._send('GET', '/v1/balance')
+
+    def me(self):
+        """The project and key making the call: {'project_id', 'key_id', 'key_name', 'key_prefix', 'scopes'}. Any valid key."""
+        return self._send('GET', '/v1/me')
 
     def usage(self, *, period=None, since=None, until=None):
         return self._send('GET', '/v1/usage' + _query({'period': period, 'since': since, 'until': until}))

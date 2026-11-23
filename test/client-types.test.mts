@@ -1,5 +1,5 @@
 import {FetchXClient, FetchXError, type FetchRequest, type FetchResult, type Usage, type Balance, type Batch, type BatchItem,
-  type BatchRequest} from '../clients/javascript.mjs';
+  type BatchRequest, type NetworkList, type NetworkCall, type Me} from '../clients/javascript.mjs';
 
 async function checkClientTypes() {
   const client = new FetchXClient({url: 'https://app.fetchx.ai', token: 'fxk_fixture'});
@@ -26,6 +26,15 @@ async function checkClientTypes() {
   const download = await client.content(result.id);
   const bytes: Uint8Array = download.body;
   await client.delete(result.id);
+  const captured: FetchResult = await client.fetch({url: 'https://shop.example.com/', capture: {types: ['document', 'xhr', 'fetch'], max_requests: 50}});
+  const calls: number | undefined = captured.network?.captured;
+  const rows: NetworkList = await client.network(captured.id, {contains: ['Lamp', '19.99'], first_party: true, phase: 'scroll'});
+  const call: NetworkCall = await client.networkCall(captured.id, rows.items[0].index);
+  const callBody: string | null | undefined = call.response?.body;
+  const har = await client.networkHar(captured.id);
+  const me: Me = await client.me();
+  const scopes: string[] = me.scopes;
+  console.log(calls, callBody, har.log, scopes, (await client.networkBody(captured.id, 1)).contentType);
   const batchInput = {items: ['https://shop.example.com/a', {url: 'https://shop.example.com/b', formats: ['text']}],
     defaults: {formats: ['markdown'], render: 'auto'}, webhook_url: 'https://hooks.example.com/fetchx', tags: ['nightly']} satisfies BatchRequest;
   const batch: Batch = await client.submitBatch(batchInput);
@@ -56,6 +65,8 @@ const badFormat: FetchRequest = {url: 'https://shop.example.com/', formats: ['pd
 const ownWebhook: BatchRequest = {items: [{url: 'https://shop.example.com/', webhook_url: 'https://hooks.example.com/'}]};
 // @ts-expect-error: defaults never carry a url; each item has its own.
 const defaultUrl: BatchRequest = {items: ['https://shop.example.com/'], defaults: {url: 'https://shop.example.com/'}};
+// @ts-expect-error: capture types are the documented ones.
+const badCapture: FetchRequest = {url: 'https://shop.example.com/', capture: {types: ['image']}};
 void checkClientTypes;
 void ownWebhook;
 void defaultUrl;

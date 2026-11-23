@@ -14,6 +14,9 @@
 // successful job returns `extract` (default {}) and reports `extract_tokens`
 // (default 1000) of page text read; `extract_unavailable` (a reason) refuses
 // the job with 503, as the engine does when extraction can't run.
+// With `capture`, a job records `network` (calls as the engine stores them, by
+// default the page's document and one JSON call) and is read through the
+// /network routes; capture without a browser (render: never, not GET) is refused.
 // Pacing: every job holds a slot on its host until it finishes; a paced job
 // (JobInput.paced) is refused with host_busy when `pace(host)` ({tier,
 // max_running, start_gap_ms}, default open 4 / 0 ms) leaves no free slot.
@@ -51,6 +54,10 @@ function refusalOf(request) {
   if (request.formats !== undefined && (!Array.isArray(request.formats) || request.formats.some(f => !FORMATS.includes(f)))) {
     return {status: 400, code: 'invalid_request', details: {field: 'formats'}};
   }
+  if (request.capture !== undefined && request.capture !== null && request.capture !== false
+    && (request.render === 'never' || (request.method ?? 'GET') !== 'GET' || (request.capture !== true && typeof request.capture !== 'object'))) {
+    return {status: 400, code: 'invalid_request', details: {field: 'capture', reason: 'capture records what a browser loads: use render always or auto with GET'}};
+  }
   if (typeof request.body === 'string' && Buffer.byteLength(request.body) > 1_000_000) {
     return {status: 413, code: 'request_too_large', details: {field: 'body', max_bytes: 1_000_000}};
   }
@@ -85,14 +92,21 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     if (req.url.startsWith('/internal/') && req.headers.authorization !== `Bearer ${token}`) return refuse(reply, 401, 'unauthorized');
   });
 
+  const captured = job => !!job.request.capture;
+  const networkView = job => ({captured: job.network.length, dropped: {trackers: 0, excluded_types: 0, third_party: 0, over_limit: 0},
+    truncated: false, attempt: 1, complete: true, expires_at: new Date(Date.parse(job.created_at) + 7 * 86_400_000).toISOString(),
+    expired: job.deleted, list_url: `/v1/fetch/${job.id}/network`, har_url: `/v1/fetch/${job.id}/network.har`});
   const view = (job, {includeBody = true} = {}) => {
     const base = {id: job.id, status: job.status, page_status: job.page_status ?? null, idempotency_key: job.key, url: job.request.url,
       created_at: job.created_at, finished_at: job.finished_at, tags: job.request.tags ?? []};
-    if (job.status === 'pending') return {...base, data: null, challenge: null, attempts: [], skipped: [], fixes: [], error: null};
+    if (job.status === 'pending') {
+      return {...base, data: null, challenge: null, attempts: [], skipped: [], fixes: [], error: null, ...(captured(job) ? {network: null} : {})};
+    }
     const data = job.data ? {...job.data} : null;
     if (data && job.deleted) data.content_expired = true;
     else if (data && includeBody && (job.request.formats ?? ['body']).includes('body')) Object.assign(data, {body: job.body, body_encoding: 'utf-8'});
-    return {...base, data, challenge: job.challenge, attempts: job.attempts, skipped: job.skipped, fixes: [], error: job.error};
+    return {...base, data, challenge: job.challenge, attempts: job.attempts, skipped: job.skipped, fixes: [], error: job.error,
+      ...(captured(job) ? {network: networkView(job)} : {})};
   };
   const envelope = (job, options) => ({job: view(job, options), tenant: job.tenant, usage: job.usage, webhook_url: job.webhook_url,
     deadline: job.deadline});
@@ -126,6 +140,16 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
       job.data.extract_report = {status: 'complete', page_tokens: outcome.extract_tokens ?? 1000};
     }
     Object.assign(job.data, outcome.data);
+    if (job.request.capture) {
+      const call = (index, extra) => ({index, page: job.page?.number ?? 1, phase: 'load', type: 'fetch', frame: 'main', method: 'GET',
+        url: job.request.url, first_party: true, status: 200, status_text: 'OK', content_type: 'application/json', request_bytes: 0,
+        response_bytes: 0, started_ms: index * 10, duration_ms: 5, request_headers: [['accept', '*/*']], request_body: null,
+        response_headers: [['content-type', 'application/json']], body: null, body_truncated: false, body_omitted: null, flags: [],
+        error: null, redirected_from: null, ...extra});
+      job.network = (outcome.network ?? [{type: 'document', content_type: 'text/html', response_headers: [['content-type', 'text/html']],
+        body: job.body}, {url: new URL('/api/items?page=1', job.request.url).href, body: '{"items":[{"name":"Lamp"}]}'}])
+        .map((extra, n) => call(n + 1, extra)).map(entry => ({...entry, response_bytes: entry.body === null ? 0 : Buffer.byteLength(entry.body)}));
+    }
     job.attempts = blocked ? [] : [{transport, class: routeClass, country: null, result: succeeded ? 'success' : 'blocked', status_code: job.data.status_code,
       wire_bytes: outcome.wire_bytes ?? 1000}];
     job.skipped = blocked ? [{transport, class: routeClass, country: null, reason: 'over_max_credits'}] : [];
@@ -203,7 +227,7 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
   // The page after job :id's. Like the engine: the idempotency key first, then
   // the earlier job (the tenant's, finished, succeeded, with a next page and
   // its content); the new request keeps the earlier one's settings.
-  const NEXT_FIELDS = ['scroll', 'expect', 'max_credits', 'timeout_ms', 'async', 'webhook_url', 'idempotency_key', 'tags'];
+  const NEXT_FIELDS = ['scroll', 'expect', 'capture', 'max_credits', 'timeout_ms', 'async', 'webhook_url', 'idempotency_key', 'tags'];
   app.post('/internal/v1/jobs/:id/next', async (req, reply) => {
     const input = envelopeOf(req, reply);
     if (!input) return reply;
@@ -266,6 +290,63 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
         .send(kind === 'screenshot' ? job.screenshot : Buffer.from(job.body));
     });
   }
+  // A job's network capture: crude filters (type, content_type, contains, limit, cursor), one call, a body, HAR.
+  const capturedJob = (req, reply) => {
+    const job = own(req, reply);
+    if (!job) return null;
+    if (!captured(job)) { refuse(reply, 404, 'capture_not_found'); return null; }
+    if (job.status === 'pending') { refuse(reply, 409, 'pending'); return null; }
+    if (job.deleted) { refuse(reply, 410, 'content_expired'); return null; }
+    return job;
+  };
+  const row = ({request_headers: _a, response_headers: _b, request_body: _c, body, status_text: _d, redirected_from: _e, ...rest}) =>
+    ({...rest, has_body: body !== null});
+  app.get('/internal/v1/jobs/:id/network', async (req, reply) => {
+    const {tenant: _tenant, type, content_type: contentType, contains, limit = '50', cursor = '0', ...rest} = req.query ?? {};
+    const unknown = Object.keys(rest).find(key => !['host', 'first_party', 'status', 'page', 'phase'].includes(key));
+    if (unknown) return refuse(reply, 400, 'invalid_request', {field: unknown, reason: 'unknown query'});
+    if (!/^\d+$/.test(limit) || Number(limit) < 1 || Number(limit) > 200) return refuse(reply, 400, 'invalid_request', {field: 'limit'});
+    const job = capturedJob(req, reply);
+    if (!job) return reply;
+    const values = contains === undefined ? [] : [contains].flat().map(value => value.toLowerCase());
+    const matching = job.network.filter(call => call.index > Number(cursor) && (!type || call.type === type)
+      && (!contentType || (call.content_type ?? '').includes(contentType))
+      && (!values.length || values.some(value => (call.body ?? '').toLowerCase().includes(value))));
+    const items = matching.slice(0, Number(limit)).map(call => ({...row(call),
+      ...(values.length ? {matched: values.filter(value => (call.body ?? '').toLowerCase().includes(value))} : {})}));
+    return {items, next_cursor: matching.length > items.length ? String(items.at(-1).index) : null, network: networkView(job)};
+  });
+  app.get('/internal/v1/jobs/:id/network.har', async (req, reply) => {
+    const job = capturedJob(req, reply);
+    if (!job) return reply;
+    return {log: {version: '1.2', creator: {name: 'FetchX', version: 'fake'}, pages: [], entries: job.network.map(call => ({
+      startedDateTime: job.created_at, time: call.duration_ms, request: {method: call.method, url: call.url}, response: {status: call.status},
+      _fetchx: {index: call.index}}))}};
+  });
+  const oneCall = (req, reply) => {
+    const job = capturedJob(req, reply);
+    if (!job) return null;
+    const call = job.network.find(entry => String(entry.index) === req.params.index);
+    if (!call) { refuse(reply, 404, 'not_found', {field: 'index'}); return null; }
+    return call;
+  };
+  app.get('/internal/v1/jobs/:id/network/:index', async (req, reply) => {
+    const call = oneCall(req, reply);
+    if (!call) return reply;
+    return {index: call.index, page: call.page, phase: call.phase, type: call.type, frame: call.frame, first_party: call.first_party,
+      started_ms: call.started_ms, duration_ms: call.duration_ms, flags: call.flags, error: call.error,
+      request: {method: call.method, url: call.url, headers: call.request_headers, body: null, body_encoding: null, body_bytes: 0},
+      response: {status: call.status, status_text: call.status_text, headers: call.response_headers, content_type: call.content_type,
+        body: call.body, body_encoding: call.body === null ? null : 'utf-8', body_bytes: call.response_bytes, transfer_bytes: call.response_bytes,
+        body_truncated: false, body_omitted: call.body_omitted, body_url: null},
+      redirected_from: null};
+  });
+  app.get('/internal/v1/jobs/:id/network/:index/body', async (req, reply) => {
+    const call = oneCall(req, reply);
+    if (!call) return reply;
+    if (call.body === null) return refuse(reply, 404, 'not_found', {field: 'body'});
+    return reply.header('content-type', call.content_type ?? 'application/octet-stream').send(Buffer.from(call.body));
+  });
   app.delete('/internal/v1/jobs/:id', async (req, reply) => {
     const job = own(req, reply);
     if (!job) return reply;

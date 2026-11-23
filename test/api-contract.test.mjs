@@ -6,7 +6,7 @@ import test from 'node:test';
 import Fastify from 'fastify';
 import Ajv2020 from 'ajv/dist/2020.js';
 import spec from '../docs/openapi.json' with {type: 'json'};
-import {registerApi, API_SCOPES} from '../src/api/v1.mjs';
+import {registerApi, API_SCOPES, ANY_SCOPE} from '../src/api/v1.mjs';
 import {databaseUrl, html, openStore, platformFor, PROJECT} from './helpers.mjs';
 
 const ajv = new Ajv2020({allErrors: true, strict: false, validateFormats: false});
@@ -32,9 +32,10 @@ test('the contract is self-contained, with unique operation ids and matching pat
       ids.add(operation.operationId);
       assert.deepEqual((operation.parameters ?? []).filter(p => p.in === 'path').map(p => p.name),
         [...path.matchAll(/\{([^}]+)\}/g)].map(([, name]) => name), path);
-      // A public operation (GET /v1/status) has no security and no scope.
+      // A public operation (GET /v1/status) has no security and no scope; "any"
+      // (GET /v1/me) takes any valid key, whatever its scopes.
       if (Array.isArray(operation.security) && operation.security.length === 0) assert.equal(operation['x-scope'], undefined, path);
-      else assert.ok(Object.values(API_SCOPES).includes(operation['x-scope']), `${path} names a real scope`);
+      else assert.ok([...Object.values(API_SCOPES), ANY_SCOPE].includes(operation['x-scope']), `${path} names a real scope`);
     }
   }
   const check = value => {
@@ -148,6 +149,41 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   await expect('post', `/v1/fetch/${list.id}/next`, 401, {token: 'wrong', body: {}}, next);
   await expect('delete', `/v1/fetch/${list.id}`, 204, undefined, one);
   await expect('post', `/v1/fetch/${list.id}/next`, 410, {body: {}}, next);
+  // Network capture, and who is calling.
+  const captured = await expect('post', '/v1/fetch', 200, {body: {url: 'https://shop.example.com/data', render: 'always', capture: true}});
+  assert.equal(captured.network.captured, 2);
+  const network = '/v1/fetch/{id}/network';
+  const rows = await expect('get', `/v1/fetch/${captured.id}/network?contains=lamp&contains=desk`, 200, undefined, network);
+  assert.deepEqual(rows.items.map(item => [item.index, item.matched]), [[2, ['lamp']]]);
+  await expect('get', `/v1/fetch/${captured.id}/network?limit=0`, 400, undefined, network);
+  await expect('get', `/v1/fetch/${page2.id}/network`, 404, undefined, network);
+  await expect('get', `/v1/fetch/${captured.id}/network/2`, 200, undefined, `${network}/{index}`);
+  await expect('get', `/v1/fetch/${captured.id}/network/9`, 404, undefined, `${network}/{index}`);
+  await expect('get', `/v1/fetch/${captured.id}/network.har`, 200, undefined, '/v1/fetch/{id}/network.har');
+  const body = await call('GET', `/v1/fetch/${captured.id}/network/2/body`);
+  assert.deepEqual([body.status, body.headers['content-type'], body.headers['x-content-type-options']], [200, 'application/json', 'nosniff']);
+  await expect('post', '/v1/fetch', 400, {body: {url: 'https://shop.example.com/data', render: 'never', capture: true}});
+  await expect('delete', `/v1/fetch/${captured.id}`, 204, undefined, one);
+  await expect('get', `/v1/fetch/${captured.id}/network`, 410, undefined, network);
+  const me = await expect('get', '/v1/me', 200);
+  assert.deepEqual(me, {project_id: PROJECT, key_id: null, key_name: null, key_prefix: null, scopes: ['fetch:write', 'fetch:read', 'usage:read']});
+  await expect('get', '/v1/me', 401, {token: 'wrong'});
+});
+
+test('a 503 unavailable says when to retry', {skip: !databaseUrl}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const {call} = await platformFor(store, {wrapEngineFetch: () => async () => { throw Object.assign(new Error('down'), {cause: {code: 'ECONNREFUSED'}}); }});
+  for (const [method, path, specUrl, body] of [['post', '/v1/fetch', '/v1/fetch', {url: 'https://shop.example.com/'}],
+    ['get', '/v1/fetch/00000000-0000-4000-8000-000000000000/network', '/v1/fetch/{id}/network']]) {
+    const response = await call(method.toUpperCase(), path, {body});
+    assert.equal(response.status, 503, JSON.stringify(response.body));
+    assert.equal(response.headers['retry-after'], '30');
+    assert.equal(response.body.error.code, 'unavailable');
+    assert.equal(response.body.error.retry_after_seconds, 30);
+    assert.equal(response.body.error.details.status_url, 'https://fetchx.ai/status');
+    assertValid(responseSchema(method, specUrl, 503), response.body, `${method} ${path}`);
+  }
 });
 
 test('real batch responses match the contract', {skip: !databaseUrl}, async t => {

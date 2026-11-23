@@ -16,10 +16,10 @@ import {eventsServer} from './engine/events.mjs';
 import {FetchFront} from './fetch/front.mjs';
 import {WebhookSender} from './fetch/webhooks.mjs';
 import {BatchRunner, BatchService} from './fetch/batches.mjs';
-import {registerApi, apiError} from './api/v1.mjs';
+import {registerApi, apiError, API_SCOPES, ANY_SCOPE, UNAVAILABLE_RETRY_SECONDS} from './api/v1.mjs';
 import {registerLifecycle} from './api/lifecycle.mjs';
 import {Estimator} from './fetch/estimate.mjs';
-import {StatusBoard} from './status.mjs';
+import {StatusBoard, linksOf} from './status.mjs';
 import {ControlIdentity} from './control-identity.mjs';
 import {isControlRequest, registerControl} from './control.mjs';
 import {ControlStripe, isStripeWebhookRequest, registerStripeWebhook} from './control-stripe.mjs';
@@ -61,9 +61,11 @@ export function server(platform, {stripeFetch, stripeAutoProcess = true} = {}) {
     if (token.startsWith('fxk_')) {
       if (!platform.controlIdentity) throw new GatewayError('unauthorized', 401);
       const principal = await platform.controlIdentity.authenticateKey(token);
-      if (!principal.scopes.includes(scope)) throw new GatewayError('api_key_scope_forbidden', 403);
+      // ANY_SCOPE: any valid key (GET /v1/me tells a key what it may do).
+      if (scope !== ANY_SCOPE && !principal.scopes.includes(scope)) throw new GatewayError('api_key_scope_forbidden', 403);
       req.project = principal.project;
       req.keyId = principal.key_id;
+      req.key = {id: principal.key_id, name: principal.name ?? null, prefix: principal.prefix ?? null, scopes: principal.scopes};
       return;
     }
     const digest = Buffer.from(sha(token), 'hex');
@@ -72,6 +74,8 @@ export function server(platform, {stripeFetch, stripeAutoProcess = true} = {}) {
         && timingSafeEqual(digest, Buffer.from(project.tokenHash, 'hex'))) {
         req.project = id;
         req.keyId = null;
+        // A token from the configuration: not a console key, allowed everything.
+        req.key = {id: null, name: null, prefix: null, scopes: Object.values(API_SCOPES)};
         return;
       }
     }
@@ -86,6 +90,12 @@ export function server(platform, {stripeFetch, stripeAutoProcess = true} = {}) {
       process.stderr.write(JSON.stringify({event: 'engine_unavailable', cause: error.engineCause}) + '\n');
     }
     const {status, body} = apiError(error);
+    // An engine that does not answer is usually restarting: the same wait the
+    // front door gives when the gateway itself does not answer.
+    if (body.error.code === 'unavailable' && !body.error.retry_after_seconds) {
+      body.error.details = {status_url: linksOf(config).status_page, retry_after_seconds: UNAVAILABLE_RETRY_SECONDS, ...body.error.details};
+      body.error.retry_after_seconds = UNAVAILABLE_RETRY_SECONDS;
+    }
     if (body.error.retry_after_seconds) reply.header('retry-after', String(body.error.retry_after_seconds));
     reply.code(status).send(body);
   });

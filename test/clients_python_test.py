@@ -26,6 +26,8 @@ class ClientTests(unittest.TestCase):
             calls.append((request.method, str(request.url), request.headers['authorization']))
             if request.url.path.endswith('/content'):
                 return httpx.Response(200, content=b'%PDF', headers={'content-type': 'application/pdf'})
+            if request.url.path.endswith('/body'):
+                return httpx.Response(200, content=b'{"name":"Lamp"}', headers={'content-type': 'application/json'})
             if request.method == 'DELETE':
                 return httpx.Response(204)
             return httpx.Response(200, json=RESULT)
@@ -40,6 +42,11 @@ class ClientTests(unittest.TestCase):
         client.usage(period='day')
         client.estimate(items=['https://shop.example.com/a'], defaults={'render': 'never'})
         client.status()
+        client.me()
+        client.network(RESULT['id'], contains=['Lamp', '19.99'], first_party=True, limit=5)
+        client.network_call(RESULT['id'], 2)
+        self.assertEqual(client.network_body(RESULT['id'], 2)['body'], b'{"name":"Lamp"}')
+        client.network_har(RESULT['id'], page=1)
         bodies = []
         next_client = client_for(lambda request: bodies.append(json.loads(request.content)) or httpx.Response(200, json=RESULT))
         next_client.next_page(RESULT['id'], scroll=3)
@@ -52,6 +59,10 @@ class ClientTests(unittest.TestCase):
             ('GET', base + '/v1/fetch?status=failed&limit=5'), ('GET', base + '/v1/fetch/' + RESULT['id'] + '/content'),
             ('DELETE', base + '/v1/fetch/' + RESULT['id']), ('GET', base + '/v1/balance'),
             ('GET', base + '/v1/usage?period=day'), ('POST', base + '/v1/estimate'), ('GET', base + '/v1/status'),
+            ('GET', base + '/v1/me'),
+            ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network?first_party=true&contains=Lamp&contains=19.99&limit=5'),
+            ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network/2'), ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network/2/body'),
+            ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network.har?page=1'),
             ('POST', base + '/v1/fetch/' + RESULT['id'] + '/next')])
         self.assertTrue(all(auth == 'Bearer fxk_fixture' for _, _, auth in calls))
 

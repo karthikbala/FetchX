@@ -355,6 +355,11 @@ class FetchResult(Model):
         return self.data.get("extract_report")
 
     @property
+    def network(self) -> Optional[dict]:
+        """For a request made with ``capture``: calls captured and dropped, and where to read them."""
+        return self.raw.get("network")
+
+    @property
     def screenshot(self) -> Optional[bytes]:
         """``formats: screenshot``: the JPEG, decoded."""
         value = self.data.get("screenshot")
@@ -795,6 +800,86 @@ class Estimate(Model):
 
     def _repr_fields(self):
         return {"kind": self.kind, "requests": self.requests, "credits": self.credits}
+
+
+class NetworkPage(Model):
+    """A page of ``GET /v1/fetch/{id}/network``: ``items`` (one dict per call), ``next_cursor`` and ``network``."""
+
+    @property
+    def items(self) -> List[dict]:
+        return list(self.raw.get("items") or [])
+
+    @property
+    def next_cursor(self) -> Optional[str]:
+        return self.raw.get("next_cursor")
+
+    @property
+    def network(self) -> dict:
+        return self.raw.get("network") or {}
+
+    def __iter__(self) -> Iterator[dict]:
+        return iter(self.items)
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def _repr_fields(self):
+        return {"items": len(self.items), "next_cursor": self.next_cursor}
+
+
+class NetworkCall(Model):
+    """One recorded call in full: ``request`` and ``response`` (None when no response came)."""
+
+    @property
+    def index(self) -> int:
+        return _int(self.raw.get("index"))
+
+    @property
+    def request(self) -> dict:
+        return self.raw.get("request") or {}
+
+    @property
+    def response(self) -> Optional[dict]:
+        return self.raw.get("response")
+
+    @property
+    def url(self) -> str:
+        return self.request.get("url") or ""
+
+    @property
+    def body(self) -> Optional[str]:
+        """The response body when it is inline: text, or base64 for a binary body (see ``response["body_encoding"]``)."""
+        return (self.response or {}).get("body")
+
+    def _repr_fields(self):
+        return {"index": self.index, "url": self.url, "status": (self.response or {}).get("status")}
+
+
+class Me(Model):
+    """``GET /v1/me``: the project and API key making the call."""
+
+    @property
+    def project_id(self) -> str:
+        return self.raw.get("project_id") or ""
+
+    @property
+    def key_id(self) -> Optional[str]:
+        return self.raw.get("key_id")
+
+    @property
+    def key_name(self) -> Optional[str]:
+        return self.raw.get("key_name")
+
+    @property
+    def key_prefix(self) -> Optional[str]:
+        return self.raw.get("key_prefix")
+
+    @property
+    def scopes(self) -> List[str]:
+        return list(self.raw.get("scopes") or [])
+
+    def _repr_fields(self):
+        return {"project_id": self.project_id, "key_prefix": self.key_prefix, "scopes": self.scopes}
 
 
 class Balance(Model):

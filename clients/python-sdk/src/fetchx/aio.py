@@ -4,13 +4,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
 import httpx
 
-from ._core import Flow, _Call, _Core, _Send, _Sleep, _Yield, log
-from .models import (Balance, Batch, BatchItem, Content, Estimate, FetchResult, FetchSummary, ListPage,
-                     ServiceStatus, Usage)
+from ._core import Flow, _Call, _Core, _Send, _Sleep, _Yield, _network_query, log
+from .models import (Balance, Batch, BatchItem, Content, Estimate, FetchResult, FetchSummary, ListPage, Me,
+                     NetworkCall, NetworkPage, ServiceStatus, Usage)
 
 _SIX_HOURS = 6 * 3600.0
 
@@ -165,6 +165,23 @@ class AsyncFetchX(_Core):
     async def delete(self, fetch_id: Any) -> None:
         await self._call(*self._plan_delete(fetch_id))
 
+    async def network(self, fetch_id: Any, type: Optional[str] = None, content_type: Optional[str] = None,
+                      host: Optional[str] = None, first_party: Optional[bool] = None, status: Union[str, int, None] = None,
+                      page: Optional[int] = None, phase: Optional[str] = None,
+                      contains: Union[str, Sequence[str], None] = None, limit: Optional[int] = None,
+                      cursor: Optional[str] = None) -> NetworkPage:
+        return await self._call(*self._plan_network(fetch_id, _network_query(type, content_type, host, first_party, status,
+                                                                                page, phase, contains, limit, cursor)))
+
+    async def network_call(self, fetch_id: Any, index: int) -> NetworkCall:
+        return await self._call(*self._plan_network_call(fetch_id, index))
+
+    async def network_body(self, fetch_id: Any, index: int) -> Content:
+        return await self._call(*self._plan_network_body(fetch_id, index))
+
+    async def network_har(self, fetch_id: Any, page: Optional[int] = None) -> dict:
+        return await self._call(*self._plan_network_har(fetch_id, page))
+
     async def list(self, status: Optional[str] = None, tag: Optional[str] = None,
                    idempotency_key: Optional[str] = None, since: Optional[str] = None, limit: Optional[int] = None,
                    cursor: Optional[str] = None) -> ListPage[FetchSummary]:
@@ -223,6 +240,9 @@ class AsyncFetchX(_Core):
 
     async def balance(self) -> Balance:
         return await self._call(*self._plan_balance())
+
+    async def me(self) -> Me:
+        return await self._call(*self._plan_me())
 
     async def usage(self, period: Optional[str] = None, since: Optional[str] = None,
                     until: Optional[str] = None) -> Usage:

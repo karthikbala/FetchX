@@ -4,13 +4,13 @@ from __future__ import annotations
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence, Union
 
 import httpx
 
-from ._core import Flow, _Call, _Core, _Send, _Sleep, _Yield, log
-from .models import (Balance, Batch, BatchItem, Content, Estimate, FetchResult, FetchSummary, ListPage,
-                     ServiceStatus, Usage)
+from ._core import Flow, _Call, _Core, _Send, _Sleep, _Yield, _network_query, log
+from .models import (Balance, Batch, BatchItem, Content, Estimate, FetchResult, FetchSummary, ListPage, Me,
+                     NetworkCall, NetworkPage, ServiceStatus, Usage)
 
 _SIX_HOURS = 6 * 3600.0
 
@@ -213,6 +213,29 @@ class FetchX(_Core):
         """``DELETE /v1/fetch/{id}``: delete everything the site sent, now."""
         self._call(*self._plan_delete(fetch_id))
 
+    def network(self, fetch_id: Any, type: Optional[str] = None, content_type: Optional[str] = None,
+                host: Optional[str] = None, first_party: Optional[bool] = None, status: Union[str, int, None] = None,
+                page: Optional[int] = None, phase: Optional[str] = None, contains: Union[str, Sequence[str], None] = None,
+                limit: Optional[int] = None, cursor: Optional[str] = None) -> NetworkPage:
+        """``GET /v1/fetch/{id}/network``: the calls a request made with ``capture`` recorded, in order.
+
+        ``contains`` (a value or up to 5) keeps calls whose response body holds one of them, compared without
+        case: pass a name or price the page shows to find the call that carries the data."""
+        return self._call(*self._plan_network(fetch_id, _network_query(type, content_type, host, first_party, status, page,
+                                                                          phase, contains, limit, cursor)))
+
+    def network_call(self, fetch_id: Any, index: int) -> NetworkCall:
+        """``GET /v1/fetch/{id}/network/{index}``: one recorded call with its headers and bodies."""
+        return self._call(*self._plan_network_call(fetch_id, index))
+
+    def network_body(self, fetch_id: Any, index: int) -> Content:
+        """``GET /v1/fetch/{id}/network/{index}/body``: one recorded call's response body, for one over 1 MB."""
+        return self._call(*self._plan_network_body(fetch_id, index))
+
+    def network_har(self, fetch_id: Any, page: Optional[int] = None) -> dict:
+        """``GET /v1/fetch/{id}/network.har``: the capture as a HAR 1.2 document, for browser developer tools."""
+        return self._call(*self._plan_network_har(fetch_id, page))
+
     def list(self, status: Optional[str] = None, tag: Optional[str] = None, idempotency_key: Optional[str] = None,
              since: Optional[str] = None, limit: Optional[int] = None,
              cursor: Optional[str] = None) -> ListPage[FetchSummary]:
@@ -285,6 +308,10 @@ class FetchX(_Core):
     def balance(self) -> Balance:
         """``GET /v1/balance``: credits available now, reserved, trial and purchased."""
         return self._call(*self._plan_balance())
+
+    def me(self) -> Me:
+        """``GET /v1/me``: the project (the same after a key is rotated) and this key's id, name, prefix and scopes."""
+        return self._call(*self._plan_me())
 
     def usage(self, period: Optional[str] = None, since: Optional[str] = None, until: Optional[str] = None) -> Usage:
         """``GET /v1/usage``: balance and usage for a day, a month (default) or a range."""

@@ -59,6 +59,10 @@ else:
 | `GET /v1/fetch` | `list(query)` | `list(...)` | `fetch:read` |
 | `GET /v1/fetch/{id}/content` | `content(id)` | `content(id)` | `fetch:read` |
 | `GET /v1/fetch/{id}/screenshot` | `screenshot(id)` | `screenshot(id)` | `fetch:read` |
+| `GET /v1/fetch/{id}/network` | `network(id, query)` | `network(id, ...)` | `fetch:read` |
+| `GET /v1/fetch/{id}/network/{index}` | `networkCall(id, index)` | `network_call(id, index)` | `fetch:read` |
+| `GET /v1/fetch/{id}/network/{index}/body` | `networkBody(id, index)` | `network_body(id, index)` | `fetch:read` |
+| `GET /v1/fetch/{id}/network.har` | `networkHar(id, {page})` | `network_har(id, page=)` | `fetch:read` |
 | `DELETE /v1/fetch/{id}` | `delete(id)` | `delete(id)` | `fetch:read` |
 | `POST /v1/batches` | `submitBatch(input)` | `submit_batch(items, **batch)` | `fetch:write` |
 | `GET /v1/batches/{id}` | `getBatch(id)` | `get_batch(id)` | `fetch:read` |
@@ -68,6 +72,7 @@ else:
 | `POST /v1/estimate` | `estimate(input)` | `estimate(**input)` | `fetch:write` |
 | `GET /v1/balance` | `balance()` | `balance()` | `usage:read` |
 | `GET /v1/usage` | `usage(query)` | `usage(...)` | `usage:read` |
+| `GET /v1/me` | `me()` | `me()` | any key |
 | `GET /v1/status` | `status()` | `status()` | none |
 
 ## Python SDK
@@ -114,11 +119,28 @@ const estimate = await fetchx.estimate({items: urls, defaults: {formats: ['markd
 if (!estimate.balance.covers_expected) console.log(estimate.notes);
 ```
 
+## The page's own network calls
+
+Pass `capture: true` (or an object of settings) and a browser records the calls the page makes while it loads and scrolls: its documents, XHR and fetch requests, with headers and response bodies. Many pages fill themselves from a JSON API, and the call that carries the data is often a better source than the HTML. The result's `network` says how many calls were kept and dropped. `contains` finds the call that holds a value the page shows:
+
+```js
+const result = await fetchx.fetch({url: 'https://shop.example.com/search?q=lamp', capture: true});
+const {items} = await fetchx.network(result.id, {contains: ['Lamp', '19.99'], content_type: 'json'});
+const call = await fetchx.networkCall(result.id, items[0].index);
+console.log(call.request.url, call.response.body);
+```
+
+Capture adds nothing to the price, but it needs a browser: the request is billed at a browser step, and it is refused with `render: 'never'` or a method other than GET. Calls to analytics, advertising and consent hosts are dropped unless `include_trackers` is set, and cookies, authorization and other secret headers are masked (`<masked len=N sha=XXXXXX>`) unless `unmask` is set. The calls are kept as long as the rest of the content (7 days, or until `delete(id)`), and `networkHar(id)` returns them as a HAR file for browser developer tools. A next page keeps the earlier page's `capture` unless it sends `capture: null`.
+
+## Who is calling
+
+`me()` returns the project, key id, name, prefix and scopes of the key making the call. Any valid key may call it. `project_id` stays the same when a key is rotated, so a tool can recognise the customer by it.
+
 ## Outcomes, errors and retries
 
 A fetch that ran returns its result whether it succeeded or not: check `status`. A failed result has `error.code`, a one-line `error.message` and `error.next` (an `action` and a `detail`) that an agent can act on, and `data` holds what the site last answered. A pending result (`async: true`, or longer than 60 seconds) comes back with `status: 'pending'`; `wait(id)` polls until it finishes.
 
-A refused call (4xx) throws `FetchXError` with `code`, `status`, `details` and `retryAfterSeconds` (`retry_after_seconds` in Python). Nothing was sent to the site and nothing was charged. During maintenance every call except `status()` is answered with `maintenance` (HTTP 503), `retryAfterSeconds` and `details.status_url`: `fetch` and `nextPage` wait and resend it like any 503, and a call that still meets it throws it. Nothing was run or charged. A route that was retired throws `route_retired` (410) with `details.replacement`. Changes to the API are listed at https://fetchx.ai/changelog.
+A refused call (4xx) throws `FetchXError` with `code`, `status`, `details` and `retryAfterSeconds` (`retry_after_seconds` in Python). Nothing was sent to the site and nothing was charged. During maintenance every call except `status()` is answered with `maintenance` (HTTP 503), `retryAfterSeconds` and `details.status_url`; when FetchX cannot take work for a moment it answers `unavailable` (503) with a `Retry-After` header the same way: `fetch` and `nextPage` wait and resend it like any 503, and a call that still meets it throws it. Nothing was run or charged. A route that was retired throws `route_retired` (410) with `details.replacement`. Changes to the API are listed at https://fetchx.ai/changelog.
 
 `fetch` and `nextPage` always send an `idempotency_key`, generated when you leave it out. After a lost response, a `429` or a `503` it resends the same body with the same key up to `retries` times (default 2). FetchX returns the first result for a key and never charges twice, so a resend is safe. Keep the key with your own record of the request if you need to find it later with `list({idempotency_key})`.
 

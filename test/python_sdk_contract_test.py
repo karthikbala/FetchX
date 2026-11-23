@@ -172,19 +172,42 @@ def scenario(fake):
     client.list(tag="contract")
     client.content(first)
     client.screenshot(first)
+    captured = client.fetch(url=f"{SHOP}/p/1", capture={"types": ["document", "xhr", "fetch"], "max_requests": 10})
+    assert captured.network["captured"] == 3 and captured.network["dropped"]["trackers"] == 1, captured.network
+    found = client.network(captured, contains=["lamp", "Desk"], content_type="json")
+    assert [(row["index"], row["matched"]) for row in found] == [(2, ["lamp"])], found.items
+    assert len(client.network(captured, limit=1)) == 1
+    call = client.network_call(captured, found.items[0]["index"])
+    assert call.body == '{"items": [{"name": "Lamp"}]}' and call.request["headers"][0][1].startswith("sid=<masked len=3 "), call.raw
+    assert client.network_body(captured, 2).data == b'{"items": [{"name": "Lamp"}]}'
+    assert [entry["request"]["url"] for entry in client.network_har(captured, page=1)["log"]["entries"]][1:] == [
+        f"{SHOP}/api/items?page=1", "https://cdn.example.net/api/stock"]
+    me = client.me()
+    assert me.key_prefix == "fxk_fake" and "fetch:read" in me.scopes, me.raw
     for bad in (lambda: client.fetch(url="ftp://shop.example.com/"),
                 lambda: client.fetch(url=f"{SHOP}/dear", max_credits=5),
                 lambda: client.fetch(url=f"{SHOP}/p/2", idempotency_key=first.idempotency_key),
                 lambda: client.get("00000000-0000-4000-8000-000000000000"),
                 lambda: client.next("00000000-0000-4000-8000-000000000001"),
-                lambda: client.next(client.fetch(url=f"{SHOP}/p/3"))):
+                lambda: client.next(client.fetch(url=f"{SHOP}/p/3")),
+                lambda: client.fetch(url=f"{SHOP}/p/1", capture=True, render="never"),
+                lambda: client.network(first),
+                lambda: client.network_call(first, 1),
+                lambda: client.network_har(first),
+                lambda: client.network_body(first, 1),
+                lambda: client.network(captured, status="ok"),
+                lambda: client.network_call(captured, 9),
+                lambda: client.network_body(captured, 4)):
         try:
             bad()
         except FetchXError:
             pass
     client.delete(second.id)
     client.get(second.id)
-    for bad in (lambda: client.content(second.id), lambda: client.next(second.id)):
+    client.delete(captured.id)
+    for bad in (lambda: client.content(second.id), lambda: client.next(second.id), lambda: client.network(captured),
+                lambda: client.network_har(captured), lambda: client.network_call(captured, 1),
+                lambda: client.network_body(captured, 1)):
         try:
             bad()
         except FetchXError:
@@ -218,7 +241,15 @@ class ContractTests(unittest.TestCase):
         fake = CheckedFake({f"{SHOP}/p/1": FakePage("<html><h1>Lamp</h1></html>", next_url=f"{SHOP}/p/2",
                                                     links=[{"url": f"{SHOP}/p/2", "text": "Next"}],
                                                     metadata={"title": "Lamp"}, extract={"name": "Lamp"},
-                                                    screenshot=b"\xff\xd8jpeg"),
+                                                    screenshot=b"\xff\xd8jpeg", network=[
+                                                        {"url": f"{SHOP}/api/items?page=1", "type": "xhr",
+                                                         "request_headers": {"Cookie": "sid=abc"},
+                                                         "body": {"items": [{"name": "Lamp"}]}},
+                                                        {"url": "https://cdn.example.net/api/stock",
+                                                         "content_type": "image/png", "body": b"\x89PNG"},
+                                                        {"url": "https://stats.example.org/collect",
+                                                         "tracker": True},
+                                                        {"url": f"{SHOP}/app.js", "type": "script"}]),
                             f"{SHOP}/p/2": FakePage("<html>Desk</html>", next_url=f"{SHOP}/p/3"),
                             f"{SHOP}/p/3": "<html>Chair</html>",
                             f"{SHOP}/slow": "<html>slow</html>",

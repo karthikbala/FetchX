@@ -267,6 +267,44 @@ class FetchTests(unittest.TestCase):
         self.assertEqual((caught.exception.code, caught.exception.status), ("content_expired", 410))
         self.assertEqual(calls(fake, "GET", "/v1/fetch")[0].params, {"tag": "daily", "limit": "5"})
 
+    def test_capture_records_the_page_calls_and_next_pages_keep_it_until_turned_off(self):
+        api = FakePage("<html><h1>Lamp</h1></html>", next_url=f"{SHOP}/p/2", network=[
+            {"url": f"{SHOP}/api/items", "body": {"items": [{"name": "Café Lamp"}]},
+             "response_headers": [["Set-Cookie", "sid=abc; Path=/"], ["X-Api-Key", "k123"]]},
+            {"url": "https://other.example.net/feed", "body": "x" * 3000, "content_type": "text/plain"}])
+        fake = shop({f"{SHOP}/p/1": api})
+        client = fake.client()
+        result = client.fetch(url=f"{SHOP}/p/1", capture={"first_party_only": True, "max_body_bytes": 1024})
+        self.assertTrue(result.rendered)
+        self.assertEqual((result.network["captured"], result.network["dropped"]["third_party"]), (2, 1))
+        self.assertEqual(result.network["list_url"], f"/v1/fetch/{result.id}/network")
+        found = client.network(result, contains="café", first_party=True)
+        self.assertEqual([(row["url"], row["matched"]) for row in found], [(f"{SHOP}/api/items", ["café"])])
+        headers = client.network_call(result.id, 2).response["headers"]
+        self.assertTrue(headers[0][1].startswith("sid=<masked len=3 ") and headers[0][1].endswith("; Path=/"))
+        self.assertTrue(headers[1][1].startswith("<masked len=4 "))
+        self.assertEqual(calls(fake, "GET", f"/v1/fetch/{result.id}/network")[0].params,
+                         {"contains": "café", "first_party": "true"})
+        unmasked = client.fetch(url=f"{SHOP}/p/1", capture={"unmask": True, "bodies": "none"})
+        call = client.network_call(unmasked, 2)
+        self.assertEqual((call.response["headers"][1][1], call.body, call.response["body_omitted"]),
+                         ("k123", None, "bodies_none"))
+        with self.assertRaises(FetchXError) as caught:
+            client.network_body(unmasked, 2)
+        self.assertEqual((caught.exception.code, caught.exception.details["reason"]), ("not_found", "bodies_none"))
+        second = client.next(result)
+        self.assertEqual(second.network["captured"], 1)
+        self.assertEqual(client.network(second).items[0]["page"], 2)
+        third = client.next(second, capture=None)
+        self.assertIsNone(third.network)
+        with self.assertRaises(FetchXError) as caught:
+            client.network(third)
+        self.assertEqual((caught.exception.code, caught.exception.status), ("capture_not_found", 404))
+        with self.assertRaises(FetchXError) as caught:
+            client.fetch(url=f"{SHOP}/p/1", capture=True, method="POST")
+        self.assertEqual(caught.exception.details["field"], "capture")
+        self.assertEqual(client.me().project_id, fake.project_id)
+
     def test_a_dict_body_and_a_given_key_replay_the_first_result(self):
         fake = shop()
         client = fake.client()

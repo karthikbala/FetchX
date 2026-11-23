@@ -425,6 +425,12 @@ export class FetchFront {
     await this.engine.remove(project, id);
   }
 
+  // A request's network capture, as the engine stores it (capture is free, so nothing here bills).
+  networkList(project, id, query = {}) { return this.engine.networkList(project, id, query); }
+  networkHar(project, id, query = {}) { return this.engine.networkHar(project, id, query); }
+  networkCall(project, id, index, query = {}) { return this.engine.networkCall(project, id, index, query); }
+  networkBody(project, id, index) { return this.engine.networkBody(project, id, index); }
+
   // How many of a project's jobs finished in a period, for /v1/usage.
   async counts(project, {from, to}) {
     return (await this.store.pool.query(`SELECT count(*) FILTER (WHERE status = 'succeeded')::int AS succeeded,
