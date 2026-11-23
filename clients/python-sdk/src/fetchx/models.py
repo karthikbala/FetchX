@@ -9,7 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 from dataclasses import dataclass
-from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar
+from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar, Union
 
 T = TypeVar("T")
 
@@ -205,15 +205,19 @@ class FetchResult(Model):
 
     ``body`` and ``content`` hold the site's response body when the request asked for it
     (``formats`` with ``body``, the default) or the call passed ``want_body=True``.
+
+    ``FetchResult(raw, content)`` builds one by hand, for example from a cache or a test.
+    ``content`` may be bytes or text; text is kept as ``body`` and encoded as UTF-8 for ``content``.
     """
 
-    def __init__(self, raw: Optional[dict] = None, content: Optional[bytes] = None,
+    def __init__(self, raw: Optional[dict] = None, content: Union[bytes, str, None] = None,
                  content_type: Optional[str] = None):
         super().__init__(raw)
-        self._content = content
         self._content_type = content_type
-        if content is None:
-            self._content = _inline_body(self.data)
+        self._text: Optional[str] = None
+        if isinstance(content, str):
+            self._text, content = content, content.encode("utf-8")
+        self._content = content if content is not None else _inline_body(self.data)
 
     def with_content(self, content: Optional[bytes], content_type: Optional[str] = None) -> FetchResult:
         return FetchResult(self.raw, content, content_type)
@@ -319,6 +323,8 @@ class FetchResult(Model):
     @property
     def body(self) -> Optional[str]:
         """The body as text (binary bodies decoded with replacement characters)."""
+        if self._text is not None:
+            return self._text
         if self._content is None:
             return None
         return self._content.decode(_charset(self.content_type), "replace")

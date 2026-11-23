@@ -23,8 +23,8 @@ class FetchXError(RuntimeError):
     ``client_config_missing``). The message never holds the API key or a page body.
     """
 
-    def __init__(self, code: str, message: str = "", *, status: Optional[int] = None,
-                 details: Optional[dict] = None, retry_after_seconds: Optional[float] = None,
+    def __init__(self, code: str, message: str = "", status: Optional[int] = None,
+                 details: Optional[dict] = None, retry_after_seconds: Optional[float] = None, *,
                  idempotency_key: Optional[str] = None, response: Optional[dict] = None):
         super().__init__(f"{code}: {message}" if message else code)
         self.code = code

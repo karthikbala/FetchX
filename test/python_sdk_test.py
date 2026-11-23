@@ -479,6 +479,22 @@ class ModelTests(unittest.TestCase):
         self.assertIn("status='succeeded'", repr(result))
         self.assertEqual((result.links, result.metadata, result.tags), ([], {}, []))
 
+    def test_results_and_errors_built_by_hand(self):
+        raw = {"id": "local-1", "url": f"{SHOP}/p/1", "status": "succeeded", "page_status": "content",
+               "credits": {"charged": 0, "breakdown": {"step": "local"}},
+               "data": {"status_code": 200, "content_type": "Text/HTML", "body_bytes": 7, "rendered": False}}
+        text = FetchResult(raw, "<p>Café")
+        self.assertEqual((text.body, text.content), ("<p>Café", "<p>Café".encode()))
+        self.assertEqual((text.ok, text.source_status, text.final_url, text.content_type, text.body_bytes,
+                          text.credits, text.step, text.challenge, text.rendered),
+                         (True, 200, f"{SHOP}/p/1", "text/html", 7, 0, "local", None, False))
+        self.assertEqual(FetchResult(raw, b"<p>Lamp").body, "<p>Lamp")
+        self.assertIsNone(FetchResult(raw).body)
+        error = FetchXError("local_no_browser", "plain HTTP only", 400, {"field": "render"}, 30)
+        self.assertEqual((error.code, error.message, error.http_status, error.details, error.retry_after),
+                         ("local_no_browser", "plain HTTP only", 400, {"field": "render"}, 30))
+        self.assertTrue(error.refused)
+
     def test_bodies_decode_with_the_page_charset(self):
         page = FakePage("Café".encode("latin-1"), content_type="text/html; charset=ISO-8859-1")
         result = shop({f"{SHOP}/latin": page}).client().fetch(url=f"{SHOP}/latin", want_body=True)
