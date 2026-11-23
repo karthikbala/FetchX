@@ -38,6 +38,8 @@ const MESSAGES = {
   url_not_allowed: 'The URL must be public http or https and must not resolve to a private address.',
   unauthorized: 'A valid API key is required: Authorization: Bearer fxk_...',
   api_key_scope_forbidden: 'This API key is not allowed to call this endpoint.',
+  api_key_expired: 'This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.',
+  key_limit_reached: 'This API key has used its credit limit (error.details.limit: credits_per_day or credits_per_month) until error.details.resets_at. Nothing was sent or charged.',
   insufficient_credits: 'The balance is below the cheapest step this request could take.',
   max_credits_too_low: 'max_credits is below the cheapest step; see error.details.min_credits.',
   payment_hold: 'Spending is paused while a payment issue is resolved.',
@@ -56,7 +58,8 @@ const MESSAGES = {
   route_retired: 'This route was retired; error.details.replacement says what to use instead.',
   route_not_found: 'There is no such route. Check the method and path against the docs (error.details.docs_url).',
 };
-const STATUS = {invalid_request: 400, url_not_allowed: 400, unauthorized: 401, api_key_scope_forbidden: 403, insufficient_credits: 402,
+const STATUS = {invalid_request: 400, url_not_allowed: 400, unauthorized: 401, api_key_expired: 401, key_limit_reached: 402,
+  api_key_scope_forbidden: 403, insufficient_credits: 402,
   max_credits_too_low: 402, payment_hold: 402, not_found: 404, idempotency_conflict: 409, request_too_large: 413, too_many_requests: 429,
   pending: 409, content_expired: 410, capture_not_found: 404, no_next_page: 409, route_retired: 410, route_not_found: 404, maintenance: 503};
 
@@ -166,8 +169,9 @@ export function registerApi(app, {service, ledger, estimator, board, batches}) {
   app.get('/v1/balance', {preHandler: guard(API_SCOPES.usage)}, req => service.balance(req.project));
   app.get('/v1/usage', {preHandler: guard(API_SCOPES.usage)}, req => usageReport({service, ledger}, req.project, req.query ?? {}));
   // Who is calling: the project (the same after a key is rotated) and this key.
-  app.get('/v1/me', {preHandler: guard(ANY_SCOPE)}, req => ({project_id: req.project, key_id: req.key?.id ?? req.keyId ?? null,
-    key_name: req.key?.name ?? null, key_prefix: req.key?.prefix ?? null, scopes: req.key?.scopes ?? Object.values(API_SCOPES)}));
+  app.get('/v1/me', {preHandler: guard(ANY_SCOPE)}, async req => ({project_id: req.project, key_id: req.key?.id ?? req.keyId ?? null,
+    key_name: req.key?.name ?? null, key_prefix: req.key?.prefix ?? null, scopes: req.key?.scopes ?? Object.values(API_SCOPES),
+    limits: await service.keyLimits(req.key?.id ?? req.keyId ?? null)}));
   // Public: no API key, any origin, and it answers during maintenance.
   app.get('/v1/status', async (req, reply) => {
     reply.header('access-control-allow-origin', '*');

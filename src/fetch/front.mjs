@@ -19,6 +19,7 @@
 // opaque tenant, and allowed_steps.
 import {randomBytes, randomUUID} from 'node:crypto';
 import {GatewayError, fail} from '../policy.mjs';
+import {keyLimitError, keyLimitState, publicLimits} from './key-limits.mjs';
 import {Sealer} from '../crypto.mjs';
 import {STEPS, extractCredits, priceOf, priceParts, worstCaseOf} from '../billing/ledger.mjs';
 import {budget} from '../budgets.mjs';
@@ -74,6 +75,8 @@ export async function initFetchFront(pool) {
     ALTER TABLE fetch_settlements ADD COLUMN IF NOT EXISTS extract_tokens integer;
     CREATE INDEX IF NOT EXISTS fetch_settlements_project_created ON fetch_settlements (project, created_at);
     CREATE INDEX IF NOT EXISTS fetch_settlements_pending ON fetch_settlements (deadline) WHERE status = 'pending';
+    -- A console key's spend this day and month (its credit limits, fetch/key-limits.mjs).
+    CREATE INDEX IF NOT EXISTS fetch_settlements_key_created ON fetch_settlements (key_id, created_at) WHERE key_id IS NOT NULL;
     CREATE TABLE IF NOT EXISTS webhook_secrets (
       project text PRIMARY KEY,
       secret bytea NOT NULL,
@@ -190,7 +193,7 @@ export class FetchFront {
     // Why allowed_steps is empty, so the engine's budget_too_low can be told
     // back to the caller as the reason it really is. Refusing here instead would
     // stop idempotent replays of finished jobs from returning their results.
-    const admission = {reserved: null, available: null, held: false, busy: null};
+    const admission = {reserved: null, available: null, held: false, busy: null, key: null};
     let allowed = null;
     const reserved = await this.store.tx(async client => {
       await this.ledger.lock(client, project);
@@ -216,7 +219,14 @@ export class FetchFront {
       }
       const ceiling = this.#ceiling(billing);
       if (waitForCredits && running > 0 && balance.available < ceiling) throw CREDITS_WAIT;
-      const credits = Math.min(ceiling, balance.available);
+      // A key with its own credit limit reserves no more than the limit has
+      // left; a batch item waits for the key's running requests first.
+      const key = await keyLimitState(client, keyId);
+      if (key.room < Math.min(ceiling, balance.available)) {
+        admission.key = key;
+        if (waitForCredits && key.held > 0) throw CREDITS_WAIT;
+      }
+      const credits = Math.min(ceiling, balance.available, key.room);
       if (credits >= 1) {
         await this.ledger.hold(client, {project, request: id, credits});
         await client.query('UPDATE fetch_settlements SET credits_max = $2 WHERE request = $1', [id, credits]);
@@ -258,7 +268,7 @@ export class FetchFront {
     return this.#viewOf(project, envelope);
   }
 
-  #budgetError(error, billing, {held, busy, available}) {
+  #budgetError(error, billing, {held, busy, available, key}) {
     const {maxCredits} = billing;
     if (busy !== null) return Object.assign(new GatewayError('too_many_requests', 429), {details: {retry_after_seconds: 5, running: busy}});
     if (held) return new GatewayError('payment_hold', 402);
@@ -270,6 +280,8 @@ export class FetchFront {
     if (Math.min(maxCredits ?? Infinity, budget(this.config, 'fetch.maxCreditsPerRequest')) < minimum) {
       return Object.assign(new GatewayError('max_credits_too_low', 402), {details: {min_credits: minimum}});
     }
+    // The key's own day or month limit, not the balance, left too little.
+    if (key && key.room < minimum) return keyLimitError(key, minimum);
     return Object.assign(new GatewayError('insufficient_credits', 402), {details: {available: available ?? 0, needed: minimum}});
   }
 
@@ -424,6 +436,9 @@ export class FetchFront {
   async remove(project, id) {
     await this.engine.remove(project, id);
   }
+
+  // The calling key's credit limits and expiry, with what it has used (GET /v1/me).
+  async keyLimits(keyId) { return publicLimits(await keyLimitState(this.store.pool, keyId)); }
 
   // A request's network capture, as the engine stores it (capture is free, so nothing here bills).
   networkList(project, id, query = {}) { return this.engine.networkList(project, id, query); }

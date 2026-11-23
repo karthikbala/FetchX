@@ -113,9 +113,11 @@ const requestErrorRows = [
   ['400', '`invalid_request`', 'A field is missing or wrong. `error.details.field` names it.'],
   ['400', '`url_not_allowed`', 'The URL is not public http or https.'],
   ['401', '`unauthorized`', 'The API key is missing, wrong or revoked.'],
+  ['401', '`api_key_expired`', 'The API key passed its expiry (`error.details.expired_at`). Change its expiry in the console or make a new key.'],
   ['402', '`insufficient_credits`', 'The balance is below the cheapest step this request could take. `error.details` has the balance and what is needed.'],
   ['402', '`max_credits_too_low`', '`max_credits` is below the cheapest step. Raise it to at least `error.details.min_credits`.'],
   ['402', '`payment_hold`', 'Spending is paused while a payment issue is resolved.'],
+  ['402', '`key_limit_reached`', 'The API key’s own credit limit for the day or month has less left than the cheapest step. `error.details` names the limit (`credits_per_day` or `credits_per_month`) and `resets_at`. Nothing was sent or charged.'],
   ['403', '`api_key_scope_forbidden`', 'The key does not have the scope this endpoint needs.'],
   ['404', '`not_found`', 'No request with that id in this project.'],
   ['404', '`capture_not_found`', 'The request was made without `capture`, so it has no network calls to read.'],
@@ -273,6 +275,15 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
         ],
       },
       {
+        id: 'key-limits',
+        title: 'Limit what a key can spend',
+        blocks: [
+          { kind: 'text', text: 'A key can have its own credit limit per day and per month, and an expiry, so you can hand it to a tool, a scheduler or a teammate without handing over the whole balance. Set them when you create the key, or later with Limits next to it. Days and months are UTC. A key’s spend is what its requests were charged plus what its running requests hold, counted by when each request started; rotating a key keeps its limits and what it has spent.' },
+          { kind: 'text', text: 'A request reserves no more than the key’s limit has left. When that is less than the cheapest step the request could take, it is refused before anything is sent: 402 `key_limit_reached`, with `error.details.limit` (`credits_per_day` or `credits_per_month`), `credits`, `used`, `remaining`, `needed` and `resets_at`. A batch whose key reaches its limit pauses with `paused_reason: key_limit_reached` and starts again by itself when the limit resets. After its expiry a key answers 401 `api_key_expired` with `error.details.expired_at`.' },
+          { kind: 'text', text: '`GET /v1/me` shows the key’s `limits`: for each of `credits_per_day` and `credits_per_month` the `limit`, `used`, `remaining` and `resets_at` (or `null` for no limit), and `expires_at`.' },
+        ],
+      },
+      {
         id: 'connect',
         title: 'Connect for agents and CLIs',
         blocks: [
@@ -387,7 +398,7 @@ curl -G "$FETCHX_URL/v1/fetch/$ID/network" -H "Authorization: Bearer $FETCHX_TOK
           { kind: 'text', text: 'Send up to 1000 URLs, or `POST /v1/fetch` bodies, in one call. FetchX checks every item first: one bad item refuses the whole batch with 400 and names it (`items[3].formats`, or `defaults.formats` when the default is at fault), and nothing is queued.' },
           { kind: 'text', text: 'FetchX then starts the items itself, at the pace it has learned each site can take. A site that has never refused FetchX gets up to 4 requests at once; a site that has refused or rate-limited it gets 2 at once, 4 seconds apart; a site that rate-limited it in the last 10 minutes gets 1 at a time, 15 seconds apart. Different sites run side by side, and batches waiting on the same site take turns.' },
           { kind: 'text', text: 'Each item is a request of its own, with its own id, run in auto mode like any other: up to `max_attempts` steps, and a fresh residential IP when a site walls one off. It is charged only if it succeeds, at the price of the step that got it. Failed items are free.' },
-          { kind: 'text', text: 'While an item runs it holds credits for the most it could cost, like a single request. Items wait for credits your running requests hold, and a batch always leaves one of your project’s requests-at-once for single requests. When the balance cannot cover the next item, the batch pauses (`status: paused`, with `paused_reason`) and starts again by itself once you add credits. When its items ask for `extract` and FetchX cannot read pages into JSON for a while, it pauses with `paused_reason: extract_unavailable` and tries again by itself every 5 minutes, without charging anything.' },
+          { kind: 'text', text: 'While an item runs it holds credits for the most it could cost, like a single request. Items wait for credits your running requests hold, and a batch always leaves one of your project’s requests-at-once for single requests. When the balance cannot cover the next item, the batch pauses (`status: paused`, with `paused_reason`) and starts again by itself once you add credits. When its items ask for `extract` and FetchX cannot read pages into JSON for a while, it pauses with `paused_reason: extract_unavailable` and tries again by itself every 5 minutes, without charging anything. When the key that submitted it has a credit limit and reaches it, it pauses with `paused_reason: key_limit_reached` until the limit resets.' },
           { kind: 'text', text: 'Canceling stops the items that have not started. Items already running finish, and are charged if they succeed.' },
         ],
       },

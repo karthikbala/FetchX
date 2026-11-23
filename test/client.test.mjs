@@ -65,7 +65,7 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   assert.equal((await client.networkHar(captured.id)).log.version, '1.2');
   await assert.rejects(client.network(page.id), {code: 'capture_not_found', status: 404});
   assert.deepEqual(await client.me(), {project_id: PROJECT, key_id: null, key_name: null, key_prefix: null,
-    scopes: ['fetch:write', 'fetch:read', 'usage:read']});
+    scopes: ['fetch:write', 'fetch:read', 'usage:read'], limits: {credits_per_day: null, credits_per_month: null, expires_at: null}});
   await assert.rejects(client.fetch({url: 'https://shop.example.com/', max_attempts: 9}),
     error => error instanceof FetchXError && error.code === 'invalid_request' && error.status === 400 && error.details.field === 'max_attempts');
   const stranger = new FetchXClient({url: 'https://api.fetchx.test', token: 'fxk_wrong', fetch: transportFor(app)});

@@ -112,6 +112,13 @@ describe('same-origin control bridge',()=>{
   expect((await send(`/projects/${project}/fetch?limit=25&status=failed&tag=console&cursor=abc_-1`)).status).toBe(200);expect(calls[0].url).toContain('?limit=25&status=failed&tag=console&cursor=abc_-1');
   expect((await send(`/projects/${project}/usage?period=day`)).status).toBe(200);
  });
+ it('forwards a key\'s limits with PUT only',async()=>{
+  const path=`/projects/${project}/keys/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/limits`,body=JSON.stringify({credits_per_month:2000,expires_at:null});
+  expect((await send(path,{method:'PUT',body})).status).toBe(200);
+  expect(calls.map(({url,init})=>[url,init.method,init.body])).toEqual([[`https://gateway.example/control${path}`,'PUT',body]]);
+  const wrong=await send(path,{method:'POST',body});expect(wrong.status).toBe(405);expect(wrong.headers.get('Allow')).toBe('PUT');
+  expect((await send(`/projects/${project}/keys/not-a-uuid/limits`,{method:'PUT',body})).status).toBe(404);expect(calls).toHaveLength(1);
+ });
  it('forwards only the console fetch routes: submit, list, read and delete one result',async()=>{
   const base=`/projects/${project}`,id='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',body=JSON.stringify({url:'https://source.example/path?x=1'});
   expect((await send(`${base}/fetch`,{method:'POST',body})).status).toBe(200);

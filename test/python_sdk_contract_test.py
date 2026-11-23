@@ -183,7 +183,7 @@ def scenario(fake):
     assert [entry["request"]["url"] for entry in client.network_har(captured, page=1)["log"]["entries"]][1:] == [
         f"{SHOP}/api/items?page=1", "https://cdn.example.net/api/stock"]
     me = client.me()
-    assert me.key_prefix == "fxk_fake" and "fetch:read" in me.scopes, me.raw
+    assert me.key_prefix == "fxk_fake" and "fetch:read" in me.scopes and me.limits["credits_per_day"] is None, me.raw
     for bad in (lambda: client.fetch(url="ftp://shop.example.com/"),
                 lambda: client.fetch(url=f"{SHOP}/dear", max_credits=5),
                 lambda: client.fetch(url=f"{SHOP}/p/2", idempotency_key=first.idempotency_key),

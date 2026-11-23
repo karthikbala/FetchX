@@ -90,8 +90,16 @@ await context.route('**/api/control/**', async route => {
   if (resource === '/webhook-secret' && method === 'GET') return send({ secret: webhookSecret });
   if (resource === '/webhook-secret/rotate' && method === 'POST') { webhookSecret = 'whsec_SYNTHETIC_UI_FIXTURE_1'; return send({ secret: webhookSecret }); }
   if (resource === '/keys' && method === 'POST') {
-    keys.push({ id: `${keys.length + 1}`.repeat(8) + '-7777-4777-8777-' + `${keys.length + 1}`.repeat(12), name: body.name, scopes: body.scopes, created_at: '2026-11-19T10:00:00Z', revoked_at: null });
+    keys.push({ id: `${keys.length + 1}`.repeat(8) + '-7777-4777-8777-' + `${keys.length + 1}`.repeat(12), name: body.name, scopes: body.scopes, created_at: '2026-11-19T10:00:00Z', revoked_at: null,
+      limits: { credits_per_day: null, credits_per_month: null, expires_at: null, ...body.limits } });
     return send({ key: keys.at(-1), token: token() });
+  }
+  const limited = /^\/keys\/([0-9a-f-]{36})\/limits$/.exec(resource);
+  if (limited && method === 'PUT') {
+    const key = keys.find(item => item.id === limited[1]);
+    if (!key) return fail('key_not_found', 'Key not found.', 404);
+    key.limits = { credits_per_day: body.credits_per_day, credits_per_month: body.credits_per_month, expires_at: body.expires_at };
+    return send({ key });
   }
   if (resource === '/usage') {
     const done = [...requests.values()];
@@ -196,13 +204,29 @@ try {
   await expect(page.locator('[data-key-dialog]')).toBeVisible(); await expect(page.locator('[data-key-secret]')).toHaveText(token());
   await page.locator('[data-close-key]').click(); await expect(page.locator('[data-key-secret]')).toHaveText('Concealed');
   assert.deepEqual(keys[1].scopes, ['fetch:write', 'fetch:read', 'usage:read']);
+  assert.equal(calls.findLast(call => call.method === 'POST' && call.path.endsWith('/keys')).body.limits, undefined, 'a key without limits sends none');
+  const serverKey = page.locator('[data-key-list] .pp-key-row').filter({ hasText: 'Server key' });
+  await expect(serverKey).toContainText('no limits');
+  await serverKey.getByRole('button', { name: 'Limits', exact: true }).click();
+  await expect(page.locator('[data-limits-dialog]')).toBeVisible(); await expect(page.locator('[data-limits-key-name]')).toHaveText('Server key');
+  await page.locator('[data-limit-day]').fill('2.5'); await page.locator('[data-key-limits] button[type="submit"]').click();
+  await expect(page.locator('[data-limits-dialog]')).toBeVisible(); assert.equal(await page.locator('[data-limit-day]').evaluate(input => input.checkValidity()), false);
+  assert.equal(calls.some(call => call.method === 'PUT'), false, 'a fractional limit is not sent'); assert.equal(keys[1].limits.credits_per_day, null);
+  await page.locator('[data-limit-day]').fill('500'); await page.locator('[data-key-limits] button[type="submit"]').click();
+  await expect(page.locator('[data-limits-dialog]')).toBeHidden(); await expect(serverKey).toContainText('500 credits a day');
+  assert.deepEqual(keys[1].limits, { credits_per_day: 500, credits_per_month: null, expires_at: null });
+  await page.locator('[data-create-key] input[name="name"]').fill('Scheduler key'); await page.locator('[data-create-limit-month]').fill('2000');
+  await page.locator('[data-create-key] button[type="submit"]').click();
+  await expect(page.locator('[data-key-dialog]')).toBeVisible(); await page.locator('[data-close-key]').click();
+  assert.deepEqual(keys[2].limits, { credits_per_day: null, credits_per_month: 2000, expires_at: null });
+  await expect(page.locator('[data-key-list] .pp-key-row').filter({ hasText: 'Scheduler key' })).toContainText('2,000 credits a month');
   const hook = page.locator('[data-webhook-secret-value]');
   await expect(hook).toHaveText('Concealed');
   await page.locator('[data-webhook-secret-show]').click(); await expect(hook).toHaveText('whsec_SYNTHETIC_UI_FIXTURE_0');
   await page.locator('[data-webhook-secret-rotate]').click(); await page.locator('[data-confirm-action]').click();
   await expect(hook).toHaveText('whsec_SYNTHETIC_UI_FIXTURE_1');
   await audit('keys');
-  checks.push('Keys: three scopes, secret shown once and concealed on close; webhook secret shown and rotated after confirming');
+  checks.push('Keys: three scopes, secret shown once and concealed on close; credit limits set on create and in the Limits dialog, a fractional limit refused; webhook secret shown and rotated after confirming');
 
   await page.setViewportSize({ width: 360, height: 800 });
   const signout = page.getByRole('button', { name: 'Sign out', exact: true });

@@ -926,7 +926,8 @@ class FakeFetchX:
         key = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
         return {"project_id": self.project_id, "key_id": self.key_id, "key_name": "fake",
                 "key_prefix": key[:12] if key.startswith("fxk_") else None,
-                "scopes": ["fetch:write", "fetch:read", "usage:read"]}
+                "scopes": ["fetch:write", "fetch:read", "usage:read"],
+                "limits": {"credits_per_day": None, "credits_per_month": None, "expires_at": None}}
 
     def _status(self) -> dict:
         return {"status": "operational", "updated_at": _iso(self._clock),

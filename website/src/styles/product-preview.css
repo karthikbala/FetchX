@@ -271,3 +271,4 @@
     grid-column: 1 / -1;
   }
 }
+.pp-key-limits{border:0;padding:0;margin:0 0 22px;min-width:0}.pp-key-limits legend{font-size:12px;margin-bottom:10px}.pp-key-limits legend small{display:block;font-size:10px;color:#8196a6;line-height:1.7;margin-top:4px}.pp-key-limit-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 14px;max-width:640px}.pp-key-limit-fields .pp-field{margin-bottom:12px}@media(max-width:550px){.pp-key-limit-fields{grid-template-columns:1fr}}

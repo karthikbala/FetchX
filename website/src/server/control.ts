@@ -76,6 +76,7 @@ function allowedMethods(path:string):string[]|null {
  if(new RegExp(`^/projects/${PROJECT}$`).test(path))return ['GET'];
  if(new RegExp(`^/projects/${PROJECT}/keys$`).test(path))return ['GET','POST'];
  if(new RegExp(`^/projects/${PROJECT}/keys/${UUID}/rotate$`).test(path))return ['POST'];
+ if(new RegExp(`^/projects/${PROJECT}/keys/${UUID}/limits$`).test(path))return ['PUT'];
  if(new RegExp(`^/projects/${PROJECT}/keys/${UUID}$`).test(path))return ['DELETE'];
  if(new RegExp(`^/projects/${PROJECT}/fetch$`).test(path))return ['GET','POST'];
  if(new RegExp(`^/projects/${PROJECT}/fetch/${UUID}$`).test(path))return ['GET','DELETE'];

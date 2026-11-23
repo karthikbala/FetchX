@@ -2,8 +2,8 @@
  "openapi": "3.1.0",
  "info": {
   "title": "FetchX API",
-  "version": "1.7.0",
-  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. A browser request with capture records the page's own network calls, read with GET /v1/fetch/{id}/network or as a HAR file. GET /v1/me says which project and key are calling. GET /v1/status needs no key.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
+  "version": "1.8.0",
+  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. A browser request with capture records the page's own network calls, read with GET /v1/fetch/{id}/network or as a HAR file. GET /v1/me says which project and key are calling, and the key's own credit limits per day and month and expiry, set in the console. GET /v1/status needs no key.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
  },
  "servers": [
   {
@@ -452,7 +452,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -466,13 +466,24 @@
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
            }
           }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
          }
         }
        }
       }
      },
      "402": {
-      "description": "Not enough credits for the cheapest step, max_credits below it, or spending paused by a payment issue. Nothing was sent.",
+      "description": "Not enough credits for the cheapest step, max_credits below it, or spending paused by a payment issue. Nothing was sent. key_limit_reached: the API key's own credit limit per day or month (set in the console) has less left than the cheapest step; error.details names the limit and when it resets.",
       "content": {
        "application/json": {
         "schema": {
@@ -507,6 +518,22 @@
            "error": {
             "code": "payment_hold",
             "message": "Spending is paused while a payment issue is resolved."
+           }
+          }
+         },
+         "key_limit_reached": {
+          "value": {
+           "error": {
+            "code": "key_limit_reached",
+            "message": "This API key has used its credit limit (error.details.limit: credits_per_day or credits_per_month) until error.details.resets_at. Nothing was sent or charged.",
+            "details": {
+             "limit": "credits_per_month",
+             "credits": 2000,
+             "used": 1996,
+             "remaining": 4,
+             "needed": 5,
+             "resets_at": "2026-12-01T00:00:00Z"
+            }
            }
           }
          }
@@ -752,7 +779,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -764,6 +791,17 @@
            "error": {
             "code": "unauthorized",
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
            }
           }
          }
@@ -1001,7 +1039,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -1013,6 +1051,17 @@
            "error": {
             "code": "unauthorized",
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
            }
           }
          }
@@ -1114,7 +1163,7 @@
       "description": "Deleted."
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -1126,6 +1175,17 @@
            "error": {
             "code": "unauthorized",
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
            }
           }
          }
@@ -1470,7 +1530,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -1484,13 +1544,24 @@
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
            }
           }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
          }
         }
        }
       }
      },
      "402": {
-      "description": "Not enough credits for the cheapest step, max_credits below it, or spending paused by a payment issue. Nothing was sent.",
+      "description": "Not enough credits for the cheapest step, max_credits below it, or spending paused by a payment issue. Nothing was sent. key_limit_reached: the API key's own credit limit per day or month (set in the console) has less left than the cheapest step; error.details names the limit and when it resets.",
       "content": {
        "application/json": {
         "schema": {
@@ -1525,6 +1596,22 @@
            "error": {
             "code": "payment_hold",
             "message": "Spending is paused while a payment issue is resolved."
+           }
+          }
+         },
+         "key_limit_reached": {
+          "value": {
+           "error": {
+            "code": "key_limit_reached",
+            "message": "This API key has used its credit limit (error.details.limit: credits_per_day or credits_per_month) until error.details.resets_at. Nothing was sent or charged.",
+            "details": {
+             "limit": "credits_per_month",
+             "credits": 2000,
+             "used": 1996,
+             "remaining": 4,
+             "needed": 5,
+             "resets_at": "2026-12-01T00:00:00Z"
+            }
            }
           }
          }
@@ -1741,7 +1828,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -1753,6 +1840,17 @@
            "error": {
             "code": "unauthorized",
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
            }
           }
          }
@@ -1904,7 +2002,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -1916,6 +2014,17 @@
            "error": {
             "code": "unauthorized",
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
            }
           }
          }
@@ -2341,7 +2450,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -2353,6 +2462,17 @@
            "error": {
             "code": "unauthorized",
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
            }
           }
          }
@@ -2455,7 +2575,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -2467,6 +2587,17 @@
            "error": {
             "code": "unauthorized",
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
            }
           }
          }
@@ -2599,7 +2730,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -2611,6 +2742,17 @@
            "error": {
             "code": "unauthorized",
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
            }
           }
          }
@@ -2925,7 +3067,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -2939,13 +3081,24 @@
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
            }
           }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
          }
         }
        }
       }
      },
      "402": {
-      "description": "The balance is below the cheapest step, or spending is paused by a payment issue. Nothing was queued.",
+      "description": "The balance is below the cheapest step, or spending is paused by a payment issue. Nothing was queued. key_limit_reached: the API key's own credit limit per day or month (set in the console) has less left than the cheapest step; error.details names the limit and when it resets.",
       "content": {
        "application/json": {
         "schema": {
@@ -2969,6 +3122,22 @@
            "error": {
             "code": "payment_hold",
             "message": "Spending is paused while a payment issue is resolved."
+           }
+          }
+         },
+         "key_limit_reached": {
+          "value": {
+           "error": {
+            "code": "key_limit_reached",
+            "message": "This API key has used its credit limit (error.details.limit: credits_per_day or credits_per_month) until error.details.resets_at. Nothing was sent or charged.",
+            "details": {
+             "limit": "credits_per_month",
+             "credits": 2000,
+             "used": 1996,
+             "remaining": 4,
+             "needed": 5,
+             "resets_at": "2026-12-01T00:00:00Z"
+            }
            }
           }
          }
@@ -3180,7 +3349,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -3192,6 +3361,17 @@
            "error": {
             "code": "unauthorized",
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
            }
           }
          }
@@ -3310,7 +3490,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -3322,6 +3502,17 @@
            "error": {
             "code": "unauthorized",
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
            }
           }
          }
@@ -3508,7 +3699,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -3520,6 +3711,17 @@
            "error": {
             "code": "unauthorized",
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
            }
           }
          }
@@ -3630,7 +3832,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -3642,6 +3844,17 @@
            "error": {
             "code": "unauthorized",
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
            }
           }
          }
@@ -3863,7 +4076,7 @@
       }
      },
      "401": {
-      "description": "No valid API key. Codes: unauthorized.",
+      "description": "No valid API key. Codes: unauthorized, api_key_expired.",
       "content": {
        "application/json": {
         "schema": {
@@ -4003,7 +4216,7 @@
       }
      },
      "401": {
-      "description": "No valid API key. Codes: unauthorized.",
+      "description": "No valid API key. Codes: unauthorized, api_key_expired.",
       "content": {
        "application/json": {
         "schema": {
@@ -4134,7 +4347,7 @@
       }
      },
      "401": {
-      "description": "No valid API key. Codes: unauthorized.",
+      "description": "No valid API key. Codes: unauthorized, api_key_expired.",
       "content": {
        "application/json": {
         "schema": {
@@ -4267,7 +4480,7 @@
       }
      },
      "401": {
-      "description": "No valid API key. Codes: unauthorized.",
+      "description": "No valid API key. Codes: unauthorized, api_key_expired.",
       "content": {
        "application/json": {
         "schema": {
@@ -4357,7 +4570,7 @@
      "Usage"
     ],
     "summary": "The calling project and key",
-    "description": "Which project and key are making the call, and what the key may do. Any valid key may call it, whatever its scopes: a tool can check a key it was given before it starts, and recognise the customer by project_id even after the key is rotated.",
+    "description": "Which project and key are making the call, what the key may do, and the credit limits and expiry set on it in the console with what it has used. Any valid key may call it, whatever its scopes: a tool can check a key it was given before it starts, and recognise the customer by project_id even after the key is rotated.",
     "x-scope": "any",
     "responses": {
      "200": {
@@ -4377,7 +4590,17 @@
            "scopes": [
             "fetch:read",
             "fetch:write"
-           ]
+           ],
+           "limits": {
+            "credits_per_day": null,
+            "credits_per_month": {
+             "limit": 2000,
+             "used": 340,
+             "remaining": 1660,
+             "resets_at": "2026-12-01T00:00:00Z"
+            },
+            "expires_at": "2027-03-01T00:00:00Z"
+           }
           }
          }
         }
@@ -4385,7 +4608,7 @@
       }
      },
      "401": {
-      "description": "The API key is missing, wrong or revoked.",
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
       "content": {
        "application/json": {
         "schema": {
@@ -4397,6 +4620,17 @@
            "error": {
             "code": "unauthorized",
             "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
            }
           }
          }
@@ -6841,7 +7075,7 @@
        "finished",
        "canceled"
       ],
-      "description": "running: items are queued or running. paused: the balance does not cover the next item (or spending is on hold), or its items ask for extract and extraction is unavailable for now (paused_reason says which); it starts again by itself once that clears. finished: every item has finished. canceled: you canceled it; items that were running still finish."
+      "description": "running: items are queued or running. paused: the balance does not cover the next item (or spending is on hold), its items ask for extract and extraction is unavailable for now, or the key that submitted it has used its credit limit (paused_reason says which); it starts again by itself once that clears. finished: every item has finished. canceled: you canceled it; items that were running still finish."
      },
      "paused_reason": {
       "type": [
@@ -6852,9 +7086,10 @@
        "insufficient_credits",
        "payment_hold",
        "extract_unavailable",
+       "key_limit_reached",
        null
       ],
-      "description": "Why the batch is paused: insufficient_credits or payment_hold until the balance covers the next item; extract_unavailable when its items ask for extract and FetchX cannot read pages into JSON right now (it tries again by itself after 5 minutes; nothing is charged meanwhile)."
+      "description": "Why the batch is paused: insufficient_credits or payment_hold until the balance covers the next item; extract_unavailable when its items ask for extract and FetchX cannot read pages into JSON right now (it tries again by itself after 5 minutes; nothing is charged meanwhile); key_limit_reached when the API key that submitted it has used its credit limit for the day or month (it starts again by itself when the limit resets)."
      },
      "idempotency_key": {
       "type": "string"
@@ -7671,7 +7906,8 @@
      "key_id",
      "key_name",
      "key_prefix",
-     "scopes"
+     "scopes",
+     "limits"
     ],
     "description": "The project and API key making the call.",
     "properties": {
@@ -7711,6 +7947,78 @@
        ]
       },
       "description": "What this key may call: fetch:write (POST /v1/fetch, next pages, batches, estimates), fetch:read (results, content, network captures, DELETE) and usage:read (balance and usage)."
+     },
+     "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "credits_per_day",
+       "credits_per_month",
+       "expires_at"
+      ],
+      "description": "The limits set on this key in the console. Null fields have no limit, and all are null for a key from the server configuration.",
+      "properties": {
+       "credits_per_day": {
+        "oneOf": [
+         {
+          "$ref": "#/components/schemas/KeyLimit"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "Credits per UTC day."
+       },
+       "credits_per_month": {
+        "oneOf": [
+         {
+          "$ref": "#/components/schemas/KeyLimit"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "Credits per UTC month."
+       },
+       "expires_at": {
+        "type": [
+         "string",
+         "null"
+        ],
+        "format": "date-time",
+        "description": "When the key stops working; after it, calls answer 401 api_key_expired."
+       }
+      }
+     }
+    }
+   },
+   "KeyLimit": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "limit",
+     "used",
+     "remaining",
+     "resets_at"
+    ],
+    "description": "One of the key's credit limits and where the key stands against it now.",
+    "properties": {
+     "limit": {
+      "type": "integer",
+      "description": "Credits the key may spend in the period."
+     },
+     "used": {
+      "type": "integer",
+      "description": "Credits its requests were charged in the period, plus what its running requests hold. A request counts in the period it started; requests made with the keys this one was rotated from count too."
+     },
+     "remaining": {
+      "type": "integer",
+      "description": "limit minus used, at least 0. A request reserves at most this much."
+     },
+     "resets_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the period ends: the next midnight UTC, or the first of next month UTC."
      }
     }
    }

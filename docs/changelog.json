@@ -6,6 +6,17 @@
   },
   "releases": [
     {
+      "version": "1.8.0",
+      "date": "2026-11-23",
+      "title": "Credit limits and expiry for API keys",
+      "changes": [
+        {"type": "added", "text": "An API key can have its own credit limit per day and per month (UTC) and an expiry, set in the console when the key is made or later. Hand a capped key to a tool, a scheduler or a teammate without handing over the whole balance. Rotating a key keeps its limits and what it has spent."},
+        {"type": "added", "text": "A request that would take a key past its limit is refused before anything is sent: 402 key_limit_reached, with error.details.limit (credits_per_day or credits_per_month), credits, used, remaining, needed and resets_at. A request reserves no more than the limit has left. A batch whose key reaches its limit pauses with paused_reason key_limit_reached and starts again by itself when the limit resets."},
+        {"type": "added", "text": "An expired key answers 401 api_key_expired with error.details.expired_at, instead of unauthorized."},
+        {"type": "added", "text": "GET /v1/me has limits: credits_per_day and credits_per_month (each limit, used, remaining and resets_at, or null) and expires_at."}
+      ]
+    },
+    {
       "version": "1.7.0",
       "date": "2026-11-23",
       "title": "Network capture on browser pages, GET /v1/me, and Retry-After when FetchX is busy",

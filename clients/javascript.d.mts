@@ -19,6 +19,7 @@ export type NetworkList = Schemas['NetworkList'];
 export type NetworkCallRow = Schemas['NetworkCallRow'];
 export type NetworkCall = Schemas['NetworkCall'];
 export type Me = Schemas['Me'];
+export type KeyLimit = Schemas['KeyLimit'];
 // The batch owns async, webhook_url and idempotency_key; the API refuses them on items and defaults.
 type BatchOwned = 'async' | 'webhook_url' | 'idempotency_key';
 export type BatchItemRequest = Omit<FetchRequest, BatchOwned>;

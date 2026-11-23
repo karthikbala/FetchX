@@ -4,6 +4,7 @@
 // recovery paths (a paced start refused, an uncertain start, an orphan).
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
 import {databaseUrl, openStore, platformFor, testConfig, PROJECT, UNMETERED_TOKEN} from './helpers.mjs';
 import {Ledger} from '../src/billing/ledger.mjs';
 
@@ -290,6 +291,47 @@ test('a batch whose items ask for extract waits while extraction is unavailable,
   assert.equal(done.status, 'finished');
   assert.equal(done.paused_reason, null);
   assert.equal(done.items.succeeded, 2);
+});
+
+test('a batch whose API key reaches its credit limit pauses until the limit resets, then runs by itself', {skip}, async t => {
+  const store = await openStore();
+  const user = randomUUID(), key = randomUUID();
+  let created = false;
+  t.after(async () => {
+    await store.pool.query('DELETE FROM control_keys WHERE id = $1', [key]);
+    if (created) await store.pool.query('DELETE FROM control_projects WHERE id = $1', [PROJECT]);
+    await store.pool.query('DELETE FROM control_users WHERE id = $1', [user]);
+    await store.close();
+  });
+  // The batch's key: a console key of the project, allowed 1 credit a day.
+  await store.pool.query('INSERT INTO control_users (id, email) VALUES ($1, $2)', [user, `limits-${user}@example.test`]);
+  created = (await store.pool.query(`INSERT INTO control_projects (id, user_id, name) VALUES ($1, $2, 'Key limits fixture')
+    ON CONFLICT (id) DO NOTHING`, [PROJECT, user])).rowCount === 1;
+  await store.pool.query(`INSERT INTO control_keys (id, project, name, prefix, token_hash, scopes, credit_limit_day)
+    VALUES ($1, $2, 'scheduler', 'fxk_fixture1', $3, '["fetch:write"]', 1)`, [key, PROJECT, randomUUID().replaceAll('-', '')]);
+  const ctx = await platformFor(store, {script: () => ({step: 'http'})});
+  const {call, platform, webhooks} = ctx;
+  const {body: batch} = await call('POST', '/v1/batches', {body: {items: ['https://a.example.com/1', 'https://a.example.com/2'], webhook_url: HOOK}});
+  await store.pool.query('UPDATE fetch_batches SET key_id = $2 WHERE id = $1', [batch.id, key]);
+  await drain(ctx);
+  const paused = (await call('GET', `/v1/batches/${batch.id}`)).body;
+  assert.equal(paused.status, 'paused');
+  assert.equal(paused.paused_reason, 'key_limit_reached');
+  assert.deepEqual([paused.items.succeeded, paused.items.queued], [1, 1], 'one item fit the day, the other waits');
+  assert.equal(await balance(store), 99);
+  const until = (await store.pool.query('SELECT paused_until FROM fetch_batches WHERE id = $1', [batch.id])).rows[0].paused_until;
+  const midnight = new Date(); midnight.setUTCHours(24, 0, 0, 0);
+  assert.ok(Math.abs(until.getTime() - midnight.getTime()) < 5_000, 'it waits for the day to end');
+  // The key's limit is raised, but the pause lasts until its wait is over.
+  await store.pool.query('UPDATE control_keys SET credit_limit_day = 5 WHERE id = $1', [key]);
+  await drain(ctx);
+  assert.equal((await call('GET', `/v1/batches/${batch.id}`)).body.status, 'paused');
+  await store.pool.query(`UPDATE fetch_batches SET paused_until = clock_timestamp() - interval '1 second' WHERE id = $1`, [batch.id]);
+  await drain(ctx);
+  const done = (await call('GET', `/v1/batches/${batch.id}`)).body;
+  assert.deepEqual([done.status, done.paused_reason, done.items.succeeded], ['finished', null, 2]);
+  await deliverHooks(platform);
+  assert.deepEqual(webhooks.map(hook => hook.headers['x-fetchx-event']), ['fetch.finished', 'batch.paused', 'fetch.finished', 'batch.finished']);
 });
 
 test('an item refused at its start fails alone and is free; canceling stops the rest', {skip}, async t => {
