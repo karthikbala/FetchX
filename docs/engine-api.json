@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FetchX engine private API",
-    "version": "1.11",
+    "version": "1.12",
     "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). POST /internal/v1/estimates says what requests would take before they are sent (planned tiers, per-host history and pace), for the platform to price. Batches are the platform's: it checks a batch's requests with POST /internal/v1/requests/check, asks POST /internal/v1/pace how fast each host may take work, and starts each item as a paced job (JobInput.paced), which the engine refuses with host_busy when the host has no free slot. info.version is the contract version; GET /internal/v1/status and /healthz report it."
   },
   "security": [
@@ -2830,8 +2830,8 @@
           },
           "client_profile": {
             "type": "string",
-            "enum": ["node", "chrome136", "camoufox"],
-            "description": "The client the site saw: FetchX's own HTTP client (node), Chrome's TLS and HTTP/2 on a handoff (chrome136), or the Camoufox browser (camoufox)."
+            "enum": ["node", "chrome136", "camoufox", "cloakbrowser"],
+            "description": "The client the site saw: FetchX's own HTTP client (node), Chrome's TLS and HTTP/2 on a handoff (chrome136), the Camoufox browser (camoufox), or the CloakBrowser browser (cloakbrowser: a Chromium presenting a Windows device, tried on a fresh exit after Camoufox met a wall, and first on a host where it gets through more often)."
           },
           "handoff": {
             "type": "boolean",
@@ -2839,7 +2839,7 @@
           },
           "ips_skipped": {
             "type": "integer",
-            "description": "A residential browser step: fresh draws passed over before the browser opened, because the host had walled their exit IP in the last day."
+            "description": "A residential browser step: fresh draws passed over before the browser opened, because the host had walled their exit IP in the last day or keeps walling their exit network."
           },
           "warm": {
             "type": "string",
