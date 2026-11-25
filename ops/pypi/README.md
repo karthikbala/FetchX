@@ -6,7 +6,7 @@ The SDK in `clients/python-sdk` is published as `fetchx-sdk` (imported as `fetch
 
 1. The SDK is MIT-licensed (Karthik, 2026-11-23): `license = "MIT"` in `clients/python-sdk/pyproject.toml` and the text in `clients/python-sdk/LICENSE`.
 2. On pypi.org, sign in to the account that will own `fetchx-sdk`, turn on two-factor sign-in, and create an API token. The first upload needs a token for the whole account, because a token for one project can only be made once the project exists.
-3. On porttrack, save the token where only root can read it:
+3. Karthik saves the token on porttrack himself, over `ssh porttrack-production`, because Claude's sessions there may not write secrets. Only root can read it:
 
    ```sh
    sudo install -d -m 0700 /opt/crawling-platform/secrets/pypi
@@ -20,18 +20,18 @@ The SDK in `clients/python-sdk` is published as `fetchx-sdk` (imported as `fetch
 ## Each release
 
 1. On a branch: set the version in `clients/python-sdk/src/fetchx/_version.py`, make the README's install line `pip install fetchx-sdk`, and note the release in `docs/changelog.json`. Merge it to main.
-2. Tag the merge commit on main `python-sdk-v<version>`.
-3. On porttrack, in a clean checkout of that tag:
+2. Check the merge commit on porttrack, in a clean checkout of it:
 
    ```sh
    python3 -I ops/pypi/release_python_sdk.py check
    ```
 
-   It builds the sdist and the wheel in a throwaway folder, runs `twine check`, installs the wheel in a fresh virtual environment, runs the SDK's offline tests and its `fetchx-connect` command there, asks PyPI whether the version is taken, and lists anything that stops an upload. It uploads nothing.
-4. With the go-ahead:
+   It builds the sdist and the wheel in a throwaway folder, runs `twine check`, installs the wheel in a fresh virtual environment, runs the SDK's offline tests and its `fetchx-connect` command there, asks PyPI whether the version is taken, and lists anything that stops an upload. It uploads nothing. Before the tag exists it lists only the missing tag.
+3. With the go-ahead, Karthik tags and uploads from his Mac. Claude's sessions on porttrack may not push tags with root's GitHub key or read the PyPI token, so this step is his. Put the merge commit's full SHA and the version in:
 
    ```sh
-   sudo python3 -I ops/pypi/release_python_sdk.py upload --version <version>
+   ssh -t porttrack-production 'D=$(mktemp -d) && sudo git clone -q git@github-fetchx:karthikbala/FetchX.git "$D/FetchX" && cd "$D/FetchX" && sudo git checkout -q --detach <merge-sha> && sudo git tag python-sdk-v<version> && sudo git push -q origin python-sdk-v<version> && sudo python3 -I ops/pypi/release_python_sdk.py upload --version <version>'
    ```
 
-   It runs every check again, refuses while anything is listed, uploads both files with the token, and waits until PyPI shows the version.
+   It clones main as root, tags the merge commit, pushes the tag, runs every check again, refuses while anything is listed, uploads both files with the token, and waits until PyPI shows the version. 0.2.0 went out this way on 2026-11-25.
+4. Install the version from PyPI in a clean virtual environment and check `fetchx.__version__`.
