@@ -2,7 +2,7 @@
 // the engine uses for sites.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {checkUrl, checkRedirect, checkAddresses, isPublicAddress} from '../src/fetch/destination.mjs';
+import {blockedHosts, checkUrl, checkRedirect, checkAddresses, FIXTURE_HOSTS, isPublicAddress} from '../src/fetch/destination.mjs';
 
 test('only public http(s) URLs are allowed', () => {
   for (const url of ['https://example.com/', 'http://example.com:8080/x', 'https://8.8.8.8/', 'https://[2606:4700::1111]/', 'https://a_b.example.com/']) {
@@ -16,6 +16,16 @@ test('only public http(s) URLs are allowed', () => {
   }
   assert.equal(checkRedirect('/next', new URL('https://example.com/a')).href, 'https://example.com/next');
   assert.throws(() => checkRedirect('http://127.0.0.1/', new URL('https://example.com/')), {code: 'url_not_allowed'});
+});
+
+test('of fetchx.ai, only the public test site may be fetched, unless the operator blocks it too', () => {
+  const blocked = blockedHosts({});
+  for (const host of FIXTURE_HOSTS) assert.equal(checkUrl(`https://${host}/login`, {blocked}).hostname, host);
+  for (const url of ['https://fetchx.ai/', 'https://app.fetchx.ai/v1/me', 'https://x.fixtures.fetchx.ai/', 'https://notfixtures.fetchx.ai/']) {
+    assert.throws(() => checkUrl(url, {blocked}), {code: 'url_not_allowed'}, url);
+  }
+  const operator = blockedHosts({destinations: {blockedHosts: ['fixtures.fetchx.ai']}});
+  for (const host of FIXTURE_HOSTS) assert.throws(() => checkUrl(`https://${host}/`, {blocked: operator}), {code: 'url_not_allowed'}, host);
 });
 
 test('every DNS answer must be public', () => {

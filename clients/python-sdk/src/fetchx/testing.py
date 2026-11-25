@@ -997,7 +997,7 @@ class FakeFetchX:
                 "limits": {"credits_per_day": None, "credits_per_month": None, "expires_at": None},
                 "concurrency": {"requests": {"limit": 10, "running": 0}},
                 "features": ["actions", "allow_hosts", "batches", "capture", "capture_actions", "estimate", "extract",
-                             "feedback", "key_limits", "limits", "logins", "next_page", "redirect_manual", "usd"]}
+                             "feedback", "fixtures", "key_limits", "limits", "logins", "next_page", "redirect_manual", "usd"]}
 
     def _post_feedback(self, body: Any) -> httpx.Response:
         if not isinstance(body, dict):
