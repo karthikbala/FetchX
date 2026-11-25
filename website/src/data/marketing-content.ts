@@ -106,7 +106,7 @@ export const productPages: ProductPage[] = [
     eyebrow: '02 / WEB UNBLOCKER',
     headline: 'Past the block,\nwithout the guesswork.',
     intro: 'When a site blocks a request, FetchX tries the next route on its own and tells you what happened. You set the limits: attempts, credits and time.',
-    status: 'Available · Turnstile, reCAPTCHA and hCaptcha solving',
+    status: 'Available · Turnstile, reCAPTCHA, hCaptcha and MTCaptcha solving',
     diagram: {
       label: 'THE ESCALATION LADDER',
       title: 'Cheapest first. Stop at the real answer.',
@@ -121,7 +121,7 @@ export const productPages: ProductPage[] = [
     benefits: [
       { title: 'Rate limits get fresh IPs', text: 'A 429 moves the next attempt to a new residential IP, alternating between two residential networks.' },
       { title: 'A real browser when needed', text: 'Empty JavaScript shells and challenge pages move to Camoufox, a hardened Firefox, with a locale and timezone that match the exit country.' },
-      { title: 'Captchas solved in place', text: 'Turnstile, reCAPTCHA and hCaptcha widgets are solved when they appear, within a budget, for 10 credits more on the successful request.' },
+      { title: 'Captchas solved in place', text: 'Turnstile, reCAPTCHA, hCaptcha and MTCaptcha widgets are solved when they stand in the way, within a budget, for 10 credits more on the successful request.' },
     ],
     code: {
       title: 'Read why a request failed',

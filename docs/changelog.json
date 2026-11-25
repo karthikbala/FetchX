@@ -6,6 +6,21 @@
   },
   "releases": [
     {
+      "version": "1.12.1",
+      "date": "2026-11-25",
+      "title": "MTCaptcha solving",
+      "changes": [
+        {
+          "type": "added",
+          "text": "Browser steps solve MTCaptcha when it stands in the way: shown and not verified, and either the only thing left to fill in its form or on a wall page with no form. It costs the same 10 credits as other captchas, only on a successful request. A widget that verifies by itself is left alone, and so is one on a form that still needs your details (a sign-in): a token alone cannot get past it, so nothing is spent."
+        },
+        {
+          "type": "changed",
+          "text": "vendor (on attempts and on blocked or rate-limited errors) can be mtcaptcha when that is the only protection a wall shows."
+        }
+      ]
+    },
+    {
       "version": "1.12.0",
       "date": "2026-11-23",
       "title": "Capped keys and one-step approval in Connect",

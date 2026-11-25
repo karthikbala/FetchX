@@ -2764,7 +2764,7 @@
           },
           "challenge": {
             "type": "string",
-            "description": "On a blocked or rate-limited step, the bot-protection vendor whose wall it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf, kasada; or arkose, recaptcha, hcaptcha when only its captcha says)."
+            "description": "On a blocked or rate-limited step, the bot-protection vendor whose wall it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf, kasada; or arkose, recaptcha, hcaptcha, mtcaptcha when only its captcha says)."
           },
           "missing": {
             "type": "array",
@@ -3441,7 +3441,7 @@
               "string",
               "null"
             ],
-            "description": "The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, kasada, or the captcha provider when nothing else names one: arkose, recaptcha, hcaptcha), named from the wall page, its headers and cookies, also when the wall came as a rate limit (429); null when nothing said."
+            "description": "The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, kasada, or the captcha provider when nothing else names one: arkose, recaptcha, hcaptcha, mtcaptcha), named from the wall page, its headers and cookies, also when the wall came as a rate limit (429); null when nothing said."
           },
           "walls": {
             "type": "integer",
