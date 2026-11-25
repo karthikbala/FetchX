@@ -3,7 +3,7 @@
   "info": {
     "title": "FetchX engine private API",
     "version": "1.13",
-    "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). POST /internal/v1/estimates says what requests would take before they are sent (planned tiers, per-host history and pace), for the platform to price. Batches are the platform's: it checks a batch's requests with POST /internal/v1/requests/check, asks POST /internal/v1/pace how fast each host may take work, and starts each item as a paced job (JobInput.paced), which the engine refuses with host_busy when the host has no free slot. info.version is the contract version; GET /internal/v1/status and /healthz report it."
+    "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). POST /internal/v1/estimates says what requests would take before they are sent (planned tiers, per-host history and pace), for the platform to price. Batches are the platform's: it checks a batch's requests with POST /internal/v1/requests/check, asks POST /internal/v1/pace how fast each host may take work, and starts each item as a paced job (JobInput.paced), which the engine refuses with host_busy when the host has no free slot. info.version is the contract version; GET /internal/v1/status and /healthz report it. Saved site logins (1.13): a tenant saves a site's username and password with POST /internal/v1/logins (sealed, never returned); a job whose page asks for a sign-in on that site signs in with it in the browser, keeps the signed-in session for the tenant's later jobs, and reports how it went (Attempt.sign_in, errors login_required and login_failed)."
   },
   "security": [
     {
@@ -2061,6 +2061,7 @@
                 "load",
                 "scroll",
                 "replay",
+                "sign_in",
                 "actions"
               ]
             }
@@ -2457,6 +2458,342 @@
           }
         }
       }
+    },
+    "/internal/v1/logins": {
+      "get": {
+        "operationId": "listLogins",
+        "summary": "A tenant's saved site logins, oldest first (never their passwords)",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The platform project id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The logins.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad tenant. Codes: invalid_request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createLogin",
+        "summary": "Save a site login: FetchX signs in with it when a page on that site asks",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The platform project id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "login"
+                  ],
+                  "properties": {
+                    "login": {
+                      "$ref": "#/components/schemas/Login"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field is wrong. Codes: invalid_request (details.field).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Codes: login_exists (this username is saved for that site already; details.id), login_limit (details.max).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/logins/{id}": {
+      "get": {
+        "operationId": "getLogin",
+        "summary": "One saved login",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The platform project id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The login.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "login"
+                  ],
+                  "properties": {
+                    "login": {
+                      "$ref": "#/components/schemas/Login"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Codes: not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateLogin",
+        "summary": "Change a login's site, username, password or name. Sending any of the first three starts it over: status new, session dropped.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The platform project id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The login.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "login"
+                  ],
+                  "properties": {
+                    "login": {
+                      "$ref": "#/components/schemas/Login"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field is wrong. Codes: invalid_request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Codes: not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Codes: login_exists (details.id).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteLogin",
+        "summary": "Delete a login and its signed-in session",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The platform project id."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Codes: not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2828,6 +3165,7 @@
               "blocked",
               "rate_limited",
               "login_required",
+              "login_failed",
               "site_error",
               "needs_browser",
               "content_missing",
@@ -2966,6 +3304,17 @@
               "minimum": 1
             },
             "description": "Browser steps that answered: the page's requests that FetchX did not let through, by reason (for example url_not_allowed, insecure_request, request_limit, source_dns_failed). Absent when there were none."
+          },
+          "sign_in": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "rejected",
+              "code_required",
+              "failed",
+              "no_login"
+            ],
+            "description": "A sign-in on the page with the saved login: passed (signed in), rejected (the sign-in form came back), code_required (it asked for a one-time code), failed (no clear answer), no_login (the page asked for a sign-in on a host no usable saved login covers)."
           }
         }
       },
@@ -3022,6 +3371,7 @@
               "rate_limited",
               "content_missing",
               "login_required",
+              "login_failed",
               "site_error",
               "unreachable",
               "cooling_down",
@@ -3069,6 +3419,7 @@
                   "check_expect",
                   "use_auto",
                   "provide_credentials",
+                  "update_login",
                   "check_url",
                   "raise_timeout",
                   "render_never",
@@ -3132,7 +3483,7 @@
         "properties": {
           "url": {
             "type": "string",
-            "description": "The page, API or file to get. Public http or https only: private, local and metadata addresses are refused, checked after DNS and on every redirect.",
+            "description": "The page, API or file to get. Public http or https only: private, local and metadata addresses are refused, checked after DNS and on every redirect. A #fragment is never sent to the site, but a browser opens the page with it, and an app route in it (#/... or #!/...) makes auto start in a browser, since plain HTTP gets the same empty app for every route.",
             "maxLength": 12000
           },
           "method": {
@@ -3417,6 +3768,21 @@
             "type": "boolean",
             "default": false,
             "description": "Only with allow_hosts: let the page load scripts, styles, fonts and images from hosts off the list (GET only, sent without Cookie or Authorization), listed in data.passive_offlist_hosts. Documents, frames, XHR and fetch, WebSockets, beacons, form posts and workers stay on the list."
+          },
+          "login": {
+            "description": "A saved site login (POST /internal/v1/logins). Left out: the tenant's login whose site shares the request's registrable domain, if it has exactly one, signs in when a page asks for a sign-in on a host it covers, and its saved session goes with the request. An id names the login to use (for a sign-in on another domain); false never signs in. Ignored when the request sends its own Cookie or Authorization header. Once a sign-in sent the login, the request makes no further attempts.",
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "boolean",
+                "enum": [
+                  false
+                ]
+              }
+            ]
           }
         },
         "description": "The customer request exactly as the platform received it on POST /v1/fetch."
@@ -3463,10 +3829,11 @@
               "not_found",
               "empty",
               "challenge",
+              "login_required",
               "error",
               null
             ],
-            "description": "What the page was. content: the page you asked for (with expect, it showed what you expected). not_found: the site\u2019s real 404 or 410, billed like content. empty: it loaded but showed next to nothing, or not what expect asked for. challenge: a bot wall, block or rate limit stopped it (see challenge). error: anything else (see error). Null while pending."
+            "description": "What the page was. content: the page you asked for (with expect, it showed what you expected). not_found: the site\u2019s real 404 or 410, billed like content. empty: it loaded but showed next to nothing, or not what expect asked for. challenge: a bot wall, block or rate limit stopped it (see challenge). login_required: the site asked for a sign-in, and FetchX had no saved login for it or the site did not accept the one it had (error login_required or login_failed). error: anything else (see error). Null while pending."
           },
           "idempotency_key": {
             "type": "string"
@@ -3934,7 +4301,7 @@
       "NextPageRequest": {
         "type": "object",
         "additionalProperties": false,
-        "description": "What may change for a next page; everything else (headers, formats, country, render, wait_for, block_resources) comes from the earlier request, and the cookies the site set on the earlier page are sent with it.",
+        "description": "What may change for a next page; everything else (headers, formats, country, render, wait_for, block_resources) comes from the earlier request, and the cookies the site set on the earlier page are sent with it (with a saved login, its session's cookies instead).",
         "properties": {
           "scroll": {
             "description": "As in FetchRequest; defaults to the earlier request's. For a next page that loads as the page is scrolled, it is how many more screens to scroll past where the earlier page ended (auto: up to 10 more); off is refused there.",
@@ -4874,9 +5241,10 @@
               "load",
               "scroll",
               "replay",
+              "sign_in",
               "actions"
             ],
-            "description": "warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page; actions: while the caller's actions ran."
+            "description": "warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page; sign_in: FetchX signing in with a saved login (the password is redacted); actions: while the caller's actions ran."
           },
           "type": {
             "type": "string",
@@ -5054,9 +5422,10 @@
               "load",
               "scroll",
               "replay",
+              "sign_in",
               "actions"
             ],
-            "description": "warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page."
+            "description": "warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page; sign_in: FetchX signing in with a saved login (the password is redacted)."
           },
           "type": {
             "type": "string",
@@ -5732,6 +6101,168 @@
               "null"
             ],
             "description": "The action that set it off, or null."
+          }
+        }
+      },
+      "Login": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "site",
+          "name",
+          "username",
+          "status",
+          "signed_in",
+          "last_sign_in",
+          "created_at",
+          "updated_at"
+        ],
+        "description": "A saved site login. The password is never returned; the username only masked.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "site": {
+            "type": "string",
+            "description": "The host FetchX may sign in on: the login is typed only on sign-in forms of this host and its subdomains, over https. A URL is taken as its host. It applies by itself to requests on the same registrable domain (login.example.com covers requests to app.example.com); name it with the request's `login` for a sign-in on another domain (an SSO provider)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's own label."
+          },
+          "username": {
+            "type": "string",
+            "description": "The username, masked (ab*****@example.com)."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "signed_in",
+              "rejected",
+              "code_required"
+            ],
+            "description": "new: not used yet. signed_in: FetchX signed in with it and keeps the session. rejected: the site showed its sign-in form again after the login was sent (a wrong password or unknown user), or several sign-ins in a row got no clear answer; code_required: the site asked for a one-time code. FetchX does not type a rejected or code_required login again until it is updated."
+          },
+          "signed_in": {
+            "type": "boolean",
+            "description": "Whether FetchX holds a signed-in session for it."
+          },
+          "last_sign_in": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "at",
+              "outcome"
+            ],
+            "properties": {
+              "at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "passed",
+                  "rejected",
+                  "code_required",
+                  "failed"
+                ]
+              }
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LoginList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "logins"
+        ],
+        "properties": {
+          "logins": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Login"
+            }
+          }
+        }
+      },
+      "LoginInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "site",
+          "username",
+          "password"
+        ],
+        "properties": {
+          "site": {
+            "type": "string",
+            "maxLength": 2048,
+            "description": "The host FetchX may sign in on: the login is typed only on sign-in forms of this host and its subdomains, over https. A URL is taken as its host. It applies by itself to requests on the same registrable domain (login.example.com covers requests to app.example.com); name it with the request's `login` for a sign-in on another domain (an SSO provider)."
+          },
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Stored sealed; never returned or logged, and taken out of stored pages and network captures."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 64
+          }
+        }
+      },
+      "LoginUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "site": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 64
           }
         }
       }
