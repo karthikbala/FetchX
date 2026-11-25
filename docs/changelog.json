@@ -32,7 +32,7 @@
         },
         {
           "type": "added",
-          "text": "The Python SDK (0.2.0) has Connect: connect(), or connect_start() and connect_finish() for agents whose tool calls must return quickly, and python -m fetchx connect. It keeps the key in an owner-only ~/.config/fetchx/credentials file (XDG_CONFIG_HOME and %APPDATA% respected), which FetchX() reads when FETCHX_TOKEN is not set."
+          "text": "The Python SDK (0.2.0) has Connect: connect(), or connect_start() and connect_finish() for agents whose tool calls must return quickly, and python -m fetchx connect. It keeps the key in an owner-only ~/.config/fetchx/credentials file (XDG_CONFIG_HOME and %APPDATA% respected), which FetchX() reads when FETCHX_TOKEN is not set. It is on PyPI: pip install fetchx-sdk."
         }
       ]
     },
