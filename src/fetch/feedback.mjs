@@ -126,6 +126,11 @@ export class FeedbackService {
       // Throws not_found for a request that is not this project's, or no longer kept.
       const job = (await this.engine.getJob(project, input.fetch_id, {includeBody: false}))?.job;
       if (!job) throw new GatewayError('not_found', 404);
+      // FetchX staff read feedback: nothing of a request made with secrets goes to them.
+      if (Array.isArray(job.secrets_used)) {
+        throw Object.assign(new GatewayError('secret_not_allowed_here', 400), {details: {field: 'fetch_id',
+          reason: 'the request was made with secrets; describe it with url and method instead, without them'}});
+      }
       fetchId = input.fetch_id;
       url = webUrl(job.url, 'fetch_id');
       method = METHODS.includes(job.method) ? job.method : null;

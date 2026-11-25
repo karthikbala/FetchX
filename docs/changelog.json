@@ -6,6 +6,29 @@
   },
   "releases": [
     {
+      "version": "1.15.0",
+      "date": "2026-11-25",
+      "title": "Per-request secrets and unstored requests",
+      "changes": [
+        {
+          "type": "added",
+          "text": "POST /v1/fetch takes secrets: up to 8 named values (a password or token, 4 characters to 4096 bytes) for this request only, each with the https origins it may go to, which must be in allow_hosts. A fill_secret action types one into a field whose frame is at one of its origins (else action_failed with secret_origin_mismatch). Over HTTP, {{secret.<name>}} in body or a header value is filled in when it is sent, form-encoded or JSON-escaped to match the body's content type; the URL's origin must be one of the secret's, and a GET or HEAD with placeholders needs render: never. FetchX never stores, logs or returns a secret's value: wherever a page shows or echoes it (as typed, URL-encoded, form-encoded, JSON-escaped or base64) it comes back as [REDACTED:<name>]. Feature id secrets."
+        },
+        {
+          "type": "added",
+          "text": "While a secret is loaded, anything the page sends that carries it to an origin the secret does not name (a script's request, a form, a redirect over HTTP) is stopped, and the request fails with secret_egress_blocked (next.action check_origins), free. Once a secret has been typed or sent, FetchX makes no further attempt on any route, so a sign-in is never sent twice. data.secrets_used, and secrets_used on each attempt and in GET /v1/fetch lists, name the secrets that were used, never their values."
+        },
+        {
+          "type": "added",
+          "text": "POST /v1/fetch takes store: false (always false with secrets): the first read of the finished result with its body (the 200 answer, or a poll of GET /v1/fetch/{id}) returns the content in full, with the body always inline, and deletes it; unread content is deleted at the latest 15 minutes after the request finished. After that the result keeps only its summary (status, page_status, credits, error, attempts, secrets_used) with data null, and its content, screenshot and network routes and POST /v1/fetch/{id}/next answer 410 not_stored. The kept request has no headers, body or action values."
+        },
+        {
+          "type": "added",
+          "text": "secrets is refused with 400 secret_not_allowed_here (error.details.field names the clash) together with screenshot, extract, capture.unmask or webhook_url, and in batches. POST /v1/feedback refuses a request made with secrets."
+        }
+      ]
+    },
+    {
       "version": "1.14.0",
       "date": "2026-11-25",
       "title": "Browser actions, host allowlists, manual redirects, concurrency and USD prices",
