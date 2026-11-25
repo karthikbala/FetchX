@@ -46,6 +46,11 @@ class ClientTests(unittest.TestCase):
         client.me()
         client.send_feedback(fetch_id=RESULT['id'], kind='blocked_via_fetchx_ok_from_home', evidence={'status_code': 200})
         client.get_feedback(RESULT['id'])
+        client.save_login(site='login.shop.example.com', username='buyer@shop.example.com', password='synthetic-pass-1')
+        client.list_logins()
+        client.get_login(RESULT['id'])
+        client.update_login(RESULT['id'], name='Shop')
+        self.assertIsNone(client.delete_login(RESULT['id']))
         client.network(RESULT['id'], contains=['Lamp', '19.99'], first_party=True, limit=5)
         client.network_call(RESULT['id'], 2)
         self.assertEqual(client.network_body(RESULT['id'], 2)['body'], b'{"name":"Lamp"}')
@@ -63,6 +68,8 @@ class ClientTests(unittest.TestCase):
             ('DELETE', base + '/v1/fetch/' + RESULT['id']), ('GET', base + '/v1/balance'),
             ('GET', base + '/v1/usage?period=day'), ('POST', base + '/v1/estimate'), ('GET', base + '/v1/status'),
             ('GET', base + '/v1/prices'), ('GET', base + '/v1/me'), ('POST', base + '/v1/feedback'), ('GET', base + '/v1/feedback/' + RESULT['id']),
+            ('POST', base + '/v1/logins'), ('GET', base + '/v1/logins'), ('GET', base + '/v1/logins/' + RESULT['id']),
+            ('PATCH', base + '/v1/logins/' + RESULT['id']), ('DELETE', base + '/v1/logins/' + RESULT['id']),
             ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network?first_party=true&contains=Lamp&contains=19.99&limit=5'),
             ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network/2'), ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network/2/body'),
             ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network.har?page=1'),

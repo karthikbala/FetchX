@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Seque
 import httpx
 
 from ._core import Flow, _Call, _Core, _Send, _Sleep, _Yield, _network_query, log
-from .models import (Balance, Batch, BatchItem, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Me,
+from .models import (Balance, Batch, BatchItem, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Login, Me,
                      NetworkCall, NetworkPage, Prices, ServiceStatus, Usage)
 
 _SIX_HOURS = 6 * 3600.0
@@ -324,6 +324,29 @@ class FetchX(_Core):
     def get_feedback(self, feedback_id: Any) -> Feedback:
         """``GET /v1/feedback/{id}``: where a report stands and FetchX staff's reply. Takes an id or a Feedback."""
         return self._call(*self._plan_get_feedback(feedback_id))
+
+    def save_login(self, body: Optional[Mapping[str, Any]] = None, **fields: Any) -> Login:
+        """``POST /v1/logins``: save a site login (``site``, ``username``, ``password``, ``name``). When a page on
+        that site asks for a sign-in, FetchX signs in with it and keeps the session for later requests. The
+        password is stored encrypted and never returned. Read it from your own secret store, not from code."""
+        return self._call(*self._plan_save_login(body, fields))
+
+    def list_logins(self) -> List[Login]:
+        """``GET /v1/logins``: the project's saved logins, usernames masked."""
+        return self._call(*self._plan_list_logins())
+
+    def get_login(self, login_id: Any) -> Login:
+        """``GET /v1/logins/{id}``. Takes an id or a Login."""
+        return self._call(*self._plan_get_login(login_id))
+
+    def update_login(self, login_id: Any, body: Optional[Mapping[str, Any]] = None, **fields: Any) -> Login:
+        """``PATCH /v1/logins/{id}``: change ``site``, ``username``, ``password`` or ``name``. A new site, username
+        or password starts over: the session is dropped and the status is ``new`` again."""
+        return self._call(*self._plan_update_login(login_id, body, fields))
+
+    def delete_login(self, login_id: Any) -> None:
+        """``DELETE /v1/logins/{id}``: the login and its signed-in session."""
+        self._call(*self._plan_delete_login(login_id))
 
     def usage(self, period: Optional[str] = None, since: Optional[str] = None, until: Optional[str] = None) -> Usage:
         """``GET /v1/usage``: balance and usage for a day, a month (default) or a range."""

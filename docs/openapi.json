@@ -2,8 +2,8 @@
  "openapi": "3.1.0",
  "info": {
   "title": "FetchX API",
-  "version": "1.12.0",
-  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. A browser request with capture records the page's own network calls, read with GET /v1/fetch/{id}/network or as a HAR file. GET /v1/me says which project and key are calling, and the key's own credit limits per day and month and expiry, set in the console. POST /v1/feedback tells FetchX how it handled a page, for example blocked through FetchX but fine from your own connection, so routes can be tuned with real cases. GET /v1/status and GET /v1/prices need no key: the service's state, and what each step costs with the trial credits a new account gets.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
+  "version": "1.13.0",
+  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. A browser request with capture records the page's own network calls, read with GET /v1/fetch/{id}/network or as a HAR file. POST /v1/logins saves a site’s username and password (encrypted, never returned): when a page asks for a sign-in on that site, FetchX signs in by itself and keeps the session for later requests. GET /v1/me says which project and key are calling, and the key's own credit limits per day and month and expiry, set in the console. POST /v1/feedback tells FetchX how it handled a page, for example blocked through FetchX but fine from your own connection, so routes can be tuned with real cases. GET /v1/status and GET /v1/prices need no key: the service's state, and what each step costs with the trial credits a new account gets.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
  },
  "servers": [
   {
@@ -25,6 +25,10 @@
   {
    "name": "Fetch",
    "description": "Get URLs and read the results."
+  },
+  {
+   "name": "Logins",
+   "description": "Site logins FetchX signs in with when a page asks."
   },
   {
    "name": "Batches",
@@ -5313,6 +5317,817 @@
      }
     }
    }
+  },
+  "/v1/logins": {
+   "get": {
+    "operationId": "listLogins",
+    "tags": [
+     "Logins"
+    ],
+    "summary": "List saved logins",
+    "description": "The project’s saved site logins, with how each last went. Passwords are never returned, and usernames only masked.",
+    "x-scope": "fetch:read",
+    "responses": {
+     "200": {
+      "description": "The logins.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LoginList"
+        },
+        "examples": {
+         "logins": {
+          "value": {
+           "items": [
+            {
+             "id": "3b2f6d1e-9c4a-4e8b-a1d2-6f7e8c9d0a1b",
+             "site": "login.example.com",
+             "name": "Portal",
+             "username": "op******@example.com",
+             "status": "signed_in",
+             "signed_in": true,
+             "last_sign_in": {
+              "at": "2026-11-25T16:00:00.000Z",
+              "outcome": "passed"
+             },
+             "created_at": "2026-11-25T15:58:00.000Z",
+             "updated_at": "2026-11-25T15:58:00.000Z"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "operationId": "createLogin",
+    "tags": [
+     "Logins"
+    ],
+    "summary": "Save a site login",
+    "description": "Saves a username and password for a site, encrypted. When a page a request reads asks for a sign-in on that site, FetchX fills in the sign-in form itself (in a browser, solving a captcha in the form if it shows), sends it, and keeps the signed-in session for the project’s later requests. The password is never returned or logged, never typed on another host, and taken out of stored pages and network captures. A site that asks for a one-time code after the password cannot be signed in to. Up to 50 logins per project; free.",
+    "x-scope": "fetch:write",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LoginInput"
+       },
+       "examples": {
+        "login": {
+         "value": {
+          "site": "login.example.com",
+          "username": "ops@example.com",
+          "password": "your-password",
+          "name": "Portal"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Saved.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Login"
+        },
+        "examples": {
+         "login": {
+          "value": {
+           "id": "3b2f6d1e-9c4a-4e8b-a1d2-6f7e8c9d0a1b",
+           "site": "login.example.com",
+           "name": "Portal",
+           "username": "op******@example.com",
+           "status": "new",
+           "signed_in": false,
+           "last_sign_in": null,
+           "created_at": "2026-11-25T15:58:00.000Z",
+           "updated_at": "2026-11-25T15:58:00.000Z"
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "A field is missing or wrong; error.details.field names it.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "site",
+             "reason": "FetchX signs in over https only"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "This username is already saved for that site (login_exists, error.details.id names it: update it instead), or the project has as many logins as it may (login_limit, error.details.max).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "login_exists": {
+          "value": {
+           "error": {
+            "code": "login_exists",
+            "message": "This project already has a login for that username on that site; error.details.id names it.",
+            "details": {
+             "id": "3b2f6d1e-9c4a-4e8b-a1d2-6f7e8c9d0a1b"
+            }
+           }
+          }
+         },
+         "login_limit": {
+          "value": {
+           "error": {
+            "code": "login_limit",
+            "message": "This project has as many saved logins as it may (error.details.max).",
+            "details": {
+             "max": 50
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/logins/{id}": {
+   "get": {
+    "operationId": "getLogin",
+    "tags": [
+     "Logins"
+    ],
+    "summary": "Read a saved login",
+    "description": "One saved login and how it last went.",
+    "x-scope": "fetch:read",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The login id.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The login.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Login"
+        },
+        "examples": {
+         "login": {
+          "value": {
+           "id": "3b2f6d1e-9c4a-4e8b-a1d2-6f7e8c9d0a1b",
+           "site": "login.example.com",
+           "name": "Portal",
+           "username": "op******@example.com",
+           "status": "signed_in",
+           "signed_in": true,
+           "last_sign_in": {
+            "at": "2026-11-25T16:00:00.000Z",
+            "outcome": "passed"
+           },
+           "created_at": "2026-11-25T15:58:00.000Z",
+           "updated_at": "2026-11-25T15:58:00.000Z"
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No saved login with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "error": {
+            "code": "not_found",
+            "message": "Nothing with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "patch": {
+    "operationId": "updateLogin",
+    "tags": [
+     "Logins"
+    ],
+    "summary": "Change a saved login",
+    "description": "Changes its site, username, password or name. A new site, username or password starts over: the saved session is dropped and the status is new, so FetchX signs in with it again (also after the site rejected it). Sign in yourself first to check a password the site rejected: repeated wrong passwords can lock an account.",
+    "x-scope": "fetch:write",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The login id.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LoginUpdate"
+       },
+       "examples": {
+        "password": {
+         "value": {
+          "password": "the-new-password"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Changed.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Login"
+        },
+        "examples": {
+         "login": {
+          "value": {
+           "id": "3b2f6d1e-9c4a-4e8b-a1d2-6f7e8c9d0a1b",
+           "site": "login.example.com",
+           "name": "Portal",
+           "username": "op******@example.com",
+           "status": "new",
+           "signed_in": false,
+           "last_sign_in": null,
+           "created_at": "2026-11-25T15:58:00.000Z",
+           "updated_at": "2026-11-25T17:00:00.000Z"
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "A field is missing or wrong; error.details.field names it.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "site",
+             "reason": "FetchX signs in over https only"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No saved login with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "error": {
+            "code": "not_found",
+            "message": "Nothing with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "This username is already saved for that site (login_exists, error.details.id names it: update it instead), or the project has as many logins as it may (login_limit, error.details.max).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "login_exists": {
+          "value": {
+           "error": {
+            "code": "login_exists",
+            "message": "This project already has a login for that username on that site; error.details.id names it.",
+            "details": {
+             "id": "3b2f6d1e-9c4a-4e8b-a1d2-6f7e8c9d0a1b"
+            }
+           }
+          }
+         },
+         "login_limit": {
+          "value": {
+           "error": {
+            "code": "login_limit",
+            "message": "This project has as many saved logins as it may (error.details.max).",
+            "details": {
+             "max": 50
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "deleteLogin",
+    "tags": [
+     "Logins"
+    ],
+    "summary": "Delete a saved login",
+    "description": "Deletes the login and its signed-in session. Requests already running may still finish with it.",
+    "x-scope": "fetch:write",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The login id.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Deleted."
+     },
+     "401": {
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No saved login with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "not_found": {
+          "value": {
+           "error": {
+            "code": "not_found",
+            "message": "Nothing with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
   }
  },
  "webhooks": {
@@ -5733,6 +6548,21 @@
         "$ref": "#/components/schemas/CaptureSettings"
        }
       ]
+     },
+     "login": {
+      "description": "A saved login (POST /v1/logins). Left out: the project’s login for the request’s registrable domain, when it has exactly one, signs in when a page asks for a sign-in on a host it covers, and its saved session goes with the request. A login id names the one to use, for example for a sign-in on another domain; false never signs in. Ignored when the request sends its own Cookie or Authorization header. Once FetchX has sent the login on a page, the request makes no further attempts, so a password is never sent twice.",
+      "oneOf": [
+       {
+        "type": "string",
+        "format": "uuid"
+       },
+       {
+        "type": "boolean",
+        "enum": [
+         false
+        ]
+       }
+      ]
      }
     }
    },
@@ -5883,10 +6713,11 @@
        "not_found",
        "empty",
        "challenge",
+       "login_required",
        "error",
        null
       ],
-      "description": "What the page was. content: the page you asked for (with expect, it showed what you expected). not_found: the site’s real 404 or 410, billed like content. empty: it loaded but showed next to nothing, or not what expect asked for. challenge: a bot wall, block or rate limit stopped it (see challenge). error: anything else (see error). Null while pending."
+      "description": "What the page was. content: the page you asked for (with expect, it showed what you expected). not_found: the site’s real 404 or 410, billed like content. empty: it loaded but showed next to nothing, or not what expect asked for. challenge: a bot wall, block or rate limit stopped it (see challenge). login_required: the site asked for a sign-in, and FetchX had no saved login for it or the site did not accept the one it had (error login_required or login_failed). error: anything else (see error). Null while pending."
      },
      "idempotency_key": {
       "type": "string"
@@ -6457,6 +7288,7 @@
        "blocked",
        "rate_limited",
        "login_required",
+       "login_failed",
        "site_error",
        "needs_browser",
        "content_missing",
@@ -6546,6 +7378,17 @@
        "still_loading"
       ],
       "description": "Browser steps on pages that answered: settled when the page had stopped filling itself in (results, listings loaded by script) before it was read; still_loading when FetchX's wait ran out first, so the page may be missing content that loads late. Pass wait_for with a selector for what you need to wait longer."
+     },
+     "sign_in": {
+      "type": "string",
+      "enum": [
+       "passed",
+       "rejected",
+       "code_required",
+       "failed",
+       "no_login"
+      ],
+      "description": "A sign-in on the page with a saved login: passed (signed in), rejected (the sign-in form came back), code_required (it asked for a one-time code), failed (no clear answer), no_login (the page asked for a sign-in on a host no usable saved login covers)."
      }
     }
    },
@@ -6602,6 +7445,7 @@
        "rate_limited",
        "content_missing",
        "login_required",
+       "login_failed",
        "site_error",
        "unreachable",
        "cooling_down",
@@ -6638,6 +7482,7 @@
          "check_expect",
          "use_auto",
          "provide_credentials",
+         "update_login",
          "check_url",
          "raise_timeout",
          "render_never",
@@ -9106,6 +9951,172 @@
      "pricing_url": {
       "type": "string",
       "description": "Credit packs and their prices in your currency."
+     }
+    }
+   },
+   "Login": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "site",
+     "name",
+     "username",
+     "status",
+     "signed_in",
+     "last_sign_in",
+     "created_at",
+     "updated_at"
+    ],
+    "description": "A saved site login. The password is never returned, and the username only masked.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "site": {
+      "type": "string",
+      "description": "The host FetchX may sign in on, such as login.example.com: the login is typed only into sign-in forms on this host and its subdomains, over https. A URL is taken as its host. It applies by itself to requests on the same registrable domain (a login for login.example.com serves requests to app.example.com); name it with the request’s `login` when the sign-in is on another domain (an SSO provider)."
+     },
+     "name": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "Your own label."
+     },
+     "username": {
+      "type": "string",
+      "description": "The username, masked (ab*****@example.com)."
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "new",
+       "signed_in",
+       "rejected",
+       "code_required"
+      ],
+      "description": "new: not used yet. signed_in: FetchX signed in with it and keeps the session. rejected: the site showed its sign-in form again after FetchX sent the login (a wrong password or unknown user), or three sign-ins in a row got no clear answer. code_required: after the password the site asked for a one-time code, which FetchX cannot give. FetchX does not type a rejected or code_required login again until you update it, since repeated wrong passwords can lock an account."
+     },
+     "signed_in": {
+      "type": "boolean",
+      "description": "Whether FetchX holds a signed-in session for it. Requests use the session first and sign in again only when the site asks."
+     },
+     "last_sign_in": {
+      "type": [
+       "object",
+       "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+       "at",
+       "outcome"
+      ],
+      "description": "The last time FetchX sent the login, and how it went.",
+      "properties": {
+       "at": {
+        "type": "string",
+        "format": "date-time"
+       },
+       "outcome": {
+        "type": "string",
+        "enum": [
+         "passed",
+         "rejected",
+         "code_required",
+         "failed"
+        ]
+       }
+      }
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "updated_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "LoginList": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "items"
+    ],
+    "properties": {
+     "items": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/Login"
+      },
+      "description": "The project’s saved logins, oldest first (at most 50)."
+     }
+    }
+   },
+   "LoginInput": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "site",
+     "username",
+     "password"
+    ],
+    "properties": {
+     "site": {
+      "type": "string",
+      "maxLength": 2048,
+      "description": "The host FetchX may sign in on, such as login.example.com: the login is typed only into sign-in forms on this host and its subdomains, over https. A URL is taken as its host. It applies by itself to requests on the same registrable domain (a login for login.example.com serves requests to app.example.com); name it with the request’s `login` when the sign-in is on another domain (an SSO provider)."
+     },
+     "username": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+     },
+     "password": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "description": "Stored encrypted; never returned or logged, and taken out of stored pages and network captures."
+     },
+     "name": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "maxLength": 64,
+      "description": "Your own label."
+     }
+    }
+   },
+   "LoginUpdate": {
+    "type": "object",
+    "additionalProperties": false,
+    "minProperties": 1,
+    "description": "A new site, username or password starts over: the saved session is dropped and the status is new again. A new name changes nothing else.",
+    "properties": {
+     "site": {
+      "type": "string",
+      "maxLength": 2048
+     },
+     "username": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+     },
+     "password": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+     },
+     "name": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "maxLength": 64
      }
     }
    }

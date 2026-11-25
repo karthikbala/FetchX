@@ -22,6 +22,10 @@
 // (JobInput.paced) is refused with host_busy when `pace(host)` ({tier,
 // max_running, start_gap_ms}, default open 4 / 0 ms) leaves no free slot.
 // `browserWaiting` (settable) is what POST /internal/v1/pace reports.
+// Saved site logins (/internal/v1/logins) are kept in memory per tenant, with
+// the engine's checks in crude form; a request's `login` must be null, false or
+// one of its tenant's login ids. An outcome's `sign_in` is the browser
+// attempt's, and `next` replaces a failed job's next action.
 // test/engine-contract.test.mjs validates what it answers against the contract.
 import Fastify from 'fastify';
 import {createHmac, randomUUID} from 'node:crypto';
@@ -68,6 +72,9 @@ function refusalOf(request) {
   if (request.capture !== undefined && request.capture !== null && request.capture !== false
     && (request.render === 'never' || (request.method ?? 'GET') !== 'GET' || (request.capture !== true && typeof request.capture !== 'object'))) {
     return {status: 400, code: 'invalid_request', details: {field: 'capture', reason: 'capture records what a browser loads: use render always or auto with GET'}};
+  }
+  if (request.login !== undefined && request.login !== null && request.login !== false && !UUID.test(String(request.login))) {
+    return {status: 400, code: 'invalid_request', details: {field: 'login', reason: 'the id of a saved login, or false'}};
   }
   if (typeof request.body === 'string' && Buffer.byteLength(request.body) > 1_000_000) {
     return {status: 413, code: 'request_too_large', details: {field: 'body', max_bytes: 1_000_000}};
@@ -162,13 +169,13 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
         body: job.body}, {url: new URL('/api/items?page=1', job.request.url).href, body: '{"items":[{"name":"Lamp"}]}'}])
         .map((extra, n) => call(n + 1, extra)).map(entry => ({...entry, response_bytes: entry.body === null ? 0 : Buffer.byteLength(entry.body)}));
     }
-    job.attempts = blocked ? [] : [{transport, class: routeClass, country: null, result: succeeded ? 'success' : 'blocked', status_code: job.data.status_code,
-      wire_bytes: outcome.wire_bytes ?? 1000}];
+    job.attempts = blocked ? [] : [{transport, class: routeClass, country: null, result: succeeded ? 'success' : outcome.error_code ?? 'blocked',
+      status_code: job.data.status_code, wire_bytes: outcome.wire_bytes ?? 1000, ...(outcome.sign_in ? {sign_in: outcome.sign_in} : {})}];
     job.skipped = blocked ? [{transport, class: routeClass, country: null, reason: 'over_max_credits'}] : [];
     job.page_status = outcome.page_status ?? (succeeded ? 'content' : 'challenge');
     job.challenge = outcome.challenge ?? null;
     job.error = succeeded ? null : {code: outcome.error_code ?? 'blocked', message: 'The site refused every route FetchX was allowed to try.',
-      next: {action: 'retry_later', retry_with_new_key: true, detail: 'Retry later.'}};
+      next: outcome.next ?? {action: 'retry_later', retry_with_new_key: true, detail: 'Retry later.'}};
     job.usage = succeeded ? {step, captcha_solved: outcome.captcha === true, wire_bytes: outcome.wire_bytes ?? 1000,
       ...(extracted ? {extract: {page_tokens: outcome.extract_tokens ?? 1000, calls: 2}} : {})} : null;
     outbox.push(job.id);
@@ -229,6 +236,9 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     const {request} = input;
     const refusal = refusalOf(request);
     if (refusal) return refuse(reply, refusal.status, refusal.code, refusal.code === 'url_not_allowed' ? undefined : refusal.details);
+    if (typeof request.login === 'string' && logins.get(request.login)?.tenant !== input.tenant) {
+      return refuse(reply, 400, 'invalid_request', {field: 'login', reason: 'no saved login with this id in this project'});
+    }
     const key = request.idempotency_key ?? `auto_${randomUUID()}`;
     const {idempotency_key: _key, ...hashed} = request;
     const hash = canonical(hashed);
@@ -367,6 +377,90 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     return reply.code(204).send();
   });
   // A batch's checks and its hosts' pace.
+  // Saved site logins: the password is kept, never shown.
+  const logins = new Map();
+  const loginView = login => {
+    const {tenant: _tenant, password: _password, username, ...shown} = login;
+    const at = username.lastIndexOf('@');
+    return {...shown, username: `${username.slice(0, 2)}*****${at > 0 ? username.slice(at) : ''}`};
+  };
+  const tenantOf = (req, reply) => {
+    const tenant = req.query?.tenant;
+    if (typeof tenant !== 'string' || !tenant) { refuse(reply, 400, 'invalid_request', {field: 'tenant'}); return null; }
+    return tenant;
+  };
+  const siteOf = value => {
+    if (typeof value !== 'string') return null;
+    let host = value.trim().toLowerCase();
+    if (/^[a-z]+:\/\//.test(host)) {
+      try { const url = new URL(host); if (url.protocol !== 'https:') return null; host = url.hostname; } catch { return null; }
+    }
+    return /^(?:[a-z0-9-]+\.)+[a-z]{2,}$/.test(host) ? host : null;
+  };
+  const loginInput = (body, {partial}) => {
+    if (!body || typeof body !== 'object' || Array.isArray(body) || (partial && !Object.keys(body).length)) return {field: 'body'};
+    const unknown = Object.keys(body).find(key => !['site', 'username', 'password', 'name'].includes(key));
+    if (unknown) return {field: unknown};
+    if ((!partial || body.site !== undefined) && !siteOf(body.site)) return {field: 'site'};
+    for (const field of ['username', 'password']) {
+      if ((!partial || body[field] !== undefined) && (typeof body[field] !== 'string' || !body[field])) return {field};
+    }
+    return null;
+  };
+  const ownLogin = (req, reply) => {
+    const tenant = tenantOf(req, reply);
+    if (!tenant) return null;
+    const login = logins.get(req.params.id);
+    if (!login || login.tenant !== tenant) { refuse(reply, 404, 'not_found'); return null; }
+    return login;
+  };
+  const sameAccount = (tenant, site, username, except = null) => [...logins.values()].find(other => other.tenant === tenant
+    && other.site === site && other.username.toLowerCase() === username.toLowerCase() && other.id !== except);
+  app.get('/internal/v1/logins', async (req, reply) => {
+    const tenant = tenantOf(req, reply);
+    if (!tenant) return reply;
+    return {logins: [...logins.values()].filter(login => login.tenant === tenant).map(loginView)};
+  });
+  app.post('/internal/v1/logins', async (req, reply) => {
+    const tenant = tenantOf(req, reply);
+    if (!tenant) return reply;
+    const bad = loginInput(req.body, {partial: false});
+    if (bad) return refuse(reply, 400, 'invalid_request', bad);
+    const site = siteOf(req.body.site);
+    const existing = sameAccount(tenant, site, req.body.username);
+    if (existing) return refuse(reply, 409, 'login_exists', {id: existing.id});
+    if ([...logins.values()].filter(login => login.tenant === tenant).length >= 50) return refuse(reply, 409, 'login_limit', {max: 50});
+    const now = new Date().toISOString();
+    const login = {id: randomUUID(), tenant, site, name: req.body.name ?? null, username: req.body.username, password: req.body.password,
+      status: 'new', signed_in: false, last_sign_in: null, created_at: now, updated_at: now};
+    logins.set(login.id, login);
+    return reply.code(201).send({login: loginView(login)});
+  });
+  app.get('/internal/v1/logins/:id', async (req, reply) => {
+    const login = ownLogin(req, reply);
+    return login ? {login: loginView(login)} : reply;
+  });
+  app.patch('/internal/v1/logins/:id', async (req, reply) => {
+    const login = ownLogin(req, reply);
+    if (!login) return reply;
+    const bad = loginInput(req.body, {partial: true});
+    if (bad) return refuse(reply, 400, 'invalid_request', bad);
+    const site = req.body.site === undefined ? login.site : siteOf(req.body.site);
+    const existing = sameAccount(login.tenant, site, req.body.username ?? login.username, login.id);
+    if (existing) return refuse(reply, 409, 'login_exists', {id: existing.id});
+    const reset = ['site', 'username', 'password'].some(key => req.body[key] !== undefined);
+    Object.assign(login, {site, username: req.body.username ?? login.username, password: req.body.password ?? login.password,
+      name: req.body.name === undefined ? login.name : req.body.name, updated_at: new Date().toISOString(),
+      ...(reset ? {status: 'new', signed_in: false} : {})});
+    return {login: loginView(login)};
+  });
+  app.delete('/internal/v1/logins/:id', async (req, reply) => {
+    const login = ownLogin(req, reply);
+    if (!login) return reply;
+    logins.delete(login.id);
+    return reply.code(204).send();
+  });
+
   app.post('/internal/v1/requests/check', async (req, reply) => {
     const requests = req.body?.requests;
     if (!Array.isArray(requests) || !requests.length || requests.length > 1000) return refuse(reply, 400, 'invalid_request', {field: 'requests'});
@@ -463,5 +557,5 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     return answers;
   }
 
-  return {app, fetchImpl, jobs, outbox, calls, admin, deliver, view, envelope, fake, hostRunning};
+  return {app, fetchImpl, jobs, outbox, calls, admin, deliver, view, envelope, fake, hostRunning, logins};
 }

@@ -894,6 +894,54 @@ class Me(Model):
         return {"project_id": self.project_id, "key_prefix": self.key_prefix, "scopes": self.scopes}
 
 
+class Login(Model):
+    """``/v1/logins``: a saved site login. FetchX signs in with it when a page on its site asks. The password
+    is never returned, and the username only masked."""
+
+    @property
+    def id(self) -> str:
+        return self.raw.get("id") or ""
+
+    @property
+    def site(self) -> str:
+        """The host FetchX types it on (and its subdomains), over https."""
+        return self.raw.get("site") or ""
+
+    @property
+    def name(self) -> Optional[str]:
+        return self.raw.get("name")
+
+    @property
+    def username(self) -> str:
+        """Masked: ``ab*****@example.com``."""
+        return self.raw.get("username") or ""
+
+    @property
+    def status(self) -> str:
+        """``new``, ``signed_in``, ``rejected`` or ``code_required``. FetchX does not type a rejected or
+        code_required login again until it is updated."""
+        return self.raw.get("status") or ""
+
+    @property
+    def signed_in(self) -> bool:
+        """Whether FetchX holds a signed-in session for it."""
+        return self.raw.get("signed_in") is True
+
+    @property
+    def usable(self) -> bool:
+        """Whether FetchX will sign in with it: not rejected, and not waiting for a one-time code."""
+        return self.status in ("new", "signed_in")
+
+    @property
+    def last_sign_in(self) -> Optional[dict]:
+        """``{"at", "outcome"}`` (outcome ``passed``, ``rejected``, ``code_required`` or ``failed``), or None."""
+        value = self.raw.get("last_sign_in")
+        return dict(value) if isinstance(value, dict) else None
+
+    def _repr_fields(self):
+        return {"id": self.id, "site": self.site, "status": self.status}
+
+
 class Feedback(Model):
     """``POST /v1/feedback`` and ``GET /v1/feedback/{id}``: a report about how FetchX handled a page, and where it stands."""
 

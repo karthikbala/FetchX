@@ -439,6 +439,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/logins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List saved logins
+         * @description The project’s saved site logins, with how each last went. Passwords are never returned, and usernames only masked.
+         */
+        get: operations["listLogins"];
+        put?: never;
+        /**
+         * Save a site login
+         * @description Saves a username and password for a site, encrypted. When a page a request reads asks for a sign-in on that site, FetchX fills in the sign-in form itself (in a browser, solving a captcha in the form if it shows), sends it, and keeps the signed-in session for the project’s later requests. The password is never returned or logged, never typed on another host, and taken out of stored pages and network captures. A site that asks for a one-time code after the password cannot be signed in to. Up to 50 logins per project; free.
+         */
+        post: operations["createLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/logins/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a saved login
+         * @description One saved login and how it last went.
+         */
+        get: operations["getLogin"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a saved login
+         * @description Deletes the login and its signed-in session. Requests already running may still finish with it.
+         */
+        delete: operations["deleteLogin"];
+        options?: never;
+        head?: never;
+        /**
+         * Change a saved login
+         * @description Changes its site, username, password or name. A new site, username or password starts over: the saved session is dropped and the status is new, so FetchX signs in with it again (also after the site rejected it). Sign in yourself first to check a password the site rejected: repeated wrong passwords can lock an account.
+         */
+        patch: operations["updateLogin"];
+        trace?: never;
+    };
 }
 export interface webhooks {
     fetchFinished: {
@@ -682,6 +734,8 @@ export interface components {
             tags?: string[];
             /** @description Record the page's own network calls (its documents, XHR and fetch requests) while a browser renders it, and keep them with the result for as long as its other content (7 days). Read them with GET /v1/fetch/{id}/network, /v1/fetch/{id}/network/{index} and /v1/fetch/{id}/network.har. true records with the defaults; false or null records nothing. capture needs a browser, so with render: auto it makes the request render, and it is refused (invalid_request, details.field capture) with render: never, a method other than GET, or a route whose render is false. Free: it adds nothing to the price. When several browsers are tried, the calls are the last browser attempt's, also when the request fails. */
             capture?: boolean | null | components["schemas"]["CaptureSettings"];
+            /** @description A saved login (POST /v1/logins). Left out: the project’s login for the request’s registrable domain, when it has exactly one, signs in when a page asks for a sign-in on a host it covers, and its saved session goes with the request. A login id names the one to use, for example for a sign-in on another domain; false never signs in. Ignored when the request sends its own Cookie or Authorization header. Once FetchX has sent the login on a page, the request makes no further attempts, so a password is never sent twice. */
+            login?: string | false;
         };
         /** @description What may change for a next page. Everything else (headers, formats, country, render, wait_for, block_resources) comes from the earlier request, and the cookies the site set on the earlier page are sent with it. An empty object is fine. */
         NextPageRequest: {
@@ -726,10 +780,10 @@ export interface components {
             /** @enum {string} */
             status: "pending" | "succeeded" | "failed";
             /**
-             * @description What the page was. content: the page you asked for (with expect, it showed what you expected). not_found: the site’s real 404 or 410, billed like content. empty: it loaded but showed next to nothing, or not what expect asked for. challenge: a bot wall, block or rate limit stopped it (see challenge). error: anything else (see error). Null while pending.
+             * @description What the page was. content: the page you asked for (with expect, it showed what you expected). not_found: the site’s real 404 or 410, billed like content. empty: it loaded but showed next to nothing, or not what expect asked for. challenge: a bot wall, block or rate limit stopped it (see challenge). login_required: the site asked for a sign-in, and FetchX had no saved login for it or the site did not accept the one it had (error login_required or login_failed). error: anything else (see error). Null while pending.
              * @enum {string|null}
              */
-            page_status: "content" | "not_found" | "empty" | "challenge" | "error" | null;
+            page_status: "content" | "not_found" | "empty" | "challenge" | "login_required" | "error" | null;
             idempotency_key: string;
             url: string;
             /** Format: date-time */
@@ -900,7 +954,7 @@ export interface components {
              * @description not_admitted means nothing reached the site on this step (for example the provider refused the host); it does not count as an attempt. content_missing means the page loaded without what expect asked for.
              * @enum {string}
              */
-            result: "success" | "answered" | "blocked" | "rate_limited" | "login_required" | "site_error" | "needs_browser" | "content_missing" | "unreachable" | "failed" | "too_large" | "uncertain" | "not_admitted" | "url_not_allowed";
+            result: "success" | "answered" | "blocked" | "rate_limited" | "login_required" | "login_failed" | "site_error" | "needs_browser" | "content_missing" | "unreachable" | "failed" | "too_large" | "uncertain" | "not_admitted" | "url_not_allowed";
             /** @description The underlying error, when result is not_admitted or failed. */
             code?: string;
             /** @description On a blocked or rate-limited step, the bot-protection vendor whose wall it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf, kasada; or arkose, recaptcha, hcaptcha when only its captcha says). */
@@ -928,6 +982,11 @@ export interface components {
              * @enum {string}
              */
             content?: "settled" | "still_loading";
+            /**
+             * @description A sign-in on the page with a saved login: passed (signed in), rejected (the sign-in form came back), code_required (it asked for a one-time code), failed (no clear answer), no_login (the page asked for a sign-in on a host no usable saved login covers).
+             * @enum {string}
+             */
+            sign_in?: "passed" | "rejected" | "code_required" | "failed" | "no_login";
         };
         SkippedStep: {
             /** @enum {string} */
@@ -940,13 +999,13 @@ export interface components {
         };
         FetchError: {
             /** @enum {string} */
-            code: "blocked" | "rate_limited" | "content_missing" | "login_required" | "site_error" | "unreachable" | "cooling_down" | "timeout" | "too_large" | "uncertain" | "route_unavailable" | "url_not_allowed" | "next_page_missing" | "extract_unavailable";
+            code: "blocked" | "rate_limited" | "content_missing" | "login_required" | "login_failed" | "site_error" | "unreachable" | "cooling_down" | "timeout" | "too_large" | "uncertain" | "route_unavailable" | "url_not_allowed" | "next_page_missing" | "extract_unavailable";
             message: string;
             retry_after_seconds?: number;
             /** @description What to do next. A request key replays its first result, failures included, so a retry always needs a new idempotency_key. */
             next: {
                 /** @enum {string} */
-                action: "retry_after" | "retry_later" | "check_expect" | "use_auto" | "provide_credentials" | "check_url" | "raise_timeout" | "render_never" | "recover" | "refetch_previous";
+                action: "retry_after" | "retry_later" | "check_expect" | "use_auto" | "provide_credentials" | "update_login" | "check_url" | "raise_timeout" | "render_never" | "recover" | "refetch_previous";
                 /** @description The earliest time a retry can help. */
                 retry_after_seconds?: number;
                 /** @description true: the same request may succeed if sent again with a new idempotency_key (after retry_after_seconds when given). false: sent again unchanged it would fail the same way; change it as action says. */
@@ -1684,6 +1743,55 @@ export interface components {
             trial_credits: number | null;
             /** @description Credit packs and their prices in your currency. */
             pricing_url: string;
+        };
+        /** @description A saved site login. The password is never returned, and the username only masked. */
+        Login: {
+            /** Format: uuid */
+            id: string;
+            /** @description The host FetchX may sign in on, such as login.example.com: the login is typed only into sign-in forms on this host and its subdomains, over https. A URL is taken as its host. It applies by itself to requests on the same registrable domain (a login for login.example.com serves requests to app.example.com); name it with the request’s `login` when the sign-in is on another domain (an SSO provider). */
+            site: string;
+            /** @description Your own label. */
+            name: string | null;
+            /** @description The username, masked (ab*****@example.com). */
+            username: string;
+            /**
+             * @description new: not used yet. signed_in: FetchX signed in with it and keeps the session. rejected: the site showed its sign-in form again after FetchX sent the login (a wrong password or unknown user), or three sign-ins in a row got no clear answer. code_required: after the password the site asked for a one-time code, which FetchX cannot give. FetchX does not type a rejected or code_required login again until you update it, since repeated wrong passwords can lock an account.
+             * @enum {string}
+             */
+            status: "new" | "signed_in" | "rejected" | "code_required";
+            /** @description Whether FetchX holds a signed-in session for it. Requests use the session first and sign in again only when the site asks. */
+            signed_in: boolean;
+            /** @description The last time FetchX sent the login, and how it went. */
+            last_sign_in: {
+                /** Format: date-time */
+                at: string;
+                /** @enum {string} */
+                outcome: "passed" | "rejected" | "code_required" | "failed";
+            } | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        LoginList: {
+            /** @description The project’s saved logins, oldest first (at most 50). */
+            items: components["schemas"]["Login"][];
+        };
+        LoginInput: {
+            /** @description The host FetchX may sign in on, such as login.example.com: the login is typed only into sign-in forms on this host and its subdomains, over https. A URL is taken as its host. It applies by itself to requests on the same registrable domain (a login for login.example.com serves requests to app.example.com); name it with the request’s `login` when the sign-in is on another domain (an SSO provider). */
+            site: string;
+            username: string;
+            /** @description Stored encrypted; never returned or logged, and taken out of stored pages and network captures. */
+            password: string;
+            /** @description Your own label. */
+            name?: string | null;
+        };
+        /** @description A new site, username or password starts over: the saved session is dropped and the status is new again. A new name changes nothing else. */
+        LoginUpdate: {
+            site?: string;
+            username?: string;
+            password?: string;
+            name?: string | null;
         };
     };
     responses: never;
@@ -3370,6 +3478,319 @@ export interface operations {
             };
             /** @description No report with that id in this project. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listLogins: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The logins. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginList"];
+                };
+            };
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginInput"];
+            };
+        };
+        responses: {
+            /** @description Saved. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Login"];
+                };
+            };
+            /** @description A field is missing or wrong; error.details.field names it. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description This username is already saved for that site (login_exists, error.details.id names it: update it instead), or the project has as many logins as it may (login_limit, error.details.max). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The login id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The login. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Login"];
+                };
+            };
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No saved login with that id in this project. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The login id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No saved login with that id in this project. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    updateLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The login id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginUpdate"];
+            };
+        };
+        responses: {
+            /** @description Changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Login"];
+                };
+            };
+            /** @description A field is missing or wrong; error.details.field names it. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No saved login with that id in this project. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description This username is already saved for that site (login_exists, error.details.id names it: update it instead), or the project has as many logins as it may (login_limit, error.details.max). */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

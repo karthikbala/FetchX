@@ -211,5 +211,25 @@ class FetchXClient:
         """Where a report stands ('status') and FetchX staff's 'reply'."""
         return self._send('GET', '/v1/feedback/' + quote(id, safe=''))
 
+    def save_login(self, **body):
+        """Save a site login: site=, username=, password=, name=. FetchX signs in with it when a page on that site asks.
+        The password is stored encrypted and never returned."""
+        return self._send('POST', '/v1/logins', body=body)
+
+    def list_logins(self):
+        """The project's saved logins: {'items': [...]}, usernames masked."""
+        return self._send('GET', '/v1/logins')
+
+    def get_login(self, id):
+        return self._send('GET', '/v1/logins/' + quote(id, safe=''))
+
+    def update_login(self, id, **changes):
+        """Change site=, username=, password= or name=. A new site, username or password starts over."""
+        return self._send('PATCH', '/v1/logins/' + quote(id, safe=''), body=changes)
+
+    def delete_login(self, id):
+        """Delete a saved login and its signed-in session."""
+        self._send('DELETE', '/v1/logins/' + quote(id, safe=''))
+
     def usage(self, *, period=None, since=None, until=None):
         return self._send('GET', '/v1/usage' + _query({'period': period, 'since': since, 'until': until}))

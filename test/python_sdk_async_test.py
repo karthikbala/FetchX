@@ -108,6 +108,20 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(((await fx.get_feedback(report.id)).status, report["method"]), ("received", "GET"))
         self.assertEqual(events, ["fetch", "fetch", "fetch", "balance", "usage", "estimate", "status", "me", "send_feedback", "get_feedback"])
 
+    async def test_saved_logins_go_in_and_never_show_their_password(self):
+        fake = fake_sites()
+        fx = fake.async_client()
+        login = await fx.save_login({"site": "login.shop.example.com", "username": "buyer@shop.example.com", "password": "synthetic-pass-1"})
+        self.assertEqual((login.status, login.usable, login.username), ("new", True, "bu*****@shop.example.com"))
+        self.assertEqual([item.id for item in await fx.list_logins()], [login.id])
+        self.assertEqual((await fx.update_login(login, password="synthetic-pass-2")).status, "new")
+        self.assertEqual((await fx.get_login(login.id)).site, "login.shop.example.com")
+        await fx.delete_login(login)
+        with self.assertRaises(FetchXError) as caught:
+            await fx.get_login(login.id)
+        self.assertEqual(caught.exception.code, "not_found")
+        self.assertEqual(fake.logins, {})
+
     async def test_reads_content_lists_and_waits(self):
         fake = fake_sites(pending_polls=4)
         fx = fake.async_client(max_wait=0)

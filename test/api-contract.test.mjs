@@ -86,6 +86,8 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   const store = await openStore();
   t.after(() => store.close());
   const {call, engine, platform} = await platformFor(store, {script: request => request.url.includes('/wall') ? {status: 'failed', body: 'denied'}
+    : request.url.includes('/signin') ? {status: 'failed', step: 'browser', error_code: 'login_failed', page_status: 'login_required', sign_in: 'rejected',
+      body: '<form><input type=password></form>', next: {action: 'update_login', retry_with_new_key: false, detail: 'Update the login.'}}
     : request.url.includes('/pdf') ? {content_type: 'application/pdf', body: '%PDF-1.4'}
       : request.url.includes('/api') ? {content_type: 'application/json', body: JSON.stringify({items: [{name: 'Lamp'}], total: 1})}
       : request.url.includes('/list') ? {body: html('list'), step: 'browser', next_page: {how: 'click'}}
@@ -183,6 +185,26 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   await expect('post', '/v1/feedback', 404, {body: {fetch_id: '00000000-0000-4000-8000-000000000000', kind: 'other'}});
   await expect('get', `/v1/feedback/${report.id}`, 200, undefined, '/v1/feedback/{id}');
   await expect('get', '/v1/feedback/00000000-0000-4000-8000-000000000000', 404, undefined, '/v1/feedback/{id}');
+  // Saved site logins: the password goes in and never comes back.
+  const oneLogin = '/v1/logins/{id}';
+  const login = await expect('post', '/v1/logins', 201, {body: {site: 'login.shop.example.com', username: 'buyer@shop.example.com',
+    password: 'synthetic-pass-1', name: 'Shop'}});
+  assert.ok(!JSON.stringify(login).includes('synthetic-pass-1'));
+  await expect('post', '/v1/logins', 409, {body: {site: 'login.shop.example.com', username: 'BUYER@shop.example.com', password: 'other-pass'}});
+  await expect('post', '/v1/logins', 400, {body: {site: 'http://login.shop.example.com', username: 'u', password: 'p'}});
+  await expect('post', '/v1/logins', 401, {token: 'wrong', body: {site: 'login.shop.example.com', username: 'u', password: 'p'}});
+  assert.deepEqual((await expect('get', '/v1/logins', 200)).items.map(item => item.id), [login.id]);
+  await expect('get', `/v1/logins/${login.id}`, 200, undefined, oneLogin);
+  await expect('patch', `/v1/logins/${login.id}`, 200, {body: {password: 'synthetic-pass-2'}}, oneLogin);
+  await expect('patch', `/v1/logins/${login.id}`, 400, {body: {}}, oneLogin);
+  await expect('post', '/v1/fetch', 200, {body: {url: 'https://shop.example.com/orders', login: login.id}});
+  await expect('post', '/v1/fetch', 400, {body: {url: 'https://shop.example.com/orders', login: 'mine'}});
+  const refused = await expect('post', '/v1/fetch', 200, {body: {url: 'https://shop.example.com/signin', login: login.id}});
+  assert.deepEqual([refused.status, refused.page_status, refused.error.code, refused.error.next.action, refused.attempts[0].sign_in, refused.credits.charged],
+    ['failed', 'login_required', 'login_failed', 'update_login', 'rejected', 0]);
+  await expect('delete', `/v1/logins/${login.id}`, 204, undefined, oneLogin);
+  await expect('get', `/v1/logins/${login.id}`, 404, undefined, oneLogin);
+  await expect('delete', `/v1/logins/${login.id}`, 404, undefined, oneLogin);
 });
 
 test('a 503 unavailable says when to retry', {skip: !databaseUrl}, async t => {
