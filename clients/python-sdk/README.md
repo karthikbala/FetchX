@@ -3,7 +3,7 @@
 A Python package for the [FetchX API](https://github.com/karthikbala/FetchX/blob/main/docs/openapi.json), with a synchronous and an asyncio client, typed results, and an in-memory FetchX for tests. It follows FetchX's rules for you: it waits through 202s, resends safely with the same idempotency key, caps what you spend, and sends one request at a time to each site. It needs Python 3.9 or newer and `httpx`.
 
 ```sh
-pip install "fetchx-sdk @ git+https://github.com/karthikbala/FetchX#subdirectory=clients/python-sdk"
+pip install fetchx-sdk
 ```
 
 ```python

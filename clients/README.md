@@ -89,7 +89,7 @@ else:
 For applications and crawlers there is also a Python package in [`python-sdk/`](python-sdk/README.md) (`import fetchx`, Python 3.9+). On top of the endpoints it waits through 202s, resends with the same key, can follow `error.next` with a new key when FetchX says that helps, sends one request at a time per site, caps credits per request and per client, calls a hook after every call, has an asyncio client, and ships an in-memory `FakeFetchX` for offline tests:
 
 ```sh
-pip install "fetchx-sdk @ git+https://github.com/karthikbala/FetchX#subdirectory=clients/python-sdk"
+pip install fetchx-sdk
 ```
 
 ```python
