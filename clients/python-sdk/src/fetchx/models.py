@@ -305,7 +305,54 @@ class FetchResult(Model):
 
     @property
     def cookies(self) -> List[dict]:
+        """Cookies the site set: ``name``, ``value``, ``domain``, ``path``, ``expires`` and, over HTTP, the ``hop``
+        that set it (0 for the first response)."""
         return self.data.get("cookies") or []
+
+    @property
+    def redirects(self) -> List[dict]:
+        """Over HTTP: the redirects followed (``url``, ``status_code``, ``location``, ``set_cookie_names``)."""
+        return list(self.data.get("redirects") or [])
+
+    @property
+    def location(self) -> Optional[str]:
+        """With ``redirect="manual"``: where the redirect that answered points."""
+        return self.data.get("location")
+
+    @property
+    def raw_headers(self) -> List[List[str]]:
+        """With ``all_headers=True``: the response's headers as ``[name, value]`` pairs, as sent."""
+        return [list(pair) for pair in self.data.get("raw_headers") or []]
+
+    @property
+    def actions(self) -> List[dict]:
+        """With ``actions``: one result per action, in order (``index``, ``type``, ``status`` ok, failed or
+        skipped, ``ms``, and ``value``, ``error`` or ``response`` when the action has one)."""
+        return list(self.data.get("actions") or [])
+
+    @property
+    def action_values(self) -> List[Any]:
+        """What each ``evaluate`` action returned, in order (the other actions are left out)."""
+        return [entry.get("value") for entry in self.actions if entry.get("type") == "evaluate"]
+
+    @property
+    def failed_action(self) -> Optional[dict]:
+        """With ``action_failed``: the result of the action that failed (its ``error`` says why)."""
+        error = self.raw.get("error") or {}
+        index = (error.get("details") or {}).get("action_index")
+        actions = self.actions
+        return actions[index] if isinstance(index, int) and 0 <= index < len(actions) else None
+
+    @property
+    def blocked_requests(self) -> List[dict]:
+        """With ``allow_hosts``: what was refused for being off the list (``origin``, ``type``, ``action_index``)."""
+        return list(self.data.get("blocked_requests") or [])
+
+    @property
+    def passive_offlist_hosts(self) -> List[str]:
+        """With ``allow_passive_subresources``: the origins off the list the page loaded scripts, styles, fonts or
+        images from."""
+        return list(self.data.get("passive_offlist_hosts") or [])
 
     @property
     def rendered(self) -> bool:
@@ -890,6 +937,21 @@ class Me(Model):
         ``limit``, ``used``, ``remaining`` and ``resets_at``, or None) and ``expires_at`` (or None)."""
         return dict(self.raw.get("limits") or {"credits_per_day": None, "credits_per_month": None, "expires_at": None})
 
+    @property
+    def concurrency(self) -> dict:
+        """The project's concurrency limit: ``requests`` with ``limit`` (requests that may run at once, of any kind)
+        and ``running`` (running now). Empty from a server older than API 1.13."""
+        return dict(self.raw.get("concurrency") or {})
+
+    @property
+    def features(self) -> List[str]:
+        """What the server supports, by feature id (API 1.13 and later; empty before)."""
+        return list(self.raw.get("features") or [])
+
+    def supports(self, feature: str) -> bool:
+        """Whether the server lists ``feature`` in ``features``, e.g. ``me.supports("usd")``."""
+        return feature in self.features
+
     def _repr_fields(self):
         return {"project_id": self.project_id, "key_prefix": self.key_prefix, "scopes": self.scopes}
 
@@ -1003,6 +1065,12 @@ class Balance(Model):
     def payment_hold(self) -> bool:
         return bool(self.raw.get("payment_hold"))
 
+    @property
+    def usd_per_credit(self) -> Optional[float]:
+        """What one credit costs in USD: the list price of the pack the project bought last, or of the smallest
+        pack (None for an unmetered project, or from a server older than API 1.13)."""
+        return self.raw.get("usd_per_credit")
+
     def _repr_fields(self):
         return {"credits": self.credits, "reserved": self.reserved}
 
@@ -1064,6 +1132,11 @@ class Prices(Model):
     def extract(self) -> dict:
         """``credits`` per started ``unit_tokens`` of page text read, up to ``max_tokens`` and ``max_credits``."""
         return dict(self.raw.get("extract") or {})
+
+    @property
+    def packs(self) -> List[dict]:
+        """The credit packs on sale, smallest first: ``credits``, ``usd``, ``inr`` and ``usd_per_credit``."""
+        return list(self.raw.get("packs") or [])
 
     @property
     def trial_credits(self) -> Optional[int]:

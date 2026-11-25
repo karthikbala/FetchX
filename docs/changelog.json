@@ -6,6 +6,57 @@
   },
   "releases": [
     {
+      "version": "1.14.0",
+      "date": "2026-11-25",
+      "title": "Browser actions, host allowlists, manual redirects, concurrency and USD prices",
+      "changes": [
+        {
+          "type": "added",
+          "text": "POST /v1/fetch takes actions: up to 50 steps for a browser to take, in order, once the page has loaded (wait, wait_for_url, click, hover, fill, type, press, select, scroll, navigate, evaluate, wait_for_response). They run in one tab and one page, and data.actions has one result per action, with what each evaluate returned. data.body is the page as the last action left it. Billed as one browser step with nothing per action; a request whose action failed fails with action_failed (error.details.action_index) and is free. With actions, timeout_ms may be up to 300000. Feature id actions."
+        },
+        {
+          "type": "added",
+          "text": "The wait_for_response action waits for the first response to a request that started after the previous action and that completes, matched by URL, method and status, and returns it in data.actions[i].response: the exact URL, the real status, headers and body (up to 2 MB), as the browser's network layer saw it. With capture, every captured call has action_index (the action that set it off) and complete, and phase actions. Feature id capture_actions."
+        },
+        {
+          "type": "added",
+          "text": "POST /v1/fetch takes allow_hosts: the only hosts a request may reach (exact names or *.suffix). In a browser every request and connection to a host off the list is refused and listed in data.blocked_requests; over HTTP a redirect off the list is not followed. allow_passive_subresources lets scripts, styles, fonts and images load from other hosts without cookies (data.passive_offlist_hosts). Feature id allow_hosts."
+        },
+        {
+          "type": "added",
+          "text": "POST /v1/fetch takes redirect: manual, to get a redirect itself instead of where it leads (a login that answers 302 with its cookies): data.status_code is the 3xx, data.final_url the request URL and data.location where it points. Manual redirects are HTTP only. Feature id redirect_manual."
+        },
+        {
+          "type": "added",
+          "text": "Over HTTP, data.redirects lists the redirects followed (URL, status, where each pointed, the names of the cookies it set), and data.cookies has the cookies every hop set, each with the hop that set it, not only those for the final URL."
+        },
+        {
+          "type": "added",
+          "text": "POST /v1/fetch takes all_headers: true, which returns the response's headers as sent in data.raw_headers: in order, with each Set-Cookie, and over HTTP the site's own casing."
+        },
+        {
+          "type": "added",
+          "text": "GET /v1/me has concurrency: the project's requests-at-once limit (requests.limit, 10 unless raised) and how many are running now (requests.running). It counts every kind of request, HTTP or browser, next pages and batch items included."
+        },
+        {
+          "type": "added",
+          "text": "GET /v1/me has features: what this FetchX supports, by feature id (actions, allow_hosts, batches, capture, capture_actions, estimate, extract, feedback, key_limits, limits, logins, next_page, redirect_manual, usd). Check for an id before relying on a newer feature; new ids are listed here as they ship."
+        },
+        {
+          "type": "changed",
+          "text": "429 too_many_requests on POST /v1/fetch and POST /v1/fetch/{id}/next names the limit it hit: error.details.limit is requests, with max (the limit) and running, next to retry_after_seconds."
+        },
+        {
+          "type": "added",
+          "text": "GET /v1/balance has usd_per_credit and currency (USD): what one credit costs in USD, from the pack the project bought last, or the smallest pack when it has bought none."
+        },
+        {
+          "type": "added",
+          "text": "GET /v1/prices has packs: each credit pack on sale with its credits, its price in USD and INR, and its USD price per credit."
+        }
+      ]
+    },
+    {
       "version": "1.13.0",
       "date": "2026-11-25",
       "title": "Saved site logins",

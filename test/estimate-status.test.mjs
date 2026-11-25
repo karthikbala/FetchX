@@ -224,6 +224,12 @@ test('prices are public: no key, any origin, cached, from the live price table',
   assert.equal(view.steps.browser_residential.credits, 30);
   assert.equal(view.steps.http.credits, 1);
   assert.equal(view.trial_credits, 1000);
+  assert.deepEqual(view.packs, [
+    {credits: 10_000, usd: 2, inr: 175, usd_per_credit: 0.0002},
+    {credits: 50_000, usd: 8, inr: 750, usd_per_credit: 0.00016},
+    {credits: 150_000, usd: 20, inr: 1800, usd_per_credit: 20 / 150_000},
+    {credits: 1_000_000, usd: 100, inr: 9000, usd_per_credit: 0.0001},
+  ]);
   assert.equal((await app.inject({method: 'GET', url: '/v1/prices', headers: {authorization: 'Bearer wrong'}})).statusCode, 200, 'a key is not checked');
 });
 

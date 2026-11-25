@@ -187,6 +187,12 @@ def scenario(fake):
     assert client.network_body(captured, 2).data == b'{"items": [{"name": "Lamp"}]}'
     assert [entry["request"]["url"] for entry in client.network_har(captured, page=1)["log"]["entries"]][1:] == [
         f"{SHOP}/api/items?page=1", "https://cdn.example.net/api/stock"]
+    acted = client.fetch(url=f"{SHOP}/p/1", allow_hosts=["shop.example.com"], allow_passive_subresources=True,
+                         actions=[{"type": "click", "selector": "#more"}, {"type": "evaluate", "script": "1 + 1"},
+                                  {"type": "wait_for_response", "url_contains": "/api/items", "status_in": [200]}],
+                         action_timeout_ms=5000, timeout_ms=300_000)
+    assert [entry["status"] for entry in acted.actions] == ["ok", "ok", "ok"], acted.raw
+    client.fetch(url=f"{SHOP}/missing", actions=[{"type": "click", "selector": "#more"}])
     me = client.me()
     assert me.key_prefix == "fxk_fake" and "fetch:read" in me.scopes and me.limits["credits_per_day"] is None, me.raw
     report = client.send_feedback(fetch_id=first.id, kind="blocked_via_fetchx_ok_from_home", message="Loads at home.",

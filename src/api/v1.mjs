@@ -32,6 +32,7 @@
 //   GET    /v1/status                 service status and notices (no API key)
 //   GET    /v1/prices                 the price table and the trial (no API key)
 import {GatewayError} from '../policy.mjs';
+import {FEATURES} from './version.mjs';
 
 export const API_SCOPES = Object.freeze({write: 'fetch:write', read: 'fetch:read', usage: 'usage:read'});
 // A route any valid key may call, whatever its scopes (x-scope "any" in the contract).
@@ -193,9 +194,11 @@ export function registerApi(app, {service, ledger, estimator, board, batches, fe
   app.get('/v1/balance', {preHandler: guard(API_SCOPES.usage)}, req => service.balance(req.project));
   app.get('/v1/usage', {preHandler: guard(API_SCOPES.usage)}, req => usageReport({service, ledger}, req.project, req.query ?? {}));
   // Who is calling: the project (the same after a key is rotated) and this key.
+  // Also the project's concurrency limit and what this server supports.
   app.get('/v1/me', {preHandler: guard(ANY_SCOPE)}, async req => ({project_id: req.project, key_id: req.key?.id ?? req.keyId ?? null,
     key_name: req.key?.name ?? null, key_prefix: req.key?.prefix ?? null, scopes: req.key?.scopes ?? Object.values(API_SCOPES),
-    limits: await service.keyLimits(req.key?.id ?? req.keyId ?? null)}));
+    limits: await service.keyLimits(req.key?.id ?? req.keyId ?? null), concurrency: await service.concurrency(req.project),
+    features: [...FEATURES]}));
   // Public: no API key, any origin, and it answers during maintenance.
   app.get('/v1/status', async (req, reply) => {
     reply.header('access-control-allow-origin', '*');

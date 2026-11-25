@@ -10,6 +10,7 @@
 // refund in progress) stops new spending. src/fetch/front.mjs drives this.
 import {fail} from '../policy.mjs';
 import {trialCredits} from './trial.mjs';
+import {PACK_OFFERS} from '../control-stripe-broker-protocol.mjs';
 
 export const STEPS = Object.freeze(['http', 'http_residential', 'browser', 'browser_residential']);
 export const DEFAULT_PRICES = Object.freeze({
@@ -78,8 +79,17 @@ export function worstCaseOf(table, step, {captcha = false, maxWireBytes, extract
     extractTokens: extract ? table.extract_max_tokens : null});
 }
 
-// GET /v1/prices (no key): the price table in credits, and the trial credits a
-// new account gets (null when no credit policy is configured).
+// The credit packs on sale, smallest first: credits and their price in USD
+// (card) and INR (UPI), in currency units, and what one credit costs in USD.
+export const PACKS = Object.freeze(Object.values(Object.values(PACK_OFFERS).reduce((packs, offer) => {
+  const pack = packs[offer.credits] ??= {credits: offer.credits, usd: null, inr: null, usd_per_credit: null};
+  pack[offer.currency] = offer.amountMinor / 100;
+  if (offer.currency === 'usd') pack.usd_per_credit = offer.amountMinor / 100 / offer.credits;
+  return packs;
+}, {})).sort((a, b) => a.credits - b.credits).map(pack => Object.freeze(pack)));
+
+// GET /v1/prices (no key): the price table in credits, the credit packs, and
+// the trial credits a new account gets (null when no credit policy is configured).
 export function pricesView(table, trial) {
   const step = (name, residential, browser, routeClasses) => ({credits: table[name], residential, browser,
     route_classes: routeClasses, included_mb: table.residential_included_mb[name] ?? null});
@@ -95,6 +105,7 @@ export function pricesView(table, trial) {
     traffic: {credits_per_mb: table.residential_overage_per_mb},
     extract: {credits: table.extract, unit_tokens: table.extract_unit_tokens, max_tokens: table.extract_max_tokens,
       max_credits: extractCredits(table, table.extract_max_tokens)},
+    packs: PACKS.map(pack => ({...pack})),
     trial_credits: trial,
     pricing_url: 'https://fetchx.ai/pricing',
   };
@@ -171,6 +182,17 @@ export class Ledger {
       purchased: Number(row.purchased),
       held: row.held,
     };
+  }
+
+  // What one credit costs in USD for this project: the list price of the pack
+  // it bought last (in either currency), else of the smallest pack. Trial and
+  // operator credits are not counted: they were not bought.
+  async usdPerCredit(project) {
+    const smallest = PACKS.find(pack => pack.usd_per_credit !== null)?.usd_per_credit ?? null;
+    const last = (await this.store.pool.query(`SELECT credits FROM paid_credit_grants
+      WHERE project = $1 AND revoked_at IS NULL AND credits IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1`, [project])).rows[0];
+    const pack = last ? PACKS.find(item => item.credits === Number(last.credits)) : null;
+    return pack?.usd_per_credit ?? smallest;
   }
 
   // Serialises admissions for one project until the caller's transaction ends.

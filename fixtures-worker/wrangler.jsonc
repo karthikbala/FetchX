@@ -1,0 +1,16 @@
+// fixtures.fetchx.ai: FetchX's public test site (worker.mjs). It stores
+// nothing and needs no bindings. reCAPTCHA v3 and MTCaptcha pages need their
+// keys as secrets (RECAPTCHA_V3_SITEKEY, RECAPTCHA_V3_SECRET,
+// MTCAPTCHA_SITEKEY, MTCAPTCHA_PRIVATEKEY); the other CAPTCHA pages use the
+// vendors' published test keys.
+{
+  "name": "fetchx-fixtures",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-30",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "fixtures.fetchx.ai", "custom_domain": true },
+    { "pattern": "frame.fixtures.fetchx.ai", "custom_domain": true }
+  ]
+}

@@ -150,6 +150,7 @@ const fetchErrorRows = [
   ['`too_large`', 'The response is over 10 MB, or the rendered page is over 5 MB.', '`render_never` for large files', 'No: send it with `render: never`'],
   ['`uncertain`', 'The outcome is unknown: FetchX restarted while it ran, or the connection dropped after a POST was sent.', 'GET and HEAD: `retry_later` (5 s). Other methods: `recover`.', 'GET and HEAD: yes. Other methods: no, check the site first, because it may have acted on the request.'],
   ['`next_page_missing`', 'A next page reached by clicking or scrolling could not be reached again: when FetchX opened the list, its Next control was gone. The list may have changed.', '`refetch_previous`: fetch the earlier page again, then ask for its next page', 'No: fetch the earlier page again first'],
+  ['`action_failed`', 'One of the request’s `actions` failed (`error.details.action_index`; `data.actions[i].error` says why, such as `selector_not_found` or `timeout`), or the page did not answer 2xx, so none ran (`page_not_ok`). `data` holds the page as it was then. Not charged.', '`fix_actions`', 'No: fix the action first'],
 ];
 
 export const docPages: DocPage[] = [
@@ -376,7 +377,25 @@ console.log(response.status, result.status, result.error?.next ?? result.data?.m
 curl -G "$FETCHX_URL/v1/fetch/$ID/network" -H "Authorization: Bearer $FETCHX_TOKEN" \\
   --data-urlencode contains=Lamp --data-urlencode content_type=json` }] },
           { kind: 'text', text: 'Capture adds nothing to the price, but it needs a browser: with `render: auto` it makes the request render, and it is refused with `render: never` or a method other than GET. Pass an object instead of `true` to choose `types` (document, xhr and fetch by default), `max_requests` (200), `max_body_bytes` (2 MB per body), `bodies` (`text`, `none` or `all`) and `first_party_only`. Calls to analytics, advertising, tag manager and consent hosts are dropped unless `include_trackers` is set. Cookies, Authorization and other secret headers are masked as `<masked len=N sha=XXXXXX>`, so two calls can be seen to carry the same value without showing it, unless `unmask` is set.' },
-          { kind: 'text', text: 'Each call says on which page and when it was made: `phase` is `warmup` (a visit to the site’s home page first), `load`, `scroll`, or `replay` (getting back to the earlier page for a next page). A next page keeps the earlier request’s `capture` unless you send `capture: null`. The calls are stored encrypted with the rest of the content: 7 days, or until you DELETE the request.' },
+          { kind: 'text', text: 'Each call says on which page and when it was made: `phase` is `warmup` (a visit to the site’s home page first), `load`, `scroll`, `replay` (getting back to the earlier page for a next page) or `actions` (while your actions ran, with `action_index`, the action that set the call off). A next page keeps the earlier request’s `capture` unless you send `capture: null`. The calls are stored encrypted with the rest of the content: 7 days, or until you DELETE the request.' },
+        ],
+      },
+      {
+        id: 'actions',
+        title: 'Click, type and run scripts on the page',
+        blocks: [
+          { kind: 'text', text: 'Pass `actions` and a browser carries them out in order once the page has loaded, in one tab: `wait` (a time, or a selector to appear or go), `wait_for_url`, `click`, `hover`, `fill`, `type`, `press`, `select`, `scroll`, `navigate`, `evaluate` and `wait_for_response`. Selectors are CSS and reach into open shadow roots. `frame` acts inside an iframe. `data.actions` has one result per action, and `data.body` is the page as the last action left it.' },
+          { kind: 'code', title: 'Search a form and read the results', snippets: [{ label: 'JSON', language: 'json', code: json({ url: 'https://portal.example.com/search', allow_hosts: ['portal.example.com'], actions: [{ type: 'fill', selector: '#ids', value: 'V1,X2' }, { type: 'click', selector: 'button[type=submit]' }, { type: 'wait_for_response', url_contains: '/api/lookup', status_in: [200] }, { type: 'evaluate', mode: 'function', script: 'return document.querySelectorAll("#result tr").length' }] }) }] },
+          { kind: 'text', text: '`evaluate` runs your script in the page’s own JavaScript, so it sees the page’s variables, and what one script leaves on `window` is there for the next. By default its completion value comes back, as in a console; with `mode: function` it runs as a function body with `args` and gives what it returns. Promises are awaited, and the value comes back as JSON in `data.actions[i].value`.' },
+          { kind: 'text', text: '`wait_for_response` waits for the first response to a request that started after the previous action and completes, matched by `url_contains` or `url_regex`, `method` and `status_in`. It returns the exact URL, the real status, the headers and up to 2 MB of body, as the browser’s network layer saw them, in `data.actions[i].response`.' },
+          { kind: 'text', text: 'Every action waits up to `timeout_ms` (15 seconds unless `action_timeout_ms` says otherwise). An action that fails stops the rest, unless it is `optional`, and the request fails with `action_failed`, free. With actions the request may take up to 5 minutes (`timeout_ms` up to 300000). It runs on a browser step only, once on a given `route`, and is never resent on another route after an action has sent something to the site. It is billed as one browser step, with nothing per action.' },
+        ],
+      },
+      {
+        id: 'allow-hosts',
+        title: 'Keep a request to your hosts',
+        blocks: [
+          { kind: 'text', text: '`allow_hosts` lists the only hosts a request may reach: exact names, or `*.example.com` for every subdomain. In a browser, every request and connection the page makes to another host is refused before it leaves FetchX and listed in `data.blocked_requests`; over HTTP, a redirect to another host is not followed and comes back as the answer, with `data.location`. `allow_passive_subresources: true` lets the page load scripts, styles, fonts and images from other hosts, without cookies, and lists them in `data.passive_offlist_hosts`. Captcha widgets load from their vendors’ hosts, so a page with one may need those on the list.' },
         ],
       },
       {

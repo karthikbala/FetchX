@@ -2,7 +2,7 @@
  "openapi": "3.1.0",
  "info": {
   "title": "FetchX API",
-  "version": "1.13.0",
+  "version": "1.14.0",
   "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. A browser request with capture records the page's own network calls, read with GET /v1/fetch/{id}/network or as a HAR file. POST /v1/logins saves a site’s username and password (encrypted, never returned): when a page asks for a sign-in on that site, FetchX signs in by itself and keeps the session for later requests. GET /v1/me says which project and key are calling, and the key's own credit limits per day and month and expiry, set in the console. POST /v1/feedback tells FetchX how it handled a page, for example blocked through FetchX but fine from your own connection, so routes can be tuned with real cases. GET /v1/status and GET /v1/prices need no key: the service's state, and what each step costs with the trial credits a new account gets.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status)."
  },
  "servers": [
@@ -752,7 +752,7 @@
       }
      },
      "429": {
-      "description": "The project has too many requests running. Wait `retry_after_seconds`.",
+      "description": "The project has too many requests running (error.details.limit names the limit: requests; max is the limit, running what runs now; see GET /v1/me concurrency). Wait retry_after_seconds.",
       "content": {
        "application/json": {
         "schema": {
@@ -763,7 +763,13 @@
           "value": {
            "error": {
             "code": "too_many_requests",
-            "message": "The project has too many requests running; wait and retry."
+            "message": "The project has too many requests running; wait and retry.",
+            "details": {
+             "limit": "requests",
+             "max": 10,
+             "running": 10,
+             "retry_after_seconds": 5
+            }
            }
           }
          }
@@ -1865,7 +1871,7 @@
       }
      },
      "429": {
-      "description": "The project has too many requests running. Wait `retry_after_seconds`.",
+      "description": "The project has too many requests running (error.details.limit names the limit: requests; max is the limit, running what runs now; see GET /v1/me concurrency). Wait retry_after_seconds.",
       "content": {
        "application/json": {
         "schema": {
@@ -1876,7 +1882,13 @@
           "value": {
            "error": {
             "code": "too_many_requests",
-            "message": "The project has too many requests running; wait and retry."
+            "message": "The project has too many requests running; wait and retry.",
+            "details": {
+             "limit": "requests",
+             "max": 10,
+             "running": 10,
+             "retry_after_seconds": 5
+            }
            }
           }
          }
@@ -2713,7 +2725,9 @@
            "reserved": 160,
            "trial": 1000,
            "purchased": 10000,
-           "payment_hold": false
+           "payment_hold": false,
+           "usd_per_credit": 0.00016,
+           "currency": "USD"
           }
          }
         }
@@ -3109,6 +3123,32 @@
             "max_tokens": 150000,
             "max_credits": 60
            },
+           "packs": [
+            {
+             "credits": 10000,
+             "usd": 2,
+             "inr": 175,
+             "usd_per_credit": 0.0002
+            },
+            {
+             "credits": 50000,
+             "usd": 8,
+             "inr": 750,
+             "usd_per_credit": 0.00016
+            },
+            {
+             "credits": 150000,
+             "usd": 20,
+             "inr": 1800,
+             "usd_per_credit": 0.00013333333333333334
+            },
+            {
+             "credits": 1000000,
+             "usd": 100,
+             "inr": 9000,
+             "usd_per_credit": 0.0001
+            }
+           ],
            "trial_credits": 1000,
            "pricing_url": "https://fetchx.ai/pricing"
           }
@@ -4253,7 +4293,8 @@
         "warmup",
         "load",
         "scroll",
-        "replay"
+        "replay",
+        "actions"
        ]
       }
      },
@@ -4830,7 +4871,29 @@
              "resets_at": "2026-12-01T00:00:00Z"
             },
             "expires_at": "2027-03-01T00:00:00Z"
-           }
+           },
+           "concurrency": {
+            "requests": {
+             "limit": 10,
+             "running": 2
+            }
+           },
+           "features": [
+            "actions",
+            "allow_hosts",
+            "batches",
+            "capture",
+            "capture_actions",
+            "estimate",
+            "extract",
+            "feedback",
+            "key_limits",
+            "limits",
+            "logins",
+            "next_page",
+            "redirect_manual",
+            "usd"
+           ]
           }
          }
         }
@@ -6507,9 +6570,9 @@
      "timeout_ms": {
       "type": "integer",
       "minimum": 5000,
-      "maximum": 180000,
+      "maximum": 300000,
       "default": 120000,
-      "description": "Total time for all attempts. A captcha solve can take up to a minute, so the default leaves room for one; a synchronous call still answers 202 after 60 seconds if the request is not finished."
+      "description": "Total time for all attempts. A captcha solve can take up to a minute, so the default leaves room for one; a synchronous call still answers 202 after 60 seconds if the request is not finished. Up to 180000, or 300000 with actions."
      },
      "async": {
       "type": "boolean",
@@ -6548,6 +6611,50 @@
         "$ref": "#/components/schemas/CaptureSettings"
        }
       ]
+     },
+     "redirect": {
+      "type": "string",
+      "enum": [
+       "follow",
+       "manual"
+      ],
+      "default": "follow",
+      "description": "follow: follow redirects (up to 5, each hop checked); data.redirects lists them. manual: answer with the redirect itself, for a login that answers 302 with its cookies: data.status_code is the 3xx, data.final_url the request URL and data.location where it points, and the cookies it set are in data.cookies. Manual is HTTP only: auto mode uses no browser, and render always, route.render, wait_for, screenshot, a number of screens and capture are refused (invalid_request, field redirect)."
+     },
+     "all_headers": {
+      "type": "boolean",
+      "default": false,
+      "description": "Return the response's headers as sent in data.raw_headers: in order, with duplicates (each Set-Cookie) and, over HTTP, the site's own casing."
+     },
+     "actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+       "$ref": "#/components/schemas/Action"
+      },
+      "description": "Steps for a browser to take, in order, once the page has loaded (its load event, at most 10 s): wait, click, fill, press, select, scroll, navigate, evaluate a script, wait for a response and more. They run in one tab, in one page and one JavaScript realm: what an evaluate leaves on window stays for later actions until the page navigates. Selectors are Playwright CSS and reach into open shadow roots. Actions imply a browser: method must be GET, render must not be never, redirect must not be manual, a route's render defaults to true (false is refused), and a number of screens to scroll is refused (use a scroll action). Only the browser steps of auto mode are used, and a route runs one attempt. The page is not scrolled or read further after the last action: data.body is its DOM then, data.final_url its address and data.status_code the last top-level document's status. expect and extract read that page. A popup or new tab is closed. Billed as one browser step, with nothing per action; a request whose action failed is free. At most 512 KB as JSON in all."
+     },
+     "action_timeout_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 60000,
+      "default": 15000,
+      "description": "Only with actions: the timeout_ms of every action that does not give its own."
+     },
+     "allow_hosts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+       "type": "string"
+      },
+      "description": "The only hosts the request may reach: exact hostnames, or *.suffix for every subdomain of suffix (not suffix itself). The URL's host must be on the list (else 400 url_not_allowed, field url). In a browser it covers every request and connection the page makes (navigations, frames, scripts, XHR and fetch, WebSockets, workers, redirect hops): one to a host off the list is refused before it leaves FetchX and listed in data.blocked_requests by origin. Over HTTP a redirect to a host off the list is not followed: the 3xx is the answer, with data.location. Captcha widgets load from their vendors' hosts, which are off most lists. A navigate action to a host off the list is refused (400, field actions[i].url)."
+     },
+     "allow_passive_subresources": {
+      "type": "boolean",
+      "default": false,
+      "description": "Only with allow_hosts: let the page load scripts, styles, fonts and images from hosts off the list (GET only, sent without Cookie or Authorization), listed in data.passive_offlist_hosts. Documents, frames, XHR and fetch, WebSockets, beacons, form posts and workers stay on the list."
      },
      "login": {
       "description": "A saved login (POST /v1/logins). Left out: the project’s login for the request’s registrable domain, when it has exactly one, signs in when a page asks for a sign-in on a host it covers, and its saved session goes with the request. A login id names the one to use, for example for a sign-in on another domain; false never signs in. Ignored when the request sends its own Cookie or Authorization header. Once FetchX has sent the login on a page, the request makes no further attempts, so a password is never sent twice.",
@@ -7035,7 +7142,83 @@
       "items": {
        "$ref": "#/components/schemas/Cookie"
       },
-      "description": "Cookies the site set, for multi-step flows."
+      "description": "Cookies the site set, for multi-step flows: those for the final URL, then those a redirect hop set for another host or path. Over HTTP each cookie a hop wrote says which (hop, 0 for the first response, see redirects); the last write per name, domain and path wins, and a cookie a hop expired is left out."
+     },
+     "redirects": {
+      "type": "array",
+      "description": "Over HTTP: the redirects followed, in order, each with the URL that answered, its status, where it pointed and the names of the cookies it set. Empty when the first response was the answer. Not on browser results.",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "url",
+        "status_code",
+        "location",
+        "set_cookie_names"
+       ],
+       "properties": {
+        "url": {
+         "type": "string"
+        },
+        "status_code": {
+         "type": "integer"
+        },
+        "location": {
+         "type": "string"
+        },
+        "set_cookie_names": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     "location": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "With redirect: manual, when the answer is a redirect: its Location, resolved against the request URL (null when it is not a URL)."
+     },
+     "raw_headers": {
+      "type": "array",
+      "description": "With all_headers: the response's headers as [name, value] pairs, in the order sent, with duplicates (each Set-Cookie). Over HTTP the site's casing is kept; a browser reports names lowercased. At most 200 pairs, values cut at 8 KB.",
+      "items": {
+       "type": "array",
+       "minItems": 2,
+       "maxItems": 2,
+       "items": {
+        "type": "string"
+       }
+      }
+     },
+     "actions": {
+      "type": [
+       "array",
+       "null"
+      ],
+      "items": {
+       "$ref": "#/components/schemas/ActionResult"
+      },
+      "description": "With actions: one entry per action, in order (null when the step that answered never got to them)."
+     },
+     "blocked_requests": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/BlockedRequest"
+      },
+      "maxItems": 100,
+      "description": "With allow_hosts: what was refused for being off the list, at most 100, each origin and type once per action."
+     },
+     "passive_offlist_hosts": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 100,
+      "description": "With allow_passive_subresources, on a browser step: the origins off the list the page loaded scripts, styles, fonts or images from."
      },
      "next_page": {
       "oneOf": [
@@ -7218,6 +7401,11 @@
      "expires": {
       "type": "string",
       "format": "date-time"
+     },
+     "hop": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Over HTTP: the response that set it, 0 for the first (see redirects). Left out for a cookie FetchX already had."
      }
     }
    },
@@ -7455,7 +7643,8 @@
        "route_unavailable",
        "url_not_allowed",
        "next_page_missing",
-       "extract_unavailable"
+       "extract_unavailable",
+       "action_failed"
       ]
      },
      "message": {
@@ -7463,6 +7652,16 @@
      },
      "retry_after_seconds": {
       "type": "integer"
+     },
+     "details": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+       "action_index": {
+        "type": "integer",
+        "description": "action_failed: the action that failed (data.actions[i].error says why)."
+       }
+      }
      },
      "next": {
       "type": "object",
@@ -7487,7 +7686,8 @@
          "raise_timeout",
          "render_never",
          "recover",
-         "refetch_previous"
+         "refetch_previous",
+         "fix_actions"
         ]
        },
        "retry_after_seconds": {
@@ -7770,7 +7970,9 @@
      "reserved",
      "trial",
      "purchased",
-     "payment_hold"
+     "payment_hold",
+     "usd_per_credit",
+     "currency"
     ],
     "properties": {
      "credits": {
@@ -7795,6 +7997,19 @@
      "payment_hold": {
       "type": "boolean",
       "description": "True while spending is paused over a payment issue."
+     },
+     "usd_per_credit": {
+      "type": [
+       "number",
+       "null"
+      ],
+      "exclusiveMinimum": 0,
+      "description": "What one credit costs in USD: the list price per credit of the pack this project bought last (whichever currency it paid in), or of the smallest pack when it has bought none. Trial and granted credits are not counted. Null for an unmetered project."
+     },
+     "currency": {
+      "type": "string",
+      "const": "USD",
+      "description": "The currency of usd_per_credit."
      }
     }
    },
@@ -9016,9 +9231,10 @@
        "warmup",
        "load",
        "scroll",
-       "replay"
+       "replay",
+       "actions"
       ],
-      "description": "warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page."
+      "description": "warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page; actions: while the caller's actions ran."
      },
      "type": {
       "type": "string",
@@ -9121,6 +9337,17 @@
        "type": "string"
       },
       "description": "With contains: the values this call's response body holds."
+     },
+     "action_index": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "The caller's action that set the call off (see ActionResponse.action_index_started), or null."
+     },
+     "complete": {
+      "type": "boolean",
+      "description": "Whether the call finished: false when it failed or was still open when the page was read."
      }
     }
    },
@@ -9184,7 +9411,8 @@
        "warmup",
        "load",
        "scroll",
-       "replay"
+       "replay",
+       "actions"
       ],
       "description": "warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page."
      },
@@ -9398,6 +9626,17 @@
        "null"
       ],
       "description": "The index of the call this one is a redirect of."
+     },
+     "action_index": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "The caller's action that set the call off (see ActionResponse.action_index_started), or null."
+     },
+     "complete": {
+      "type": "boolean",
+      "description": "Whether the call finished: false when it failed or was still open when the page was read."
      }
     }
    },
@@ -9410,7 +9649,9 @@
      "key_name",
      "key_prefix",
      "scopes",
-     "limits"
+     "limits",
+     "concurrency",
+     "features"
     ],
     "description": "The project and API key making the call.",
     "properties": {
@@ -9492,6 +9733,43 @@
         "description": "When the key stops working; after it, calls answer 401 api_key_expired."
        }
       }
+     },
+     "concurrency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "requests"
+      ],
+      "description": "The project's concurrency limit. requests: how many of the project's requests may run at once, of any kind (HTTP or browser, next pages and batch items included), and how many are running now. Past it, POST /v1/fetch and POST /v1/fetch/{id}/next answer 429 too_many_requests with error.details.limit \"requests\". There is no separate limit for browser requests. A running batch leaves one of them free for single requests. Ask FetchX support to raise it.",
+      "properties": {
+       "requests": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "limit",
+         "running"
+        ],
+        "properties": {
+         "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Requests that may run at once."
+         },
+         "running": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Requests running now."
+         }
+        }
+       }
+      }
+     },
+     "features": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "What this FetchX supports, by feature id, so a client can check before relying on a newer feature: actions (browser actions on POST /v1/fetch), allow_hosts (the host allowlist on POST /v1/fetch), batches, capture (network capture), capture_actions (wait_for_response, and action_index and complete on captured calls), estimate, extract, feedback, key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), logins (saved site logins: /v1/logins, and login on POST /v1/fetch), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation."
      }
     }
    },
@@ -9845,10 +10123,11 @@
      "captcha",
      "traffic",
      "extract",
+     "packs",
      "trial_credits",
      "pricing_url"
     ],
-    "description": "FetchX's price table, in credits.",
+    "description": "FetchX's price table, in credits, and the credit packs that buy them.",
     "properties": {
      "unit": {
       "type": "string",
@@ -9940,6 +10219,47 @@
        }
       }
      },
+     "packs": {
+      "type": "array",
+      "description": "The credit packs on sale, smallest first. Credits never expire; a project's balance holds whatever it bought, in either currency.",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "credits",
+        "usd",
+        "inr",
+        "usd_per_credit"
+       ],
+       "properties": {
+        "credits": {
+         "type": "integer",
+         "minimum": 1
+        },
+        "usd": {
+         "type": [
+          "number",
+          "null"
+         ],
+         "description": "Price in USD, by card. Null when not sold in USD."
+        },
+        "inr": {
+         "type": [
+          "number",
+          "null"
+         ],
+         "description": "Price in INR, by UPI. Null when not sold in INR."
+        },
+        "usd_per_credit": {
+         "type": [
+          "number",
+          "null"
+         ],
+         "description": "usd divided by credits."
+        }
+       }
+      }
+     },
      "trial_credits": {
       "type": [
        "integer",
@@ -9951,6 +10271,390 @@
      "pricing_url": {
       "type": "string",
       "description": "Credit packs and their prices in your currency."
+     }
+    }
+   },
+   "ActionFrame": {
+    "type": "object",
+    "additionalProperties": false,
+    "minProperties": 1,
+    "maxProperties": 1,
+    "description": "The frame to act in (default: the top frame): the first whose URL contains url_contains, or the iframe element selector matches. Waited for within the action's timeout; none gives frame_not_found.",
+    "properties": {
+     "url_contains": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+     },
+     "selector": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+     }
+    }
+   },
+   "Action": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "type"
+    ],
+    "description": "One step. Each type takes only its own fields (anything else is refused, invalid_request with details.field actions[i].name). Every action takes frame (not navigate, wait_for_url or wait_for_response), optional (a failed optional action does not stop the others) and timeout_ms (1 to 60000; an evaluate up to the request's timeout_ms). wait: ms (0 to 60000), or selector with state (attached, visible (default), hidden, detached). wait_for_url: url_contains or url_regex, matched against the top frame's URL. click: selector, button (left, right, middle), click_count (1 to 3); scrolls the element into view and waits until it can be clicked. hover: selector. fill: selector (default: the element with the focus, through open shadow roots) and value (up to 64 KB); clears the field and sets the value as typing would (input and change events). fill_secret: as fill, with secret, the name of an entry in the request's secrets (refused until secrets are available). press: key (Enter, Tab, Control+a...), selector optional. select: selector and value or label. scroll: to (top, bottom) or px. navigate: url (https; on allow_hosts when given), in the same tab. evaluate: script (up to 64 KB) run in the page's own world; mode expression (default) gives the completion value of the script, as a console does, and function runs it as a function body with args (JSON up to 64 KB) and gives what it returns. A promise is awaited; the value comes back as JSON (up to 1 MB) in data.actions[i].value. A script that sends the page elsewhere ends ok with value null, and the next action runs in the new document. wait_for_response: url_contains or url_regex, method, status_in (HTTP statuses) and body (text (default) or none); matches the first response, as the browser's network layer saw it, to a request that started after the previous action began (any, for the first action) and that completes, and returns it in data.actions[i].response. type: text typed one key at a time, selector optional, delay_ms (0 to 1000) between keys.",
+    "properties": {
+     "type": {
+      "type": "string",
+      "enum": [
+       "wait",
+       "wait_for_url",
+       "click",
+       "hover",
+       "fill",
+       "fill_secret",
+       "press",
+       "select",
+       "scroll",
+       "navigate",
+       "evaluate",
+       "wait_for_response",
+       "type"
+      ]
+     },
+     "frame": {
+      "$ref": "#/components/schemas/ActionFrame"
+     },
+     "optional": {
+      "type": "boolean",
+      "default": false
+     },
+     "timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 300000
+     },
+     "ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 60000
+     },
+     "selector": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+     },
+     "state": {
+      "type": "string",
+      "enum": [
+       "attached",
+       "visible",
+       "hidden",
+       "detached"
+      ]
+     },
+     "url_contains": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+     },
+     "url_regex": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+     },
+     "button": {
+      "type": "string",
+      "enum": [
+       "left",
+       "right",
+       "middle"
+      ]
+     },
+     "click_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3
+     },
+     "value": {
+      "type": "string",
+      "maxLength": 65536
+     },
+     "label": {
+      "type": "string",
+      "maxLength": 1024
+     },
+     "secret": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+     },
+     "key": {
+      "type": "string",
+      "maxLength": 64
+     },
+     "to": {
+      "type": "string",
+      "enum": [
+       "top",
+       "bottom"
+      ]
+     },
+     "px": {
+      "type": "integer",
+      "minimum": -1000000,
+      "maximum": 1000000
+     },
+     "url": {
+      "type": "string",
+      "maxLength": 12000
+     },
+     "script": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "expression",
+       "function"
+      ]
+     },
+     "args": {
+      "description": "Any JSON value, only with mode function: the function's args."
+     },
+     "method": {
+      "type": "string",
+      "pattern": "^[A-Z]{1,16}$"
+     },
+     "status_in": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+       "type": "integer",
+       "minimum": 100,
+       "maximum": 599
+      }
+     },
+     "body": {
+      "type": "string",
+      "enum": [
+       "text",
+       "none"
+      ]
+     },
+     "text": {
+      "type": "string",
+      "maxLength": 65536
+     },
+     "delay_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000
+     }
+    }
+   },
+   "ActionResponse": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "request_index",
+     "url",
+     "method",
+     "status",
+     "headers",
+     "content_type",
+     "body",
+     "body_encoding",
+     "body_bytes",
+     "complete",
+     "truncated",
+     "sha256",
+     "action_index_started"
+    ],
+    "description": "The response a wait_for_response matched, from the browser's network layer (not the page's JavaScript): the exact request URL with its query, and the real HTTP status.",
+    "properties": {
+     "request_index": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "Its index in the network capture, when the request has capture and recorded it."
+     },
+     "url": {
+      "type": "string"
+     },
+     "method": {
+      "type": "string"
+     },
+     "status": {
+      "type": "integer"
+     },
+     "headers": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Lowercased names; Cookie, Set-Cookie, Authorization and secret-named headers masked as in a capture."
+     },
+     "content_type": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "body": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "With body text: the body, utf-8 text for text types, else base64; up to 2 MB (8 MB for all of a request's action results). null with body none, or for a response without one."
+     },
+     "body_encoding": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "enum": [
+       "utf8",
+       "base64",
+       null
+      ]
+     },
+     "body_bytes": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "The whole body's size."
+     },
+     "complete": {
+      "type": "boolean",
+      "description": "Whether the whole body was read."
+     },
+     "truncated": {
+      "type": "boolean",
+      "description": "Whether body holds less than the whole body."
+     },
+     "sha256": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "Of the whole body."
+     },
+     "action_index_started": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "The action that set the request off: the one running when it started, or, when that was a wait, the action before it."
+     }
+    }
+   },
+   "ActionResult": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "index",
+     "type",
+     "status",
+     "ms"
+    ],
+    "properties": {
+     "index": {
+      "type": "integer"
+     },
+     "type": {
+      "type": "string",
+      "enum": [
+       "wait",
+       "wait_for_url",
+       "click",
+       "hover",
+       "fill",
+       "fill_secret",
+       "press",
+       "select",
+       "scroll",
+       "navigate",
+       "evaluate",
+       "wait_for_response",
+       "type"
+      ]
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "ok",
+       "failed",
+       "skipped"
+      ],
+      "description": "skipped: an earlier action that was not optional failed, or the page did not answer 2xx."
+     },
+     "ms": {
+      "type": "integer"
+     },
+     "value": {
+      "description": "evaluate only: the script's result as JSON."
+     },
+     "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "code",
+       "message"
+      ],
+      "properties": {
+       "code": {
+        "type": "string",
+        "enum": [
+         "selector_not_found",
+         "not_actionable",
+         "timeout",
+         "evaluate_error",
+         "navigation_blocked",
+         "frame_not_found",
+         "host_not_allowed",
+         "secret_not_found",
+         "secret_origin_mismatch",
+         "secret_insecure",
+         "page_not_ok"
+        ]
+       },
+       "message": {
+        "type": "string",
+        "maxLength": 300,
+        "description": "What went wrong, with the failing selector at most; for evaluate_error, the script's own error. page_not_ok: the page answered other than 2xx, so no action ran."
+       }
+      }
+     },
+     "response": {
+      "$ref": "#/components/schemas/ActionResponse"
+     }
+    }
+   },
+   "BlockedRequest": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "origin",
+     "type",
+     "action_index"
+    ],
+    "properties": {
+     "origin": {
+      "type": "string",
+      "description": "Scheme, host and port only."
+     },
+     "type": {
+      "type": "string",
+      "description": "What the request was: a browser resource type (document, script, xhr, fetch...), connection (a socket, worker or redirect hop the relay refused) or redirect (an HTTP redirect)."
+     },
+     "action_index": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "The action that set it off, or null."
      }
     }
    },
