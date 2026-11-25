@@ -15,7 +15,11 @@ The SDK in `clients/python-sdk` is published as `fetchx-sdk` (imported as `fetch
 
    The token is not shown while you paste it and does not go into the shell history.
 
-4. After the first upload, make a token for `fetchx-sdk` only, put it in the same file, and delete the account-wide token on pypi.org.
+4. After the first upload, make a token for `fetchx-sdk` only, put it in the same file, and delete the account-wide token on pypi.org. Done on 2026-11-25: the file now holds the token "porttrack fetchx-sdk releases". To replace it later from the Mac in one line, use this. Piping the token straight into `sudo` under `ssh -t` printed success but wrote nothing, so this writes a private temporary file first and prints the file's new time:
+
+   ```sh
+   ssh -t porttrack-production 'read -rsp "PyPI token: " T; echo; case "$T" in pypi-*) ;; *) echo "not a pypi- token, nothing written"; exit 1;; esac; umask 077; F=$(mktemp) && printf "%s\n" "$T" > "$F" && unset T && sudo install -m 0600 -o root -g root "$F" /opt/crawling-platform/secrets/pypi/token; rm -f "$F"; sudo stat -c "file written %y, %s bytes" /opt/crawling-platform/secrets/pypi/token'
+   ```
 
 ## Each release
 
