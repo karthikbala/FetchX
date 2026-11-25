@@ -36,7 +36,8 @@ from .client import FetchX
 
 FETCH_FIELDS = frozenset({"url", "method", "headers", "body", "body_base64", "render", "wait_for", "scroll", "country",
                           "route", "formats", "block_resources", "expect", "extract", "max_attempts", "fix_headers",
-                          "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key", "tags", "capture"})
+                          "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key", "tags", "capture",
+                          "redirect", "all_headers"})
 NEXT_FIELDS = frozenset({"scroll", "expect", "capture", "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key",
                          "tags"})
 FORMATS = frozenset({"body", "markdown", "text", "links", "metadata", "skeleton", "screenshot"})
@@ -345,6 +346,10 @@ class FakeFetchX:
         key = body.get("idempotency_key")
         if key is not None and not isinstance(key, str):
             return _invalid("idempotency_key")
+        if body.get("redirect", "follow") not in ("follow", "manual"):
+            return _invalid("redirect")
+        if not isinstance(body.get("all_headers", False), bool):
+            return _invalid("all_headers")
         return None
 
     def _replay(self, key: str, body: dict, scope: str = "") -> Optional[httpx.Response]:
@@ -944,7 +949,7 @@ class FakeFetchX:
                 "limits": {"credits_per_day": None, "credits_per_month": None, "expires_at": None},
                 "concurrency": {"requests": {"limit": 10, "running": 0}},
                 "features": ["batches", "capture", "estimate", "extract", "feedback", "key_limits", "limits",
-                             "next_page", "usd"]}
+                             "next_page", "redirect_manual", "usd"]}
 
     def _post_feedback(self, body: Any) -> httpx.Response:
         if not isinstance(body, dict):

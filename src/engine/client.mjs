@@ -6,7 +6,7 @@
 // started.
 import {GatewayError} from '../policy.mjs';
 
-export const ENGINE_CONTRACT = '1.12';
+export const ENGINE_CONTRACT = '1.13';
 const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH']);
 // 503 answers that are refusals: nothing was started, and the caller is told why.
 const REFUSED_503 = new Set(['extract_unavailable']);

@@ -4882,6 +4882,7 @@
             "key_limits",
             "limits",
             "next_page",
+            "redirect_manual",
             "usd"
            ]
           }
@@ -5790,6 +5791,20 @@
         "$ref": "#/components/schemas/CaptureSettings"
        }
       ]
+     },
+     "redirect": {
+      "type": "string",
+      "enum": [
+       "follow",
+       "manual"
+      ],
+      "default": "follow",
+      "description": "follow: follow redirects (up to 5, each hop checked); data.redirects lists them. manual: answer with the redirect itself, for a login that answers 302 with its cookies: data.status_code is the 3xx, data.final_url the request URL and data.location where it points, and the cookies it set are in data.cookies. Manual is HTTP only: auto mode uses no browser, and render always, route.render, wait_for, screenshot, a number of screens and capture are refused (invalid_request, field redirect)."
+     },
+     "all_headers": {
+      "type": "boolean",
+      "default": false,
+      "description": "Return the response's headers as sent in data.raw_headers: in order, with duplicates (each Set-Cookie) and, over HTTP, the site's own casing."
      }
     }
    },
@@ -6261,7 +6276,57 @@
       "items": {
        "$ref": "#/components/schemas/Cookie"
       },
-      "description": "Cookies the site set, for multi-step flows."
+      "description": "Cookies the site set, for multi-step flows: those for the final URL, then those a redirect hop set for another host or path. Over HTTP each cookie a hop wrote says which (hop, 0 for the first response, see redirects); the last write per name, domain and path wins, and a cookie a hop expired is left out."
+     },
+     "redirects": {
+      "type": "array",
+      "description": "Over HTTP: the redirects followed, in order, each with the URL that answered, its status, where it pointed and the names of the cookies it set. Empty when the first response was the answer. Not on browser results.",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "url",
+        "status_code",
+        "location",
+        "set_cookie_names"
+       ],
+       "properties": {
+        "url": {
+         "type": "string"
+        },
+        "status_code": {
+         "type": "integer"
+        },
+        "location": {
+         "type": "string"
+        },
+        "set_cookie_names": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     "location": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "With redirect: manual, when the answer is a redirect: its Location, resolved against the request URL (null when it is not a URL)."
+     },
+     "raw_headers": {
+      "type": "array",
+      "description": "With all_headers: the response's headers as [name, value] pairs, in the order sent, with duplicates (each Set-Cookie). Over HTTP the site's casing is kept; a browser reports names lowercased. At most 200 pairs, values cut at 8 KB.",
+      "items": {
+       "type": "array",
+       "minItems": 2,
+       "maxItems": 2,
+       "items": {
+        "type": "string"
+       }
+      }
      },
      "next_page": {
       "oneOf": [
@@ -6444,6 +6509,11 @@
      "expires": {
       "type": "string",
       "format": "date-time"
+     },
+     "hop": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Over HTTP: the response that set it, 0 for the first (see redirects). Left out for a cookie FetchX already had."
      }
     }
    },
@@ -8757,7 +8827,7 @@
       "items": {
        "type": "string"
       },
-      "description": "What this FetchX supports, by feature id, so a client can check before relying on a newer feature: batches, capture (network capture), estimate, extract, feedback, key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), next_page, usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation."
+      "description": "What this FetchX supports, by feature id, so a client can check before relying on a newer feature: batches, capture (network capture), estimate, extract, feedback, key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation."
      }
     }
    },

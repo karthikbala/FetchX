@@ -8,15 +8,27 @@
     {
       "version": "1.13.0",
       "date": "2026-11-25",
-      "title": "Concurrency, USD prices and feature ids",
+      "title": "Manual redirects, concurrency, USD prices and feature ids",
       "changes": [
+        {
+          "type": "added",
+          "text": "POST /v1/fetch takes redirect: manual, to get a redirect itself instead of where it leads (a login that answers 302 with its cookies): data.status_code is the 3xx, data.final_url the request URL and data.location where it points. Manual redirects are HTTP only. Feature id redirect_manual."
+        },
+        {
+          "type": "added",
+          "text": "Over HTTP, data.redirects lists the redirects followed (URL, status, where each pointed, the names of the cookies it set), and data.cookies has the cookies every hop set, each with the hop that set it, not only those for the final URL."
+        },
+        {
+          "type": "added",
+          "text": "POST /v1/fetch takes all_headers: true, which returns the response's headers as sent in data.raw_headers: in order, with each Set-Cookie, and over HTTP the site's own casing."
+        },
         {
           "type": "added",
           "text": "GET /v1/me has concurrency: the project's requests-at-once limit (requests.limit, 10 unless raised) and how many are running now (requests.running). It counts every kind of request, HTTP or browser, next pages and batch items included."
         },
         {
           "type": "added",
-          "text": "GET /v1/me has features: what this FetchX supports, by feature id (batches, capture, estimate, extract, feedback, key_limits, limits, next_page, usd). Check for an id before relying on a newer feature; new ids are listed here as they ship."
+          "text": "GET /v1/me has features: what this FetchX supports, by feature id (batches, capture, estimate, extract, feedback, key_limits, limits, next_page, redirect_manual, usd). Check for an id before relying on a newer feature; new ids are listed here as they ship."
         },
         {
           "type": "changed",

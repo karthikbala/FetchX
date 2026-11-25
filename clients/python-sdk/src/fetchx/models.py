@@ -305,7 +305,24 @@ class FetchResult(Model):
 
     @property
     def cookies(self) -> List[dict]:
+        """Cookies the site set: ``name``, ``value``, ``domain``, ``path``, ``expires`` and, over HTTP, the ``hop``
+        that set it (0 for the first response)."""
         return self.data.get("cookies") or []
+
+    @property
+    def redirects(self) -> List[dict]:
+        """Over HTTP: the redirects followed (``url``, ``status_code``, ``location``, ``set_cookie_names``)."""
+        return list(self.data.get("redirects") or [])
+
+    @property
+    def location(self) -> Optional[str]:
+        """With ``redirect="manual"``: where the redirect that answered points."""
+        return self.data.get("location")
+
+    @property
+    def raw_headers(self) -> List[List[str]]:
+        """With ``all_headers=True``: the response's headers as ``[name, value]`` pairs, as sent."""
+        return [list(pair) for pair in self.data.get("raw_headers") or []]
 
     @property
     def rendered(self) -> bool:

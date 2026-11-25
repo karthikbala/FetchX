@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FetchX engine private API",
-    "version": "1.12",
+    "version": "1.13",
     "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). POST /internal/v1/estimates says what requests would take before they are sent (planned tiers, per-host history and pace), for the platform to price. Batches are the platform's: it checks a batch's requests with POST /internal/v1/requests/check, asks POST /internal/v1/pace how fast each host may take work, and starts each item as a paced job (JobInput.paced), which the engine refuses with host_busy when the host has no free slot. info.version is the contract version; GET /internal/v1/status and /healthz report it."
   },
   "security": [
@@ -2516,7 +2516,57 @@
             "items": {
               "$ref": "#/components/schemas/Cookie"
             },
-            "description": "Cookies the site set, for multi-step flows."
+            "description": "Cookies the site set, for multi-step flows: those for the final URL, then those a redirect hop set for another host or path. On an HTTP step each cookie a hop wrote says which (hop, 0 for the first response); the last write per name, domain and path wins, and a cookie a hop expired is left out."
+          },
+          "redirects": {
+            "type": "array",
+            "description": "HTTP steps only: the redirects followed, in order, each with the URL that answered, its status, where it pointed and the names of the cookies it set. Empty when the first response was the answer.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "url",
+                "status_code",
+                "location",
+                "set_cookie_names"
+              ],
+              "properties": {
+                "url": {
+                  "type": "string"
+                },
+                "status_code": {
+                  "type": "integer"
+                },
+                "location": {
+                  "type": "string"
+                },
+                "set_cookie_names": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With redirect: manual, when the answer is a redirect: its Location, resolved against the request URL (null when it is not a URL)."
+          },
+          "raw_headers": {
+            "type": "array",
+            "description": "With all_headers: the response's headers as [name, value] pairs, in the order sent, with duplicates (each Set-Cookie). An HTTP step keeps the site's casing; a browser step reports what the browser gives, lowercased. At most 200 pairs, values cut at 8 KB.",
+            "items": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "string"
+              }
+            }
           },
           "body": {
             "type": "string",
@@ -2676,6 +2726,11 @@
           "expires": {
             "type": "string",
             "format": "date-time"
+          },
+          "hop": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "HTTP steps: the response that set it, 0 for the first (see redirects). Left out for a cookie the attempt already had."
           }
         }
       },
@@ -2764,7 +2819,7 @@
           },
           "challenge": {
             "type": "string",
-            "description": "On a blocked or rate-limited step, the bot-protection vendor whose wall it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf, kasada; or arkose, recaptcha, hcaptcha when only its captcha says)."
+            "description": "On a blocked or rate-limited step, the bot-protection vendor whose wall it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf, kasada; or arkose, recaptcha, hcaptcha, mtcaptcha when only its captcha says)."
           },
           "missing": {
             "type": "array",
@@ -3279,6 +3334,20 @@
                 "$ref": "#/components/schemas/CaptureSettings"
               }
             ]
+          },
+          "redirect": {
+            "type": "string",
+            "enum": [
+              "follow",
+              "manual"
+            ],
+            "default": "follow",
+            "description": "follow: follow redirects (up to 5, each hop checked). manual: answer with the redirect itself: data.status_code is the 3xx, data.final_url the request URL and data.location where it points. Manual is HTTP only: auto mode uses no browser, and render always, route.render, wait_for, screenshot, a number of screens and capture are refused (invalid_request, field redirect). Cookies the 3xx sets come back in data.cookies."
+          },
+          "all_headers": {
+            "type": "boolean",
+            "default": false,
+            "description": "Return the response's headers as sent in data.raw_headers: in order, with duplicates (each Set-Cookie) and, on HTTP steps, the site's casing."
           }
         },
         "description": "The customer request exactly as the platform received it on POST /v1/fetch."
@@ -3441,7 +3510,7 @@
               "string",
               "null"
             ],
-            "description": "The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, kasada, or the captcha provider when nothing else names one: arkose, recaptcha, hcaptcha), named from the wall page, its headers and cookies, also when the wall came as a rate limit (429); null when nothing said."
+            "description": "The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, kasada, or the captcha provider when nothing else names one: arkose, recaptcha, hcaptcha, mtcaptcha), named from the wall page, its headers and cookies, also when the wall came as a rate limit (429); null when nothing said."
           },
           "walls": {
             "type": "integer",

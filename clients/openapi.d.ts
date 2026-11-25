@@ -682,6 +682,17 @@ export interface components {
             tags?: string[];
             /** @description Record the page's own network calls (its documents, XHR and fetch requests) while a browser renders it, and keep them with the result for as long as its other content (7 days). Read them with GET /v1/fetch/{id}/network, /v1/fetch/{id}/network/{index} and /v1/fetch/{id}/network.har. true records with the defaults; false or null records nothing. capture needs a browser, so with render: auto it makes the request render, and it is refused (invalid_request, details.field capture) with render: never, a method other than GET, or a route whose render is false. Free: it adds nothing to the price. When several browsers are tried, the calls are the last browser attempt's, also when the request fails. */
             capture?: boolean | null | components["schemas"]["CaptureSettings"];
+            /**
+             * @description follow: follow redirects (up to 5, each hop checked); data.redirects lists them. manual: answer with the redirect itself, for a login that answers 302 with its cookies: data.status_code is the 3xx, data.final_url the request URL and data.location where it points, and the cookies it set are in data.cookies. Manual is HTTP only: auto mode uses no browser, and render always, route.render, wait_for, screenshot, a number of screens and capture are refused (invalid_request, field redirect).
+             * @default follow
+             * @enum {string}
+             */
+            redirect?: "follow" | "manual";
+            /**
+             * @description Return the response's headers as sent in data.raw_headers: in order, with duplicates (each Set-Cookie) and, over HTTP, the site's own casing.
+             * @default false
+             */
+            all_headers?: boolean;
         };
         /** @description What may change for a next page. Everything else (headers, formats, country, render, wait_for, block_resources) comes from the earlier request, and the cookies the site set on the earlier page are sent with it. An empty object is fine. */
         NextPageRequest: {
@@ -818,8 +829,19 @@ export interface components {
             headers?: {
                 [key: string]: string;
             };
-            /** @description Cookies the site set, for multi-step flows. */
+            /** @description Cookies the site set, for multi-step flows: those for the final URL, then those a redirect hop set for another host or path. Over HTTP each cookie a hop wrote says which (hop, 0 for the first response, see redirects); the last write per name, domain and path wins, and a cookie a hop expired is left out. */
             cookies?: components["schemas"]["Cookie"][];
+            /** @description Over HTTP: the redirects followed, in order, each with the URL that answered, its status, where it pointed and the names of the cookies it set. Empty when the first response was the answer. Not on browser results. */
+            redirects?: {
+                url: string;
+                status_code: number;
+                location: string;
+                set_cookie_names: string[];
+            }[];
+            /** @description With redirect: manual, when the answer is a redirect: its Location, resolved against the request URL (null when it is not a URL). */
+            location?: string | null;
+            /** @description With all_headers: the response's headers as [name, value] pairs, in the order sent, with duplicates (each Set-Cookie). Over HTTP the site's casing is kept; a browser reports names lowercased. At most 200 pairs, values cut at 8 KB. */
+            raw_headers?: string[][];
             /** @description On successful results: how the page leads on, or null when FetchX found no next page. Gone with the rest of the content after 7 days or DELETE. */
             next_page?: components["schemas"]["NextPage"] | null;
             /** @description The body: utf-8 text, or base64 for binary. Only when formats has body (the default); left out on reads with include_body=false, and when it is too large to inline (see body_url). */
@@ -877,6 +899,8 @@ export interface components {
             path: string;
             /** Format: date-time */
             expires?: string;
+            /** @description Over HTTP: the response that set it, 0 for the first (see redirects). Left out for a cookie FetchX already had. */
+            hop?: number;
         };
         /** @description formats: metadata. */
         PageMetadata: {
@@ -1539,7 +1563,7 @@ export interface components {
                     running: number;
                 };
             };
-            /** @description What this FetchX supports, by feature id, so a client can check before relying on a newer feature: batches, capture (network capture), estimate, extract, feedback, key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), next_page, usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation. */
+            /** @description What this FetchX supports, by feature id, so a client can check before relying on a newer feature: batches, capture (network capture), estimate, extract, feedback, key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation. */
             features: string[];
         };
         /** @description One of the key's credit limits and where the key stands against it now. */
