@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {FetchXClient, FetchXError} from '../clients/javascript.mjs';
 import {databaseUrl, html, openStore, platformFor, PROJECT, TOKEN} from './helpers.mjs';
 import {Ledger} from '../src/billing/ledger.mjs';
+import {FEATURES} from '../src/api/version.mjs';
 
 const skip = !databaseUrl;
 // A fetch() that calls the app in-process; `before` and `after` can fake a lost reply.
@@ -67,7 +68,8 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   assert.equal((await client.networkHar(captured.id)).log.version, '1.2');
   await assert.rejects(client.network(page.id), {code: 'capture_not_found', status: 404});
   assert.deepEqual(await client.me(), {project_id: PROJECT, key_id: null, key_name: null, key_prefix: null,
-    scopes: ['fetch:write', 'fetch:read', 'usage:read'], limits: {credits_per_day: null, credits_per_month: null, expires_at: null}});
+    scopes: ['fetch:write', 'fetch:read', 'usage:read'], limits: {credits_per_day: null, credits_per_month: null, expires_at: null},
+    concurrency: {requests: {limit: 10, running: 0}}, features: [...FEATURES]});
   const report = await client.sendFeedback({fetch_id: captured.id, kind: 'wrong_content', message: 'Prices missing.', evidence: {status_code: 200}});
   assert.deepEqual([report.status, report.fetch_id, report.evidence], ['received', captured.id, {status_code: 200}]);
   assert.equal((await client.getFeedback(report.id)).id, report.id);

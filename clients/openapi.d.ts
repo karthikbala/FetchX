@@ -1026,6 +1026,13 @@ export interface components {
             purchased: number;
             /** @description True while spending is paused over a payment issue. */
             payment_hold: boolean;
+            /** @description What one credit costs in USD: the list price per credit of the pack this project bought last (whichever currency it paid in), or of the smallest pack when it has bought none. Trial and granted credits are not counted. Null for an unmetered project. */
+            usd_per_credit: number | null;
+            /**
+             * @description The currency of usd_per_credit.
+             * @constant
+             */
+            currency: "USD";
         };
         /** @description One POST /v1/fetch body, or a batch body: items (URLs, or requests with url) merged over defaults. async, webhook_url and idempotency_key are set once for a batch, never in defaults or an item. */
         EstimateRequest: components["schemas"]["FetchRequest"] | components["schemas"]["EstimateBatch"];
@@ -1523,6 +1530,17 @@ export interface components {
                  */
                 expires_at: string | null;
             };
+            /** @description The project's concurrency limit. requests: how many of the project's requests may run at once, of any kind (HTTP or browser, next pages and batch items included), and how many are running now. Past it, POST /v1/fetch and POST /v1/fetch/{id}/next answer 429 too_many_requests with error.details.limit "requests". There is no separate limit for browser requests. A running batch leaves one of them free for single requests. Ask FetchX support to raise it. */
+            concurrency: {
+                requests: {
+                    /** @description Requests that may run at once. */
+                    limit: number;
+                    /** @description Requests running now. */
+                    running: number;
+                };
+            };
+            /** @description What this FetchX supports, by feature id, so a client can check before relying on a newer feature: batches, capture (network capture), estimate, extract, feedback, key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), next_page, usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation. */
+            features: string[];
         };
         /** @description One of the key's credit limits and where the key stands against it now. */
         KeyLimit: {
@@ -1650,7 +1668,7 @@ export interface components {
             /** @description Traffic included in the step's price, in MB; each started MB past it costs traffic.credits_per_mb. Null: traffic is not charged on this step. */
             included_mb: number | null;
         };
-        /** @description FetchX's price table, in credits. */
+        /** @description FetchX's price table, in credits, and the credit packs that buy them. */
         Prices: {
             /** @constant */
             unit: "credits";
@@ -1680,6 +1698,16 @@ export interface components {
                 /** @description The most extraction adds to one page. */
                 max_credits: number;
             };
+            /** @description The credit packs on sale, smallest first. Credits never expire; a project's balance holds whatever it bought, in either currency. */
+            packs: {
+                credits: number;
+                /** @description Price in USD, by card. Null when not sold in USD. */
+                usd: number | null;
+                /** @description Price in INR, by UPI. Null when not sold in INR. */
+                inr: number | null;
+                /** @description usd divided by credits. */
+                usd_per_credit: number | null;
+            }[];
             /** @description Trial credits a new account gets once, on its first project. They share one balance with purchased credits and pay for every step. Null when this server grants none. */
             trial_credits: number | null;
             /** @description Credit packs and their prices in your currency. */
@@ -1845,7 +1873,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The project has too many requests running. Wait `retry_after_seconds`. */
+            /** @description The project has too many requests running (error.details.limit names the limit: requests; max is the limit, running what runs now; see GET /v1/me concurrency). Wait retry_after_seconds. */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -2099,7 +2127,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The project has too many requests running. Wait `retry_after_seconds`. */
+            /** @description The project has too many requests running (error.details.limit names the limit: requests; max is the limit, running what runs now; see GET /v1/me concurrency). Wait retry_after_seconds. */
             429: {
                 headers: {
                     [name: string]: unknown;

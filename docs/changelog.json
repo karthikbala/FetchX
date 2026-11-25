@@ -6,6 +6,33 @@
   },
   "releases": [
     {
+      "version": "1.13.0",
+      "date": "2026-11-25",
+      "title": "Concurrency, USD prices and feature ids",
+      "changes": [
+        {
+          "type": "added",
+          "text": "GET /v1/me has concurrency: the project's requests-at-once limit (requests.limit, 10 unless raised) and how many are running now (requests.running). It counts every kind of request, HTTP or browser, next pages and batch items included."
+        },
+        {
+          "type": "added",
+          "text": "GET /v1/me has features: what this FetchX supports, by feature id (batches, capture, estimate, extract, feedback, key_limits, limits, next_page, usd). Check for an id before relying on a newer feature; new ids are listed here as they ship."
+        },
+        {
+          "type": "changed",
+          "text": "429 too_many_requests on POST /v1/fetch and POST /v1/fetch/{id}/next names the limit it hit: error.details.limit is requests, with max (the limit) and running, next to retry_after_seconds."
+        },
+        {
+          "type": "added",
+          "text": "GET /v1/balance has usd_per_credit and currency (USD): what one credit costs in USD, from the pack the project bought last, or the smallest pack when it has bought none."
+        },
+        {
+          "type": "added",
+          "text": "GET /v1/prices has packs: each credit pack on sale with its credits, its price in USD and INR, and its USD price per credit."
+        }
+      ]
+    },
+    {
       "version": "1.12.0",
       "date": "2026-11-23",
       "title": "Capped keys and one-step approval in Connect",

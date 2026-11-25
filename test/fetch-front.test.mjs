@@ -58,7 +58,13 @@ test('a successful fetch is charged once, at the price of the step the engine re
   assert.equal((await call('GET', '/v1/fetch/00000000-0000-4000-8000-000000000000')).status, 404);
   const usage = await call('GET', '/v1/usage');
   assert.equal(usage.body.balance.credits, 99);
-  assert.deepEqual((await call('GET', '/v1/balance')).body, {credits: 99, reserved: 0, trial: 100, purchased: 0, payment_hold: false});
+  // No pack bought: a credit is priced at the smallest pack's USD list price.
+  assert.deepEqual((await call('GET', '/v1/balance')).body, {credits: 99, reserved: 0, trial: 100, purchased: 0, payment_hold: false,
+    usd_per_credit: 0.0002, currency: 'USD'});
+  // After a purchase, the pack bought last prices a credit, whatever currency paid for it.
+  await store.pool.query(`INSERT INTO paid_credit_grants (project, account_id, mode, checkout_session_id, payment_intent_id, credits,
+    amount_minor, currency) VALUES ($1, 'acct_test', 'live', 'cs_live_usd1', 'pi_usd1', 50000, 75000, 'inr')`, [PROJECT]);
+  assert.equal((await call('GET', '/v1/balance')).body.usd_per_credit, 0.00016);
   // Formats decide what comes back: markdown alone leaves the body out (it stays at /content).
   const lean = await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/p/3', formats: ['markdown']}});
   assert.equal(lean.body.data.body, undefined);
@@ -285,9 +291,11 @@ test('a project with too many jobs running is told to wait', {skip}, async t => 
   const {call, engine} = await platformFor(store, {config: testConfig({fetchLimits: {maxConcurrentPerProject: 2}}), script: () => ({hold: gate})});
   const job = n => ({url: `https://slow.example.com/${n}`, async: true, max_credits: 1});
   for (const n of [1, 2]) assert.equal((await call('POST', '/v1/fetch', {body: job(n)})).status, 202);
+  assert.deepEqual((await call('GET', '/v1/me')).body.concurrency, {requests: {limit: 2, running: 2}});
   const busy = await call('POST', '/v1/fetch', {body: job(3)});
   assert.equal(busy.status, 429);
   assert.equal(busy.body.error.code, 'too_many_requests');
+  assert.deepEqual(busy.body.error.details, {limit: 'requests', max: 2, running: 2, retry_after_seconds: 5});
   assert.equal(busy.headers['retry-after'], '5');
   release();
   await Promise.all([...engine.jobs.values()].map(job => job.done));

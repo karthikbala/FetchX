@@ -22,9 +22,9 @@ The contract is [`openapi.json`](openapi.json); `test/api-contract.test.mjs` hol
 | `GET /v1/batches/{id}` | `fetch:read` | The batch: status, item counts, credits charged |
 | `GET /v1/batches/{id}/items` | `fetch:read` | Its items with their results: `order=index` (default) or `order=finished` (a feed), `status`, `results`, `limit`, `cursor` |
 | `POST /v1/batches/{id}/cancel` | `fetch:write` | Stop the items that have not started |
-| `GET /v1/balance` | `usage:read` | Credits available now, reserved, trial and purchased, and whether a payment hold is on |
+| `GET /v1/balance` | `usage:read` | Credits available now, reserved, trial and purchased, whether a payment hold is on, and `usd_per_credit` (the pack bought last, else the smallest pack) |
 | `GET /v1/usage` | `usage:read` | Balance and usage for a day, a month or a range |
-| `GET /v1/me` | any valid key | The calling project (`project_id`, the same after a key is rotated) and key (`key_id`, `key_name`, `key_prefix`, `scopes`), and the key's `limits` with what it has used |
+| `GET /v1/me` | any valid key | The calling project (`project_id`, the same after a key is rotated) and key (`key_id`, `key_name`, `key_prefix`, `scopes`), the key's `limits` with what it has used, the project's `concurrency` (`requests.limit` and `requests.running`) and the server's `features` |
 | `POST /v1/feedback` | `fetch:write` | Report how FetchX handled a page: `fetch_id` or `url`, `kind`, `message`, `evidence`. 201 new, 200 for the same open report. Free, 100 a day per project |
 | `GET /v1/feedback/{id}` | `fetch:read` | A report's `status` (received, reviewing, resolved, dismissed) and staff's `reply` |
 | `POST /v1/estimate` | `fetch:write` | What a request, or a batch of up to 1,000, would cost and how long it would take. Nothing is sent, reserved or charged |
@@ -83,6 +83,10 @@ Each item gets `credits` (`typical` and `high` for one success, `expected` weigh
 `src/status.mjs` keeps operators' notices (`status_notices`: incidents and maintenance, with timed updates) and builds `GET /v1/status`. A maintenance notice with `pause_api` makes every `/v1` route except `GET /v1/status` answer `503 maintenance` with `Retry-After` while it is active (`registerLifecycle` in `src/api/lifecycle.mjs`). Operators post and resolve notices in the admin portal's Status tab (`/control/admin/notices`). The status page at fetchx.ai/status does not depend on the gateway; see [operations](operations.md#status-page-and-maintenance).
 
 [`changelog.json`](changelog.json) is the record of what changed, newest first. `retired` entries make a route answer `410 route_retired` with `error.details.replacement`; `deprecations` add `Deprecation` (RFC 9745), `Sunset` (RFC 8594) and `Link: rel="deprecation"` headers to a route that still works. Any other unknown route answers `404 route_not_found` with links to the docs, changelog and status page. The website's `/changelog`, `/changelog.json` and `/changelog.xml` are built from the same file, and `API_VERSION` (`src/api/version.mjs`) is its newest release.
+
+## Features and concurrency
+
+`GET /v1/me` lists `features` (`FEATURES` in `src/api/version.mjs`): ids a client checks before relying on a newer feature. Add a feature's id in the release that ships it, with a changelog line; removing one is a breaking change and goes through a deprecation. `concurrency.requests` is the admission limit (`fetch.maxConcurrentPerProject`, or the project's own `maxConcurrentRequests`) and the project's pending settlements, the count admission compares with it; a refusal is `429 too_many_requests` with `details.limit: requests`, `max` and `running`. `GET /v1/prices` lists the credit packs (`PACKS` in `src/billing/ledger.mjs`, from the Stripe broker's `PACK_OFFERS`).
 
 ## Errors
 

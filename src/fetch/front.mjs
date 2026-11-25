@@ -193,7 +193,7 @@ export class FetchFront {
     // Why allowed_steps is empty, so the engine's budget_too_low can be told
     // back to the caller as the reason it really is. Refusing here instead would
     // stop idempotent replays of finished jobs from returning their results.
-    const admission = {reserved: null, available: null, held: false, busy: null, key: null};
+    const admission = {reserved: null, available: null, held: false, busy: null, cap: null, key: null};
     let allowed = null;
     const reserved = await this.store.tx(async client => {
       await this.ledger.lock(client, project);
@@ -203,9 +203,10 @@ export class FetchFront {
         VALUES ($1, $2, $3, clock_timestamp() + make_interval(secs => $4), $5)`,
         [id, project, keyId, this.limits.provisionalDeadlineMs / 1000, billing.extract]);
       if (claim && !(await claim(client, id))) throw CLAIM_LOST;
-      const cap = this.config.projects?.[project]?.maxConcurrentRequests ?? budget(this.config, 'fetch.maxConcurrentPerProject');
+      const cap = this.#concurrencyLimit(project);
       if (running >= cap) {
         admission.busy = running;
+        admission.cap = cap;
         allowed = [];
         return;
       }
@@ -268,9 +269,13 @@ export class FetchFront {
     return this.#viewOf(project, envelope);
   }
 
-  #budgetError(error, billing, {held, busy, available, key}) {
+  #budgetError(error, billing, {held, busy, cap, available, key}) {
     const {maxCredits} = billing;
-    if (busy !== null) return Object.assign(new GatewayError('too_many_requests', 429), {details: {retry_after_seconds: 5, running: busy}});
+    // details.limit names the limit that was reached (GET /v1/me concurrency).
+    if (busy !== null) {
+      return Object.assign(new GatewayError('too_many_requests', 429),
+        {details: {limit: 'requests', max: cap, running: busy, retry_after_seconds: 5}});
+    }
     if (held) return new GatewayError('payment_hold', 402);
     const table = this.ledger.prices;
     const planned = (error.details?.planned_steps ?? []).filter(step => STEPS.includes(step));
@@ -411,11 +416,26 @@ export class FetchFront {
       extractTokens: settlement.extract_tokens === null || settlement.extract_tokens === undefined ? null : Number(settlement.extract_tokens)});
   }
 
-  // The project's credits now, for GET /v1/balance.
+  // The project's credits now, for GET /v1/balance, with what a credit costs in USD.
   async balance(project) {
     const balance = await this.ledger.balance(project);
+    const usd = {usd_per_credit: balance ? await this.ledger.usdPerCredit(project) : null, currency: 'USD'};
     return balance ? {credits: balance.available, reserved: balance.reserved, trial: balance.trial, purchased: balance.purchased,
-      payment_hold: balance.held} : {credits: null, reserved: 0, trial: 0, purchased: 0, payment_hold: false};
+      payment_hold: balance.held, ...usd} : {credits: null, reserved: 0, trial: 0, purchased: 0, payment_hold: false, ...usd};
+  }
+
+  // Requests a project may have running at once, of any kind.
+  #concurrencyLimit(project) {
+    return this.config.projects?.[project]?.maxConcurrentRequests ?? budget(this.config, 'fetch.maxConcurrentPerProject');
+  }
+
+  // The project's concurrency limit and what runs now, for GET /v1/me. Running
+  // requests are those admission counts: every request still unsettled,
+  // batch items included.
+  async concurrency(project) {
+    const running = (await this.store.pool.query(`SELECT count(*)::int AS n FROM fetch_settlements WHERE project = $1 AND status = 'pending'`,
+      [project])).rows[0].n;
+    return {requests: {limit: this.#concurrencyLimit(project), running}};
   }
 
   async get(project, id, {includeBody = true} = {}) {

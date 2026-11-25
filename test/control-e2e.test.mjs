@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import {randomBytes, randomUUID} from 'node:crypto';
 import pg from 'pg';
 import {Store} from '../src/store.mjs';
+import {FEATURES} from '../src/api/version.mjs';
 import {createPlatform, server} from '../src/server.mjs';
 import {fakeEngine} from './fake-engine.mjs';
 import {SERVICE_TOKEN} from './helpers.mjs';
@@ -174,7 +175,8 @@ test('self-service: identity, isolation, keys, idempotency and success-only cred
       const me = await api('GET', '/v1/me', undefined, readOnly.token);
       assert.equal(me.status, 200, JSON.stringify(me.body));
       assert.deepEqual(me.body, {project_id: projectA.id, key_id: readOnly.key.id, key_name: 'usage only', key_prefix: readOnly.key.prefix,
-        scopes: ['usage:read'], limits: {credits_per_day: null, credits_per_month: null, expires_at: null}});
+        scopes: ['usage:read'], limits: {credits_per_day: null, credits_per_month: null, expires_at: null},
+        concurrency: {requests: {limit: 10, running: 0}}, features: [...FEATURES]});
       assert.equal(readOnly.token.slice(0, 12), me.body.key_prefix);
     });
     const viaKey = await api('POST', '/v1/fetch', {url: 'https://shop.example.com/k'}, keyA.token);

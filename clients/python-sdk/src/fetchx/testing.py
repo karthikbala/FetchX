@@ -915,7 +915,8 @@ class FakeFetchX:
 
     def _balance(self) -> dict:
         return {"credits": self.balance, "reserved": 0, "trial": 0,
-                "purchased": self.balance or 0, "payment_hold": False}
+                "purchased": self.balance or 0, "payment_hold": False,
+                "usd_per_credit": 0.0002 if self.balance is not None else None, "currency": "USD"}
 
     def _usage(self) -> dict:
         finished = [state for state in self._results.values() if state["polls_left"] <= 0]
@@ -940,7 +941,10 @@ class FakeFetchX:
         return {"project_id": self.project_id, "key_id": self.key_id, "key_name": "fake",
                 "key_prefix": key[:12] if key.startswith("fxk_") else None,
                 "scopes": ["fetch:write", "fetch:read", "usage:read"],
-                "limits": {"credits_per_day": None, "credits_per_month": None, "expires_at": None}}
+                "limits": {"credits_per_day": None, "credits_per_month": None, "expires_at": None},
+                "concurrency": {"requests": {"limit": 10, "running": 0}},
+                "features": ["batches", "capture", "estimate", "extract", "feedback", "key_limits", "limits",
+                             "next_page", "usd"]}
 
     def _post_feedback(self, body: Any) -> httpx.Response:
         if not isinstance(body, dict):
@@ -1002,6 +1006,8 @@ class FakeFetchX:
                           "browser_residential": step(25, True, True, ["residential"], 5)},
                 "captcha": {"credits": 10}, "traffic": {"credits_per_mb": 5},
                 "extract": {"credits": 10, "unit_tokens": 25000, "max_tokens": 150000, "max_credits": 60},
+                "packs": [{"credits": c, "usd": usd, "inr": inr, "usd_per_credit": usd / c}
+                          for c, usd, inr in ((10_000, 2, 175), (50_000, 8, 750), (150_000, 20, 1800), (1_000_000, 100, 9000))],
                 "trial_credits": 1000, "pricing_url": "https://fetchx.test/pricing"}
 
     def _tick(self) -> datetime:

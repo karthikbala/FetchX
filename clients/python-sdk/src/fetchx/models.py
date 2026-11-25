@@ -890,6 +890,21 @@ class Me(Model):
         ``limit``, ``used``, ``remaining`` and ``resets_at``, or None) and ``expires_at`` (or None)."""
         return dict(self.raw.get("limits") or {"credits_per_day": None, "credits_per_month": None, "expires_at": None})
 
+    @property
+    def concurrency(self) -> dict:
+        """The project's concurrency limit: ``requests`` with ``limit`` (requests that may run at once, of any kind)
+        and ``running`` (running now). Empty from a server older than API 1.13."""
+        return dict(self.raw.get("concurrency") or {})
+
+    @property
+    def features(self) -> List[str]:
+        """What the server supports, by feature id (API 1.13 and later; empty before)."""
+        return list(self.raw.get("features") or [])
+
+    def supports(self, feature: str) -> bool:
+        """Whether the server lists ``feature`` in ``features``, e.g. ``me.supports("usd")``."""
+        return feature in self.features
+
     def _repr_fields(self):
         return {"project_id": self.project_id, "key_prefix": self.key_prefix, "scopes": self.scopes}
 
@@ -955,6 +970,12 @@ class Balance(Model):
     def payment_hold(self) -> bool:
         return bool(self.raw.get("payment_hold"))
 
+    @property
+    def usd_per_credit(self) -> Optional[float]:
+        """What one credit costs in USD: the list price of the pack the project bought last, or of the smallest
+        pack (None for an unmetered project, or from a server older than API 1.13)."""
+        return self.raw.get("usd_per_credit")
+
     def _repr_fields(self):
         return {"credits": self.credits, "reserved": self.reserved}
 
@@ -1016,6 +1037,11 @@ class Prices(Model):
     def extract(self) -> dict:
         """``credits`` per started ``unit_tokens`` of page text read, up to ``max_tokens`` and ``max_credits``."""
         return dict(self.raw.get("extract") or {})
+
+    @property
+    def packs(self) -> List[dict]:
+        """The credit packs on sale, smallest first: ``credits``, ``usd``, ``inr`` and ``usd_per_credit``."""
+        return list(self.raw.get("packs") or [])
 
     @property
     def trial_credits(self) -> Optional[int]:

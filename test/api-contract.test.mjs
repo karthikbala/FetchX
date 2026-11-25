@@ -7,6 +7,7 @@ import Fastify from 'fastify';
 import Ajv2020 from 'ajv/dist/2020.js';
 import spec from '../docs/openapi.json' with {type: 'json'};
 import {registerApi, API_SCOPES, ANY_SCOPE} from '../src/api/v1.mjs';
+import {FEATURES} from '../src/api/version.mjs';
 import {databaseUrl, html, openStore, platformFor, PROJECT} from './helpers.mjs';
 
 const ajv = new Ajv2020({allErrors: true, strict: false, validateFormats: false});
@@ -172,8 +173,12 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   await expect('delete', `/v1/fetch/${captured.id}`, 204, undefined, one);
   await expect('get', `/v1/fetch/${captured.id}/network`, 410, undefined, network);
   const me = await expect('get', '/v1/me', 200);
-  assert.deepEqual(me, {project_id: PROJECT, key_id: null, key_name: null, key_prefix: null, scopes: ['fetch:write', 'fetch:read', 'usage:read'],
-    limits: {credits_per_day: null, credits_per_month: null, expires_at: null}});
+  const {concurrency, ...who} = me;
+  assert.deepEqual(who, {project_id: PROJECT, key_id: null, key_name: null, key_prefix: null, scopes: ['fetch:write', 'fetch:read', 'usage:read'],
+    limits: {credits_per_day: null, credits_per_month: null, expires_at: null}, features: [...FEATURES]});
+  // Earlier async jobs of this test may still be running.
+  assert.equal(concurrency.requests.limit, 10);
+  assert.ok(Number.isInteger(concurrency.requests.running) && concurrency.requests.running >= 0);
   await expect('get', '/v1/me', 401, {token: 'wrong'});
   const report = await expect('post', '/v1/feedback', 201, {body: {fetch_id: failed.id, kind: 'blocked_via_fetchx_ok_from_home',
     message: 'Loads at home.', evidence: {status_code: 200, client: 'curl from home'}}});
