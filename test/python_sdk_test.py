@@ -307,6 +307,45 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(caught.exception.details["field"], "capture")
         self.assertEqual(client.me().project_id, fake.project_id)
 
+    def test_actions_return_their_results_and_a_failed_one_fails_the_request_for_free(self):
+        portal = "https://portal.example.com"
+        actions = [{"type": "fill", "selector": "#q", "value": "V1"}, {"type": "click", "selector": "#go"},
+                   {"type": "evaluate", "script": "document.title"}]
+        fake = FakeFetchX({f"{portal}/": FakePage("<html>results for V1</html>", actions=[None, None, {"value": "Results"}],
+                                                  blocked_requests=[{"origin": "https://tracker.example.net", "type": "xhr",
+                                                                     "action_index": 1}]),
+                           f"{portal}/form": FakePage("<html>the form</html>", actions=[
+                               None, {"status": "failed", "error": {"code": "selector_not_found",
+                                                                    "message": "Nothing matches #go."}}]),
+                           f"{portal}/gone": FakePage("<html>gone</html>", status_code=404)}, credits=10)
+        client = fake.client()
+        result = client.fetch(url=f"{portal}/", actions=actions, allow_hosts=["portal.example.com"],
+                              allow_passive_subresources=True)
+        self.assertTrue(result.ok)
+        self.assertEqual([entry["status"] for entry in result.actions], ["ok", "ok", "ok"])
+        self.assertEqual((result.action_values, result.credits, result.attempts[0]["transport"]), (["Results"], 10, "browser"))
+        self.assertEqual(result.blocked_requests[0]["origin"], "https://tracker.example.net")
+        self.assertEqual(result.passive_offlist_hosts, [])
+        failed = client.fetch(url=f"{portal}/form", actions=actions)
+        self.assertEqual((failed.error_code, failed.next_action, failed.credits), ("action_failed", "fix_actions", 0))
+        self.assertEqual([entry["status"] for entry in failed.actions], ["ok", "failed", "skipped"])
+        self.assertEqual(failed.failed_action["error"]["code"], "selector_not_found")
+        self.assertIn("the form", failed.body)
+        gone = client.fetch(url=f"{portal}/gone", actions=actions)
+        self.assertEqual([entry.get("error", {}).get("code", entry["status"]) for entry in gone.actions],
+                         ["page_not_ok", "skipped", "skipped"])
+        for request, field in (({"allow_hosts": ["other.example.com"]}, "url"), ({"allow_hosts": []}, "allow_hosts"),
+                               ({"allow_passive_subresources": True}, "allow_passive_subresources"),
+                               ({"actions": actions, "method": "POST"}, "actions"),
+                               ({"actions": actions, "render": "never"}, "render"),
+                               ({"actions": [{"type": "fly"}]}, "actions[0].type"),
+                               ({"actions": [{"type": "fill_secret", "secret": "password"}]}, "actions[0].secret"),
+                               ({"action_timeout_ms": 5000}, "action_timeout_ms")):
+            with self.assertRaises(FetchXError) as caught:
+                client.fetch(url=f"{portal}/", **request)
+            self.assertEqual(caught.exception.details["field"], field, request)
+        self.assertIn("actions", client.me().raw["features"])
+
     def test_a_dict_body_and_a_given_key_replay_the_first_result(self):
         fake = shop()
         client = fake.client()

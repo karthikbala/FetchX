@@ -325,6 +325,36 @@ class FetchResult(Model):
         return [list(pair) for pair in self.data.get("raw_headers") or []]
 
     @property
+    def actions(self) -> List[dict]:
+        """With ``actions``: one result per action, in order (``index``, ``type``, ``status`` ok, failed or
+        skipped, ``ms``, and ``value``, ``error`` or ``response`` when the action has one)."""
+        return list(self.data.get("actions") or [])
+
+    @property
+    def action_values(self) -> List[Any]:
+        """What each ``evaluate`` action returned, in order (the other actions are left out)."""
+        return [entry.get("value") for entry in self.actions if entry.get("type") == "evaluate"]
+
+    @property
+    def failed_action(self) -> Optional[dict]:
+        """With ``action_failed``: the result of the action that failed (its ``error`` says why)."""
+        error = self.raw.get("error") or {}
+        index = (error.get("details") or {}).get("action_index")
+        actions = self.actions
+        return actions[index] if isinstance(index, int) and 0 <= index < len(actions) else None
+
+    @property
+    def blocked_requests(self) -> List[dict]:
+        """With ``allow_hosts``: what was refused for being off the list (``origin``, ``type``, ``action_index``)."""
+        return list(self.data.get("blocked_requests") or [])
+
+    @property
+    def passive_offlist_hosts(self) -> List[str]:
+        """With ``allow_passive_subresources``: the origins off the list the page loaded scripts, styles, fonts or
+        images from."""
+        return list(self.data.get("passive_offlist_hosts") or [])
+
+    @property
     def rendered(self) -> bool:
         return bool(self.data.get("rendered"))
 

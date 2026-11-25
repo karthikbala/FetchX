@@ -8,5 +8,5 @@ export const API_VERSION = changelog.releases[0].version;
 // What this server supports, by feature id (GET /v1/me features). A client
 // checks for an id before relying on a newer feature. Add an id when its
 // feature ships; removing one is a breaking change (see docs/api.md).
-export const FEATURES = Object.freeze(['batches', 'capture', 'estimate', 'extract', 'feedback', 'key_limits', 'limits', 'next_page',
-  'redirect_manual', 'usd']);
+export const FEATURES = Object.freeze(['actions', 'allow_hosts', 'batches', 'capture', 'capture_actions', 'estimate', 'extract', 'feedback',
+  'key_limits', 'limits', 'next_page', 'redirect_manual', 'usd']);

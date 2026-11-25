@@ -30,8 +30,9 @@ export const DEFAULT_LIMITS = Object.freeze({
   maxCredits: 100_000,
   // The engine's response cap; the worst case of a residential step pays for it.
   maxWireBytes: 30_000_000,
-  // A job's deadline before the engine answers (its longest timeout_ms, 180 s, plus slack).
-  provisionalDeadlineMs: 200_000,
+  // A job's deadline before the engine answers (its longest timeout_ms, 300 s
+  // for a request with actions, plus slack).
+  provisionalDeadlineMs: 320_000,
   // How long after its deadline a job with no event is looked up.
   settleGraceMs: 30_000,
   metadataDays: 90,

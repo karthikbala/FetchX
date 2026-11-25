@@ -662,7 +662,7 @@ export interface components {
             /** @description The most this request may cost. Steps that would cost more are skipped. */
             max_credits?: number;
             /**
-             * @description Total time for all attempts. A captcha solve can take up to a minute, so the default leaves room for one; a synchronous call still answers 202 after 60 seconds if the request is not finished.
+             * @description Total time for all attempts. A captcha solve can take up to a minute, so the default leaves room for one; a synchronous call still answers 202 after 60 seconds if the request is not finished. Up to 180000, or 300000 with actions.
              * @default 120000
              */
             timeout_ms?: number;
@@ -693,6 +693,20 @@ export interface components {
              * @default false
              */
             all_headers?: boolean;
+            /** @description Steps for a browser to take, in order, once the page has loaded (its load event, at most 10 s): wait, click, fill, press, select, scroll, navigate, evaluate a script, wait for a response and more. They run in one tab, in one page and one JavaScript realm: what an evaluate leaves on window stays for later actions until the page navigates. Selectors are Playwright CSS and reach into open shadow roots. Actions imply a browser: method must be GET, render must not be never, redirect must not be manual, a route's render defaults to true (false is refused), and a number of screens to scroll is refused (use a scroll action). Only the browser steps of auto mode are used, and a route runs one attempt. The page is not scrolled or read further after the last action: data.body is its DOM then, data.final_url its address and data.status_code the last top-level document's status. expect and extract read that page. A popup or new tab is closed. Billed as one browser step, with nothing per action; a request whose action failed is free. At most 512 KB as JSON in all. */
+            actions?: components["schemas"]["Action"][];
+            /**
+             * @description Only with actions: the timeout_ms of every action that does not give its own.
+             * @default 15000
+             */
+            action_timeout_ms?: number;
+            /** @description The only hosts the request may reach: exact hostnames, or *.suffix for every subdomain of suffix (not suffix itself). The URL's host must be on the list (else 400 url_not_allowed, field url). In a browser it covers every request and connection the page makes (navigations, frames, scripts, XHR and fetch, WebSockets, workers, redirect hops): one to a host off the list is refused before it leaves FetchX and listed in data.blocked_requests by origin. Over HTTP a redirect to a host off the list is not followed: the 3xx is the answer, with data.location. Captcha widgets load from their vendors' hosts, which are off most lists. A navigate action to a host off the list is refused (400, field actions[i].url). */
+            allow_hosts?: string[];
+            /**
+             * @description Only with allow_hosts: let the page load scripts, styles, fonts and images from hosts off the list (GET only, sent without Cookie or Authorization), listed in data.passive_offlist_hosts. Documents, frames, XHR and fetch, WebSockets, beacons, form posts and workers stay on the list.
+             * @default false
+             */
+            allow_passive_subresources?: boolean;
         };
         /** @description What may change for a next page. Everything else (headers, formats, country, render, wait_for, block_resources) comes from the earlier request, and the cookies the site set on the earlier page are sent with it. An empty object is fine. */
         NextPageRequest: {
@@ -842,6 +856,12 @@ export interface components {
             location?: string | null;
             /** @description With all_headers: the response's headers as [name, value] pairs, in the order sent, with duplicates (each Set-Cookie). Over HTTP the site's casing is kept; a browser reports names lowercased. At most 200 pairs, values cut at 8 KB. */
             raw_headers?: string[][];
+            /** @description With actions: one entry per action, in order (null when the step that answered never got to them). */
+            actions?: components["schemas"]["ActionResult"][] | null;
+            /** @description With allow_hosts: what was refused for being off the list, at most 100, each origin and type once per action. */
+            blocked_requests?: components["schemas"]["BlockedRequest"][];
+            /** @description With allow_passive_subresources, on a browser step: the origins off the list the page loaded scripts, styles, fonts or images from. */
+            passive_offlist_hosts?: string[];
             /** @description On successful results: how the page leads on, or null when FetchX found no next page. Gone with the rest of the content after 7 days or DELETE. */
             next_page?: components["schemas"]["NextPage"] | null;
             /** @description The body: utf-8 text, or base64 for binary. Only when formats has body (the default); left out on reads with include_body=false, and when it is too large to inline (see body_url). */
@@ -964,13 +984,17 @@ export interface components {
         };
         FetchError: {
             /** @enum {string} */
-            code: "blocked" | "rate_limited" | "content_missing" | "login_required" | "site_error" | "unreachable" | "cooling_down" | "timeout" | "too_large" | "uncertain" | "route_unavailable" | "url_not_allowed" | "next_page_missing" | "extract_unavailable";
+            code: "blocked" | "rate_limited" | "content_missing" | "login_required" | "site_error" | "unreachable" | "cooling_down" | "timeout" | "too_large" | "uncertain" | "route_unavailable" | "url_not_allowed" | "next_page_missing" | "extract_unavailable" | "action_failed";
             message: string;
             retry_after_seconds?: number;
+            details?: {
+                /** @description action_failed: the action that failed (data.actions[i].error says why). */
+                action_index?: number;
+            };
             /** @description What to do next. A request key replays its first result, failures included, so a retry always needs a new idempotency_key. */
             next: {
                 /** @enum {string} */
-                action: "retry_after" | "retry_later" | "check_expect" | "use_auto" | "provide_credentials" | "check_url" | "raise_timeout" | "render_never" | "recover" | "refetch_previous";
+                action: "retry_after" | "retry_later" | "check_expect" | "use_auto" | "provide_credentials" | "check_url" | "raise_timeout" | "render_never" | "recover" | "refetch_previous" | "fix_actions";
                 /** @description The earliest time a retry can help. */
                 retry_after_seconds?: number;
                 /** @description true: the same request may succeed if sent again with a new idempotency_key (after retry_after_seconds when given). false: sent again unchanged it would fail the same way; change it as action says. */
@@ -1426,10 +1450,10 @@ export interface components {
             /** @description 1 for the first page, 2 for the first POST /v1/fetch/{id}/next, and so on. */
             page: number;
             /**
-             * @description warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page.
+             * @description warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page; actions: while the caller's actions ran.
              * @enum {string}
              */
-            phase: "warmup" | "load" | "scroll" | "replay";
+            phase: "warmup" | "load" | "scroll" | "replay" | "actions";
             /** @enum {string} */
             type: "document" | "xhr" | "fetch" | "script" | "eventsource" | "other";
             method: string;
@@ -1462,6 +1486,10 @@ export interface components {
             error: string | null;
             /** @description With contains: the values this call's response body holds. */
             matched?: string[];
+            /** @description The caller's action that set the call off (see ActionResponse.action_index_started), or null. */
+            action_index?: number | null;
+            /** @description Whether the call finished: false when it failed or was still open when the page was read. */
+            complete?: boolean;
         };
         NetworkList: {
             items: components["schemas"]["NetworkCallRow"][];
@@ -1478,7 +1506,7 @@ export interface components {
              * @description warmup: FetchX's own visit to the site's home page before the page (protected sites); load: the page loading; scroll: after scrolling started; replay: FetchX getting back to the earlier page on a next page.
              * @enum {string}
              */
-            phase: "warmup" | "load" | "scroll" | "replay";
+            phase: "warmup" | "load" | "scroll" | "replay" | "actions";
             /** @enum {string} */
             type: "document" | "xhr" | "fetch" | "script" | "eventsource" | "other";
             /**
@@ -1529,6 +1557,10 @@ export interface components {
             };
             /** @description The index of the call this one is a redirect of. */
             redirected_from: number | null;
+            /** @description The caller's action that set the call off (see ActionResponse.action_index_started), or null. */
+            action_index?: number | null;
+            /** @description Whether the call finished: false when it failed or was still open when the page was read. */
+            complete?: boolean;
         };
         /** @description The project and API key making the call. */
         Me: {
@@ -1563,7 +1595,7 @@ export interface components {
                     running: number;
                 };
             };
-            /** @description What this FetchX supports, by feature id, so a client can check before relying on a newer feature: batches, capture (network capture), estimate, extract, feedback, key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation. */
+            /** @description What this FetchX supports, by feature id, so a client can check before relying on a newer feature: actions (browser actions on POST /v1/fetch), allow_hosts (the host allowlist on POST /v1/fetch), batches, capture (network capture), capture_actions (wait_for_response, and action_index and complete on captured calls), estimate, extract, feedback, key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation. */
             features: string[];
         };
         /** @description One of the key's credit limits and where the key stands against it now. */
@@ -1736,6 +1768,103 @@ export interface components {
             trial_credits: number | null;
             /** @description Credit packs and their prices in your currency. */
             pricing_url: string;
+        };
+        /** @description The frame to act in (default: the top frame): the first whose URL contains url_contains, or the iframe element selector matches. Waited for within the action's timeout; none gives frame_not_found. */
+        ActionFrame: {
+            url_contains?: string;
+            selector?: string;
+        };
+        /** @description One step. Each type takes only its own fields (anything else is refused, invalid_request with details.field actions[i].name). Every action takes frame (not navigate, wait_for_url or wait_for_response), optional (a failed optional action does not stop the others) and timeout_ms (1 to 60000; an evaluate up to the request's timeout_ms). wait: ms (0 to 60000), or selector with state (attached, visible (default), hidden, detached). wait_for_url: url_contains or url_regex, matched against the top frame's URL. click: selector, button (left, right, middle), click_count (1 to 3); scrolls the element into view and waits until it can be clicked. hover: selector. fill: selector (default: the element with the focus, through open shadow roots) and value (up to 64 KB); clears the field and sets the value as typing would (input and change events). fill_secret: as fill, with secret, the name of an entry in the request's secrets (refused until secrets are available). press: key (Enter, Tab, Control+a...), selector optional. select: selector and value or label. scroll: to (top, bottom) or px. navigate: url (https; on allow_hosts when given), in the same tab. evaluate: script (up to 64 KB) run in the page's own world; mode expression (default) gives the completion value of the script, as a console does, and function runs it as a function body with args (JSON up to 64 KB) and gives what it returns. A promise is awaited; the value comes back as JSON (up to 1 MB) in data.actions[i].value. A script that sends the page elsewhere ends ok with value null, and the next action runs in the new document. wait_for_response: url_contains or url_regex, method, status_in (HTTP statuses) and body (text (default) or none); matches the first response, as the browser's network layer saw it, to a request that started after the previous action began (any, for the first action) and that completes, and returns it in data.actions[i].response. type: text typed one key at a time, selector optional, delay_ms (0 to 1000) between keys. */
+        Action: {
+            /** @enum {string} */
+            type: "wait" | "wait_for_url" | "click" | "hover" | "fill" | "fill_secret" | "press" | "select" | "scroll" | "navigate" | "evaluate" | "wait_for_response" | "type";
+            frame?: components["schemas"]["ActionFrame"];
+            /** @default false */
+            optional?: boolean;
+            timeout_ms?: number;
+            ms?: number;
+            selector?: string;
+            /** @enum {string} */
+            state?: "attached" | "visible" | "hidden" | "detached";
+            url_contains?: string;
+            url_regex?: string;
+            /** @enum {string} */
+            button?: "left" | "right" | "middle";
+            click_count?: number;
+            value?: string;
+            label?: string;
+            secret?: string;
+            key?: string;
+            /** @enum {string} */
+            to?: "top" | "bottom";
+            px?: number;
+            url?: string;
+            script?: string;
+            /** @enum {string} */
+            mode?: "expression" | "function";
+            /** @description Any JSON value, only with mode function: the function's args. */
+            args?: unknown;
+            method?: string;
+            status_in?: number[];
+            /** @enum {string} */
+            body?: "text" | "none";
+            text?: string;
+            delay_ms?: number;
+        };
+        /** @description The response a wait_for_response matched, from the browser's network layer (not the page's JavaScript): the exact request URL with its query, and the real HTTP status. */
+        ActionResponse: {
+            /** @description Its index in the network capture, when the request has capture and recorded it. */
+            request_index: number | null;
+            url: string;
+            method: string;
+            status: number;
+            /** @description Lowercased names; Cookie, Set-Cookie, Authorization and secret-named headers masked as in a capture. */
+            headers: {
+                [key: string]: string;
+            };
+            content_type: string | null;
+            /** @description With body text: the body, utf-8 text for text types, else base64; up to 2 MB (8 MB for all of a request's action results). null with body none, or for a response without one. */
+            body: string | null;
+            /** @enum {string|null} */
+            body_encoding: "utf8" | "base64" | null;
+            /** @description The whole body's size. */
+            body_bytes: number | null;
+            /** @description Whether the whole body was read. */
+            complete: boolean;
+            /** @description Whether body holds less than the whole body. */
+            truncated: boolean;
+            /** @description Of the whole body. */
+            sha256: string | null;
+            /** @description The action that set the request off: the one running when it started, or, when that was a wait, the action before it. */
+            action_index_started: number | null;
+        };
+        ActionResult: {
+            index: number;
+            /** @enum {string} */
+            type: "wait" | "wait_for_url" | "click" | "hover" | "fill" | "fill_secret" | "press" | "select" | "scroll" | "navigate" | "evaluate" | "wait_for_response" | "type";
+            /**
+             * @description skipped: an earlier action that was not optional failed, or the page did not answer 2xx.
+             * @enum {string}
+             */
+            status: "ok" | "failed" | "skipped";
+            ms: number;
+            /** @description evaluate only: the script's result as JSON. */
+            value?: unknown;
+            error?: {
+                /** @enum {string} */
+                code: "selector_not_found" | "not_actionable" | "timeout" | "evaluate_error" | "navigation_blocked" | "frame_not_found" | "host_not_allowed" | "secret_not_found" | "secret_origin_mismatch" | "secret_insecure" | "page_not_ok";
+                /** @description What went wrong, with the failing selector at most; for evaluate_error, the script's own error. page_not_ok: the page answered other than 2xx, so no action ran. */
+                message: string;
+            };
+            response?: components["schemas"]["ActionResponse"];
+        };
+        BlockedRequest: {
+            /** @description Scheme, host and port only. */
+            origin: string;
+            /** @description What the request was: a browser resource type (document, script, xhr, fetch...), connection (a socket, worker or redirect hop the relay refused) or redirect (an HTTP redirect). */
+            type: string;
+            /** @description The action that set it off, or null. */
+            action_index: number | null;
         };
     };
     responses: never;
@@ -2906,7 +3035,7 @@ export interface operations {
                 status?: string;
                 /** @description Only calls of that page (1, or a next page). */
                 page?: number;
-                phase?: "warmup" | "load" | "scroll" | "replay";
+                phase?: "warmup" | "load" | "scroll" | "replay" | "actions";
                 /** @description Repeatable. Keeps calls whose response body holds any of the values, without case (a JSON body is also searched as parsed); each row lists the values it matched. Use a few values the page shows (a name, a price) to find the call that carries the data. */
                 contains?: string[];
                 limit?: number;

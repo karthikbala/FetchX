@@ -37,7 +37,8 @@ from .client import FetchX
 FETCH_FIELDS = frozenset({"url", "method", "headers", "body", "body_base64", "render", "wait_for", "scroll", "country",
                           "route", "formats", "block_resources", "expect", "extract", "max_attempts", "fix_headers",
                           "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key", "tags", "capture",
-                          "redirect", "all_headers"})
+                          "redirect", "all_headers", "actions", "action_timeout_ms", "allow_hosts",
+                          "allow_passive_subresources"})
 NEXT_FIELDS = frozenset({"scroll", "expect", "capture", "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key",
                          "tags"})
 FORMATS = frozenset({"body", "markdown", "text", "links", "metadata", "skeleton", "screenshot"})
@@ -46,9 +47,9 @@ FEEDBACK_KINDS = frozenset({"blocked_via_fetchx_ok_from_home", "wrong_content", 
 FEEDBACK_EVIDENCE = frozenset({"status_code", "final_url", "content_type", "body_excerpt", "client"})
 FAILURE_CODES = frozenset({"blocked", "rate_limited", "content_missing", "login_required", "site_error", "unreachable",
                            "cooling_down", "timeout", "too_large", "uncertain", "route_unavailable", "url_not_allowed",
-                           "next_page_missing", "extract_unavailable"})
+                           "next_page_missing", "extract_unavailable", "action_failed"})
 NEXT_ACTIONS = frozenset({"retry_after", "retry_later", "check_expect", "use_auto", "provide_credentials", "check_url",
-                          "raise_timeout", "render_never", "recover", "refetch_previous"})
+                          "raise_timeout", "render_never", "recover", "refetch_previous", "fix_actions"})
 _ATTEMPT_RESULTS = frozenset({"blocked", "rate_limited", "login_required", "site_error", "content_missing",
                               "unreachable", "too_large", "uncertain", "url_not_allowed"})
 FAKE_JPEG = b"\xff\xd8\xff\xe0fake-jpeg\xff\xd9"
@@ -57,6 +58,10 @@ CAPTURE_DEFAULTS: Dict[str, Any] = {"types": ["document", "xhr", "fetch"], "max_
                                     "max_body_bytes": 2_000_000, "bodies": "text", "first_party_only": False,
                                     "include_trackers": False, "unmask": False}
 CAPTURE_NEEDS_BROWSER = "capture records what a browser loads: use render always or auto with GET"
+ACTION_TYPES = frozenset({"wait", "wait_for_url", "click", "hover", "fill", "fill_secret", "press", "select", "scroll",
+                          "navigate", "evaluate", "wait_for_response", "type"})
+_ACTION_RESULT_FIELDS = ("status", "ms", "value", "error", "response")
+_HOST = re.compile(r"^(\*\.)?(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$")
 _CAPTURE_TOTAL_BYTES = 25_000_000
 _INLINE_BODY_BYTES = 1_000_000
 _NETWORK_QUERY = frozenset({"type", "content_type", "host", "first_party", "status", "page", "phase", "contains",
@@ -76,7 +81,8 @@ class FakePage:
                  credits: Optional[int] = None, step: Optional[str] = None, rendered: bool = False,
                  headers: Optional[Dict[str, str]] = None, cookies: Optional[List[dict]] = None,
                  screenshot: Optional[bytes] = None, page_status: Optional[str] = None,
-                 network: Optional[List[dict]] = None):
+                 network: Optional[List[dict]] = None, actions: Optional[List[Optional[dict]]] = None,
+                 blocked_requests: Optional[List[dict]] = None):
         self.content = body.encode("utf-8") if isinstance(body, str) else bytes(body)
         self.status_code = status_code
         self.content_type = content_type
@@ -94,6 +100,12 @@ class FakePage:
         # "request_headers" and "response_headers" (dicts or name/value pairs), "request_body",
         # "frame" (main), "tracker" (False) and "error" (None, or why no response came).
         self.network = network or []
+        # What a request's actions give, by index: dicts with any of "status" (ok, failed), "ms", "value"
+        # (an evaluate's result), "error" ({"code", "message"}) and "response" (a wait_for_response's).
+        # An action with no entry is ok. A failed action that is not optional fails the request, free.
+        self.actions = actions or []
+        # With allow_hosts: what the page tried to reach off the list ({"origin", "type", "action_index"}).
+        self.blocked_requests = blocked_requests or []
 
 
 PageLike = Union[FakePage, str, bytes, Tuple[int, str, Union[str, bytes]], Callable[[dict], Any], None]
@@ -330,7 +342,7 @@ class FakeFetchX:
         url = body.get("url")
         if not isinstance(url, str) or not re.match(r"^https?://[^/\s]+", url):
             return _invalid("url")
-        return self._check_common(body) or _check_capture(body)
+        return self._check_common(body) or _check_capture(body) or _check_actions(body)
 
     def _check_common(self, body: dict) -> Optional[httpx.Response]:
         formats = body.get("formats")
@@ -409,6 +421,8 @@ class FakeFetchX:
             if failure["times"] <= 0:
                 failures.pop(0)
             state.update(failure=failure, charged=0)
+        elif request.get("actions") and _action_results(request, page)[1] is not None:
+            state.update(failure=None, charged=0)
         else:
             state.update(failure=None, charged=price)
             if self.balance is not None:
@@ -465,8 +479,9 @@ class FakeFetchX:
         status_code = page.status_code
         page_status = page.page_status or ("content" if status_code < 400 else
                                            "not_found" if status_code in (404, 410) else "error")
+        acted = bool(request.get("actions"))
         data: Dict[str, Any] = {"status_code": status_code, "final_url": request["url"],
-                                "content_type": page.content_type, "rendered": page.rendered or captured,
+                                "content_type": page.content_type, "rendered": page.rendered or captured or acted,
                                 "body_bytes": len(page.content)}
         if state["deleted"]:
             data["content_expired"] = True
@@ -496,12 +511,29 @@ class FakeFetchX:
                 data["screenshot"] = base64.b64encode(page.screenshot or FAKE_JPEG).decode()
             if "extract" in request:
                 data["extract"] = page.extract
+        if "allow_hosts" in request:
+            data["blocked_requests"] = [dict(entry) for entry in page.blocked_requests]
+            if request.get("allow_passive_subresources") and (acted or captured or page.rendered):
+                data["passive_offlist_hosts"] = []
+        if acted:
+            data["actions"], failed_at = _action_results(request, page)
+            if failed_at is not None:
+                attempt = {"transport": "browser", "class": "datacenter", "country": "US", "result": "failed",
+                           "status_code": status_code, "ms": 100}
+                error = {"code": "action_failed", "message": f"Action {failed_at} failed; data.actions says why.",
+                         "next": {"action": "fix_actions", "retry_with_new_key": False,
+                                  "detail": "Fix the action (data.actions[i].error says what went wrong) and send again."},
+                         "details": {"action_index": failed_at}}
+                return {**base, "status": "failed", "page_status": page_status, "data": data, "error": error,
+                        "attempts": [attempt], "credits": credits}
         step = page.step or self.step
+        if acted and not step.startswith("browser"):
+            step = "browser"
         credits["charged"] = state["charged"]
         credits["breakdown"] = {"step": step, "step_credits": state["charged"], "captcha_credits": 0,
                                 "traffic_mb": 0.1, "included_mb": None, "traffic_credits": 0,
                                 "extract_tokens": None, "extract_credits": 0}
-        attempt = {"transport": "browser" if step.startswith("browser") or captured else "http",
+        attempt = {"transport": "browser" if step.startswith("browser") or captured or acted else "http",
                    "class": "residential" if step.endswith("residential") else "datacenter", "country": "US",
                    "result": "success", "status_code": status_code, "ms": 100}
         return {**base, "status": "succeeded", "page_status": page_status, "data": data, "credits": credits,
@@ -948,8 +980,8 @@ class FakeFetchX:
                 "scopes": ["fetch:write", "fetch:read", "usage:read"],
                 "limits": {"credits_per_day": None, "credits_per_month": None, "expires_at": None},
                 "concurrency": {"requests": {"limit": 10, "running": 0}},
-                "features": ["batches", "capture", "estimate", "extract", "feedback", "key_limits", "limits",
-                             "next_page", "redirect_manual", "usd"]}
+                "features": ["actions", "allow_hosts", "batches", "capture", "capture_actions", "estimate", "extract",
+                             "feedback", "key_limits", "limits", "next_page", "redirect_manual", "usd"]}
 
     def _post_feedback(self, body: Any) -> httpx.Response:
         if not isinstance(body, dict):
@@ -1118,6 +1150,82 @@ def _invalid(field: str) -> httpx.Response:
 
 
 # --------------------------------------------------------------------------- network capture helpers
+
+def _check_actions(request: dict) -> Optional[httpx.Response]:
+    """actions, action_timeout_ms, allow_hosts and allow_passive_subresources, checked as FetchX does (in brief)."""
+    hosts = request.get("allow_hosts")
+    if hosts is not None:
+        if not isinstance(hosts, list) or not 1 <= len(hosts) <= 32 \
+                or not all(isinstance(host, str) and _HOST.match(host.lower()) for host in hosts):
+            return _invalid("allow_hosts")
+        if not _host_allowed(urlsplit(request["url"]).hostname or "", hosts):
+            return _error(400, "url_not_allowed", "The URL's host is not on allow_hosts.", {"field": "url"})
+    passive = request.get("allow_passive_subresources")
+    if passive is not None and (not isinstance(passive, bool) or hosts is None):
+        return _invalid("allow_passive_subresources")
+    actions = request.get("actions")
+    if actions is None:
+        return _invalid("action_timeout_ms") if "action_timeout_ms" in request else None
+    timeout = request.get("action_timeout_ms", 15_000)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1000 <= timeout <= 60_000:
+        return _invalid("action_timeout_ms")
+    if not isinstance(actions, list) or not 1 <= len(actions) <= 50:
+        return _invalid("actions")
+    for index, action in enumerate(actions):
+        if not isinstance(action, dict):
+            return _invalid(f"actions[{index}]")
+        if action.get("type") not in ACTION_TYPES:
+            return _invalid(f"actions[{index}].type")
+        if action["type"] == "fill_secret":
+            return _invalid(f"actions[{index}].secret")
+        if action["type"] == "navigate" and hosts is not None \
+                and not _host_allowed(urlsplit(str(action.get("url") or "")).hostname or "", hosts):
+            return _invalid(f"actions[{index}].url")
+    if str(request.get("method") or "GET").upper() != "GET":
+        return _invalid("actions")
+    for field, refused in (("render", request.get("render") == "never"), ("redirect", request.get("redirect") == "manual"),
+                           ("scroll", isinstance(request.get("scroll"), int) and not isinstance(request.get("scroll"), bool))):
+        if refused:
+            return _invalid(field)
+    route = request.get("route")
+    if isinstance(route, dict) and route.get("render") is False:
+        return _invalid("route.render")
+    return None
+
+
+def _host_allowed(host: str, patterns: List[str]) -> bool:
+    host = host.lower()
+    for pattern in patterns:
+        pattern = pattern.lower()
+        if pattern.startswith("*.") and host.endswith(pattern[1:]) and host != pattern[2:]:
+            return True
+        if host == pattern:
+            return True
+    return False
+
+
+def _action_results(request: dict, page: FakePage) -> Tuple[List[dict], Optional[int]]:
+    """data.actions for a request's actions on a page, and the index of the action that failed it (or None)."""
+    results: List[dict] = []
+    failed_at: Optional[int] = None
+    for index, action in enumerate(request.get("actions") or []):
+        entry: Dict[str, Any] = {"index": index, "type": action["type"], "status": "ok", "ms": 0}
+        if failed_at is not None:
+            entry["status"] = "skipped"
+        elif page.status_code >= 300:
+            entry.update(status="failed", error={"code": "page_not_ok",
+                                                 "message": f"The page answered {page.status_code}, so no action ran."})
+            failed_at = index
+        else:
+            given = page.actions[index] if index < len(page.actions) else None
+            entry.update({key: value for key, value in (given or {}).items() if key in _ACTION_RESULT_FIELDS})
+            if action["type"] == "evaluate":
+                entry.setdefault("value", None)
+        if entry["status"] == "failed" and not action.get("optional") and failed_at is None:
+            failed_at = index
+        results.append(entry)
+    return results, failed_at
+
 
 def _capture_settings(value: Any) -> Optional[dict]:
     """A request's capture as complete settings, or None when it records nothing."""
