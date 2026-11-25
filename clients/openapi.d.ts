@@ -632,7 +632,7 @@ export interface webhooks {
 export interface components {
     schemas: {
         FetchRequest: {
-            /** @description The page, API or file to get. Public http or https only: private, local and metadata addresses are refused, checked after DNS and on every redirect. */
+            /** @description The page, API or file to get. Public http or https only: private, local and metadata addresses are refused, checked after DNS and on every redirect. A #fragment is never sent to the site, but a browser opens the page with it, and an app route in it (#/... or #!/...) makes auto start in a browser, since plain HTTP gets the same empty app for every route. */
             url: string;
             /**
              * @description Only GET and HEAD escalate. Other methods get one attempt, never a browser, and are never retried.
@@ -825,7 +825,7 @@ export interface components {
         };
         /** @description Blocks, bot challenges and rate limits met on the way, and on the page that answered (a captcha, a wall that cleared). FetchX handles them itself; this says what it met and how it got past. */
         Challenge: {
-            /** @description The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, kasada, or the captcha provider when nothing else names one: arkose, recaptcha, hcaptcha), named from the wall page, its headers and cookies, also when the wall came as a rate limit (429); null when nothing said. */
+            /** @description The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, kasada, or the captcha provider when nothing else names one: arkose, recaptcha, hcaptcha, mtcaptcha), named from the wall page, its headers and cookies, also when the wall came as a rate limit (429); null when nothing said. */
             vendor: string | null;
             /** @description How many attempts met one. */
             walls: number;
@@ -957,7 +957,7 @@ export interface components {
             result: "success" | "answered" | "blocked" | "rate_limited" | "login_required" | "login_failed" | "site_error" | "needs_browser" | "content_missing" | "unreachable" | "failed" | "too_large" | "uncertain" | "not_admitted" | "url_not_allowed";
             /** @description The underlying error, when result is not_admitted or failed. */
             code?: string;
-            /** @description On a blocked or rate-limited step, the bot-protection vendor whose wall it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf, kasada; or arkose, recaptcha, hcaptcha when only its captcha says). */
+            /** @description On a blocked or rate-limited step, the bot-protection vendor whose wall it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf, kasada; or arkose, recaptcha, hcaptcha, mtcaptcha when only its captcha says). */
             challenge?: string;
             /** @description On a content_missing step, the expect conditions the page did not meet, and extract:<field> for each required extract field it did not show. */
             missing?: (string | ("selector" | "text" | "min_markdown_length") | unknown)[];

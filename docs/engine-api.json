@@ -3389,7 +3389,7 @@
         "properties": {
           "url": {
             "type": "string",
-            "description": "The page, API or file to get. Public http or https only: private, local and metadata addresses are refused, checked after DNS and on every redirect.",
+            "description": "The page, API or file to get. Public http or https only: private, local and metadata addresses are refused, checked after DNS and on every redirect. A #fragment is never sent to the site, but a browser opens the page with it, and an app route in it (#/... or #!/...) makes auto start in a browser, since plain HTTP gets the same empty app for every route.",
             "maxLength": 12000
           },
           "method": {

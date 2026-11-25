@@ -6306,7 +6306,7 @@
     "properties": {
      "url": {
       "type": "string",
-      "description": "The page, API or file to get. Public http or https only: private, local and metadata addresses are refused, checked after DNS and on every redirect.",
+      "description": "The page, API or file to get. Public http or https only: private, local and metadata addresses are refused, checked after DNS and on every redirect. A #fragment is never sent to the site, but a browser opens the page with it, and an app route in it (#/... or #!/...) makes auto start in a browser, since plain HTTP gets the same empty app for every route.",
       "maxLength": 12000
      },
      "method": {
@@ -6895,7 +6895,7 @@
        "string",
        "null"
       ],
-      "description": "The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, kasada, or the captcha provider when nothing else names one: arkose, recaptcha, hcaptcha), named from the wall page, its headers and cookies, also when the wall came as a rate limit (429); null when nothing said."
+      "description": "The bot-protection vendor last seen (datadome, cloudflare, akamai, imperva, human, aws_waf, kasada, or the captcha provider when nothing else names one: arkose, recaptcha, hcaptcha, mtcaptcha), named from the wall page, its headers and cookies, also when the wall came as a rate limit (429); null when nothing said."
      },
      "walls": {
       "type": "integer",
@@ -7307,7 +7307,7 @@
      },
      "challenge": {
       "type": "string",
-      "description": "On a blocked or rate-limited step, the bot-protection vendor whose wall it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf, kasada; or arkose, recaptcha, hcaptcha when only its captcha says)."
+      "description": "On a blocked or rate-limited step, the bot-protection vendor whose wall it was, when known (for example datadome, cloudflare, akamai, imperva, human, aws_waf, kasada; or arkose, recaptcha, hcaptcha, mtcaptcha when only its captcha says)."
      },
      "missing": {
       "type": "array",
