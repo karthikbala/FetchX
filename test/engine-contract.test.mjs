@@ -14,7 +14,11 @@ import {databaseUrl, html, openStore, platformFor, PROJECT} from './helpers.mjs'
 const ajv = new Ajv2020({allErrors: true, strict: false, validateFormats: false});
 const schemaId = 'urn:fetchx:engine-contract';
 ajv.addSchema({$id: schemaId, components: spec.components});
-const validator = schema => schema.$ref ? ajv.getSchema(schemaId + schema.$ref) : ajv.compile(schema);
+// An inline schema's own $refs point into the contract's components.
+const anchored = value => Array.isArray(value) ? value.map(anchored) : value && typeof value === 'object'
+  ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === '$ref' && item.startsWith('#') ? schemaId + item : anchored(item)]))
+  : value;
+const validator = schema => schema.$ref ? ajv.getSchema(schemaId + schema.$ref) : ajv.compile(anchored(schema));
 function assertValid(schema, value, label) {
   const validate = validator(schema);
   assert.ok(validate(value), `${label}: ${ajv.errorsText(validate.errors)}`);
@@ -116,6 +120,18 @@ test('engine client requests and fake engine answers and events match the contra
   await call('DELETE', `/v1/fetch/${captured.body.id}`);
   await call('GET', network);
   await platform.engine.status();
+  // Saved site logins, passed on for the project.
+  const login = await call('POST', '/v1/logins', {body: {site: 'login.shop.example.com', username: 'buyer@shop.example.com', password: 'synthetic-pass-1'}});
+  assert.equal(login.status, 201, JSON.stringify(login.body));
+  await call('POST', '/v1/logins', {body: {site: 'login.shop.example.com', username: 'buyer@shop.example.com', password: 'synthetic-pass-1'}});
+  await call('POST', '/v1/logins', {body: {site: 'http://login.shop.example.com', username: 'buyer@shop.example.com', password: 'synthetic-pass-1'}});
+  await call('GET', '/v1/logins');
+  await call('GET', `/v1/logins/${login.body.id}`);
+  await call('PATCH', `/v1/logins/${login.body.id}`, {body: {name: 'Shop'}});
+  await call('PATCH', `/v1/logins/${login.body.id}`, {body: {site: 'http://login.shop.example.com'}});
+  await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/orders', login: login.body.id}});
+  await call('DELETE', `/v1/logins/${login.body.id}`);
+  await call('GET', `/v1/logins/${login.body.id}`);
   // Batches: the check before anything is queued, the pace the queue reads,
   // and paced starts, one of them refused because its host is full.
   await call('POST', '/v1/batches', {body: {items: ['https://shop.example.com/b1', {url: 'https://shop.example.com/b2', formats: ['pdf']}]}});
@@ -141,7 +157,7 @@ test('engine client requests and fake engine answers and events match the contra
       // The engine validates the customer's request; the platform passes it on as
       // sent, so a refused one is only checked for the platform's own fields.
       const input = JSON.parse(init.body);
-      const checked = [400, 413].includes(status) ? {...input, request: found.template.endsWith('/next') ? {} : {url: 'https://shop.example.com/'}} : input;
+      const checked = [400, 413].includes(status) && 'request' in input ? {...input, request: found.template.endsWith('/next') ? {} : {url: 'https://shop.example.com/'}} : input;
       assertValid(operation.requestBody.content['application/json'].schema, checked, `${label} request`);
     }
     const response = operation.responses[status] ?? operation.responses[`${String(status)[0]}XX`];
@@ -161,7 +177,10 @@ test('engine client requests and fake engine answers and events match the contra
     'POST /internal/v1/pace 200', 'POST /internal/v1/estimates 200', 'GET /internal/v1/jobs/{id}/network 200',
     'GET /internal/v1/jobs/{id}/network 400', 'GET /internal/v1/jobs/{id}/network 404', 'GET /internal/v1/jobs/{id}/network 410',
     'GET /internal/v1/jobs/{id}/network/{index} 200', 'GET /internal/v1/jobs/{id}/network/{index} 404',
-    'GET /internal/v1/jobs/{id}/network/{index}/body 200', 'GET /internal/v1/jobs/{id}/network.har 200']) {
+    'GET /internal/v1/jobs/{id}/network/{index}/body 200', 'GET /internal/v1/jobs/{id}/network.har 200', 'GET /internal/v1/logins 200',
+    'POST /internal/v1/logins 201', 'POST /internal/v1/logins 400', 'POST /internal/v1/logins 409', 'GET /internal/v1/logins/{id} 200',
+    'GET /internal/v1/logins/{id} 404', 'PATCH /internal/v1/logins/{id} 200', 'PATCH /internal/v1/logins/{id} 400',
+    'DELETE /internal/v1/logins/{id} 204']) {
     assert.ok(statuses.has(expected), `not exercised: ${expected}`);
   }
 

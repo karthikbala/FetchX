@@ -72,6 +72,17 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   assert.deepEqual([report.status, report.fetch_id, report.evidence], ['received', captured.id, {status_code: 200}]);
   assert.equal((await client.getFeedback(report.id)).id, report.id);
   await assert.rejects(client.sendFeedback({url: 'https://shop.example.com/', kind: 'slow'}), {code: 'invalid_request', status: 400});
+  // Saved site logins: the password goes in and never comes back.
+  const login = await client.saveLogin({site: 'login.shop.example.com', username: 'buyer@shop.example.com', password: 'synthetic-pass-1', name: 'Shop'});
+  assert.deepEqual([login.site, login.status, login.signed_in, login.last_sign_in], ['login.shop.example.com', 'new', false, null]);
+  assert.ok(!JSON.stringify(login).includes('synthetic-pass-1') && !login.username.includes('buyer'));
+  assert.deepEqual((await client.listLogins()).items.map(item => item.id), [login.id]);
+  assert.equal((await client.getLogin(login.id)).name, 'Shop');
+  assert.equal((await client.updateLogin(login.id, {name: 'Shop (ops)'})).name, 'Shop (ops)');
+  await assert.rejects(client.saveLogin({site: 'login.shop.example.com', username: 'BUYER@shop.example.com', password: 'other-pass'}),
+    error => error.code === 'login_exists' && error.status === 409 && error.details.id === login.id);
+  assert.equal(await client.deleteLogin(login.id), undefined);
+  await assert.rejects(client.getLogin(login.id), {code: 'not_found', status: 404});
   await assert.rejects(client.fetch({url: 'https://shop.example.com/', max_attempts: 9}),
     error => error instanceof FetchXError && error.code === 'invalid_request' && error.status === 400 && error.details.field === 'max_attempts');
   const stranger = new FetchXClient({url: 'https://api.fetchx.test', token: 'fxk_wrong', fetch: transportFor(app)});

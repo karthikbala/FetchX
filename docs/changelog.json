@@ -6,6 +6,25 @@
   },
   "releases": [
     {
+      "version": "1.13.0",
+      "date": "2026-11-25",
+      "title": "Saved site logins",
+      "changes": [
+        {
+          "type": "added",
+          "text": "POST /v1/logins saves a site's username and password, encrypted. When a page a request reads asks for a sign-in on that site (its host or a subdomain, over https), FetchX fills in the sign-in form in a browser, solves a captcha in the form if one shows, sends it, and keeps the signed-in session for the project's later requests. The password is never returned or logged, never typed on another host, and taken out of stored pages and network captures. GET, PATCH and DELETE /v1/logins/{id} read, change and delete a login; GET /v1/logins lists them. Free; up to 50 per project."
+        },
+        {
+          "type": "added",
+          "text": "POST /v1/fetch takes login: a saved login's id to sign in with (for a sign-in on another domain, such as an SSO provider), or false to never sign in. Left out, the project's only login for the request's registrable domain is used. A request that sends its own Cookie or Authorization header uses no saved login."
+        },
+        {
+          "type": "added",
+          "text": "A failed request says login_required when the site asked for a sign-in and FetchX had no saved login for it (next.action provide_credentials), and login_failed when the site did not accept the saved login (next.action update_login, or retry_later when the sign-in got no clear answer). page_status is login_required for both, and neither is charged. Each browser attempt that signed in reports sign_in. Once FetchX has sent a login on a page the request makes no further attempts, and a login the site rejected or that needs a one-time code is not typed again until you update it."
+        }
+      ]
+    },
+    {
       "version": "1.12.1",
       "date": "2026-11-25",
       "title": "MTCaptcha solving",
@@ -17,6 +36,14 @@
         {
           "type": "changed",
           "text": "vendor (on attempts and on blocked or rate-limited errors) can be mtcaptcha when that is the only protection a wall shows."
+        },
+        {
+          "type": "changed",
+          "text": "A URL's #fragment is kept for the browser: it is never sent to the site, but a browser opens the page with it, and next pages keep it. An app route (#/... or #!/...) makes auto start in a browser, since plain HTTP gets the same empty app for every route."
+        },
+        {
+          "type": "fixed",
+          "text": "A browser page that shows nothing yet (an app still loading) is not read as finished, and a page that sends itself on while it is read (such as an app's redirect to its sign-in) is followed, so the result is the page it went to."
         }
       ]
     },
@@ -47,7 +74,7 @@
         },
         {
           "type": "added",
-          "text": "The Python SDK (0.2.0) has Connect: connect(), or connect_start() and connect_finish() for agents whose tool calls must return quickly, and python -m fetchx connect. It keeps the key in an owner-only ~/.config/fetchx/credentials file (XDG_CONFIG_HOME and %APPDATA% respected), which FetchX() reads when FETCHX_TOKEN is not set."
+          "text": "The Python SDK (0.2.0) has Connect: connect(), or connect_start() and connect_finish() for agents whose tool calls must return quickly, and python -m fetchx connect. It keeps the key in an owner-only ~/.config/fetchx/credentials file (XDG_CONFIG_HOME and %APPDATA% respected), which FetchX() reads when FETCHX_TOKEN is not set. It is on PyPI: pip install fetchx-sdk."
         }
       ]
     },
