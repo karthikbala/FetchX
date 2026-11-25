@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, Optional, 
 import httpx
 
 from ._core import Flow, _Call, _Core, _Send, _Sleep, _Yield, _network_query, log
-from .models import (Balance, Batch, BatchItem, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Me,
+from .models import (Balance, Batch, BatchItem, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Login, Me,
                      NetworkCall, NetworkPage, Prices, ServiceStatus, Usage)
 
 _SIX_HOURS = 6 * 3600.0
@@ -251,6 +251,26 @@ class AsyncFetchX(_Core):
     async def get_feedback(self, feedback_id: Any) -> Feedback:
         """``GET /v1/feedback/{id}``: see ``FetchX.get_feedback``."""
         return await self._call(*self._plan_get_feedback(feedback_id))
+
+    async def save_login(self, body: Optional[Mapping[str, Any]] = None, **fields: Any) -> Login:
+        """``POST /v1/logins``: see ``FetchX.save_login``."""
+        return await self._call(*self._plan_save_login(body, fields))
+
+    async def list_logins(self) -> List[Login]:
+        """``GET /v1/logins``: see ``FetchX.list_logins``."""
+        return await self._call(*self._plan_list_logins())
+
+    async def get_login(self, login_id: Any) -> Login:
+        """``GET /v1/logins/{id}``: see ``FetchX.get_login``."""
+        return await self._call(*self._plan_get_login(login_id))
+
+    async def update_login(self, login_id: Any, body: Optional[Mapping[str, Any]] = None, **fields: Any) -> Login:
+        """``PATCH /v1/logins/{id}``: see ``FetchX.update_login``."""
+        return await self._call(*self._plan_update_login(login_id, body, fields))
+
+    async def delete_login(self, login_id: Any) -> None:
+        """``DELETE /v1/logins/{id}``: see ``FetchX.delete_login``."""
+        await self._call(*self._plan_delete_login(login_id))
 
     async def usage(self, period: Optional[str] = None, since: Optional[str] = None,
                     until: Optional[str] = None) -> Usage:

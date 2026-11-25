@@ -467,6 +467,22 @@ export class FetchFront {
   networkCall(project, id, index, query = {}) { return this.engine.networkCall(project, id, index, query); }
   networkBody(project, id, index) { return this.engine.networkBody(project, id, index); }
 
+  // ---------- saved site logins ----------
+
+  // The engine keeps them, sealed, and signs in with them; the platform only
+  // passes them on for the project. A login is not a fetch: nothing is billed.
+  async listLogins(project) { return {items: await this.engine.listLogins(project)}; }
+  getLogin(project, id) { return this.engine.getLogin(project, id); }
+  saveLogin(project, body) {
+    if (!plain(body)) throw invalid('body', 'a JSON object');
+    return this.engine.createLogin(project, body);
+  }
+  updateLogin(project, id, body) {
+    if (!plain(body)) throw invalid('body', 'a JSON object');
+    return this.engine.updateLogin(project, id, body);
+  }
+  removeLogin(project, id) { return this.engine.removeLogin(project, id); }
+
   // How many of a project's jobs finished in a period, for /v1/usage.
   async counts(project, {from, to}) {
     return (await this.store.pool.query(`SELECT count(*) FILTER (WHERE status = 'succeeded')::int AS succeeded,

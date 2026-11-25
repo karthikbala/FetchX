@@ -36,7 +36,7 @@ from .client import FetchX
 
 FETCH_FIELDS = frozenset({"url", "method", "headers", "body", "body_base64", "render", "wait_for", "scroll", "country",
                           "route", "formats", "block_resources", "expect", "extract", "max_attempts", "fix_headers",
-                          "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key", "tags", "capture",
+                          "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key", "tags", "capture", "login",
                           "redirect", "all_headers", "actions", "action_timeout_ms", "allow_hosts",
                           "allow_passive_subresources"})
 NEXT_FIELDS = frozenset({"scroll", "expect", "capture", "max_credits", "timeout_ms", "async", "webhook_url", "idempotency_key",
@@ -45,6 +45,7 @@ FORMATS = frozenset({"body", "markdown", "text", "links", "metadata", "skeleton"
 FEEDBACK_FIELDS = frozenset({"fetch_id", "url", "method", "kind", "message", "evidence"})
 FEEDBACK_KINDS = frozenset({"blocked_via_fetchx_ok_from_home", "wrong_content", "extract_wrong", "other"})
 FEEDBACK_EVIDENCE = frozenset({"status_code", "final_url", "content_type", "body_excerpt", "client"})
+LOGIN_FIELDS = frozenset({"site", "username", "password", "name"})
 FAILURE_CODES = frozenset({"blocked", "rate_limited", "content_missing", "login_required", "site_error", "unreachable",
                            "cooling_down", "timeout", "too_large", "uncertain", "route_unavailable", "url_not_allowed",
                            "next_page_missing", "extract_unavailable", "action_failed"})
@@ -155,6 +156,7 @@ class FakeFetchX:
         self._batches: Dict[str, dict] = {}
         self._batch_keys: Dict[str, Tuple[str, str]] = {}
         self.feedback: Dict[str, dict] = {}      # id -> report, as POST /v1/feedback stored it
+        self.logins: Dict[str, dict] = {}        # id -> saved login, password included (never returned)
         self._failures: Dict[str, List[dict]] = {}
         self._refusals: List[_Rule] = []
         self._drops: List[_Rule] = []
@@ -315,6 +317,20 @@ class FakeFetchX:
         if len(rest) == 2 and rest[0] == "feedback" and method == "GET":
             report = self.feedback.get(rest[1])
             return _json(200, report) if report else _error(404, "not_found", "Nothing with that id in this project")
+        if rest == ["logins"] and method == "POST":
+            return self._save_login(payload)
+        if rest == ["logins"] and method == "GET":
+            return _json(200, {"items": [self._login_view(login) for login in self.logins.values()]})
+        if len(rest) == 2 and rest[0] == "logins" and method in ("GET", "PATCH", "DELETE"):
+            login = self.logins.get(rest[1])
+            if login is None:
+                return _error(404, "not_found", "Nothing with that id in this project")
+            if method == "GET":
+                return _json(200, self._login_view(login))
+            if method == "DELETE":
+                del self.logins[login["id"]]
+                return httpx.Response(204)
+            return self._update_login(login, payload)
         return _error(404, "route_not_found", "There is no such route")
 
     # ----------------------------------------------------------------- fetches
@@ -981,7 +997,7 @@ class FakeFetchX:
                 "limits": {"credits_per_day": None, "credits_per_month": None, "expires_at": None},
                 "concurrency": {"requests": {"limit": 10, "running": 0}},
                 "features": ["actions", "allow_hosts", "batches", "capture", "capture_actions", "estimate", "extract",
-                             "feedback", "key_limits", "limits", "next_page", "redirect_manual", "usd"]}
+                             "feedback", "key_limits", "limits", "logins", "next_page", "redirect_manual", "usd"]}
 
     def _post_feedback(self, body: Any) -> httpx.Response:
         if not isinstance(body, dict):
@@ -1016,6 +1032,64 @@ class FakeFetchX:
                   "created_at": now, "updated_at": now}
         self.feedback[report["id"]] = report
         return _json(201, report)
+
+    # ----------------------------------------------------------------- saved site logins
+
+    @staticmethod
+    def _login_view(login: dict) -> dict:
+        user = login["username"]
+        at = user.rfind("@")
+        shown = {key: value for key, value in login.items() if key not in ("password", "username")}
+        return {**shown, "username": user[:2] + "*****" + (user[at:] if at > 0 else "")}
+
+    @staticmethod
+    def _login_input(body: Any, partial: bool) -> Optional[httpx.Response]:
+        if not isinstance(body, dict) or (partial and not body):
+            return _invalid("body")
+        for key in body:
+            if key not in LOGIN_FIELDS:
+                return _invalid(key)
+        site = body.get("site")
+        if (not partial or "site" in body) and (not isinstance(site, str) or not re.match(r"^(https://)?[a-z0-9.-]+\.[a-z]{2,}(/.*)?$", site.lower())):
+            return _invalid("site")
+        for key in ("username", "password"):
+            if (not partial or key in body) and (not isinstance(body.get(key), str) or not body.get(key)):
+                return _invalid(key)
+        return None
+
+    @staticmethod
+    def _host(site: str) -> str:
+        return (urlsplit(site).hostname if "://" in site else site).lower()
+
+    def _save_login(self, body: Any) -> httpx.Response:
+        refused = self._login_input(body, partial=False)
+        if refused:
+            return refused
+        site = self._host(body["site"])
+        for login in self.logins.values():
+            if login["site"] == site and login["username"].lower() == body["username"].lower():
+                return _error(409, "login_exists", "This project already has a login for that username on that site",
+                              details={"id": login["id"]})
+        now = _iso(self._tick())
+        login = {"id": str(uuid.uuid4()), "site": site, "name": body.get("name"), "username": body["username"],
+                 "password": body["password"], "status": "new", "signed_in": False, "last_sign_in": None,
+                 "created_at": now, "updated_at": now}
+        self.logins[login["id"]] = login
+        return _json(201, self._login_view(login))
+
+    def _update_login(self, login: dict, body: Any) -> httpx.Response:
+        refused = self._login_input(body, partial=True)
+        if refused:
+            return refused
+        if any(key in body for key in ("site", "username", "password")):
+            login.update(status="new", signed_in=False)
+        for key in ("username", "password", "name"):
+            if key in body:
+                login[key] = body[key]
+        if "site" in body:
+            login["site"] = self._host(body["site"])
+        login["updated_at"] = _iso(self._tick())
+        return _json(200, self._login_view(login))
 
     def answer_feedback(self, feedback_id: str, status: str = "resolved", reply: Optional[str] = None) -> dict:
         """What FetchX staff do in the admin portal: set a report's status and the reply the caller sees."""

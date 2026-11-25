@@ -23,6 +23,10 @@ export type Me = Schemas['Me'];
 export type KeyLimit = Schemas['KeyLimit'];
 export type FeedbackRequest = Schemas['FeedbackRequest'];
 export type Feedback = Schemas['Feedback'];
+export type Login = Schemas['Login'];
+export type LoginList = Schemas['LoginList'];
+export type LoginInput = Schemas['LoginInput'];
+export type LoginUpdate = Schemas['LoginUpdate'];
 // The batch owns async, webhook_url and idempotency_key; the API refuses them on items and defaults.
 type BatchOwned = 'async' | 'webhook_url' | 'idempotency_key';
 export type BatchItemRequest = Omit<FetchRequest, BatchOwned>;
@@ -151,5 +155,14 @@ export class FetchXClient {
   sendFeedback(input: FeedbackRequest): Promise<Feedback>;
   /** Where a report stands and FetchX staff's reply. */
   getFeedback(id: string): Promise<Feedback>;
+  /** Save a site login: FetchX signs in with it when a page on that site asks. The password is never returned. */
+  saveLogin(input: LoginInput): Promise<Login>;
+  /** The project's saved logins, usernames masked. */
+  listLogins(): Promise<LoginList>;
+  getLogin(id: string): Promise<Login>;
+  /** Change a saved login. A new site, username or password starts over (status new, session dropped). */
+  updateLogin(id: string, changes: LoginUpdate): Promise<Login>;
+  /** Delete a saved login and its signed-in session. */
+  deleteLogin(id: string): Promise<void>;
   usage(query?: UsageQuery): Promise<Usage>;
 }

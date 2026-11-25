@@ -6,7 +6,7 @@
 // started.
 import {GatewayError} from '../policy.mjs';
 
-export const ENGINE_CONTRACT = '1.13';
+export const ENGINE_CONTRACT = '1.14';
 const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH']);
 // 503 answers that are refusals: nothing was started, and the caller is told why.
 const REFUSED_503 = new Set(['extract_unavailable']);
@@ -125,6 +125,28 @@ export class EngineClient {
 
   async remove(tenant, id) {
     await this.#call('DELETE', `/internal/v1/jobs/${encodeURIComponent(id)}`, {query: {tenant}});
+  }
+
+  // A tenant's saved site logins (the engine keeps them sealed; the password
+  // goes in and never comes back). Each answer is the engine's Login view.
+  async listLogins(tenant) {
+    return (await this.#call('GET', '/internal/v1/logins', {query: {tenant}})).body.logins;
+  }
+
+  async getLogin(tenant, id) {
+    return (await this.#call('GET', `/internal/v1/logins/${encodeURIComponent(id)}`, {query: {tenant}})).body.login;
+  }
+
+  async createLogin(tenant, body) {
+    return (await this.#call('POST', '/internal/v1/logins', {query: {tenant}, body})).body.login;
+  }
+
+  async updateLogin(tenant, id, body) {
+    return (await this.#call('PATCH', `/internal/v1/logins/${encodeURIComponent(id)}`, {query: {tenant}, body})).body.login;
+  }
+
+  async removeLogin(tenant, id) {
+    await this.#call('DELETE', `/internal/v1/logins/${encodeURIComponent(id)}`, {query: {tenant}});
   }
 
   // Checks requests without starting them: [{host} | {error: {code, details?}}], in order.

@@ -23,6 +23,11 @@
 //   POST   /v1/estimate               what a request or a batch would cost and take, before sending it
 //   GET    /v1/balance                credits available now
 //   GET    /v1/usage                  credits and usage
+//   GET    /v1/logins                 the project's saved site logins (never their passwords)
+//   POST   /v1/logins                 save a site login: FetchX signs in with it when a page asks
+//   GET    /v1/logins/:id             one saved login
+//   PATCH  /v1/logins/:id             change its site, username, password or name (a new password starts over)
+//   DELETE /v1/logins/:id             delete it and its signed-in session
 //   GET    /v1/me                     the project and key making the call (any valid key)
 //   GET    /v1/status                 service status and notices (no API key)
 //   GET    /v1/prices                 the price table and the trial (no API key)
@@ -59,11 +64,14 @@ const MESSAGES = {
   maintenance: 'FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.',
   route_retired: 'This route was retired; error.details.replacement says what to use instead.',
   route_not_found: 'There is no such route. Check the method and path against the docs (error.details.docs_url).',
+  login_exists: 'This project already has a login for that username on that site; error.details.id names it.',
+  login_limit: 'This project has as many saved logins as it may (error.details.max).',
 };
 const STATUS = {invalid_request: 400, url_not_allowed: 400, unauthorized: 401, api_key_expired: 401, key_limit_reached: 402,
   api_key_scope_forbidden: 403, insufficient_credits: 402,
   max_credits_too_low: 402, payment_hold: 402, not_found: 404, idempotency_conflict: 409, request_too_large: 413, too_many_requests: 429,
-  pending: 409, content_expired: 410, capture_not_found: 404, no_next_page: 409, route_retired: 410, route_not_found: 404, maintenance: 503};
+  pending: 409, content_expired: 410, capture_not_found: 404, no_next_page: 409, route_retired: 410, route_not_found: 404, maintenance: 503,
+  login_exists: 409, login_limit: 409};
 
 export function apiError(error) {
   const known = error instanceof GatewayError;
@@ -174,6 +182,15 @@ export function registerApi(app, {service, ledger, estimator, board, batches, fe
     return reply.code(created ? 201 : 200).send(report);
   });
   app.get('/v1/feedback/:id', {...idParams, preHandler: guard(API_SCOPES.read)}, req => feedback.get(req.project, req.params.id));
+  // Saved site logins (FetchFront passes these to the engine, which keeps them sealed). Free.
+  app.get('/v1/logins', {preHandler: guard(API_SCOPES.read)}, req => service.listLogins(req.project));
+  app.post('/v1/logins', {preHandler: guard(API_SCOPES.write)}, async (req, reply) => reply.code(201).send(await service.saveLogin(req.project, req.body)));
+  app.get('/v1/logins/:id', {...idParams, preHandler: guard(API_SCOPES.read)}, req => service.getLogin(req.project, req.params.id));
+  app.patch('/v1/logins/:id', {...idParams, preHandler: guard(API_SCOPES.write)}, req => service.updateLogin(req.project, req.params.id, req.body));
+  app.delete('/v1/logins/:id', {...idParams, preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
+    await service.removeLogin(req.project, req.params.id);
+    return reply.code(204).send();
+  });
   app.get('/v1/balance', {preHandler: guard(API_SCOPES.usage)}, req => service.balance(req.project));
   app.get('/v1/usage', {preHandler: guard(API_SCOPES.usage)}, req => usageReport({service, ledger}, req.project, req.query ?? {}));
   // Who is calling: the project (the same after a key is rotated) and this key.

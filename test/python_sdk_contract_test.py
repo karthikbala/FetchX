@@ -203,6 +203,16 @@ def scenario(fake):
     fake.answer_feedback(report.id, "resolved", "Fixed.")
     answered = client.get_feedback(report)
     assert (answered.status, answered.reply, answered.open) == ("resolved", "Fixed.", False), answered.raw
+    login = client.save_login(site="https://login.shop.example.com/auth", username="buyer@shop.example.com",
+                              password="synthetic-pass-1", name="Shop")
+    assert (login.site, login.status, login.signed_in, login.usable, login.last_sign_in) == (
+        "login.shop.example.com", "new", False, True, None), login.raw
+    assert "synthetic-pass-1" not in json.dumps(login.raw) and "buyer" not in login.username
+    assert [item.id for item in client.list_logins()] == [login.id]
+    assert client.get_login(login).name == "Shop"
+    assert client.update_login(login, name="Shop (ops)").name == "Shop (ops)"
+    assert client.fetch(url=f"{SHOP}/p/1", login=login.id, idempotency_key="with-login").status == "succeeded"
+    client.delete_login(login)
     for bad in (lambda: client.fetch(url="ftp://shop.example.com/"),
                 lambda: client.fetch(url=f"{SHOP}/dear", max_credits=5),
                 lambda: client.fetch(url=f"{SHOP}/p/2", idempotency_key=first.idempotency_key),
@@ -220,7 +230,11 @@ def scenario(fake):
                 lambda: client.send_feedback(url="ftp://shop.example.com/", kind="other"),
                 lambda: client.send_feedback(fetch_id=first.id, url=f"{SHOP}/p/1", kind="other"),
                 lambda: client.send_feedback(fetch_id="00000000-0000-4000-8000-000000000002", kind="other"),
-                lambda: client.get_feedback("00000000-0000-4000-8000-000000000003")):
+                lambda: client.get_feedback("00000000-0000-4000-8000-000000000003"),
+                lambda: client.save_login(site="http://login.shop.example.com", username="buyer@shop.example.com", password="p-1"),
+                lambda: client.get_login(login.id),
+                lambda: client.update_login(login.id, name="Gone"),
+                lambda: client.delete_login(login.id)):
         try:
             bad()
         except FetchXError:

@@ -210,6 +210,22 @@ export class FetchXClient {
   // GET /v1/feedback/{id}: where a report stands and FetchX staff's reply.
   getFeedback(id) { return this.#send('GET', `/v1/feedback/${encodeURIComponent(id)}`); }
 
+  // POST /v1/logins: save a site login ({site, username, password, name?}); FetchX
+  // signs in with it when a page on that site asks. The password never comes back.
+  saveLogin(input) { return this.#send('POST', '/v1/logins', {body: input}); }
+
+  // GET /v1/logins: {items}, the project's saved logins (usernames masked).
+  listLogins() { return this.#send('GET', '/v1/logins'); }
+
+  // GET /v1/logins/{id}
+  getLogin(id) { return this.#send('GET', `/v1/logins/${encodeURIComponent(id)}`); }
+
+  // PATCH /v1/logins/{id}: {site?, username?, password?, name?}. A new password starts over.
+  updateLogin(id, changes) { return this.#send('PATCH', `/v1/logins/${encodeURIComponent(id)}`, {body: changes}); }
+
+  // DELETE /v1/logins/{id}: the login and its signed-in session.
+  async deleteLogin(id) { await this.#send('DELETE', `/v1/logins/${encodeURIComponent(id)}`); }
+
   // GET /v1/usage: {period: 'day' | 'month'} or {since, until}
   usage(query = {}) {
     const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null));

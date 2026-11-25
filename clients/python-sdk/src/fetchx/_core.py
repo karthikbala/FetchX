@@ -22,7 +22,7 @@ import httpx
 
 from ._version import __version__
 from .errors import FetchXError, SpendLimitReached
-from .models import (Balance, Batch, BatchItem, CallEvent, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Me,
+from .models import (Balance, Batch, BatchItem, CallEvent, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Login, Me,
                      NetworkCall, NetworkPage, Prices, ServiceStatus, Usage)
 
 log = logging.getLogger("fetchx")
@@ -74,7 +74,7 @@ def site_of(url: Optional[str]) -> Optional[str]:
 
 
 def _path_id(value: Any) -> str:
-    text = value.id if isinstance(value, (FetchResult, Batch, Feedback)) else str(value or "")
+    text = value.id if isinstance(value, (FetchResult, Batch, Feedback, Login)) else str(value or "")
     if not text:
         raise FetchXError("invalid_request", "an id is required", details={"field": "id"})
     return quote(text, safe="")
@@ -759,6 +759,40 @@ class _Core:
 
     def _plan_get_feedback(self, feedback_id: Any) -> Plan:
         return self._plan_get_model("get_feedback", f"/v1/feedback/{_path_id(feedback_id)}", Feedback)
+
+    # ----------------------------------------------------------------- saved site logins
+
+    def _plan_save_login(self, body: Optional[Mapping], fields: Mapping) -> Plan:
+        request = _merge(body, fields)
+        call = _Call("save_login")
+
+        def flow() -> Flow:
+            return Login((yield from self._send(call, "POST", "/v1/logins", json=request)))
+        return call, flow(), None
+
+    def _plan_list_logins(self) -> Plan:
+        call = _Call("list_logins")
+
+        def flow() -> Flow:
+            data = yield from self._send(call, "GET", "/v1/logins")
+            return [Login(item) for item in data.get("items") or []]
+        return call, flow(), None
+
+    def _plan_get_login(self, login_id: Any) -> Plan:
+        return self._plan_get_model("get_login", f"/v1/logins/{_path_id(login_id)}", Login)
+
+    def _plan_update_login(self, login_id: Any, body: Optional[Mapping], fields: Mapping) -> Plan:
+        request = _merge(body, fields)
+        path = f"/v1/logins/{_path_id(login_id)}"
+        call = _Call("update_login")
+
+        def flow() -> Flow:
+            return Login((yield from self._send(call, "PATCH", path, json=request)))
+        return call, flow(), None
+
+    def _plan_delete_login(self, login_id: Any) -> Plan:
+        call = _Call("delete_login")
+        return call, self._send(call, "DELETE", f"/v1/logins/{_path_id(login_id)}"), None
 
     def _plan_balance(self) -> Plan:
         return self._plan_get_model("balance", "/v1/balance", Balance)

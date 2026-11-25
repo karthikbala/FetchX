@@ -1,5 +1,5 @@
 import {FetchXClient, FetchXError, type FetchRequest, type FetchResult, type Usage, type Balance, type Batch, type BatchItem,
-  type BatchRequest, type NetworkList, type NetworkCall, type Me, type Feedback, type Prices} from '../clients/javascript.mjs';
+  type BatchRequest, type NetworkList, type NetworkCall, type Me, type Feedback, type Prices, type Login} from '../clients/javascript.mjs';
 
 async function checkClientTypes() {
   const client = new FetchXClient({url: 'https://app.fetchx.ai', token: 'fxk_fixture'});
@@ -52,6 +52,19 @@ async function checkClientTypes() {
   // @ts-expect-error kind is one of the documented values
   await client.sendFeedback({url: 'https://shop.example.com/', kind: 'slow'});
   console.log(reply, state);
+  const login: Login = await client.saveLogin({site: 'login.shop.example.com', username: 'buyer@shop.example.com', password: 'from-a-vault'});
+  const loginStatus: 'new' | 'signed_in' | 'rejected' | 'code_required' = login.status;
+  const lastOutcome: 'passed' | 'rejected' | 'code_required' | 'failed' | undefined = login.last_sign_in?.outcome;
+  await client.updateLogin(login.id, {password: 'from-a-vault-2'});
+  const saved: Login[] = (await client.listLogins()).items;
+  await client.fetch({url: 'https://app.shop.example.com/orders', login: (await client.getLogin(login.id)).id});
+  await client.fetch({url: 'https://app.shop.example.com/orders', login: false});
+  // @ts-expect-error a login is named by its id, or false
+  await client.fetch({url: 'https://app.shop.example.com/orders', login: true});
+  // @ts-expect-error the password is required
+  await client.saveLogin({site: 'login.shop.example.com', username: 'buyer@shop.example.com'});
+  await client.deleteLogin(login.id);
+  console.log(loginStatus, lastOutcome, saved.length);
   console.log(calls, callBody, har.log, scopes, (await client.networkBody(captured.id, 1)).contentType);
   const batchInput = {items: ['https://shop.example.com/a', {url: 'https://shop.example.com/b', formats: ['text']}],
     defaults: {formats: ['markdown'], render: 'auto'}, webhook_url: 'https://hooks.example.com/fetchx', tags: ['nightly']} satisfies BatchRequest;
