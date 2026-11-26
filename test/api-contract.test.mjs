@@ -210,6 +210,22 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   await expect('delete', `/v1/logins/${login.id}`, 204, undefined, oneLogin);
   await expect('get', `/v1/logins/${login.id}`, 404, undefined, oneLogin);
   await expect('delete', `/v1/logins/${login.id}`, 404, undefined, oneLogin);
+  // A request's own secrets: the names of those used come back, never a value;
+  // nothing is kept to go on from, and staff are never shown such a request.
+  const secretValue = 'Fixture "Pass" 2026!';
+  const secret = await expect('post', '/v1/fetch', 200, {body: {url: 'https://shop.example.com/list', render: 'always', allow_hosts: ['shop.example.com'],
+    secrets: {password: {value: secretValue, origins: ['https://shop.example.com']}},
+    actions: [{type: 'fill_secret', selector: '#password', secret: 'password'}]}});
+  assert.deepEqual([secret.status, secret.secrets_used], ['succeeded', ['password']]);
+  assert.ok(!JSON.stringify(secret).includes(secretValue));
+  const listed = (await expect('get', '/v1/fetch?limit=1', 200)).items[0];
+  assert.deepEqual([listed.id, listed.secrets_used], [secret.id, ['password']]);
+  await expect('post', `/v1/fetch/${secret.id}/next`, 410, {body: {}}, next);
+  const unstored = await expect('post', '/v1/fetch', 200, {body: {url: 'https://shop.example.com/list', render: 'always', store: false}});
+  assert.equal(unstored.secrets_used, undefined);
+  assert.equal((await expect('post', `/v1/fetch/${unstored.id}/next`, 410, {body: {}}, next)).error.code, 'not_stored');
+  const staff = await expect('post', '/v1/feedback', 400, {body: {fetch_id: secret.id, kind: 'wrong_content'}});
+  assert.deepEqual([staff.error.code, staff.error.details.field], ['secret_not_allowed_here', 'fetch_id']);
 });
 
 test('a 503 unavailable says when to retry', {skip: !databaseUrl}, async t => {

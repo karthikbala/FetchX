@@ -25,7 +25,9 @@
 // Saved site logins (/internal/v1/logins) are kept in memory per tenant, with
 // the engine's checks in crude form; a request's `login` must be null, false or
 // one of its tenant's login ids. An outcome's `sign_in` is the browser
-// attempt's, and `next` replaces a failed job's next action.
+// attempt's, and `next` replaces a failed job's next action. A request with
+// `secrets` reports secrets_used (the outcome's, by default every name); one
+// with secrets or store: false has no next page (410 not_stored).
 // test/engine-contract.test.mjs validates what it answers against the contract.
 import Fastify from 'fastify';
 import {createHmac, randomUUID} from 'node:crypto';
@@ -124,7 +126,7 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     if (data && job.deleted) data.content_expired = true;
     else if (data && includeBody && (job.request.formats ?? ['body']).includes('body')) Object.assign(data, {body: job.body, body_encoding: 'utf-8'});
     return {...base, data, challenge: job.challenge, attempts: job.attempts, skipped: job.skipped, fixes: [], error: job.error,
-      ...(captured(job) ? {network: networkView(job)} : {})};
+      ...(captured(job) ? {network: networkView(job)} : {}), ...(job.request.secrets ? {secrets_used: job.secrets_used ?? []} : {})};
   };
   const envelope = (job, options) => ({job: view(job, options), tenant: job.tenant, usage: job.usage, webhook_url: job.webhook_url,
     deadline: job.deadline});
@@ -172,6 +174,7 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     job.attempts = blocked ? [] : [{transport, class: routeClass, country: null, result: succeeded ? 'success' : outcome.error_code ?? 'blocked',
       status_code: job.data.status_code, wire_bytes: outcome.wire_bytes ?? 1000, ...(outcome.sign_in ? {sign_in: outcome.sign_in} : {})}];
     job.skipped = blocked ? [{transport, class: routeClass, country: null, reason: 'over_max_credits'}] : [];
+    if (job.request.secrets) job.secrets_used = outcome.secrets_used ?? Object.keys(job.request.secrets).sort();
     job.page_status = outcome.page_status ?? (succeeded ? 'content' : 'challenge');
     job.challenge = outcome.challenge ?? null;
     job.error = succeeded ? null : {code: outcome.error_code ?? 'blocked', message: 'The site refused every route FetchX was allowed to try.',
@@ -270,6 +273,7 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     if (previous.status !== 'succeeded') return refuse(reply, 409, 'no_next_page', {reason: 'failed'});
     const next = previous.data.next_page;
     if (!next) return refuse(reply, 409, 'no_next_page', {reason: 'none_found'});
+    if (previous.request.store === false || previous.request.secrets) return refuse(reply, 410, 'not_stored');
     if (previous.deleted) return refuse(reply, 410, 'content_expired');
     if (next.how === 'scroll' && (changes.scroll ?? previous.request.scroll) === 'off') {
       return refuse(reply, 400, 'invalid_request', {field: 'scroll', reason: 'this next page loads as the page is scrolled; use auto or a number of screens'});
@@ -293,7 +297,7 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     const items = [...jobs.values()].filter(job => job.tenant === tenant && (!key || job.key === key) && (!status || job.status === status)
       && (!tag || (job.request.tags ?? []).includes(tag))).reverse().slice(0, Number(limit))
       .map(job => ({id: job.id, status: job.status, url: job.request.url, created_at: job.created_at, error_code: job.error?.code ?? null,
-        tags: job.request.tags ?? [], idempotency_key: job.key}));
+        tags: job.request.tags ?? [], idempotency_key: job.key, ...(job.request.secrets ? {secrets_used: job.secrets_used ?? []} : {})}));
     return {items, next_cursor: null};
   });
   app.get('/internal/v1/jobs/:id', async (req, reply) => {

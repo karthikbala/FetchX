@@ -160,6 +160,14 @@ test('a batch is checked whole before anything is queued, and refusals name the 
   // The platform's own check (what it bills from).
   await refused({items: [{url: 'https://a.example.com/', max_credits: 0}]}, 'invalid_request', 'items[0].max_credits');
   await refused({items: ['https://a.example.com/'], defaults: {max_credits: 100_001}}, 'invalid_request', 'defaults.max_credits');
+  // A request's own secrets never wait in a queue: each is sent on its own.
+  const secrets = {password: {value: 'ptx-sentinel-5a9e', origins: ['https://a.example.com']}};
+  await refused({items: ['https://a.example.com/', {url: 'https://a.example.com/x', allow_hosts: ['a.example.com'], secrets}]},
+    'secret_not_allowed_here', 'items[1].secrets');
+  const shared = await refused({items: ['https://a.example.com/'], defaults: {allow_hosts: ['a.example.com'], secrets}}, 'secret_not_allowed_here',
+    'defaults.secrets');
+  assert.equal(shared.status, 400);
+  assert.ok(!JSON.stringify(shared.body).includes('ptx-sentinel-5a9e'));
   // No credits: refused before the engine is asked anything.
   await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 0 WHERE project = $1', [PROJECT]);
   const broke = await refused({items: ['https://a.example.com/']}, 'insufficient_credits');

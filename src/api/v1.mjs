@@ -66,12 +66,14 @@ const MESSAGES = {
   route_not_found: 'There is no such route. Check the method and path against the docs (error.details.docs_url).',
   login_exists: 'This project already has a login for that username on that site; error.details.id names it.',
   login_limit: 'This project has as many saved logins as it may (error.details.max).',
+  not_stored: 'The request was made with store: false (or secrets), so its content was given once and not kept.',
+  secret_not_allowed_here: 'Secrets cannot be sent with this option; error.details.field names it.',
 };
 const STATUS = {invalid_request: 400, url_not_allowed: 400, unauthorized: 401, api_key_expired: 401, key_limit_reached: 402,
   api_key_scope_forbidden: 403, insufficient_credits: 402,
   max_credits_too_low: 402, payment_hold: 402, not_found: 404, idempotency_conflict: 409, request_too_large: 413, too_many_requests: 429,
   pending: 409, content_expired: 410, capture_not_found: 404, no_next_page: 409, route_retired: 410, route_not_found: 404, maintenance: 503,
-  login_exists: 409, login_limit: 409};
+  login_exists: 409, login_limit: 409, not_stored: 410, secret_not_allowed_here: 400};
 
 export function apiError(error) {
   const known = error instanceof GatewayError;
