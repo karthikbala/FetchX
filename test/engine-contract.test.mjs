@@ -63,6 +63,8 @@ test('engine client requests and fake engine answers and events match the contra
         : request.url.includes('/list') ? {body: html('list'), next_page: {how: 'link', url: 'https://shop.example.com/list?page=2'}}
           : {body: html('ok')},
     pace: host => ({tier: 'open', max_running: host === 'one.example.com' ? 1 : 4, start_gap_ms: 0}),
+    sessionScript: input => input.allow_hosts[0] === 'busy.example.com' ? {refuse: {status: 503, code: 'browser_capacity', details: {retry_after_seconds: 30}}}
+      : input.allow_hosts[0] === 'full.example.com' ? {refuse: {status: 429, code: 'browser_session_limit', details: {limit: 2, open: 2}}} : {},
     wrapEngineFetch: fakeFetch => async (url, init) => {
       const response = await fakeFetch(url, init);
       exchanges.push({url: new URL(url), init, status: response.status, body: response.status === 204 ? null : await response.clone().arrayBuffer()});
@@ -132,6 +134,34 @@ test('engine client requests and fake engine answers and events match the contra
   await call('POST', '/v1/fetch', {body: {url: 'https://shop.example.com/orders', login: login.body.id}});
   await call('DELETE', `/v1/logins/${login.body.id}`);
   await call('GET', `/v1/logins/${login.body.id}`);
+  // Browser sessions: made, read, listed, filled and closed, and the engine's refusals.
+  const pin = {value: 'synthetic-pin-1', origins: ['https://login.shop.example.com']};
+  const first = await call('POST', '/v1/browser-sessions', {body: {allow_hosts: ['shop.example.com', 'login.shop.example.com'], secrets: {pin}}});
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  assert.equal((await call('POST', '/v1/browser-sessions', {body: {allow_hosts: ['shop.example.com'], login: '00000000-0000-4000-8000-000000000000'}})).status, 400);
+  assert.equal((await call('POST', '/v1/browser-sessions', {body: {allow_hosts: ['busy.example.com']}})).status, 503);
+  assert.equal((await call('POST', '/v1/browser-sessions', {body: {allow_hosts: ['full.example.com']}})).status, 429);
+  const second = await call('POST', '/v1/browser-sessions', {body: {allow_hosts: ['shop.example.com'], route: {class: 'residential', country: 'GB'},
+    max_credits: 100}});
+  assert.equal(second.status, 201, JSON.stringify(second.body));
+  await call('GET', `/v1/browser-sessions/${first.body.id}`);
+  await call('GET', '/v1/browser-sessions?status=open');
+  const fill = (id, body) => call('POST', `/v1/browser-sessions/${id}/fill`, {body});
+  assert.equal((await fill(first.body.id, {secret: 'pin', selector: '#pin', frame_url: 'https://login.shop.example.com/sign-in'})).status, 200);
+  assert.equal((await fill(first.body.id, {secret: 'nope', selector: '#pin'})).status, 404);
+  assert.equal((await fill(first.body.id, {secret: 'pin', selector: '#pin', frame_url: 'https://shop.example.com/'})).status, 403);
+  assert.equal((await fill(first.body.id, {secret: 'pin', selector: '#missing', frame_url: 'https://login.shop.example.com/'})).status, 409);
+  assert.equal((await call('DELETE', `/v1/browser-sessions/${first.body.id}`)).status, 200);
+  engine.closeSession(second.body.id, {reason: 'idle'});
+  assert.equal((await fill(second.body.id, {secret: 'pin', selector: '#pin'})).status, 410);
+  await call('GET', `/v1/browser-sessions/${second.body.id}`);
+  // Sessions the engine no longer knows are settled as lost.
+  for (const method of ['GET', 'DELETE']) {
+    const gone = await call('POST', '/v1/browser-sessions', {body: {allow_hosts: ['shop.example.com']}});
+    assert.equal(gone.status, 201, JSON.stringify(gone.body));
+    engine.sessions.delete(gone.body.id);
+    assert.equal((await call(method, `/v1/browser-sessions/${gone.body.id}`)).status, 200);
+  }
   // Batches: the check before anything is queued, the pace the queue reads,
   // and paced starts, one of them refused because its host is full.
   await call('POST', '/v1/batches', {body: {items: ['https://shop.example.com/b1', {url: 'https://shop.example.com/b2', formats: ['pdf']}]}});
@@ -180,7 +210,12 @@ test('engine client requests and fake engine answers and events match the contra
     'GET /internal/v1/jobs/{id}/network/{index}/body 200', 'GET /internal/v1/jobs/{id}/network.har 200', 'GET /internal/v1/logins 200',
     'POST /internal/v1/logins 201', 'POST /internal/v1/logins 400', 'POST /internal/v1/logins 409', 'GET /internal/v1/logins/{id} 200',
     'GET /internal/v1/logins/{id} 404', 'PATCH /internal/v1/logins/{id} 200', 'PATCH /internal/v1/logins/{id} 400',
-    'DELETE /internal/v1/logins/{id} 204']) {
+    'DELETE /internal/v1/logins/{id} 204', 'POST /internal/v1/browser-sessions 201', 'POST /internal/v1/browser-sessions 400',
+    'POST /internal/v1/browser-sessions 429', 'POST /internal/v1/browser-sessions 503', 'GET /internal/v1/browser-sessions 200',
+    'GET /internal/v1/browser-sessions/{id} 200', 'GET /internal/v1/browser-sessions/{id} 404', 'DELETE /internal/v1/browser-sessions/{id} 200',
+    'DELETE /internal/v1/browser-sessions/{id} 404', 'POST /internal/v1/browser-sessions/{id}/fill 200', 'POST /internal/v1/browser-sessions/{id}/fill 403',
+    'POST /internal/v1/browser-sessions/{id}/fill 404', 'POST /internal/v1/browser-sessions/{id}/fill 409',
+    'POST /internal/v1/browser-sessions/{id}/fill 410']) {
     assert.ok(statuses.has(expected), `not exercised: ${expected}`);
   }
 

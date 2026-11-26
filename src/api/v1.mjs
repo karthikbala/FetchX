@@ -3,7 +3,8 @@
 // `estimator` prices requests before they are sent (src/fetch/estimate.mjs);
 // `board` is the service status (src/status.mjs). Retired and unknown routes,
 // deprecation headers and maintenance are src/api/lifecycle.mjs.
-// `batches` is the BatchService (src/fetch/batches.mjs).
+// `batches` is the BatchService (src/fetch/batches.mjs); `sessions` the
+// BrowserSessionFront (src/fetch/browser-sessions.mjs).
 //   POST   /v1/fetch                  get a URL
 //   POST   /v1/fetch/:id/next         get the page after request :id's (a new request)
 //   GET    /v1/fetch                  list recent requests
@@ -28,6 +29,11 @@
 //   GET    /v1/logins/:id             one saved login
 //   PATCH  /v1/logins/:id             change its site, username, password or name (a new password starts over)
 //   DELETE /v1/logins/:id             delete it and its signed-in session
+//   POST   /v1/browser-sessions       start a browser the caller drives with Playwright (its WebSocket: server.mjs)
+//   GET    /v1/browser-sessions       the project's recent sessions
+//   GET    /v1/browser-sessions/:id   one session, or its receipt once it has ended
+//   DELETE /v1/browser-sessions/:id   close it and get its receipt
+//   POST   /v1/browser-sessions/:id/fill  type a saved login's or a secret's value into a field
 //   GET    /v1/me                     the project and key making the call (any valid key)
 //   GET    /v1/status                 service status and notices (no API key)
 //   GET    /v1/prices                 the price table and the trial (no API key)
@@ -68,12 +74,25 @@ const MESSAGES = {
   login_limit: 'This project has as many saved logins as it may (error.details.max).',
   not_stored: 'The request was made with store: false (or secrets), so its content was given once and not kept.',
   secret_not_allowed_here: 'Secrets cannot be sent with this option; error.details.field names it.',
+  browser_session_not_found: 'No browser session with that id in this project.',
+  browser_session_closed: 'The browser session has ended; GET it for its receipt.',
+  secret_not_found: 'The session has no secret by that name (error.details.secret).',
+  secret_origin_mismatch: 'That frame is not at one of the origins the secret may be typed into.',
+  secret_insecure: 'Secrets are typed only into https pages.',
+  secret_request_invalid: 'The fill was refused; error.details says why.',
+  fill_invalid: 'The fill was refused; error.details.field names the field.',
+  fill_frame_not_found: 'No frame of the session matches frame_url.',
+  fill_failed: 'The field could not be filled; error.details.reason says why.',
+  command_timeout: 'The session\'s browser did not answer in time; it may not have typed. Retry the fill, or check the page.',
+  browser_worker_unavailable: 'The machine running the session\'s browser cannot be reached; it may not have typed. Retry the fill, or check the page.',
 };
 const STATUS = {invalid_request: 400, url_not_allowed: 400, unauthorized: 401, api_key_expired: 401, key_limit_reached: 402,
   api_key_scope_forbidden: 403, insufficient_credits: 402,
   max_credits_too_low: 402, payment_hold: 402, not_found: 404, idempotency_conflict: 409, request_too_large: 413, too_many_requests: 429,
   pending: 409, content_expired: 410, capture_not_found: 404, no_next_page: 409, route_retired: 410, route_not_found: 404, maintenance: 503,
-  login_exists: 409, login_limit: 409, not_stored: 410, secret_not_allowed_here: 400};
+  login_exists: 409, login_limit: 409, not_stored: 410, secret_not_allowed_here: 400,
+  browser_session_not_found: 404, browser_session_closed: 410, secret_not_found: 404, secret_origin_mismatch: 403, secret_insecure: 403,
+  secret_request_invalid: 400, fill_invalid: 400, fill_frame_not_found: 409, fill_failed: 409, command_timeout: 503, browser_worker_unavailable: 503};
 
 export function apiError(error) {
   const known = error instanceof GatewayError;
@@ -125,7 +144,7 @@ export async function usageReport({service, ledger}, project, query = {}) {
 const idParams = {schema: {params: {type: 'object', required: ['id'], properties: {id: {type: 'string', maxLength: 64}}}}};
 
 // app.authenticate(req, scope) sets req.project, req.keyId and req.key ({id, name, prefix, scopes}).
-export function registerApi(app, {service, ledger, estimator, board, batches, feedback}) {
+export function registerApi(app, {service, ledger, estimator, board, batches, feedback, sessions}) {
   const guard = scope => async req => app.authenticate(req, scope);
   app.post('/v1/fetch', {preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
     const view = await service.submit(req.project, req.body, {keyId: req.keyId});
@@ -193,13 +212,24 @@ export function registerApi(app, {service, ledger, estimator, board, batches, fe
     await service.removeLogin(req.project, req.params.id);
     return reply.code(204).send();
   });
+  // Browser sessions (BrowserSessionFront): billed once, when they end.
+  app.post('/v1/browser-sessions', {preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
+    const {session, created} = await sessions.create(req.project, req.body, {keyId: req.keyId});
+    return reply.code(created ? 201 : 200).send(session);
+  });
+  app.get('/v1/browser-sessions', {preHandler: guard(API_SCOPES.read)}, req => sessions.list(req.project, req.query ?? {}));
+  app.get('/v1/browser-sessions/:id', {...idParams, preHandler: guard(API_SCOPES.read)}, req => sessions.get(req.project, req.params.id));
+  app.delete('/v1/browser-sessions/:id', {...idParams, preHandler: guard(API_SCOPES.write)}, req => sessions.close(req.project, req.params.id));
+  app.post('/v1/browser-sessions/:id/fill', {...idParams, preHandler: guard(API_SCOPES.write)},
+    req => sessions.fill(req.project, req.params.id, req.body));
   app.get('/v1/balance', {preHandler: guard(API_SCOPES.usage)}, req => service.balance(req.project));
   app.get('/v1/usage', {preHandler: guard(API_SCOPES.usage)}, req => usageReport({service, ledger}, req.project, req.query ?? {}));
   // Who is calling: the project (the same after a key is rotated) and this key.
   // Also the project's concurrency limit and what this server supports.
   app.get('/v1/me', {preHandler: guard(ANY_SCOPE)}, async req => ({project_id: req.project, key_id: req.key?.id ?? req.keyId ?? null,
     key_name: req.key?.name ?? null, key_prefix: req.key?.prefix ?? null, scopes: req.key?.scopes ?? Object.values(API_SCOPES),
-    limits: await service.keyLimits(req.key?.id ?? req.keyId ?? null), concurrency: await service.concurrency(req.project),
+    limits: await service.keyLimits(req.key?.id ?? req.keyId ?? null),
+    concurrency: {...await service.concurrency(req.project), browser_sessions: await sessions.concurrency(req.project)},
     features: [...FEATURES]}));
   // Public: no API key, any origin, and it answers during maintenance.
   app.get('/v1/status', async (req, reply) => {

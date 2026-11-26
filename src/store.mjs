@@ -8,6 +8,7 @@ import {initPurchases} from './billing/purchases.mjs';
 import {initLedger} from './billing/ledger.mjs';
 import {initFetchFront} from './fetch/front.mjs';
 import {initBatches} from './fetch/batches.mjs';
+import {initBrowserSessions} from './fetch/browser-sessions.mjs';
 import {initFeedback} from './fetch/feedback.mjs';
 import {initBudgets} from './budgets.mjs';
 import {initStatus} from './status.mjs';
@@ -69,6 +70,7 @@ export class Store {
     await initControlStripe(this.pool);
     await initFetchFront(this.pool);
     await initBatches(this.pool);
+    await initBrowserSessions(this.pool);
     await initFeedback(this.pool);
     await initBudgets(this.pool);
     await initStatus(this.pool);

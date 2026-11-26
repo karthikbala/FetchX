@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FetchX engine private API",
-    "version": "1.15",
-    "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). POST /internal/v1/estimates says what requests would take before they are sent (planned tiers, per-host history and pace), for the platform to price. Batches are the platform's: it checks a batch's requests with POST /internal/v1/requests/check, asks POST /internal/v1/pace how fast each host may take work, and starts each item as a paced job (JobInput.paced), which the engine refuses with host_busy when the host has no free slot. info.version is the contract version; GET /internal/v1/status and /healthz report it. Saved site logins (1.13): a tenant saves a site's username and password with POST /internal/v1/logins (sealed, never returned); a job whose page asks for a sign-in on that site signs in with it in the browser, keeps the signed-in session for the tenant's later jobs, and reports how it went (Attempt.sign_in, errors login_required and login_failed). Browser actions and host allowlists (1.14): a job's actions run in order in its browser once the page has loaded, each with its result in FetchData.actions (error action_failed, free); allow_hosts limits every request and connection to the listed hosts (FetchData.blocked_requests); over HTTP, redirect manual returns a redirect itself and all_headers returns the headers as sent (FetchData.redirects, location, raw_headers)."
+    "version": "1.16",
+    "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). POST /internal/v1/estimates says what requests would take before they are sent (planned tiers, per-host history and pace), for the platform to price. Batches are the platform's: it checks a batch's requests with POST /internal/v1/requests/check, asks POST /internal/v1/pace how fast each host may take work, and starts each item as a paced job (JobInput.paced), which the engine refuses with host_busy when the host has no free slot. info.version is the contract version; GET /internal/v1/status and /healthz report it. Saved site logins (1.13): a tenant saves a site's username and password with POST /internal/v1/logins (sealed, never returned); a job whose page asks for a sign-in on that site signs in with it in the browser, keeps the signed-in session for the tenant's later jobs, and reports how it went (Attempt.sign_in, errors login_required and login_failed). Browser actions and host allowlists (1.14): a job's actions run in order in its browser once the page has loaded, each with its result in FetchData.actions (error action_failed, free); allow_hosts limits every request and connection to the listed hosts (FetchData.blocked_requests); over HTTP, redirect manual returns a redirect itself and all_headers returns the headers as sent (FetchData.redirects, location, raw_headers). Remote browser sessions (1.16): POST /internal/v1/browser-sessions starts a Camoufox the caller drives itself over Playwright's protocol, held to allow_hosts like a job's browser (every request a page, frame or worker makes is admitted by the engine; WebSockets and other connections go through the engine's relay, which opens tunnels only to hosts on the list). The caller connects with Playwright's connect() through the platform, which carries the WebSocket upgrade to GET /internal/v1/browser-sessions/{id}/ws?tenant=<tenant> with the service token (not a routed path: the server takes the upgrade). A session ends when the platform closes it (DELETE), at its TTL, when its caller is idle or gone for idle_ttl_s, at max_wire_bytes, or when its browser fails; its receipt (BrowserSession, state closed) says why, what it used and whether it is billable. The engine never records protocol payloads, page input or screenshots of a session."
   },
   "security": [
     {
@@ -2784,6 +2784,463 @@
           },
           "404": {
             "description": "Not found. Codes: not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/browser-sessions": {
+      "get": {
+        "operationId": "listBrowserSessions",
+        "summary": "A tenant's browser sessions, newest first (at most 100); receipts are kept 7 days",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The platform project id."
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed"
+              ]
+            },
+            "description": "open: starting or open; closed: receipts."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sessions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad tenant or state. Codes: invalid_request (details.field).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createBrowserSession",
+        "summary": "Start a remote browser session; answers once its caller can connect",
+        "description": "Takes a browser worker for the session's whole life and answers when the session's browser is up (state open, expires_at set), usually within seconds and at most about a minute. The caller then connects with Playwright's connect(), with the exact Playwright version in playwright.version (another version is refused with HTTP 428 at the WebSocket), and drives browser.contexts[0], the session's one context. The same id again answers with the session as it stands (201) and starts nothing.",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The platform project id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserSessionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The session, open (or, for a repeated id, as it stands).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "session"
+                  ],
+                  "properties": {
+                    "session": {
+                      "$ref": "#/components/schemas/BrowserSession"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field is wrong. Codes: invalid_request (details.field, details.reason), url_not_allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Codes: session_id_conflict (the id belongs to another tenant), provider_excluded (the route's provider may not reach the first host).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Codes: browser_session_limit (the tenant has details.limit sessions open; details.open), residential_budget_exhausted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Nothing is running and nothing is billable. Codes: browser_unavailable (sessions are off on this engine), browser_capacity (no browser free; retry_after_seconds), browser_failed or another browser_* code (the browser did not start; the receipt says error), route_unavailable, residential_country_unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/browser-sessions/{id}": {
+      "get": {
+        "operationId": "getBrowserSession",
+        "summary": "One browser session: as it stands, or its receipt once closed",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The platform project id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "session"
+                  ],
+                  "properties": {
+                    "session": {
+                      "$ref": "#/components/schemas/BrowserSession"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad tenant. Codes: invalid_request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (or another tenant's). Codes: not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "closeBrowserSession",
+        "summary": "Close a browser session; answers with its receipt",
+        "description": "Disconnects its caller and closes its browser (close_reason client). Closing a closed session answers with its receipt as it is.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The platform project id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The receipt (state closed). Within a 20 s grace it is always closed; a browser that cannot be reached is closed at its deadline, and the session reads open until then.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "session"
+                  ],
+                  "properties": {
+                    "session": {
+                      "$ref": "#/components/schemas/BrowserSession"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad tenant. Codes: invalid_request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Codes: not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/browser-sessions/{id}/fill": {
+      "post": {
+        "operationId": "fillBrowserSession",
+        "summary": "Type one of the session's secrets into a field, without the caller ever holding it",
+        "description": "Types the named secret (one of the session's own, or login.username / login.password of its saved login) into the first element matching selector, in the newest page's frame whose URL starts with frame_url (the main frame when left out). The frame must be on https, on a host the session has reached, at one of the secret's origins (a login's: its site). From then on the value is taken out of everything the session sends its caller (as [REDACTED:<name>], or [REDACTED] for a login's), and a request carrying it to another origin is stopped (secret_egress in the receipt).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tenant",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The platform project id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserSessionFill"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Typed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "fill"
+                  ],
+                  "properties": {
+                    "fill": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "secret",
+                        "frame_url"
+                      ],
+                      "properties": {
+                        "secret": {
+                          "type": "string"
+                        },
+                        "frame_url": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "The frame it was typed in, without query or fragment."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Codes: invalid_request (details.field), fill_invalid, secret_request_invalid (the frame is on a host the session has not reached).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid service token. Codes: unauthorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Codes: secret_origin_mismatch (the frame is not at one of the secret's origins), secret_insecure (not https).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Codes: not_found (no such session), secret_not_found (no secret by that name).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Codes: fill_frame_not_found, fill_failed (details.reason: no element matched, or it took no input).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The session has ended. Codes: browser_session_closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The browser did not answer. Codes: command_timeout, browser_worker_unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6325,6 +6782,483 @@
               "null"
             ],
             "maxLength": 64
+          }
+        }
+      },
+      "BrowserSessionInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "allow_hosts"
+        ],
+        "description": "Starts a remote browser session.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The platform's id for the session (lowercase)."
+          },
+          "allow_hosts": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "type": "string"
+            },
+            "description": "The only hosts the session's browser may reach: exact hostnames, or *.suffix for every subdomain of suffix. Every request a page, frame or worker makes and every connection (WebSockets included) is held to it: one to a host off the list is refused before it leaves FetchX and listed in blocked_requests by origin. The first host decides the route's provider."
+          },
+          "ttl_s": {
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 900,
+            "default": 300,
+            "description": "How long the session may run, from when it is open."
+          },
+          "idle_ttl_s": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 120,
+            "default": 60,
+            "description": "The session closes when its caller sent nothing for this long (idle), or no caller was connected for this long (disconnect)."
+          },
+          "proxy": {
+            "type": "string",
+            "enum": [
+              "datacenter",
+              "residential"
+            ],
+            "default": "datacenter",
+            "description": "The exit: one IP for the whole session."
+          },
+          "country": {
+            "type": "string",
+            "pattern": "^[A-Z]{2}$",
+            "default": "US"
+          },
+          "secrets": {
+            "oneOf": [
+              {
+                "type": "object",
+                "minProperties": 1,
+                "maxProperties": 8,
+                "propertyNames": {
+                  "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "value",
+                    "origins"
+                  ],
+                  "properties": {
+                    "value": {
+                      "type": "string",
+                      "minLength": 4,
+                      "description": "At most 4096 bytes. Never stored, logged or returned: held in the engine's memory while the request runs, and taken out of everything the request returns (as [REDACTED:<name>]) in the forms a page may send or show it (as typed, URL-encoded, form-encoded, JSON-escaped, base64). Shorter than 4 characters is refused: it could not be found to redact."
+                    },
+                    "origins": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 4,
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "The https origins (scheme, host, port; no path) the secret may be typed into or sent to. Each host must be in allow_hosts."
+                    }
+                  }
+                },
+                "description": "The session's own secrets by name (1 to 8), each typed only at the origins it names (each origin's host must be on allow_hosts). Typed with POST .../fill, never sent to the caller: once loaded, a secret is taken out of everything the session sends its caller as [REDACTED:<name>] (in the forms a page may send or show it), and a request a page makes that carries it to another origin is stopped. The engine keeps their names and origins only."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "login": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A saved login (POST /internal/v1/logins) whose site is on allow_hosts: its signed-in session's cookies are in the browser from the start, and its username and password can be typed with fill (as login.username and login.password)."
+          },
+          "max_wire_bytes": {
+            "type": "integer",
+            "minimum": 1000000,
+            "description": "Traffic (bytes on the wire, both ways, through the exit) at which the session closes (traffic_limit). At most the engine's setting (500 MB by default), which is also the default."
+          },
+          "viewport": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "width",
+              "height"
+            ],
+            "properties": {
+              "width": {
+                "type": "integer",
+                "minimum": 320,
+                "maximum": 3840
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 240,
+                "maximum": 2160
+              }
+            },
+            "description": "The pages' viewport; left out, the browser identity's own."
+          }
+        }
+      },
+      "BrowserSessionFill": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "secret",
+          "selector"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string",
+            "pattern": "^(?:[a-z][a-z0-9_]{0,31}|login\\.(?:username|password))$"
+          },
+          "selector": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "A Playwright selector; the first match is filled."
+          },
+          "frame_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2048,
+            "description": "The start of the frame's https URL (for a field in a cross-origin frame); the main frame when left out."
+          }
+        }
+      },
+      "BrowserSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "state",
+          "created_at",
+          "ready_at",
+          "expires_at",
+          "closed_at",
+          "close_reason",
+          "ttl_s",
+          "idle_ttl_s",
+          "allow_hosts",
+          "route",
+          "login",
+          "secrets",
+          "max_wire_bytes",
+          "browser",
+          "playwright",
+          "usage",
+          "blocked_requests",
+          "websockets",
+          "secrets_used",
+          "secret_egress",
+          "refused_calls",
+          "billable",
+          "error"
+        ],
+        "description": "A remote browser session; once closed, its receipt.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "starting",
+              "open",
+              "closed"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ready_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When its caller could first connect."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ready_at plus ttl_s."
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "close_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "client",
+              "ttl",
+              "idle",
+              "disconnect",
+              "traffic_limit",
+              "error",
+              null
+            ],
+            "description": "client: closed with DELETE. ttl: reached ttl_s. idle: its caller sent nothing for idle_ttl_s. disconnect: no caller connected for idle_ttl_s. traffic_limit: reached max_wire_bytes. error: its browser failed or did not start (see error)."
+          },
+          "ttl_s": {
+            "type": "integer"
+          },
+          "idle_ttl_s": {
+            "type": "integer"
+          },
+          "allow_hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "route": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "class",
+              "country",
+              "provider"
+            ],
+            "properties": {
+              "class": {
+                "type": "string",
+                "enum": [
+                  "datacenter",
+                  "residential"
+                ]
+              },
+              "country": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              }
+            }
+          },
+          "login": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "origins"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "origins": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "description": "Names and origins only."
+          },
+          "max_wire_bytes": {
+            "type": "integer"
+          },
+          "browser": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "engine",
+              "version"
+            ],
+            "properties": {
+              "engine": {
+                "type": "string",
+                "enum": [
+                  "camoufox"
+                ]
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          },
+          "playwright": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "version",
+              "client"
+            ],
+            "properties": {
+              "version": {
+                "type": "string",
+                "description": "The Playwright release the session's server runs."
+              },
+              "client": {
+                "type": "string",
+                "description": "The major.minor a caller's Playwright must be (any patch release); another is refused with HTTP 428 at the WebSocket."
+              }
+            }
+          },
+          "usage": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "duration_s",
+              "wire_bytes",
+              "requests",
+              "connections"
+            ],
+            "properties": {
+              "duration_s": {
+                "type": "number",
+                "description": "From ready_at to closed_at (or now)."
+              },
+              "wire_bytes": {
+                "type": "integer",
+                "description": "Bytes through the exit, both ways, TLS included."
+              },
+              "requests": {
+                "type": "integer",
+                "description": "Requests and connections the engine admitted."
+              },
+              "connections": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Caller connections over the session (null while it runs)."
+              }
+            }
+          },
+          "blocked_requests": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "origin",
+                "type"
+              ],
+              "properties": {
+                "origin": {
+                  "type": "string",
+                  "description": "Scheme, host and port (wss:// for a WebSocket)."
+                },
+                "type": {
+                  "type": "string",
+                  "description": "A browser resource type (document, script, xhr, fetch...), websocket, or connection (a socket, worker request or redirect hop the relay refused)."
+                }
+              }
+            },
+            "description": "What was refused, by origin and type (each pair once, at most 100)."
+          },
+          "websockets": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "opened",
+              "refused"
+            ],
+            "properties": {
+              "opened": {
+                "type": "integer",
+                "description": "WebSockets the pages opened to hosts on allow_hosts."
+              },
+              "refused": {
+                "type": "integer",
+                "description": "WebSockets to hosts off the list (or not https), refused and listed in blocked_requests."
+              }
+            }
+          },
+          "secrets_used": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Secrets typed into the session (names)."
+          },
+          "secret_egress": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Secrets a page tried to send to another origin (the requests were stopped)."
+          },
+          "refused_calls": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Protocol calls the session refused its caller, by Interface.method (such as Browser.newContext), with counts."
+          },
+          "billable": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "null while it runs. true when it was open and ended in an ordinary way (any close_reason but error); the platform charges only those."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With close_reason error: a code, such as browser_failed, browser_deadline or engine_restarted."
+          }
+        }
+      },
+      "BrowserSessionList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sessions"
+        ],
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrowserSession"
+            }
           }
         }
       }

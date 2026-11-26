@@ -16,6 +16,7 @@ class ControlError extends Error {
 }
 const STEP_LABELS: Record<string, string> = {
   http: 'HTTP', http_residential: 'HTTP, residential IP', browser: 'Browser', browser_residential: 'Browser, residential IP',
+  browser_session: 'Browser session', browser_session_residential: 'Browser session, residential IP',
 };
 const PRICE_LABELS: Record<string, string> = {
   http: 'HTTP (direct or datacenter)', http_residential: 'HTTP over a residential IP', browser: 'Browser',

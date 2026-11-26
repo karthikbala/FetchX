@@ -22,8 +22,7 @@ import httpx
 
 from ._version import __version__
 from .errors import FetchXError, SpendLimitReached
-from .models import (Balance, Batch, BatchItem, CallEvent, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Login, Me,
-                     NetworkCall, NetworkPage, Prices, ServiceStatus, Usage)
+from .models import (Balance, Batch, BatchItem, BrowserSession, CallEvent, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Login, Me, NetworkCall, NetworkPage, Prices, ServiceStatus, Usage)
 
 log = logging.getLogger("fetchx")
 
@@ -74,7 +73,7 @@ def site_of(url: Optional[str]) -> Optional[str]:
 
 
 def _path_id(value: Any) -> str:
-    text = value.id if isinstance(value, (FetchResult, Batch, Feedback, Login)) else str(value or "")
+    text = value.id if isinstance(value, (FetchResult, Batch, Feedback, Login, BrowserSession)) else str(value or "")
     if not text:
         raise FetchXError("invalid_request", "an id is required", details={"field": "id"})
     return quote(text, safe="")
@@ -793,6 +792,47 @@ class _Core:
     def _plan_delete_login(self, login_id: Any) -> Plan:
         call = _Call("delete_login")
         return call, self._send(call, "DELETE", f"/v1/logins/{_path_id(login_id)}"), None
+
+    # ----------------------------------------------------------------- browser sessions
+
+    def _plan_create_browser_session(self, body: Optional[Mapping], fields: Mapping) -> Plan:
+        request = _merge(body, fields)
+        request.setdefault("idempotency_key", new_key("fxs"))
+        call = _Call("create_browser_session")
+        call.key = request["idempotency_key"]
+
+        def flow() -> Flow:
+            # Resent with the same key, a create whose answer was lost gets the same session.
+            return BrowserSession((yield from self._send(call, "POST", "/v1/browser-sessions", json=request, key=request["idempotency_key"])))
+        return call, flow(), None
+
+    def _plan_get_browser_session(self, session_id: Any) -> Plan:
+        return self._plan_get_model("get_browser_session", f"/v1/browser-sessions/{_path_id(session_id)}", BrowserSession)
+
+    def _plan_list_browser_sessions(self, status: Optional[str]) -> Plan:
+        call = _Call("list_browser_sessions")
+
+        def flow() -> Flow:
+            data = yield from self._send(call, "GET", "/v1/browser-sessions", params=_query(status=status) or None)
+            return [BrowserSession(item) for item in data.get("items") or []]
+        return call, flow(), None
+
+    def _plan_close_browser_session(self, session_id: Any) -> Plan:
+        path = f"/v1/browser-sessions/{_path_id(session_id)}"
+        call = _Call("close_browser_session")
+
+        def flow() -> Flow:
+            return BrowserSession((yield from self._send(call, "DELETE", path)))
+        return call, flow(), None
+
+    def _plan_fill_browser_session(self, session_id: Any, body: Optional[Mapping], fields: Mapping) -> Plan:
+        request = _merge(body, fields)
+        path = f"/v1/browser-sessions/{_path_id(session_id)}/fill"
+        call = _Call("fill_browser_session")
+
+        def flow() -> Flow:
+            return dict((yield from self._send(call, "POST", path, json=request)))
+        return call, flow(), None
 
     def _plan_balance(self) -> Plan:
         return self._plan_get_model("balance", "/v1/balance", Balance)

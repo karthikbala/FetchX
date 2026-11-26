@@ -55,6 +55,13 @@ class ClientTests(unittest.TestCase):
         client.network_call(RESULT['id'], 2)
         self.assertEqual(client.network_body(RESULT['id'], 2)['body'], b'{"name":"Lamp"}')
         client.network_har(RESULT['id'], page=1)
+        client.create_browser_session(allow_hosts=['shop.example.com'], ttl_s=120)
+        client.get_browser_session(RESULT['id'])
+        client.list_browser_sessions(status='open')
+        client.fill_browser_session(RESULT['id'], secret='login.password', selector='#password')
+        client.close_browser_session(RESULT['id'])
+        with self.assertRaises(FetchXError):
+            client.create_browser_session(ttl_s=120)
         bodies = []
         next_client = client_for(lambda request: bodies.append(json.loads(request.content)) or httpx.Response(200, json=RESULT))
         next_client.next_page(RESULT['id'], scroll=3)
@@ -73,6 +80,9 @@ class ClientTests(unittest.TestCase):
             ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network?first_party=true&contains=Lamp&contains=19.99&limit=5'),
             ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network/2'), ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network/2/body'),
             ('GET', base + '/v1/fetch/' + RESULT['id'] + '/network.har?page=1'),
+            ('POST', base + '/v1/browser-sessions'), ('GET', base + '/v1/browser-sessions/' + RESULT['id']),
+            ('GET', base + '/v1/browser-sessions?status=open'), ('POST', base + '/v1/browser-sessions/' + RESULT['id'] + '/fill'),
+            ('DELETE', base + '/v1/browser-sessions/' + RESULT['id']),
             ('POST', base + '/v1/fetch/' + RESULT['id'] + '/next')])
         self.assertTrue(all(auth == 'Bearer fxk_fixture' for _, _, auth in calls))
 

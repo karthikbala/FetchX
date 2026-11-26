@@ -226,6 +226,31 @@ export class FetchXClient {
   // DELETE /v1/logins/{id}: the login and its signed-in session.
   async deleteLogin(id) { await this.#send('DELETE', `/v1/logins/${encodeURIComponent(id)}`); }
 
+  // POST /v1/browser-sessions: start a browser you drive yourself with Playwright
+  // ({allow_hosts, ttl_s?, idle_ttl_s?, route?, secrets?, login?, viewport?, max_credits?}).
+  // Connect with playwright.firefox.connect(session.ws_url, {headers: {Authorization: 'Bearer fxk_...'}})
+  // and use browser.contexts()[0]. Sent with an idempotency_key, so a retry gets the same session.
+  async createBrowserSession(input) {
+    if (!isObject(input) || !Array.isArray(input.allow_hosts)) throw new FetchXError('allow_hosts_required');
+    return this.#start('/v1/browser-sessions', input);
+  }
+
+  // GET /v1/browser-sessions/{id}: the session, or its receipt once it has ended.
+  getBrowserSession(id) { return this.#send('GET', `/v1/browser-sessions/${encodeURIComponent(id)}`); }
+
+  // GET /v1/browser-sessions: {items}, newest first; {status: 'open' | 'closed'}.
+  listBrowserSessions({status} = {}) {
+    return this.#send('GET', '/v1/browser-sessions' + (status ? `?status=${encodeURIComponent(status)}` : ''));
+  }
+
+  // DELETE /v1/browser-sessions/{id}: close it; resolves with its receipt.
+  closeBrowserSession(id) { return this.#send('DELETE', `/v1/browser-sessions/${encodeURIComponent(id)}`); }
+
+  // POST /v1/browser-sessions/{id}/fill: type a session secret ({secret: 'name'}) or the
+  // saved login's username or password ({secret: 'login.password'}) into the field
+  // `selector` matches, in the frame at frame_url. The value never reaches you.
+  fillBrowserSession(id, input) { return this.#send('POST', `/v1/browser-sessions/${encodeURIComponent(id)}/fill`, {body: input}); }
+
   // GET /v1/usage: {period: 'day' | 'month'} or {since, until}
   usage(query = {}) {
     const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null));

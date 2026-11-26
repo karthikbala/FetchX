@@ -69,7 +69,7 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   await assert.rejects(client.network(page.id), {code: 'capture_not_found', status: 404});
   assert.deepEqual(await client.me(), {project_id: PROJECT, key_id: null, key_name: null, key_prefix: null,
     scopes: ['fetch:write', 'fetch:read', 'usage:read'], limits: {credits_per_day: null, credits_per_month: null, expires_at: null},
-    concurrency: {requests: {limit: 10, running: 0}}, features: [...FEATURES]});
+    concurrency: {requests: {limit: 10, running: 0}, browser_sessions: {limit: 2, running: 0}}, features: [...FEATURES]});
   const report = await client.sendFeedback({fetch_id: captured.id, kind: 'wrong_content', message: 'Prices missing.', evidence: {status_code: 200}});
   assert.deepEqual([report.status, report.fetch_id, report.evidence], ['received', captured.id, {status_code: 200}]);
   assert.equal((await client.getFeedback(report.id)).id, report.id);
@@ -85,6 +85,21 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
     error => error.code === 'login_exists' && error.status === 409 && error.details.id === login.id);
   assert.equal(await client.deleteLogin(login.id), undefined);
   await assert.rejects(client.getLogin(login.id), {code: 'not_found', status: 404});
+  // Browser sessions: made with a key so a retry is the same session, filled, closed with a receipt.
+  const session = await client.createBrowserSession({allow_hosts: ['shop.example.com', 'login.shop.example.com'],
+    secrets: {pin: {value: 'synthetic-pin-1', origins: ['https://login.shop.example.com']}}});
+  assert.deepEqual([session.status, session.ws_url], ['open', `wss://app.fetchx.ai/v1/browser-sessions/${session.id}/ws`]);
+  assert.match(session.idempotency_key, /^[0-9a-f-]{36}$/);
+  assert.equal((await client.createBrowserSession({allow_hosts: ['shop.example.com', 'login.shop.example.com'],
+    secrets: {pin: {value: 'synthetic-pin-1', origins: ['https://login.shop.example.com']}}, idempotency_key: session.idempotency_key})).id, session.id);
+  assert.deepEqual(await client.fillBrowserSession(session.id, {secret: 'pin', selector: '#pin', frame_url: 'https://login.shop.example.com/'}),
+    {secret: 'pin', frame_url: 'https://login.shop.example.com/'});
+  assert.equal((await client.getBrowserSession(session.id)).status, 'open');
+  assert.deepEqual((await client.listBrowserSessions({status: 'open'})).items.map(item => item.id), [session.id]);
+  const receipt = await client.closeBrowserSession(session.id);
+  assert.deepEqual([receipt.status, receipt.secrets_used, receipt.credits.charged], ['closed', ['pin'], 10]);
+  assert.deepEqual((await client.listBrowserSessions({status: 'open'})).items, []);
+  await assert.rejects(client.createBrowserSession({}), {code: 'allow_hosts_required'});
   await assert.rejects(client.fetch({url: 'https://shop.example.com/', max_attempts: 9}),
     error => error instanceof FetchXError && error.code === 'invalid_request' && error.status === 400 && error.details.field === 'max_attempts');
   const stranger = new FetchXClient({url: 'https://api.fetchx.test', token: 'fxk_wrong', fetch: transportFor(app)});

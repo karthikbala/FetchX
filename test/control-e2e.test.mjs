@@ -176,7 +176,7 @@ test('self-service: identity, isolation, keys, idempotency and success-only cred
       assert.equal(me.status, 200, JSON.stringify(me.body));
       assert.deepEqual(me.body, {project_id: projectA.id, key_id: readOnly.key.id, key_name: 'usage only', key_prefix: readOnly.key.prefix,
         scopes: ['usage:read'], limits: {credits_per_day: null, credits_per_month: null, expires_at: null},
-        concurrency: {requests: {limit: 10, running: 0}}, features: [...FEATURES]});
+        concurrency: {requests: {limit: 10, running: 0}, browser_sessions: {limit: 2, running: 0}}, features: [...FEATURES]});
       assert.equal(readOnly.token.slice(0, 12), me.body.key_prefix);
     });
     const viaKey = await api('POST', '/v1/fetch', {url: 'https://shop.example.com/k'}, keyA.token);

@@ -295,3 +295,59 @@ test('real batch responses match the contract', {skip: !databaseUrl}, async t =>
   await store.pool.query('UPDATE control_credit_accounts SET granted_credits = 0 WHERE project = $1', [PROJECT]);
   await expect('post', '/v1/batches', 402, {body: {items: ['https://shop.example.com/5']}});
 });
+
+test('real browser session responses match the contract', {skip: !databaseUrl}, async t => {
+  const store = await openStore();
+  t.after(() => store.close());
+  const {call, engine} = await platformFor(store, {sessionScript: input => input.allow_hosts[0] === 'busy.example.com'
+    ? {refuse: {status: 503, code: 'browser_capacity', details: {retry_after_seconds: 30}}} : {}});
+  const expect = async (method, path, status, request, specUrl = path.split('?')[0]) => {
+    const response = await call(method.toUpperCase(), path, request);
+    assert.equal(response.status, status, `${method} ${path}: ${JSON.stringify(response.body)}`);
+    if (response.body) assertValid(responseSchema(method, specUrl, status), response.body, `${method} ${path} ${status}`);
+    return response.body;
+  };
+  const all = '/v1/browser-sessions';
+  const one = '/v1/browser-sessions/{id}';
+  const fill = '/v1/browser-sessions/{id}/fill';
+  const body = {allow_hosts: ['shop.example.com', 'login.shop.example.com'], ttl_s: 120, idle_ttl_s: 30, idempotency_key: 'contract-session',
+    secrets: {pin: {value: 'synthetic-pin-1', origins: ['https://login.shop.example.com']}}};
+  const session = await expect('post', all, 201, {body});
+  assert.deepEqual([session.status, session.idempotency_key, session.ws_url, session.credits.max, session.credits.charged],
+    ['open', 'contract-session', `wss://app.fetchx.ai/v1/browser-sessions/${session.id}/ws`, 10, 0]);
+  assert.ok(!JSON.stringify(session).includes('synthetic-pin-1'));
+  assert.equal((await expect('post', all, 200, {body})).id, session.id);
+  await expect('post', all, 409, {body: {...body, ttl_s: 300}});
+  await expect('post', all, 400, {body: {allow_hosts: ['shop.example.com'], route: {class: 'mobile'}}});
+  await expect('post', all, 400, {body: {allow_hosts: ['shop.example.com'], login: '00000000-0000-4000-8000-000000000000'}});
+  await expect('post', all, 401, {token: 'wrong', body});
+  await expect('post', all, 402, {body: {allow_hosts: ['shop.example.com'], max_credits: 5}});
+  const busy = await expect('post', all, 503, {body: {allow_hosts: ['busy.example.com']}});
+  assert.deepEqual([busy.error.code, busy.error.details.reason], ['unavailable', 'browser_capacity']);
+  await expect('post', all, 201, {body: {allow_hosts: ['shop.example.com'], route: {class: 'residential', country: 'GB'}, max_credits: 60}});
+  const full = await expect('post', all, 429, {body: {allow_hosts: ['shop.example.com']}});
+  assert.deepEqual(full.error.details, {limit: 'browser_sessions', max: 2, running: 2, retry_after_seconds: 30});
+  const me = await expect('get', '/v1/me', 200);
+  assert.deepEqual(me.concurrency.browser_sessions, {limit: 2, running: 2});
+  await expect('get', `/v1/browser-sessions/${session.id}`, 200, undefined, one);
+  assert.equal((await expect('get', `${all}?status=open`, 200)).items.length, 2);
+  await expect('get', `${all}?status=nope`, 400);
+  await expect('get', '/v1/browser-sessions/00000000-0000-4000-8000-000000000000', 404, undefined, one);
+  const filled = await expect('post', `/v1/browser-sessions/${session.id}/fill`, 200, {body: {secret: 'pin', selector: '#pin',
+    frame_url: 'https://login.shop.example.com/sign-in'}}, fill);
+  assert.deepEqual(filled, {secret: 'pin', frame_url: 'https://login.shop.example.com/sign-in'});
+  await expect('post', `/v1/browser-sessions/${session.id}/fill`, 400, {body: {secret: 'pin'}}, fill);
+  await expect('post', `/v1/browser-sessions/${session.id}/fill`, 403, {body: {secret: 'pin', selector: '#pin', frame_url: 'https://shop.example.com/'}}, fill);
+  await expect('post', `/v1/browser-sessions/${session.id}/fill`, 404, {body: {secret: 'nope', selector: '#pin'}}, fill);
+  await expect('post', `/v1/browser-sessions/${session.id}/fill`, 409, {body: {secret: 'pin', selector: '#missing',
+    frame_url: 'https://login.shop.example.com/'}}, fill);
+  const receipt = await expect('delete', `/v1/browser-sessions/${session.id}`, 200, undefined, one);
+  assert.deepEqual([receipt.status, receipt.close_reason, receipt.secrets_used, receipt.credits.charged, receipt.credits.breakdown.step_credits],
+    ['closed', 'client', ['pin'], 10, 10]);
+  assert.equal((await expect('delete', `/v1/browser-sessions/${session.id}`, 200, undefined, one)).credits.charged, 10);
+  await expect('post', `/v1/browser-sessions/${session.id}/fill`, 410, {body: {secret: 'pin', selector: '#pin'}}, fill);
+  await expect('delete', '/v1/browser-sessions/00000000-0000-4000-8000-000000000000', 404, undefined, one);
+  await expect('get', `${all}?status=closed`, 200);
+  await expect('get', all, 200);
+  assert.equal(engine.sessions.size, 2);
+});
