@@ -212,6 +212,14 @@ export class BatchService {
 
   async submit(project, raw, {keyId = null} = {}) {
     const batch = expandBatch(raw, {blocked: this.blocked});
+    // A batch runs unattended and keeps its items for its webhook: a request
+    // with secrets is sent on its own (POST /v1/fetch), never in a batch.
+    for (const item of batch.items) {
+      if (item.request.secrets !== undefined) {
+        throw this.#itemError(Object.assign(new GatewayError('secret_not_allowed_here', 400),
+          {details: {field: 'secrets', reason: 'not in batches: send each request with secrets on its own with POST /v1/fetch'}}), item, batch.defaults);
+      }
+    }
     const key = batch.idempotencyKey ?? randomUUID();
     if (batch.idempotencyKey) {
       const existing = await this.#byKey(project, key);

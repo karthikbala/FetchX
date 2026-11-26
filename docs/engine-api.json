@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FetchX engine private API",
-    "version": "1.14",
+    "version": "1.15",
     "description": "The contract between the FetchX platform and the FetchX engine. Private network only; every call carries the platform's service token. The engine never sees prices, credits or users: jobs carry an opaque tenant, the platform sends the cost tiers a job may use (allowed_steps) and bills from `usage`, which only a successful job has. Finished jobs are also reported as signed job.finished events (see JobFinishedEvent). POST /internal/v1/estimates says what requests would take before they are sent (planned tiers, per-host history and pace), for the platform to price. Batches are the platform's: it checks a batch's requests with POST /internal/v1/requests/check, asks POST /internal/v1/pace how fast each host may take work, and starts each item as a paced job (JobInput.paced), which the engine refuses with host_busy when the host has no free slot. info.version is the contract version; GET /internal/v1/status and /healthz report it. Saved site logins (1.13): a tenant saves a site's username and password with POST /internal/v1/logins (sealed, never returned); a job whose page asks for a sign-in on that site signs in with it in the browser, keeps the signed-in session for the tenant's later jobs, and reports how it went (Attempt.sign_in, errors login_required and login_failed). Browser actions and host allowlists (1.14): a job's actions run in order in its browser once the page has loaded, each with its result in FetchData.actions (error action_failed, free); allow_hosts limits every request and connection to the listed hosts (FetchData.blocked_requests); over HTTP, redirect manual returns a redirect itself and all_headers returns the headers as sent (FetchData.redirects, location, raw_headers)."
   },
   "security": [
@@ -47,7 +47,7 @@
             }
           },
           "400": {
-            "description": "The envelope or the request is wrong; nothing was started. Codes: invalid_request, url_not_allowed.",
+            "description": "The envelope or the request is wrong; nothing was started. Codes: invalid_request, url_not_allowed, secret_not_allowed_here (secrets with an option that keeps or sends what a page shows elsewhere, or a paced batch item; details.field names it).",
             "content": {
               "application/json": {
                 "schema": {
@@ -311,7 +311,7 @@
             }
           },
           "410": {
-            "description": "Job {id}'s content has expired or was deleted, so its cookies are gone. Codes: content_expired.",
+            "description": "Job {id} has nothing to go on from. Codes: content_expired (its content has expired or was deleted, so its cookies are gone), not_stored (a job made with store: false keeps no session for a next page).",
             "content": {
               "application/json": {
                 "schema": {
@@ -566,7 +566,7 @@
             }
           },
           "410": {
-            "description": "Expired or deleted. Codes: content_expired.",
+            "description": "Expired or deleted. Codes: content_expired, not_stored (a job made with store: false, once its content was read or 15 minutes after it finished).",
             "content": {
               "application/json": {
                 "schema": {
@@ -644,7 +644,7 @@
             }
           },
           "410": {
-            "description": "Expired or deleted. Codes: content_expired.",
+            "description": "Expired or deleted. Codes: content_expired, not_stored (a job made with store: false, once its content was read or 15 minutes after it finished).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2145,7 +2145,7 @@
             }
           },
           "410": {
-            "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired.",
+            "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired, not_stored (a job made with store: false, once its content was read or 15 minutes after it finished).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2251,7 +2251,7 @@
             }
           },
           "410": {
-            "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired.",
+            "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired, not_stored (a job made with store: false, once its content was read or 15 minutes after it finished).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2348,7 +2348,7 @@
             }
           },
           "410": {
-            "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired.",
+            "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired, not_stored (a job made with store: false, once its content was read or 15 minutes after it finished).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2447,7 +2447,7 @@
             }
           },
           "410": {
-            "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired.",
+            "description": "Deleted (DELETE) or expired after 7 days. Codes: content_expired, not_stored (a job made with store: false, once its content was read or 15 minutes after it finished).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3315,6 +3315,10 @@
               "no_login"
             ],
             "description": "A sign-in on the page with the saved login: passed (signed in), rejected (the sign-in form came back), code_required (it asked for a one-time code), failed (no clear answer), no_login (the page asked for a sign-in on a host no usable saved login covers)."
+          },
+          "secrets_used": {
+            "type": "boolean",
+            "description": "true on the attempt that typed or sent one of the request's secrets (no attempt follows it)."
           }
         }
       },
@@ -3382,7 +3386,8 @@
               "url_not_allowed",
               "next_page_missing",
               "extract_unavailable",
-              "action_failed"
+              "action_failed",
+              "secret_egress_blocked"
             ]
           },
           "message": {
@@ -3425,7 +3430,8 @@
                   "render_never",
                   "recover",
                   "refetch_previous",
-                  "fix_actions"
+                  "fix_actions",
+                  "check_origins"
                 ]
               },
               "retry_after_seconds": {
@@ -3783,6 +3789,44 @@
                 ]
               }
             ]
+          },
+          "secrets": {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 8,
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9_]{0,31}$"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "value",
+                "origins"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "minLength": 4,
+                  "description": "At most 4096 bytes. Never stored, logged or returned: held in the engine's memory while the request runs, and taken out of everything the request returns (as [REDACTED:<name>]) in the forms a page may send or show it (as typed, URL-encoded, form-encoded, JSON-escaped, base64). Shorter than 4 characters is refused: it could not be found to redact."
+                },
+                "origins": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 4,
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The https origins (scheme, host, port; no path) the secret may be typed into or sent to. Each host must be in allow_hosts."
+                }
+              }
+            },
+            "description": "The request's own secrets by name (1 to 8), each typed or sent only to the origins it names. A fill_secret action types one into a field when the field's frame is at one of its origins (else the action fails with secret_origin_mismatch); {{secret.<name>}} in body or a header value is filled in over HTTP (form-encoded in an application/x-www-form-urlencoded body, JSON-escaped in a JSON one), on each hop whose origin the secret names (a hop that would carry it elsewhere is not sent: secret_egress_blocked); the URL's origin must be one of them, and a GET or HEAD with placeholders needs render never. While a secret is loaded in a browser, a request the page makes that carries it (URL, headers or body) to another origin is stopped, and the request fails with secret_egress_blocked. Once a secret was typed or sent, the request makes no further attempt (on any route). Requires allow_hosts. Refused (400 secret_not_allowed_here, details.field) with formats screenshot, extract, capture.unmask, webhook_url, and in batches. Forces store false. The request keeps each secret's name and origins only, and its hash is keyed."
+          },
+          "store": {
+            "type": "boolean",
+            "default": true,
+            "description": "false: nothing the site sent outlives its first read, and nothing the caller sent to the site is kept. The first GET of the finished job with its body (the synchronous answer, or a poll) gives the content in full (the body always inline) and deletes it; it is deleted at the latest 15 minutes after the job finished. After that the job keeps only its summary (status, page_status, error, attempts, secrets_used) with data null, for 90 days, and its content routes and next page answer 410 not_stored. The kept request has no headers, body or action values. Forced false with secrets."
           }
         },
         "description": "The customer request exactly as the platform received it on POST /v1/fetch."
@@ -3926,6 +3970,13 @@
               }
             ],
             "description": "Only on requests made with capture: the network capture (null while pending). Top level, not under data, because a request that failed before any page answered still has its capture."
+          },
+          "secrets_used": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Only on a request made with secrets: the names of those that were typed (fill_secret) or sent (a placeholder), sorted by name. Values never appear anywhere."
           }
         },
         "description": "The caller-facing view of a job. The platform adds `credits` and returns it as the public FetchResult."
@@ -4169,6 +4220,13 @@
                 },
                 "idempotency_key": {
                   "type": "string"
+                },
+                "secrets_used": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Only on a request made with secrets: the names of those that were typed or sent."
                 }
               }
             }
@@ -5745,7 +5803,7 @@
         "required": [
           "type"
         ],
-        "description": "One step. Each type takes only its own fields (anything else is refused, invalid_request with details.field actions[i].name). Every action takes frame (not navigate, wait_for_url or wait_for_response), optional (a failed optional action does not stop the others) and timeout_ms (1 to 60000; an evaluate up to the request's timeout_ms). wait: ms (0 to 60000), or selector with state (attached, visible (default), hidden, detached). wait_for_url: url_contains or url_regex, matched against the top frame's URL. click: selector, button (left, right, middle), click_count (1 to 3); scrolls the element into view and waits until it can be clicked. hover: selector. fill: selector (default: the element with the focus, through open shadow roots) and value (up to 64 KB); clears the field and sets the value as typing would (input and change events). fill_secret: as fill, with secret, the name of an entry in the request's secrets (refused until secrets are available). press: key (Enter, Tab, Control+a...), selector optional. select: selector and value or label. scroll: to (top, bottom) or px. navigate: url (https; on allow_hosts when given), in the same tab. evaluate: script (up to 64 KB) run in the page's own world; mode expression (default) gives the completion value of the script, as a console does, and function runs it as a function body with args (JSON up to 64 KB) and gives what it returns. A promise is awaited; the value comes back as JSON (up to 1 MB) in data.actions[i].value. A script that sends the page elsewhere ends ok with value null, and the next action runs in the new document. wait_for_response: url_contains or url_regex, method, status_in (HTTP statuses) and body (text (default) or none); matches the first response, as the browser's network layer saw it, to a request that started after the previous action began (any, for the first action) and that completes, and returns it in data.actions[i].response. type: text typed one key at a time, selector optional, delay_ms (0 to 1000) between keys.",
+        "description": "One step. Each type takes only its own fields (anything else is refused, invalid_request with details.field actions[i].name). Every action takes frame (not navigate, wait_for_url or wait_for_response), optional (a failed optional action does not stop the others) and timeout_ms (1 to 60000; an evaluate up to the request's timeout_ms). wait: ms (0 to 60000), or selector with state (attached, visible (default), hidden, detached). wait_for_url: url_contains or url_regex, matched against the top frame's URL. click: selector, button (left, right, middle), click_count (1 to 3); scrolls the element into view and waits until it can be clicked. hover: selector. fill: selector (default: the element with the focus, through open shadow roots) and value (up to 64 KB); clears the field and sets the value as typing would (input and change events). fill_secret: as fill, with secret, the name of an entry in the request's secrets; it is typed only into a field whose frame is at one of the secret's origins, over https (else the action fails with secret_origin_mismatch, or secret_insecure). press: key (Enter, Tab, Control+a...), selector optional. select: selector and value or label. scroll: to (top, bottom) or px. navigate: url (https; on allow_hosts when given), in the same tab. evaluate: script (up to 64 KB) run in the page's own world; mode expression (default) gives the completion value of the script, as a console does, and function runs it as a function body with args (JSON up to 64 KB) and gives what it returns. A promise is awaited; the value comes back as JSON (up to 1 MB) in data.actions[i].value. A script that sends the page elsewhere ends ok with value null, and the next action runs in the new document. wait_for_response: url_contains or url_regex, method, status_in (HTTP statuses) and body (text (default) or none); matches the first response, as the browser's network layer saw it, to a request that started after the previous action began (any, for the first action) and that completes, and returns it in data.actions[i].response. type: text typed one key at a time, selector optional, delay_ms (0 to 1000) between keys.",
         "properties": {
           "type": {
             "type": "string",
@@ -5985,7 +6043,7 @@
               "string",
               "null"
             ],
-            "description": "Of the whole body."
+            "description": "Of the whole body. null when one of the request's secrets was taken out of it."
           },
           "action_index_started": {
             "type": [
