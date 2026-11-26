@@ -3238,7 +3238,7 @@
               "challenged",
               "failed"
             ],
-            "description": "Browser steps on sites that have refused FetchX before start at the site's home page. passed: it loaded; cleared: a bot check there cleared by itself; solved: the check there was a captcha, which was solved, and the visit went on (see captcha); challenged: the check stayed, so this step ended there and the next one used a fresh IP; failed: the home page did not load, and the page was visited directly."
+            "description": "Browser steps on sites that have refused FetchX before start at the site's home page (a data step on such a host starts at the call's page, see from_page). passed: it loaded; cleared: a bot check there cleared by itself; solved: the check there was a captcha, which was solved, and the visit went on (see captcha); challenged: the check stayed, so this step ended there and the next one used a fresh IP; failed: the home page did not load, and the page was visited directly."
           },
           "wall": {
             "type": "string",
@@ -3256,6 +3256,10 @@
           "handoff": {
             "type": "boolean",
             "description": "An HTTP step on a residential session a browser got through for this project and host earlier (the handoff): same exit IP, the cookies that browser earned and its User-Agent, sent with Chrome's TLS. Only for requests that need no browser and bring no cookie or Authorization of their own: data (not GET or HEAD, or an Accept that is not HTML) or render: never."
+          },
+          "from_page": {
+            "type": "boolean",
+            "description": "A browser step for data (a GET or HEAD whose Accept is not HTML) on a host that refuses FetchX, whose call was made from the page it belongs to: the browser opened the caller's Referer (else its Origin, else the site's home page) on the same site, let it settle, and the page made the call with fetch() and the caller's headers, adding the telemetry its bot protection hands the page's own calls (Akamai Bot Manager's Akamai-BM-Telemetry). A call to another origin is made this way only with such telemetry; otherwise the browser goes on from the page to the URL itself. The call's answer is the step's answer. A session whose call carried telemetry gets no handoff (a value works only from the browser it was made for): the project's later data requests on it are made from its page again, in the browser kept open for it when there is one."
           },
           "ips_skipped": {
             "type": "integer",
