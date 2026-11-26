@@ -56,7 +56,10 @@ const PAGES = [
 ];
 
 const escape = value => String(value).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;'})[c]);
-const BASE_HEADERS = {'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer'};
+// no-transform keeps Cloudflare from changing the pages on their way out: the
+// zone's Web Analytics would otherwise add its beacon script
+// (static.cloudflareinsights.com), and these pages load no third-party scripts.
+const BASE_HEADERS = {'cache-control': 'no-store, no-transform', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer'};
 
 function respond(body, status, type, extra = {}, cookies = []) {
   const headers = new Headers({...BASE_HEADERS, ...(type ? {'content-type': type} : {}), ...extra});

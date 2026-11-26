@@ -101,6 +101,15 @@ test('CAPTCHA pages gate #signIn on the widget and verify the token with the ven
   assert.match(sent[0][1], /secret=1x0000000000000000000000000000000AA/);
 });
 
+test('every page asks Cloudflare not to transform it, so no analytics beacon is added', async () => {
+  for (const path of ['/', '/login', '/home', '/chain', '/shadow', '/frame', '/exfil', '/api/lookup?ids=V1', '/nope']) {
+    const answer = await call(path);
+    assert.match(answer.headers.get('cache-control') ?? '', /\bno-transform\b/, path);
+    assert.match(answer.headers.get('cache-control') ?? '', /\bno-store\b/, path);
+    assert.doesNotMatch(await answer.text(), /cloudflareinsights/, path);
+  }
+});
+
 test('the framed form lives on frame.<host>, and /exfil tries to reach outside.example', async () => {
   const frame = await (await call('/frame?captcha=none')).text();
   assert.match(frame, /<iframe id="frame" title="form" src="https:\/\/frame\.fixtures\.fetchx\.ai\/form\?captcha=none"/);

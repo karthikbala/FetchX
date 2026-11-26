@@ -8,7 +8,7 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import spec from '../docs/openapi.json' with {type: 'json'};
 import {registerApi, API_SCOPES, ANY_SCOPE} from '../src/api/v1.mjs';
 import {FEATURES} from '../src/api/version.mjs';
-import {databaseUrl, html, openStore, platformFor, PROJECT} from './helpers.mjs';
+import {databaseUrl, html, openStore, platformFor, PROJECT, TOKEN} from './helpers.mjs';
 
 const ajv = new Ajv2020({allErrors: true, strict: false, validateFormats: false});
 const schemaId = 'urn:fetchx:contract';
@@ -86,7 +86,7 @@ test('every documented example matches its schema', () => {
 test('real responses from the gateway match the contract', {skip: !databaseUrl}, async t => {
   const store = await openStore();
   t.after(() => store.close());
-  const {call, engine, platform} = await platformFor(store, {script: request => request.url.includes('/wall') ? {status: 'failed', body: 'denied'}
+  const {app, call, engine, platform} = await platformFor(store, {script: request => request.url.includes('/wall') ? {status: 'failed', body: 'denied'}
     : request.url.includes('/signin') ? {status: 'failed', step: 'browser', error_code: 'login_failed', page_status: 'login_required', sign_in: 'rejected',
       body: '<form><input type=password></form>', next: {action: 'update_login', retry_with_new_key: false, detail: 'Update the login.'}}
     : request.url.includes('/pdf') ? {content_type: 'application/pdf', body: '%PDF-1.4'}
@@ -207,7 +207,15 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   const refused = await expect('post', '/v1/fetch', 200, {body: {url: 'https://shop.example.com/signin', login: login.id}});
   assert.deepEqual([refused.status, refused.page_status, refused.error.code, refused.error.next.action, refused.attempts[0].sign_in, refused.credits.charged],
     ['failed', 'login_required', 'login_failed', 'update_login', 'rejected', 0]);
-  await expect('delete', `/v1/logins/${login.id}`, 204, undefined, oneLogin);
+  // A client that sends Content-Type: application/json on every call, with no body.
+  const jsonHeaders = {authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json'};
+  const deleted = await app.inject({method: 'DELETE', url: `/v1/logins/${login.id}`, headers: jsonHeaders});
+  assert.equal(deleted.statusCode, 204, deleted.body);
+  const emptyPost = await app.inject({method: 'POST', url: '/v1/fetch', headers: jsonHeaders});
+  assert.deepEqual([emptyPost.statusCode, emptyPost.json().error.code], [400, 'invalid_request'], 'a POST still needs its body');
+  const poisoned = await app.inject({method: 'POST', url: '/v1/logins', headers: jsonHeaders,
+    payload: '{"site":"login.shop.example.com","username":"u","password":"p","__proto__":{"x":1}}'});
+  assert.equal(poisoned.statusCode, 400, 'prototype poisoning is still refused');
   await expect('get', `/v1/logins/${login.id}`, 404, undefined, oneLogin);
   await expect('delete', `/v1/logins/${login.id}`, 404, undefined, oneLogin);
   // A request's own secrets: the names of those used come back, never a value;

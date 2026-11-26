@@ -6,6 +6,29 @@
   },
   "releases": [
     {
+      "version": "1.15.2",
+      "date": "2026-11-26",
+      "title": "Forms in frames, blocked requests to reserved names, empty JSON bodies",
+      "changes": [
+        {
+          "type": "fixed",
+          "text": "A form that a caller's action submits inside a frame (such as a sign-in form framed from another host on allow_hosts) is sent, as one in the top frame always was. It was refused, and the frame showed the browser's blocked-page error."
+        },
+        {
+          "type": "fixed",
+          "text": "With allow_hosts, a request the page makes to a host off the list is listed in data.blocked_requests also when the host is a reserved or private name (such as outside.example) that FetchX would refuse anyway."
+        },
+        {
+          "type": "fixed",
+          "text": "A DELETE or GET sent with Content-Type: application/json and no body is no longer refused with 400 invalid_request."
+        },
+        {
+          "type": "fixed",
+          "text": "fixtures.fetchx.ai pages no longer carry Cloudflare's analytics script, so they load no third-party scripts."
+        }
+      ]
+    },
+    {
       "version": "1.15.1",
       "date": "2026-11-26",
       "title": "FetchX's public test site",
