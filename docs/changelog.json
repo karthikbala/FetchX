@@ -6,6 +6,33 @@
   },
   "releases": [
     {
+      "version": "1.17.0",
+      "date": "2026-11-26",
+      "title": "Captchas in sign-in forms, after actions and inside frames",
+      "changes": [
+        {
+          "type": "added",
+          "text": "A solve_captcha action solves the captcha that stands before your next action, such as a reCAPTCHA v2, Turnstile, hCaptcha or MTCaptcha in a sign-in form, and leaves the form for that action to send (or sends it, with submit: true, when the widget has no callback). It finds the widget in the action's frame and the frames inside it, or in any frame. data.actions[i].value says which captcha it solved; captcha_not_solved and captcha_unavailable say why not. Feature id solve_captcha."
+        },
+        {
+          "type": "added",
+          "text": "After an action, a wall it navigated to or a captcha puzzle it opened over the page (such as an invisible reCAPTCHA on a button) is solved before the next action runs, and listed in data.actions[i].captcha."
+        },
+        {
+          "type": "changed",
+          "text": "Captchas inside frames are found and solved in the frame that holds them, on the page as in actions. A frame's captcha is solved when the page is a wall or when the captcha is the only thing left to fill in its form, so a sign-in form is not sent before it is filled in."
+        },
+        {
+          "type": "fixed",
+          "text": "A reCAPTCHA v2 widget drawn with grecaptcha.render and a callback, but no data-callback, now has that callback run once it is solved, so the page goes on as it would for a person. Callbacks now always run in the page's own world; on some browser steps they did not run at all."
+        },
+        {
+          "type": "fixed",
+          "text": "A captcha in a sign-in form on a page that just loaded is no longer solved, and the form sent, before the form is filled in. When FetchX sends a form after a solve, it does so only if the form's submit control is enabled."
+        }
+      ]
+    },
+    {
       "version": "1.15.2",
       "date": "2026-11-26",
       "title": "Forms in frames, blocked requests to reserved names, empty JSON bodies",
