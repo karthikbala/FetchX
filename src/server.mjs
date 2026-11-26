@@ -52,6 +52,15 @@ export function createPlatform({store, config, deps = {}}) {
 export function server(platform, {stripeFetch, stripeAutoProcess = true} = {}) {
   const {config} = platform;
   const app = Fastify({logger: false, bodyLimit: 2 * 1024 * 1024, requestTimeout: 150_000});
+  // Some HTTP clients send Content-Type: application/json on every request,
+  // also a DELETE or GET with no body: that is no body, not a malformed one.
+  // Everything else goes to Fastify's own parser (prototype-poisoning checks included).
+  const parseJson = app.getDefaultJsonParser('error', 'ignore');
+  app.removeContentTypeParser('application/json');
+  app.addContentTypeParser('application/json', {parseAs: 'string'}, (req, body, done) => {
+    if (body === '' && ['DELETE', 'GET', 'HEAD', 'OPTIONS'].includes(req.method)) return done(null, undefined);
+    return parseJson(req, body, done);
+  });
   const stripe = new ControlStripe({store: platform.store, config, purchases: platform.purchases, fetchStripe: stripeFetch});
   app.decorate('stripe', stripe);
   app.decorate('gateway', platform);
