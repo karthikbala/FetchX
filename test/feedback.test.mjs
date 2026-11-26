@@ -22,7 +22,7 @@ test('a caller reports a request FetchX could not get; staff see what FetchX did
   const report = response.body;
   assert.deepEqual({...report, id: undefined, created_at: undefined, updated_at: undefined}, {id: undefined, kind: 'blocked_via_fetchx_ok_from_home',
     fetch_id: failed.id, url: 'https://shop.example.com/wall?q=1', method: null, message: 'Loads at home.', evidence, status: 'received', reply: null,
-    created_at: undefined, updated_at: undefined});
+    created_at: undefined, updated_at: undefined, request_id: response.headers['x-request-id']});
   assert.equal(report.created_at, report.updated_at);
   assert.equal((await call('GET', `/v1/feedback/${report.id}`)).body.status, 'received');
 

@@ -67,7 +67,9 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   assert.deepEqual([new TextDecoder().decode(raw.body), raw.contentType], ['{"items":[{"name":"Lamp"}]}', 'application/json']);
   assert.equal((await client.networkHar(captured.id)).log.version, '1.2');
   await assert.rejects(client.network(page.id), {code: 'capture_not_found', status: 404});
-  assert.deepEqual(await client.me(), {project_id: PROJECT, key_id: null, key_name: null, key_prefix: null,
+  const {request_id: meRequestId, ...me} = await client.me();
+  assert.match(meRequestId, /^req_[0-9a-f]{24}$/);
+  assert.deepEqual(me, {project_id: PROJECT, key_id: null, key_name: null, key_prefix: null,
     scopes: ['fetch:write', 'fetch:read', 'usage:read'], limits: {credits_per_day: null, credits_per_month: null, expires_at: null},
     concurrency: {requests: {limit: 10, running: 0}}, features: [...FEATURES]});
   const report = await client.sendFeedback({fetch_id: captured.id, kind: 'wrong_content', message: 'Prices missing.', evidence: {status_code: 200}});
@@ -86,7 +88,8 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   assert.equal(await client.deleteLogin(login.id), undefined);
   await assert.rejects(client.getLogin(login.id), {code: 'not_found', status: 404});
   await assert.rejects(client.fetch({url: 'https://shop.example.com/', max_attempts: 9}),
-    error => error instanceof FetchXError && error.code === 'invalid_request' && error.status === 400 && error.details.field === 'max_attempts');
+    error => error instanceof FetchXError && error.code === 'invalid_request' && error.status === 400 && error.details.field === 'max_attempts'
+      && /^req_[0-9a-f]{24}$/.test(error.requestId));
   const stranger = new FetchXClient({url: 'https://api.fetchx.test', token: 'fxk_wrong', fetch: transportFor(app)});
   await assert.rejects(stranger.usage(), {code: 'unauthorized', status: 401});
 });

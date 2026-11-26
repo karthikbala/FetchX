@@ -137,19 +137,21 @@ class ClientTests(unittest.TestCase):
 
     def test_errors_carry_code_status_details_and_never_the_body_or_token(self):
         def refused(_request):
-            return httpx.Response(400, json={'error': {'code': 'invalid_request', 'message': 'bad', 'details': {'field': 'url'}}})
+            return httpx.Response(400, json={'error': {'code': 'invalid_request', 'message': 'bad', 'details': {'field': 'url'}},
+                                             'request_id': 'req_' + 'a' * 24})
 
         with self.assertRaises(FetchXError) as caught:
             client_for(refused).fetch(url='https://shop.example.com/', idempotency_key='k1')
         error = caught.exception
-        self.assertEqual((error.code, error.status, error.details, error.idempotency_key), ('invalid_request', 400, {'field': 'url'}, 'k1'))
+        self.assertEqual((error.code, error.status, error.details, error.idempotency_key, error.request_id),
+                         ('invalid_request', 400, {'field': 'url'}, 'k1', 'req_' + 'a' * 24))
 
         def broken(_request):
-            return httpx.Response(502, content=b'<html>private proxy page</html>')
+            return httpx.Response(502, content=b'<html>private proxy page</html>', headers={'x-request-id': 'req_' + 'b' * 24})
 
         with self.assertRaises(FetchXError) as caught:
             client_for(broken, retries=0).fetch(url='https://shop.example.com/')
-        self.assertEqual(caught.exception.code, 'invalid_response')
+        self.assertEqual((caught.exception.code, caught.exception.request_id), ('invalid_response', 'req_' + 'b' * 24))
         self.assertNotIn('private proxy page', str(caught.exception))
         self.assertNotIn('fxk_fixture', str(caught.exception))
 

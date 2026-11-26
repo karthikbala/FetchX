@@ -1,0 +1,439 @@
+{
+  "description": "Response fields callers have told FetchX they rely on, pinned as the contract had them. test/stable-fields.test.mjs refuses a breaking change to a pinned field (removed or renamed, a new JSON type such as null, an enum value dropped, no longer always present) unless docs/changelog.json deprecates that field (an entry with `field`) with the notice its policy gives. Additions never break: new fields, new enum values. Pin more with `node scripts/stable-fields.mjs pin <Schema.path>`; `[]` steps into an array's items.",
+  "callers": {
+    "PortTrack (2026-11-26)": "id, request_id, status, page_status, error (code, next), attempts[] (route, result, sign_in, secrets_used), credits (breakdown.step), data.actions[], data.blocked_requests, secrets_used"
+  },
+  "fields": {
+    "Error.error.code": {
+      "types": [
+        "string"
+      ],
+      "required": true
+    },
+    "Error.error.details": {
+      "types": [
+        "object"
+      ],
+      "required": false
+    },
+    "Error.error.message": {
+      "types": [
+        "string"
+      ],
+      "required": true
+    },
+    "Error.error.retry_after_seconds": {
+      "types": [
+        "integer"
+      ],
+      "required": false
+    },
+    "Error.request_id": {
+      "types": [
+        "string"
+      ],
+      "required": false
+    },
+    "FetchResult.attempts": {
+      "types": [
+        "array"
+      ],
+      "required": true
+    },
+    "FetchResult.attempts[].captcha": {
+      "types": [
+        "array"
+      ],
+      "required": false
+    },
+    "FetchResult.attempts[].challenge": {
+      "types": [
+        "string"
+      ],
+      "required": false
+    },
+    "FetchResult.attempts[].class": {
+      "types": [
+        "string"
+      ],
+      "enum": [
+        "datacenter",
+        "direct",
+        "residential"
+      ],
+      "required": true
+    },
+    "FetchResult.attempts[].code": {
+      "types": [
+        "string"
+      ],
+      "required": false
+    },
+    "FetchResult.attempts[].country": {
+      "types": [
+        "null",
+        "string"
+      ],
+      "required": true
+    },
+    "FetchResult.attempts[].ms": {
+      "types": [
+        "integer",
+        "null"
+      ],
+      "required": false
+    },
+    "FetchResult.attempts[].result": {
+      "types": [
+        "string"
+      ],
+      "enum": [
+        "answered",
+        "blocked",
+        "content_missing",
+        "failed",
+        "login_failed",
+        "login_required",
+        "needs_browser",
+        "not_admitted",
+        "rate_limited",
+        "site_error",
+        "success",
+        "too_large",
+        "uncertain",
+        "unreachable",
+        "url_not_allowed"
+      ],
+      "required": true
+    },
+    "FetchResult.attempts[].secrets_used": {
+      "types": [
+        "boolean"
+      ],
+      "required": false
+    },
+    "FetchResult.attempts[].sign_in": {
+      "types": [
+        "string"
+      ],
+      "enum": [
+        "code_required",
+        "failed",
+        "no_login",
+        "passed",
+        "rejected"
+      ],
+      "required": false
+    },
+    "FetchResult.attempts[].status_code": {
+      "types": [
+        "integer",
+        "null"
+      ],
+      "required": true
+    },
+    "FetchResult.attempts[].transport": {
+      "types": [
+        "string"
+      ],
+      "enum": [
+        "browser",
+        "http"
+      ],
+      "required": true
+    },
+    "FetchResult.created_at": {
+      "types": [
+        "string"
+      ],
+      "required": true
+    },
+    "FetchResult.credits": {
+      "types": [
+        "object"
+      ],
+      "required": true
+    },
+    "FetchResult.credits.breakdown.step": {
+      "types": [
+        "string"
+      ],
+      "enum": [
+        "browser",
+        "browser_residential",
+        "http",
+        "http_residential"
+      ],
+      "required": true
+    },
+    "FetchResult.credits.charged": {
+      "types": [
+        "integer"
+      ],
+      "required": true
+    },
+    "FetchResult.data": {
+      "types": [
+        "null",
+        "object"
+      ],
+      "required": true
+    },
+    "FetchResult.data.actions": {
+      "types": [
+        "array",
+        "null"
+      ],
+      "required": false
+    },
+    "FetchResult.data.actions[].error": {
+      "types": [
+        "object"
+      ],
+      "required": false
+    },
+    "FetchResult.data.actions[].index": {
+      "types": [
+        "integer"
+      ],
+      "required": false
+    },
+    "FetchResult.data.actions[].ms": {
+      "types": [
+        "integer"
+      ],
+      "required": false
+    },
+    "FetchResult.data.actions[].response": {
+      "types": [
+        "object"
+      ],
+      "required": false
+    },
+    "FetchResult.data.actions[].status": {
+      "types": [
+        "string"
+      ],
+      "enum": [
+        "failed",
+        "ok",
+        "skipped"
+      ],
+      "required": false
+    },
+    "FetchResult.data.actions[].type": {
+      "types": [
+        "string"
+      ],
+      "enum": [
+        "click",
+        "evaluate",
+        "fill",
+        "fill_secret",
+        "hover",
+        "navigate",
+        "press",
+        "scroll",
+        "select",
+        "type",
+        "wait",
+        "wait_for_response",
+        "wait_for_url"
+      ],
+      "required": false
+    },
+    "FetchResult.data.actions[].value": {
+      "types": [],
+      "required": false
+    },
+    "FetchResult.data.blocked_requests": {
+      "types": [
+        "array"
+      ],
+      "required": false
+    },
+    "FetchResult.data.blocked_requests[].action_index": {
+      "types": [
+        "integer",
+        "null"
+      ],
+      "required": false
+    },
+    "FetchResult.data.blocked_requests[].origin": {
+      "types": [
+        "string"
+      ],
+      "required": false
+    },
+    "FetchResult.data.blocked_requests[].type": {
+      "types": [
+        "string"
+      ],
+      "required": false
+    },
+    "FetchResult.data.final_url": {
+      "types": [
+        "string"
+      ],
+      "required": true
+    },
+    "FetchResult.data.status_code": {
+      "types": [
+        "integer"
+      ],
+      "required": true
+    },
+    "FetchResult.error": {
+      "types": [
+        "null",
+        "object"
+      ],
+      "required": true
+    },
+    "FetchResult.error.code": {
+      "types": [
+        "string"
+      ],
+      "enum": [
+        "action_failed",
+        "blocked",
+        "content_missing",
+        "cooling_down",
+        "extract_unavailable",
+        "login_failed",
+        "login_required",
+        "next_page_missing",
+        "rate_limited",
+        "route_unavailable",
+        "secret_egress_blocked",
+        "site_error",
+        "timeout",
+        "too_large",
+        "uncertain",
+        "unreachable",
+        "url_not_allowed"
+      ],
+      "required": true
+    },
+    "FetchResult.error.details.action_index": {
+      "types": [
+        "integer"
+      ],
+      "required": false
+    },
+    "FetchResult.error.message": {
+      "types": [
+        "string"
+      ],
+      "required": true
+    },
+    "FetchResult.error.next": {
+      "types": [
+        "object"
+      ],
+      "required": true
+    },
+    "FetchResult.error.next.action": {
+      "types": [
+        "string"
+      ],
+      "enum": [
+        "check_expect",
+        "check_origins",
+        "check_url",
+        "fix_actions",
+        "provide_credentials",
+        "raise_timeout",
+        "recover",
+        "refetch_previous",
+        "render_never",
+        "retry_after",
+        "retry_later",
+        "update_login",
+        "use_auto"
+      ],
+      "required": true
+    },
+    "FetchResult.error.next.retry_after_seconds": {
+      "types": [
+        "integer"
+      ],
+      "required": false
+    },
+    "FetchResult.error.next.retry_with_new_key": {
+      "types": [
+        "boolean"
+      ],
+      "required": true
+    },
+    "FetchResult.error.retry_after_seconds": {
+      "types": [
+        "integer"
+      ],
+      "required": false
+    },
+    "FetchResult.finished_at": {
+      "types": [
+        "null",
+        "string"
+      ],
+      "required": true
+    },
+    "FetchResult.id": {
+      "types": [
+        "string"
+      ],
+      "required": true
+    },
+    "FetchResult.idempotency_key": {
+      "types": [
+        "string"
+      ],
+      "required": true
+    },
+    "FetchResult.page_status": {
+      "types": [
+        "null",
+        "string"
+      ],
+      "enum": [
+        "challenge",
+        "content",
+        "empty",
+        "error",
+        "login_required",
+        "not_found"
+      ],
+      "required": true
+    },
+    "FetchResult.request_id": {
+      "types": [
+        "string"
+      ],
+      "required": false
+    },
+    "FetchResult.secrets_used": {
+      "types": [
+        "array"
+      ],
+      "required": false
+    },
+    "FetchResult.status": {
+      "types": [
+        "string"
+      ],
+      "enum": [
+        "failed",
+        "pending",
+        "succeeded"
+      ],
+      "required": true
+    },
+    "FetchResult.url": {
+      "types": [
+        "string"
+      ],
+      "required": true
+    }
+  }
+}

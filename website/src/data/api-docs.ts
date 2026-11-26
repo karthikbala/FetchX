@@ -495,7 +495,8 @@ for item in fetchx.batch_results(batch['id']):
         id: 'request-errors',
         title: 'Refused calls (4xx)',
         blocks: [
-          { kind: 'text', text: 'The call itself was wrong, so nothing was sent to the site and nothing was charged. The body is `{error: {code, message, details?}}`.' },
+          { kind: 'text', text: 'The call itself was wrong, so nothing was sent to the site and nothing was charged. The body is `{error: {code, message, details?}, request_id}`.' },
+          { kind: 'text', text: 'Every answer has an `X-Request-Id` header, and every JSON answer from `/v1`, success or error, has the same id as `request_id`. It names that one call; a fetch keeps its own `id`. Log both, and quote `request_id` when you ask about a call: FetchX can find the call, and the fetch it started, from it.' },
           { kind: 'text', text: 'A refused call stores nothing under its `idempotency_key`, so once you have fixed it you can send it with the same key. The exception is 409: that key already belongs to a different request, so use a new one. After a 429 or a 503, resend the same body with the same key.' },
           { kind: 'table', headers: ['HTTP', 'Code', 'Meaning'], rows: requestErrorRows },
         ],
@@ -589,6 +590,7 @@ for item in fetchx.batch_results(batch['id']):
         title: 'Changes, deprecations and retired routes',
         blocks: [
           { kind: 'text', text: 'Every change to the API is in the changelog, newest first. A breaking change is announced there as a deprecation at least 30 days before its sunset. Until the sunset the route still answers, with a `Deprecation` header (RFC 9745), a `Sunset` header (RFC 8594) and `Link: <https://fetchx.ai/changelog>; rel="deprecation"`. Log those headers in your client to hear about a change before it lands.' },
+          { kind: 'text', text: 'The same goes for the fields of an answer. FetchX does not remove or rename a documented field, change its type, let it be null or missing where it always had a value, stop sending a value it lists, or change what a value means, without a deprecation in the changelog at least 30 days before. Additions ship without notice and are listed when they ship: new fields, new values, new error codes. Ignore fields you do not know, treat a value you do not know as other, and follow the Atom feed to hear about a deprecation the day it is announced.' },
           { kind: 'text', text: 'After the sunset the route answers `410 Gone` with `error.code` `route_retired` and `error.details.replacement`. An unknown route answers `404` with `error.code` `route_not_found` and links to these docs, the changelog and the status page.' },
           { kind: 'link', label: 'API changelog', href: '/changelog' },
           { kind: 'link', label: 'Changelog as an Atom feed', href: '/changelog.xml' },
