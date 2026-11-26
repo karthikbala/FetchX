@@ -761,6 +761,20 @@ export interface components {
             allow_passive_subresources?: boolean;
             /** @description A saved login (POST /v1/logins). Left out: the project’s login for the request’s registrable domain, when it has exactly one, signs in when a page asks for a sign-in on a host it covers, and its saved session goes with the request. A login id names the one to use, for example for a sign-in on another domain; false never signs in. Ignored when the request sends its own Cookie or Authorization header. Once FetchX has sent the login on a page, the request makes no further attempts, so a password is never sent twice. */
             login?: string | false;
+            /** @description Secrets for this request only, by name (1 to 8): a password or token FetchX types or sends without keeping it. A fill_secret action types one into a field whose frame is at one of its origins (else the action fails with secret_origin_mismatch). Over HTTP, {{secret.<name>}} in body or a header value is replaced when it is sent (form-encoded in an application/x-www-form-urlencoded body, JSON-escaped in a JSON one); the URL's origin must be one of the secret's, a redirect that would carry it to another origin is not followed, and a GET or HEAD with placeholders needs render: never. While a secret is loaded, anything the page sends that carries it to another origin is stopped, and the request fails with secret_egress_blocked. Once a secret has been typed or sent, FetchX makes no further attempt, on any route. Needs allow_hosts. Refused with 400 secret_not_allowed_here (error.details.field) together with a screenshot, extract, capture.unmask or webhook_url, and in batches. Implies store: false. secrets_used on the result names those that were used. Feature id secrets. */
+            secrets?: {
+                [key: string]: {
+                    /** @description The secret, 4 characters to 4096 bytes. FetchX never stores, logs or returns it: it is held in memory while the request runs, and wherever a page shows or echoes it (as typed, URL-encoded, form-encoded, JSON-escaped or base64) it comes back as [REDACTED:<name>]. */
+                    value: string;
+                    /** @description The https origins (scheme, host and port, no path), such as https://login.example.com, the secret may be typed into or sent to. Each host must be in allow_hosts. */
+                    origins: string[];
+                };
+            };
+            /**
+             * @description false: FetchX keeps nothing of the page or of what you sent beyond the response. The first read of the finished result with its body (the 200 answer, or a poll of GET /v1/fetch/{id}) returns the content in full, with the body always inline, and deletes it; unread content is deleted 15 minutes after the request finished. From then on the result keeps only its summary for 90 days (status, page_status, credits, error, attempts, secrets_used) with data null, and the content, screenshot and network routes and the next page answer 410 not_stored. The kept request has no headers, body or action values. Always false with secrets.
+             * @default true
+             */
+            store?: boolean;
         };
         /** @description What may change for a next page. Everything else (headers, formats, country, render, wait_for, block_resources) comes from the earlier request, and the cookies the site set on the earlier page are sent with it. An empty object is fine. */
         NextPageRequest: {
@@ -847,6 +861,8 @@ export interface components {
             } | null;
             /** @description Only on requests made with capture: the network capture (null while pending). Top level, not under data, because a request that failed before any page answered still has its capture. */
             network?: components["schemas"]["NetworkSummary"] | null;
+            /** @description Only on a request made with secrets: the names of those FetchX typed (fill_secret) or sent (a placeholder), sorted by name. Values never appear anywhere. */
+            secrets_used?: string[];
         };
         /** @description Blocks, bot challenges and rate limits met on the way, and on the page that answered (a captcha, a wall that cleared). FetchX handles them itself; this says what it met and how it got past. */
         Challenge: {
@@ -1031,6 +1047,8 @@ export interface components {
              * @enum {string}
              */
             sign_in?: "passed" | "rejected" | "code_required" | "failed" | "no_login";
+            /** @description true on the attempt that typed or sent one of the request's secrets. No attempt follows it. */
+            secrets_used?: boolean;
         };
         SkippedStep: {
             /** @enum {string} */
@@ -1043,7 +1061,7 @@ export interface components {
         };
         FetchError: {
             /** @enum {string} */
-            code: "blocked" | "rate_limited" | "content_missing" | "login_required" | "login_failed" | "site_error" | "unreachable" | "cooling_down" | "timeout" | "too_large" | "uncertain" | "route_unavailable" | "url_not_allowed" | "next_page_missing" | "extract_unavailable" | "action_failed";
+            code: "blocked" | "rate_limited" | "content_missing" | "login_required" | "login_failed" | "site_error" | "unreachable" | "cooling_down" | "timeout" | "too_large" | "uncertain" | "route_unavailable" | "url_not_allowed" | "next_page_missing" | "extract_unavailable" | "action_failed" | "secret_egress_blocked";
             message: string;
             retry_after_seconds?: number;
             details?: {
@@ -1053,7 +1071,7 @@ export interface components {
             /** @description What to do next. A request key replays its first result, failures included, so a retry always needs a new idempotency_key. */
             next: {
                 /** @enum {string} */
-                action: "retry_after" | "retry_later" | "check_expect" | "use_auto" | "provide_credentials" | "update_login" | "check_url" | "raise_timeout" | "render_never" | "recover" | "refetch_previous" | "fix_actions";
+                action: "retry_after" | "retry_later" | "check_expect" | "use_auto" | "provide_credentials" | "update_login" | "check_url" | "raise_timeout" | "render_never" | "recover" | "refetch_previous" | "fix_actions" | "check_origins";
                 /** @description The earliest time a retry can help. */
                 retry_after_seconds?: number;
                 /** @description true: the same request may succeed if sent again with a new idempotency_key (after retry_after_seconds when given). false: sent again unchanged it would fail the same way; change it as action says. */
@@ -1076,6 +1094,8 @@ export interface components {
                 error_code: string | null;
                 tags: string[];
                 idempotency_key: string;
+                /** @description Only on a request made with secrets: the names of those that were typed or sent. */
+                secrets_used?: string[];
             }[];
             next_cursor: string | null;
         };
@@ -1654,7 +1674,7 @@ export interface components {
                     running: number;
                 };
             };
-            /** @description What this FetchX supports, by feature id, so a client can check before relying on a newer feature: actions (browser actions on POST /v1/fetch), allow_hosts (the host allowlist on POST /v1/fetch), batches, capture (network capture), capture_actions (wait_for_response, and action_index and complete on captured calls), estimate, extract, feedback, key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), logins (saved site logins: /v1/logins, and login on POST /v1/fetch), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation. */
+            /** @description What this FetchX supports, by feature id, so a client can check before relying on a newer feature: actions (browser actions on POST /v1/fetch), allow_hosts (the host allowlist on POST /v1/fetch), batches, capture (network capture), capture_actions (wait_for_response, and action_index and complete on captured calls), estimate, extract, feedback, fixtures (FetchX's public test site, https://fixtures.fetchx.ai, may be fetched), key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), logins (saved site logins: /v1/logins, and login on POST /v1/fetch), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation. */
             features: string[];
         };
         /** @description One of the key's credit limits and where the key stands against it now. */
@@ -1833,7 +1853,7 @@ export interface components {
             url_contains?: string;
             selector?: string;
         };
-        /** @description One step. Each type takes only its own fields (anything else is refused, invalid_request with details.field actions[i].name). Every action takes frame (not navigate, wait_for_url or wait_for_response), optional (a failed optional action does not stop the others) and timeout_ms (1 to 60000; an evaluate up to the request's timeout_ms). wait: ms (0 to 60000), or selector with state (attached, visible (default), hidden, detached). wait_for_url: url_contains or url_regex, matched against the top frame's URL. click: selector, button (left, right, middle), click_count (1 to 3); scrolls the element into view and waits until it can be clicked. hover: selector. fill: selector (default: the element with the focus, through open shadow roots) and value (up to 64 KB); clears the field and sets the value as typing would (input and change events). fill_secret: as fill, with secret, the name of an entry in the request's secrets (refused until secrets are available). press: key (Enter, Tab, Control+a...), selector optional. select: selector and value or label. scroll: to (top, bottom) or px. navigate: url (https; on allow_hosts when given), in the same tab. evaluate: script (up to 64 KB) run in the page's own world; mode expression (default) gives the completion value of the script, as a console does, and function runs it as a function body with args (JSON up to 64 KB) and gives what it returns. A promise is awaited; the value comes back as JSON (up to 1 MB) in data.actions[i].value. A script that sends the page elsewhere ends ok with value null, and the next action runs in the new document. wait_for_response: url_contains or url_regex, method, status_in (HTTP statuses) and body (text (default) or none); matches the first response, as the browser's network layer saw it, to a request that started after the previous action began (any, for the first action) and that completes, and returns it in data.actions[i].response. type: text typed one key at a time, selector optional, delay_ms (0 to 1000) between keys. */
+        /** @description One step. Each type takes only its own fields (anything else is refused, invalid_request with details.field actions[i].name). Every action takes frame (not navigate, wait_for_url or wait_for_response), optional (a failed optional action does not stop the others) and timeout_ms (1 to 60000; an evaluate up to the request's timeout_ms). wait: ms (0 to 60000), or selector with state (attached, visible (default), hidden, detached). wait_for_url: url_contains or url_regex, matched against the top frame's URL. click: selector, button (left, right, middle), click_count (1 to 3); scrolls the element into view and waits until it can be clicked. hover: selector. fill: selector (default: the element with the focus, through open shadow roots) and value (up to 64 KB); clears the field and sets the value as typing would (input and change events). fill_secret: as fill, with secret, the name of an entry in the request's secrets; it is typed only into a field whose frame is at one of the secret's origins, over https (else the action fails with secret_origin_mismatch or secret_insecure). press: key (Enter, Tab, Control+a...), selector optional. select: selector and value or label. scroll: to (top, bottom) or px. navigate: url (https; on allow_hosts when given), in the same tab. evaluate: script (up to 64 KB) run in the page's own world; mode expression (default) gives the completion value of the script, as a console does, and function runs it as a function body with args (JSON up to 64 KB) and gives what it returns. A promise is awaited; the value comes back as JSON (up to 1 MB) in data.actions[i].value. A script that sends the page elsewhere ends ok with value null, and the next action runs in the new document. wait_for_response: url_contains or url_regex, method, status_in (HTTP statuses) and body (text (default) or none); matches the first response, as the browser's network layer saw it, to a request that started after the previous action began (any, for the first action) and that completes, and returns it in data.actions[i].response. type: text typed one key at a time, selector optional, delay_ms (0 to 1000) between keys. */
         Action: {
             /** @enum {string} */
             type: "wait" | "wait_for_url" | "click" | "hover" | "fill" | "fill_secret" | "press" | "select" | "scroll" | "navigate" | "evaluate" | "wait_for_response" | "type";
@@ -1892,7 +1912,7 @@ export interface components {
             complete: boolean;
             /** @description Whether body holds less than the whole body. */
             truncated: boolean;
-            /** @description Of the whole body. */
+            /** @description Of the whole body. null when one of the request's secrets was taken out of it. */
             sha256: string | null;
             /** @description The action that set the request off: the one running when it started, or, when that was a wait, the action before it. */
             action_index_started: number | null;
@@ -2080,7 +2100,7 @@ export interface operations {
                     "application/json": components["schemas"]["FetchResult"];
                 };
             };
-            /** @description A field is missing or wrong, or the URL is not public. Nothing was sent. */
+            /** @description A field is missing or wrong, or the URL is not public. Nothing was sent. secret_not_allowed_here: secrets with an option that would keep or send what a page shows elsewhere (error.details.field names it). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -2379,7 +2399,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Request {id}'s content expired or was deleted, and the next page needs its cookies. Fetch the earlier page again. */
+            /** @description Request {id} has nothing to go on from. Codes: content_expired (its content expired or was deleted, and the next page needs its cookies: fetch the earlier page again), not_stored (it was made with store: false or with secrets, which keeps no session for a next page). */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -2465,7 +2485,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The content expired or was deleted. */
+            /** @description The content expired or was deleted. Codes: not_stored when the request was made with store: false (or secrets) and its content was read once or 15 minutes went by. */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -2542,7 +2562,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The content expired or was deleted. */
+            /** @description The content expired or was deleted. Codes: not_stored when the request was made with store: false (or secrets) and its content was read once or 15 minutes went by. */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -2862,7 +2882,7 @@ export interface operations {
                     "application/json": components["schemas"]["Batch"];
                 };
             };
-            /** @description A field is missing or wrong, or an item's URL is not public. Nothing was queued. error.details.field names the item and field. */
+            /** @description A field is missing or wrong, or an item's URL is not public. Nothing was queued. error.details.field names the item and field. An item with secrets is refused with secret_not_allowed_here: send it on its own with POST /v1/fetch. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -3213,7 +3233,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Deleted (DELETE) or expired after 7 days. Codes: content_expired. */
+            /** @description Deleted (DELETE) or expired after 7 days. Codes: content_expired, not_stored (a request made with store: false, once its content was read or 15 minutes after it finished). */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -3304,7 +3324,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Deleted (DELETE) or expired after 7 days. Codes: content_expired. */
+            /** @description Deleted (DELETE) or expired after 7 days. Codes: content_expired, not_stored (a request made with store: false, once its content was read or 15 minutes after it finished). */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -3392,7 +3412,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Deleted (DELETE) or expired after 7 days. Codes: content_expired. */
+            /** @description Deleted (DELETE) or expired after 7 days. Codes: content_expired, not_stored (a request made with store: false, once its content was read or 15 minutes after it finished). */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -3471,7 +3491,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Deleted (DELETE) or expired after 7 days. Codes: content_expired. */
+            /** @description Deleted (DELETE) or expired after 7 days. Codes: content_expired, not_stored (a request made with store: false, once its content was read or 15 minutes after it finished). */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -3560,7 +3580,7 @@ export interface operations {
                     "application/json": components["schemas"]["Feedback"];
                 };
             };
-            /** @description A field is missing or wrong; error.details.field names it. */
+            /** @description A field is missing or wrong; error.details.field names it. secret_not_allowed_here: fetch_id names a request made with secrets; describe it with url and method instead. */
             400: {
                 headers: {
                     [name: string]: unknown;

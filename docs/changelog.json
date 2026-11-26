@@ -6,6 +6,17 @@
   },
   "releases": [
     {
+      "version": "1.15.1",
+      "date": "2026-11-26",
+      "title": "FetchX's public test site",
+      "changes": [
+        {
+          "type": "added",
+          "text": "https://fixtures.fetchx.ai is FetchX's public test site, and POST /v1/fetch may now fetch it (and its framed form on frame.fixtures.fetchx.ai); the rest of fetchx.ai stays refused with url_not_allowed. It has a sign-in form with a CSRF token (fixture-user / fixture-password), a redirect chain that sets a cookie on each hop, an echo of what was sent, a page that fills in late inside a shadow root, a form in a cross-origin frame, CAPTCHA pages using each vendor's test keys, and a page that tries to send its cookie elsewhere, so your acceptance tests for actions, allow_hosts, redirects and capture can run through FetchX. Feature id fixtures."
+        }
+      ]
+    },
+    {
       "version": "1.15.0",
       "date": "2026-11-25",
       "title": "Per-request secrets and unstored requests",

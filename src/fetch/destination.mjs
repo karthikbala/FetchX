@@ -20,6 +20,12 @@ const METADATA_ADDRESSES = new Set(['168.63.129.16']);
 const FETCHX_KEY = /\bfx[ks]_[A-Za-z0-9_-]{20,}/;
 
 const matchesHost = (host, suffix) => host === suffix || host.endsWith('.' + suffix);
+// FetchX's own domain, never fetched, but for its public test site
+// (fixtures.fetchx.ai, PortTrack's F0): a Cloudflare Worker that serves fixed
+// test pages and can reach nothing else of FetchX's, so callers can run their
+// acceptance tests through FetchX. An operator's own blockedHosts still apply.
+const SELF = 'fetchx.ai';
+export const FIXTURE_HOSTS = Object.freeze(['fixtures.fetchx.ai', 'frame.fixtures.fetchx.ai']);
 const dnsName = host => typeof host === 'string' && host.length <= 253 && host.includes('.')
   && host.split('.').every(label => LABEL.test(label));
 
@@ -37,7 +43,7 @@ export function isPublicAddress({address, family} = {}) {
 // Hosts that must never be fetched, whatever DNS says: FetchX's own sites and
 // any the operator adds (config.destinations.blockedHosts).
 export function blockedHosts(config) {
-  const hosts = new Set(['fetchx.ai', ...(config?.destinations?.blockedHosts ?? [])]);
+  const hosts = new Set([SELF, ...(config?.destinations?.blockedHosts ?? [])]);
   for (const origin of config?.controlPlane?.origins ?? []) {
     try { hosts.add(new URL(origin).hostname.toLowerCase()); } catch { /* validated with the control plane */ }
   }
@@ -59,7 +65,10 @@ export function checkUrl(raw, {blocked = new Set()} = {}) {
   } else if (!dnsName(host) || UNROUTABLE_NAMES.some(suffix => matchesHost(host, suffix))) {
     fail('url_not_allowed');
   }
-  if ([...blocked].some(suffix => matchesHost(host, suffix))) fail('url_not_allowed');
+  // fetchx.ai is blocked, except its public test site.
+  if ([...blocked].some(suffix => matchesHost(host, suffix) && !(suffix === SELF && FIXTURE_HOSTS.includes(host)))) {
+    fail('url_not_allowed');
+  }
   // Never forward a FetchX credential to a third-party site.
   let decoded = raw;
   try { decoded = decodeURIComponent(raw); } catch { /* keep the raw form */ }
