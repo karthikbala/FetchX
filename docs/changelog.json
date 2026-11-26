@@ -16,7 +16,7 @@
         },
         {
           "type": "added",
-          "text": "While a secret is loaded, anything the page sends that carries it to an origin the secret does not name (a script's request, a form, a redirect over HTTP) is stopped, and the request fails with secret_egress_blocked (next.action check_origins), free. Once a secret has been typed or sent, FetchX makes no further attempt on any route, so a sign-in is never sent twice. data.secrets_used, and secrets_used on each attempt and in GET /v1/fetch lists, name the secrets that were used, never their values."
+          "text": "While a secret is loaded, anything the page sends that carries it to an origin the secret does not name (a script's request, a form, a redirect over HTTP) is stopped, and the request fails with secret_egress_blocked (next.action check_origins), free. Once a secret has been typed or sent, FetchX makes no further attempt on any route, so a sign-in is never sent twice. secrets_used on the result (top level, beside status) and in GET /v1/fetch lists names the secrets that were used, never their values; an attempt that used one has secrets_used: true."
         },
         {
           "type": "added",
