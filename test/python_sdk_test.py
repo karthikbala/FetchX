@@ -348,6 +348,29 @@ class FetchTests(unittest.TestCase):
             self.assertEqual(caught.exception.details["field"], field, request)
         self.assertIn("actions", client.me().raw["features"])
 
+    def test_solve_captcha_actions_report_what_they_solved(self):
+        portal = "https://portal.example.com"
+        actions = [{"type": "fill", "selector": "#user", "value": "me"}, {"type": "solve_captcha"},
+                   {"type": "click", "selector": "#go"}]
+        fake = FakeFetchX({f"{portal}/login": FakePage("<html>signed in</html>", actions=[
+                               None, {"value": {"type": "recaptcha_v2", "outcome": "passed"}},
+                               {"captcha": [{"type": "turnstile", "outcome": "passed"}]}]),
+                           f"{portal}/plain": FakePage("<html>no captcha</html>"),
+                           f"{portal}/hard": FakePage("<html>the form</html>", actions=[
+                               None, {"status": "failed", "error": {"code": "captcha_not_solved",
+                                                                    "message": "The recaptcha_v2 captcha was not solved (captcha_timeout)."}}])},
+                          credits=10)
+        client = fake.client()
+        result = client.fetch(url=f"{portal}/login", actions=actions)
+        self.assertEqual(result.actions[1]["value"], {"type": "recaptcha_v2", "outcome": "passed"})
+        self.assertEqual(result.actions[2]["captcha"], [{"type": "turnstile", "outcome": "passed"}])
+        plain = client.fetch(url=f"{portal}/plain", actions=actions)
+        self.assertEqual(plain.actions[1]["value"], {"type": None, "outcome": "none"})
+        failed = client.fetch(url=f"{portal}/hard", actions=actions)
+        self.assertEqual((failed.error_code, failed.credits, failed.failed_action["error"]["code"]),
+                         ("action_failed", 0, "captcha_not_solved"))
+        self.assertIn("solve_captcha", client.me().raw["features"])
+
     def test_a_dict_body_and_a_given_key_replay_the_first_result(self):
         fake = shop()
         client = fake.client()
