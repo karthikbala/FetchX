@@ -268,6 +268,7 @@ def scenario(fake):
     client.estimate(items=[f"{SHOP}/p/1", {"url": f"{SHOP}/dear", "max_credits": 5}], defaults={"formats": ["text"]})
     client.balance()
     client.usage(period="day")
+    client.usage(key_id=fake.key_id)
     client.status()
     prices = client.prices()
     assert prices.step("browser_residential") == 25 and prices.trial_credits == 1000 and prices.captcha == 10, prices.raw

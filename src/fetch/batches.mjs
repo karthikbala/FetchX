@@ -22,7 +22,6 @@ import {randomUUID} from 'node:crypto';
 import {GatewayError, ID} from '../policy.mjs';
 import {keyLimitError, keyLimitState} from './key-limits.mjs';
 import {sha} from '../crypto.mjs';
-import {budget} from '../budgets.mjs';
 import {blockedHosts, checkUrl} from './destination.mjs';
 
 export const BATCH_LIMITS = Object.freeze({
@@ -548,7 +547,7 @@ export class BatchService {
     const running = new Map((await this.store.pool.query(`SELECT project, count(*)::int AS n FROM fetch_settlements
       WHERE status = 'pending' AND project = ANY($1::text[]) GROUP BY project`, [projects])).rows.map(row => [row.project, row.n]));
     return new Map(projects.map(project => {
-      const cap = this.config.projects?.[project]?.maxConcurrentRequests ?? budget(this.config, 'fetch.maxConcurrentPerProject');
+      const cap = this.front.concurrencyLimit(project);
       return [project, Math.max(0, (cap > 1 ? cap - 1 : cap) - (running.get(project) ?? 0))];
     }));
   }

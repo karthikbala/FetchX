@@ -24,7 +24,11 @@ test('a successful fetch is charged once, at the price of the step the engine re
   assert.deepEqual(first.body.credits, {charged: 1, max: 100, balance: 99, breakdown: {step: 'http', step_credits: 1, captcha_credits: 0,
     traffic_mb: 0, included_mb: null, traffic_credits: 0, extract_tokens: null, extract_credits: 0}});
   assert.deepEqual(Object.keys(first.body), ['id', 'status', 'page_status', 'idempotency_key', 'url', 'created_at', 'finished_at', 'tags', 'data',
-    'credits', 'challenge', 'attempts', 'skipped', 'fixes', 'error', 'batch']);
+    'credits', 'challenge', 'attempts', 'skipped', 'fixes', 'error', 'batch', 'request_id']);
+  // The call's own id: in the body and the header, and kept with the fetch it started.
+  assert.match(first.body.request_id, /^req_[0-9a-f]{24}$/);
+  assert.equal(first.headers['x-request-id'], first.body.request_id);
+  assert.equal((await settlement(store, first.body.id)).request_id, first.body.request_id);
   assert.equal(first.body.batch, null, 'a single request is not a batch item');
   assert.equal(await balance(store), 99);
   assert.equal(await reservations(store), 0);
@@ -59,7 +63,7 @@ test('a successful fetch is charged once, at the price of the step the engine re
   const usage = await call('GET', '/v1/usage');
   assert.equal(usage.body.balance.credits, 99);
   // No pack bought: a credit is priced at the smallest pack's USD list price.
-  assert.deepEqual((await call('GET', '/v1/balance')).body, {credits: 99, reserved: 0, trial: 100, purchased: 0, payment_hold: false,
+  assert.deepEqual({...(await call('GET', '/v1/balance')).body, request_id: undefined}, {request_id: undefined, credits: 99, reserved: 0, trial: 100, purchased: 0, payment_hold: false,
     usd_per_credit: 0.0002, currency: 'USD'});
   // After a purchase, the pack bought last prices a credit, whatever currency paid for it.
   await store.pool.query(`INSERT INTO paid_credit_grants (project, account_id, mode, checkout_session_id, payment_intent_id, credits,

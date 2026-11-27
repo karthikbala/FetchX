@@ -68,7 +68,7 @@ test('self-service: identity, isolation, keys, idempotency and success-only cred
   const api = async (method, path, payload, token) => {
     const response = await app.inject({method, url: path, headers: token ? {authorization: 'Bearer ' + token} : {},
       ...(payload === undefined ? {} : {payload})});
-    return {status: response.statusCode, body: response.json()};
+    return {status: response.statusCode, body: response.json(), headers: response.headers};
   };
   const noDispatch = async fn => {
     const before = calls.length;
@@ -176,7 +176,7 @@ test('self-service: identity, isolation, keys, idempotency and success-only cred
       assert.equal(me.status, 200, JSON.stringify(me.body));
       assert.deepEqual(me.body, {project_id: projectA.id, key_id: readOnly.key.id, key_name: 'usage only', key_prefix: readOnly.key.prefix,
         scopes: ['usage:read'], limits: {credits_per_day: null, credits_per_month: null, expires_at: null},
-        concurrency: {requests: {limit: 10, running: 0}}, features: [...FEATURES]});
+        concurrency: {requests: {limit: 10, running: 0}}, features: [...FEATURES], request_id: me.headers['x-request-id']});
       assert.equal(readOnly.token.slice(0, 12), me.body.key_prefix);
     });
     const viaKey = await api('POST', '/v1/fetch', {url: 'https://shop.example.com/k'}, keyA.token);
@@ -234,6 +234,26 @@ test('self-service: identity, isolation, keys, idempotency and success-only cred
     const raised = await console_('PUT', `/projects/${projectA.id}/keys/${rotated.key.id}/limits`, {credits_per_day: 3}, a);
     assert.deepEqual(raised.body.key.limits, {credits_per_day: 3, credits_per_month: null, expires_at: null});
     assert.equal((await api('POST', '/v1/fetch', {url: 'https://shop.example.com/capped/3'}, rotated.token)).body.status, 'succeeded');
+    // Usage for one key counts that key and the key it was rotated from (revoked keys too); the balance stays the project's.
+    await noDispatch(async () => {
+      const byKey = await api('GET', `/v1/usage?period=day&key_id=${capped.key.id}`, undefined, rotated.token);
+      assert.equal(byKey.status, 200, JSON.stringify(byKey.body));
+      assert.deepEqual([byKey.body.key_id, byKey.body.key_ids, byKey.body.used.credits, byKey.body.used.succeeded, byKey.body.used.failed],
+        [capped.key.id, [capped.key.id, rotated.key.id].sort(), 3, 3, 0]);
+      assert.equal(byKey.body.daily.reduce((sum, row) => sum + row.credits, 0), 3);
+      assert.deepEqual((await api('GET', `/v1/usage?period=day&key_id=${rotated.key.id}`, undefined, rotated.token)).body.used, byKey.body.used);
+      const whole = await api('GET', '/v1/usage?period=day', undefined, rotated.token);
+      assert.deepEqual([whole.body.key_id, whole.body.key_ids], [null, null]);
+      assert.ok(whole.body.used.credits > byKey.body.used.credits, 'the project spent more than this key');
+      assert.deepEqual(whole.body.balance, byKey.body.balance);
+      const viaConsole = await console_('GET', `/projects/${projectA.id}/usage?period=day&key_id=${capped.key.id}`, undefined, a);
+      assert.deepEqual(viaConsole.body.used, byKey.body.used);
+      for (const other of [keyB.key.id, 'not-a-key', '00000000-0000-4000-8000-000000000000']) {
+        const refused = await api('GET', `/v1/usage?key_id=${other}`, undefined, rotated.token);
+        assert.equal(refused.status, 400, other);
+        assert.deepEqual([refused.body.error.code, refused.body.error.details.field], ['invalid_request', 'key_id']);
+      }
+    });
     assert.equal((await console_('PUT', `/projects/${projectA.id}/keys/${rotated.key.id}/limits`, {credits_per_day: -1}, a)).status, 400);
     assert.equal((await console_('PUT', `/projects/${projectA.id}/keys/${capped.key.id}/limits`, {}, a)).status, 409, 'a revoked key keeps its limits');
     assert.equal((await console_('PUT', `/projects/${projectA.id}/keys/${rotated.key.id}/limits`, {}, b)).status, 404, 'only members');

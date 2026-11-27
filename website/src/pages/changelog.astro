@@ -11,7 +11,8 @@ const latest = changelog.releases[0];
     <header class="page-intro st-intro">
       <span class="eyebrow">API CHANGELOG · LATEST {latest.version}</span>
       <h1>What changed.</h1>
-      <p>Changes to the FetchX API at <code>/v1</code>, newest first. A breaking change is announced here as a deprecation at least {changelog.policy.notice_days} days before its sunset. Until then the API still serves the route and marks its answers with <code>Deprecation</code> and <code>Sunset</code> headers; afterwards it answers <code>410 Gone</code> with <code>error.details.replacement</code>.</p>
+      <p>Changes to the FetchX API at <code>/v1</code>, newest first. A breaking change, to a route or to a field of an answer, is announced here as a deprecation at least {changelog.policy.notice_days} days before its sunset. Until then the API still serves it, and a deprecated route marks its answers with <code>Deprecation</code> and <code>Sunset</code> headers; afterwards a retired route answers <code>410 Gone</code> with <code>error.details.replacement</code>.</p>
+      {changelog.policy.compatibility && <p>{changelog.policy.compatibility}</p>}
       <p class="st-meta mono"><a href="/changelog.xml">Atom feed</a> · <a href="/changelog.json">JSON</a> · <a href="/status">Status</a></p>
     </header>
 
@@ -19,12 +20,12 @@ const latest = changelog.releases[0];
       <h2 id="cl-deprecations">Deprecations in force</h2>
       {changelog.deprecations.length ? (
         <div class="cl-table-wrap"><table class="cl-table">
-          <thead><tr><th scope="col">Route</th><th scope="col">Deprecated</th><th scope="col">Sunset</th><th scope="col">Use instead</th></tr></thead>
+          <thead><tr><th scope="col">Route or field</th><th scope="col">Deprecated</th><th scope="col">Sunset</th><th scope="col">Use instead</th></tr></thead>
           <tbody>{changelog.deprecations.map(entry => (
             <tr><td><code>{routeLabel(entry)}</code></td><td>{entry.deprecated_in}, {date(entry.deprecated_on)}</td><td>{entry.sunset_on ? date(entry.sunset_on) : 'Not set yet'}</td><td>{entry.replacement}{entry.note && <span class="cl-note">{entry.note}</span>}</td></tr>
           ))}</tbody>
         </table></div>
-      ) : <p class="st-empty">None. Every route in the API reference is current.</p>}
+      ) : <p class="st-empty">None. Every route and field in the API reference is current.</p>}
     </section>
 
     {changelog.releases.map(release => (

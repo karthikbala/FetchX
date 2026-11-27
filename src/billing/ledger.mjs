@@ -139,6 +139,17 @@ export async function initLedger(pool) {
       created_at timestamptz NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS credit_charges_project_created ON credit_charges (project, created_at);
+    -- The console key whose request it was (fetch_settlements.key_id), for
+    -- GET /v1/usage?key_id=. Charges from before the column take it from their
+    -- settlement while that is still kept.
+    ALTER TABLE credit_charges ADD COLUMN IF NOT EXISTS key_id text;
+    CREATE INDEX IF NOT EXISTS credit_charges_key_created ON credit_charges (key_id, created_at) WHERE key_id IS NOT NULL;
+    DO $$ BEGIN
+      IF to_regclass('fetch_settlements') IS NOT NULL THEN
+        UPDATE credit_charges c SET key_id = s.key_id FROM fetch_settlements s
+          WHERE s.request = c.request AND c.key_id IS NULL AND s.key_id IS NOT NULL;
+      END IF;
+    END $$;
   `);
 }
 
@@ -209,13 +220,13 @@ export class Ledger {
 
   // Charges a successful job (never more than it reserved) and closes its
   // reservation. Idempotent per job.
-  async charge(client, {project, request, step, credits, captcha = false}) {
+  async charge(client, {project, request, step, credits, captcha = false, keyId = null}) {
     if (!this.metered(project)) return 0;
     const reservation = (await client.query('DELETE FROM credit_reservations WHERE request = $1 RETURNING credits', [request])).rows[0];
     const amount = Math.min(credits, Number(reservation?.credits ?? credits));
     if (amount > 0) {
-      await client.query(`INSERT INTO credit_charges (request, project, step, credits, captcha) VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (request) DO NOTHING`, [request, project, step, amount, captcha]);
+      await client.query(`INSERT INTO credit_charges (request, project, step, credits, captcha, key_id) VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (request) DO NOTHING`, [request, project, step, amount, captcha, keyId]);
     }
     return amount;
   }
@@ -224,17 +235,19 @@ export class Ledger {
     await client.query('DELETE FROM credit_reservations WHERE request = $1', [request]);
   }
 
-  async usage(project, {from, to}) {
+  // keyIds: only the charges of requests made with these console keys (null: all).
+  async usage(project, {from, to, keyIds = null}) {
     const pool = this.store.pool;
+    const where = 'project = $1 AND created_at >= $2 AND created_at < $3 AND ($4::text[] IS NULL OR key_id = ANY($4::text[]))';
+    const values = [project, from, to, keyIds];
     const byStep = (await pool.query(`SELECT step, count(*)::int AS requests, sum(credits)::bigint AS credits
-      FROM credit_charges WHERE project = $1 AND created_at >= $2 AND created_at < $3 GROUP BY step ORDER BY step`,
-    [project, from, to])).rows.map(row => ({step: row.step, requests: row.requests, credits: Number(row.credits)}));
-    const captcha = (await pool.query(`SELECT count(*)::int AS requests FROM credit_charges
-      WHERE project = $1 AND captcha AND created_at >= $2 AND created_at < $3`, [project, from, to])).rows[0].requests;
+      FROM credit_charges WHERE ${where} GROUP BY step ORDER BY step`,
+    values)).rows.map(row => ({step: row.step, requests: row.requests, credits: Number(row.credits)}));
+    const captcha = (await pool.query(`SELECT count(*)::int AS requests FROM credit_charges WHERE ${where} AND captcha`, values)).rows[0].requests;
     const daily = (await pool.query(`SELECT to_char(date_trunc('day', created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS date,
         count(*)::int AS requests, sum(credits)::bigint AS credits
-      FROM credit_charges WHERE project = $1 AND created_at >= $2 AND created_at < $3 GROUP BY 1 ORDER BY 1`,
-    [project, from, to])).rows.map(row => ({date: row.date, requests: row.requests, credits: Number(row.credits)}));
+      FROM credit_charges WHERE ${where} GROUP BY 1 ORDER BY 1`,
+    values)).rows.map(row => ({date: row.date, requests: row.requests, credits: Number(row.credits)}));
     return {by_step: byStep, captcha_solved: captcha, daily, credits: byStep.reduce((sum, row) => sum + row.credits, 0)};
   }
 
