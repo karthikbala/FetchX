@@ -6,7 +6,7 @@
 // started.
 import {GatewayError} from '../policy.mjs';
 
-export const ENGINE_CONTRACT = '1.16';
+export const ENGINE_CONTRACT = '1.17';
 const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH']);
 // 503 answers that are refusals: nothing was started, and the caller is told why.
 const REFUSED_503 = new Set(['extract_unavailable']);
@@ -149,7 +149,7 @@ export class EngineClient {
     await this.#call('DELETE', `/internal/v1/logins/${encodeURIComponent(id)}`, {query: {tenant}});
   }
 
-  // Remote browser sessions (contract 1.16). The engine answers a create once
+  // Remote browser sessions (contract 1.17). The engine answers a create once
   // the session can be connected to (its browser takes up to a minute to
   // start); a 503 from it started nothing billable, so it is a refusal with the
   // engine's code (browser_capacity, browser_failed...), not an uncertain call.

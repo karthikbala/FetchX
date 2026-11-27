@@ -1,7 +1,7 @@
 // The platform side of browser sessions (POST /v1/browser-sessions): what a
 // session may cost, the hold on the project's credits while it runs, charging
 // it once when it ends, and carrying its caller's WebSocket to the engine,
-// which runs the browser (karthikbala/fetchx-engine, contract 1.16).
+// which runs the browser (karthikbala/fetchx-engine, contract 1.17).
 //
 // A session bills as one row of fetch_settlements (kind browser_session), so it
 // counts toward the project's running requests and the key's credit limits like

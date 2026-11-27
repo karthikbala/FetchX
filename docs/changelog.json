@@ -6,8 +6,8 @@
   },
   "releases": [
     {
-      "version": "1.16.0",
-      "date": "2026-11-26",
+      "version": "1.18.0",
+      "date": "2026-11-27",
       "title": "Browser sessions you drive with Playwright",
       "changes": [
         {
