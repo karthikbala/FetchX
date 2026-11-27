@@ -1,13 +1,14 @@
 {
   "title": "FetchX API changelog",
-  "description": "Changes to the FetchX API at /v1, newest first. Each release has a version (docs/openapi.json info.version is the latest) and a date. Breaking changes are announced here as deprecations first: each names the version and date it was deprecated, what replaces it, and its sunset date, at least 30 days later. Until the sunset the API still serves it and marks responses with Deprecation and Sunset headers; afterwards a retired route answers 410 Gone with error.details.replacement.",
+  "description": "Changes to the FetchX API at /v1, newest first. Each release has a version (docs/openapi.json info.version is the latest) and a date. Breaking changes, to a route or to a field of an answer, are announced here as deprecations first: each names the route or field, the version and date it was deprecated, what replaces it, and its sunset date, at least 30 days later. Until the sunset the API still serves it, and a deprecated route marks its responses with Deprecation and Sunset headers; afterwards a retired route answers 410 Gone with error.details.replacement.",
   "policy": {
-    "notice_days": 30
+    "notice_days": 30,
+    "compatibility": "Every field the API reference documents in an answer is covered, as well as every route. FetchX does not remove or rename a field, change its type, let it be null or missing where it always had a value, stop sending a value it lists, or change what a value means, without a deprecation here at least 30 days before the change. Until then the old field or value is still sent. Additions ship without notice and are listed here when they ship: new fields, new values in a list of values, new error codes, new routes and new optional request fields. A client should ignore fields it does not know and treat a value it does not know as other. Follow /changelog.xml (Atom) or /changelog.json to hear about a deprecation the day it is announced."
   },
   "releases": [
     {
       "version": "1.17.0",
-      "date": "2026-11-26",
+      "date": "2026-11-27",
       "title": "Captchas in sign-in forms, after actions and inside frames",
       "changes": [
         {
@@ -29,6 +30,29 @@
         {
           "type": "fixed",
           "text": "A captcha in a sign-in form on a page that just loaded is no longer solved, and the form sent, before the form is filled in. When FetchX sends a form after a solve, it does so only if the form's submit control is enabled."
+        }
+      ]
+    },
+    {
+      "version": "1.16.0",
+      "date": "2026-11-26",
+      "title": "Request ids, usage per key, the compatibility promise",
+      "changes": [
+        {
+          "type": "added",
+          "text": "Every answer carries an X-Request-Id header, and every JSON answer from /v1, success or error, carries the same id as request_id (req_ and 24 hex digits). It names the HTTP call: a fetch keeps its own id. Log it, and quote it when you ask about a call; FetchX can find the call, and the fetch it started, from it. Feature id request_ids."
+        },
+        {
+          "type": "added",
+          "text": "GET /v1/usage takes key_id: used, by_step and daily then count only requests made with that API key, and the keys it was rotated from or to. The answer says which (key_id, key_ids); balance stays the project's. An id that is not one of the project's keys is 400 invalid_request with error.details.field key_id. Feature id usage_by_key."
+        },
+        {
+          "type": "added",
+          "text": "The changelog's policy now states the compatibility promise for answer fields as well as routes: no field is removed, renamed, retyped, made nullable or optional, and no listed value dropped or redefined, without a deprecation here at least 30 days ahead. Deprecations can now name a field (field) as well as a route (path)."
+        },
+        {
+          "type": "fixed",
+          "text": "POST /v1/estimate counts the project's own limit of requests at once, when FetchX has raised it for that project, instead of the default."
         }
       ]
     },

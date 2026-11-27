@@ -45,6 +45,12 @@ class FetchXError(RuntimeError):
         return self.retry_after_seconds
 
     @property
+    def request_id(self) -> Optional[str]:
+        """FetchX's id for the call (``req_...``, also the X-Request-Id header): quote it when asking about one."""
+        value = (self.response or {}).get("request_id") if isinstance(self.response, dict) else None
+        return value if isinstance(value, str) else None
+
+    @property
     def refused(self) -> bool:
         """True for a 4xx: nothing was sent to the site and nothing was charged."""
         return self.status is not None and 400 <= self.status < 500

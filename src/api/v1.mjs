@@ -107,15 +107,28 @@ function usagePeriod(query) {
   return {from, to};
 }
 
+// key_id: only what requests made with that console key (and the keys of its
+// lineage, rotated from or to it) used. The balance stays the project's.
+async function usageKeys(service, project, query) {
+  if (query.key_id === undefined) return {keyId: null, keyIds: null};
+  const keyIds = typeof query.key_id === 'string' ? await service.usageKeys(project, query.key_id) : null;
+  if (!keyIds) throw Object.assign(new GatewayError('invalid_request'), {details: {field: 'key_id', reason: 'the id of one of this project\'s API keys'}});
+  return {keyId: query.key_id.toLowerCase(), keyIds};
+}
+
 export async function usageReport({service, ledger}, project, query = {}) {
   const {from, to} = usagePeriod(query);
-  const counts = await service.counts(project, {from, to});
+  const {keyId, keyIds} = await usageKeys(service, project, query);
+  const counts = await service.counts(project, {from, to, keyIds});
   const balance = await ledger.balance(project);
-  const used = ledger.metered(project) ? await ledger.usage(project, {from, to}) : {credits: 0, by_step: [], captcha_solved: 0, daily: []};
+  const used = ledger.metered(project) ? await ledger.usage(project, {from, to, keyIds})
+    : {credits: 0, by_step: [], captcha_solved: 0, daily: []};
   return {
     balance: balance ? {credits: balance.available, trial: balance.trial, purchased: balance.purchased, reserved: balance.reserved,
       payment_hold: balance.held} : null,
     period: {from: from.toISOString(), to: to.toISOString()},
+    key_id: keyId,
+    key_ids: keyIds,
     used: {credits: used.credits, succeeded: counts.succeeded, failed: counts.failed, captcha_solved: used.captcha_solved},
     by_step: used.by_step,
     daily: used.daily,
@@ -124,15 +137,46 @@ export async function usageReport({service, ledger}, project, query = {}) {
 
 const idParams = {schema: {params: {type: 'object', required: ['id'], properties: {id: {type: 'string', maxLength: 64}}}}};
 
+// Calls that start a fetch: their answer's `id` is the fetch they started (or replayed).
+const STARTS_FETCH = new Set(['POST /v1/fetch', 'POST /v1/fetch/:id/next']);
+// Public and polled by monitors: not worth a log line each.
+const UNLOGGED = new Set(['GET /v1/status', 'GET /v1/prices']);
+// A file, not an API object: it carries the id in its header only.
+const FILE_ROUTES = new Set(['/v1/fetch/:id/network.har']);
+const isApi = url => /^\/v1(?:[/?]|$)/.test(url ?? '');
+
+// Every call has an id (req.id, made by the server's genReqId): it goes out as
+// X-Request-Id on every answer and, on /v1, as request_id in every JSON body,
+// success or error, so a caller can log it and quote it. One line per /v1 call
+// goes to stderr (no URL, query or body): the id, route, status, error code,
+// project, key and the fetch it started, so support can find a call by its id.
+export function registerRequestIds(app) {
+  app.addHook('onRequest', async (req, reply) => { reply.header('x-request-id', req.id); });
+  app.addHook('preSerialization', async (req, reply, payload) => {
+    if (!isApi(req.url) || FILE_ROUTES.has(req.routeOptions?.url) || payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+      return payload;
+    }
+    if (STARTS_FETCH.has(`${req.method} ${req.routeOptions?.url}`) && typeof payload.id === 'string') req.fetchId = payload.id;
+    return {...payload, request_id: req.id};
+  });
+  app.addHook('onResponse', async (req, reply) => {
+    const route = req.routeOptions?.url ?? null;
+    if (!isApi(req.url) || UNLOGGED.has(`${req.method} ${route}`)) return;
+    process.stderr.write(JSON.stringify({event: 'api_call', request_id: req.id, method: req.method, route, status: reply.statusCode,
+      code: req.errorCode ?? null, project: req.project ?? null, key_id: req.keyId ?? null, fetch_id: req.fetchId ?? null,
+      id: typeof req.params?.id === 'string' ? req.params.id.slice(0, 64) : null, ms: Math.round(reply.elapsedTime)}) + '\n');
+  });
+}
+
 // app.authenticate(req, scope) sets req.project, req.keyId and req.key ({id, name, prefix, scopes}).
 export function registerApi(app, {service, ledger, estimator, board, batches, feedback}) {
   const guard = scope => async req => app.authenticate(req, scope);
   app.post('/v1/fetch', {preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
-    const view = await service.submit(req.project, req.body, {keyId: req.keyId});
+    const view = await service.submit(req.project, req.body, {keyId: req.keyId, requestId: req.id});
     return reply.code(view.status === 'pending' ? 202 : 200).send(view);
   });
   app.post('/v1/fetch/:id/next', {...idParams, preHandler: guard(API_SCOPES.write)}, async (req, reply) => {
-    const view = await service.submitNext(req.project, req.params.id, req.body ?? {}, {keyId: req.keyId});
+    const view = await service.submitNext(req.project, req.params.id, req.body ?? {}, {keyId: req.keyId, requestId: req.id});
     return reply.code(view.status === 'pending' ? 202 : 200).send(view);
   });
   app.get('/v1/fetch', {preHandler: guard(API_SCOPES.read)}, req => service.list(req.project, req.query ?? {}));

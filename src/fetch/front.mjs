@@ -19,7 +19,7 @@
 // opaque tenant, and allowed_steps.
 import {randomBytes, randomUUID} from 'node:crypto';
 import {GatewayError, fail} from '../policy.mjs';
-import {keyLimitError, keyLimitState, publicLimits} from './key-limits.mjs';
+import {keyLimitError, keyLimitState, keyLineage, publicLimits} from './key-limits.mjs';
 import {Sealer} from '../crypto.mjs';
 import {STEPS, extractCredits, priceOf, priceParts, worstCaseOf} from '../billing/ledger.mjs';
 import {budget} from '../budgets.mjs';
@@ -76,6 +76,9 @@ export async function initFetchFront(pool) {
     ALTER TABLE fetch_settlements ADD COLUMN IF NOT EXISTS extract_tokens integer;
     CREATE INDEX IF NOT EXISTS fetch_settlements_project_created ON fetch_settlements (project, created_at);
     CREATE INDEX IF NOT EXISTS fetch_settlements_pending ON fetch_settlements (deadline) WHERE status = 'pending';
+    -- The call (request_id, X-Request-Id) that started the job, so support can
+    -- find a job from the id a caller quotes. Null for batch items.
+    ALTER TABLE fetch_settlements ADD COLUMN IF NOT EXISTS request_id text;
     -- A console key's spend this day and month (its credit limits, fetch/key-limits.mjs).
     CREATE INDEX IF NOT EXISTS fetch_settlements_key_created ON fetch_settlements (key_id, created_at) WHERE key_id IS NOT NULL;
     CREATE TABLE IF NOT EXISTS webhook_secrets (
@@ -145,12 +148,12 @@ export class FetchFront {
   // (POST /v1/estimate shows it as credits.hold). Throws like submit on a bad max_credits.
   holdFor(raw) { return this.#ceiling(this.#billingInput(raw)); }
 
-  async submit(project, raw, {keyId = null} = {}) {
+  async submit(project, raw, {keyId = null, requestId = null} = {}) {
     const billing = this.#billingInput(raw);
     if (typeof raw.idempotency_key === 'string' && raw.idempotency_key.startsWith(ITEM_KEY_PREFIX)) {
       throw invalid('idempotency_key', `keys starting with ${ITEM_KEY_PREFIX} belong to batch items`);
     }
-    return this.#start(project, billing, {keyId},
+    return this.#start(project, billing, {keyId, requestId},
       (id, allowed) => this.engine.startJob({id, tenant: project, request: raw, allowed_steps: allowed}));
   }
 
@@ -172,12 +175,12 @@ export class FetchFront {
   // The page after request `previous` (POST /v1/fetch/{id}/next). The engine
   // builds it from the earlier request, so only what may change per page is
   // sent; a next page is always a GET, which sets the reservation's ceiling.
-  async submitNext(project, previous, raw = {}, {keyId = null} = {}) {
+  async submitNext(project, previous, raw = {}, {keyId = null, requestId = null} = {}) {
     // A next page reads its page into JSON when the earlier one did.
     const earlier = UUID.test(previous ?? '') ? (await this.store.pool.query(
       'SELECT extract FROM fetch_settlements WHERE request = $1 AND project = $2', [previous, project])).rows[0] : null;
     const billing = {...this.#billingInput(raw), method: 'GET', maxWireBytes: this.#deepestWireBytes(), extract: earlier?.extract === true};
-    return this.#start(project, billing, {keyId},
+    return this.#start(project, billing, {keyId, requestId},
       (id, allowed) => this.engine.startNextJob(previous, {id, tenant: project, request: raw, allowed_steps: allowed}));
   }
 
@@ -187,7 +190,7 @@ export class FetchFront {
   // waitForCredits: rather than start with less than its full reservation while
   // other requests of the project hold credits, refuse with credits_busy (a
   // batch item waits for them; it never runs with fewer steps than it could).
-  async #start(project, billing, {keyId, claim = null, waitForCredits = false, onReplay = null}, send) {
+  async #start(project, billing, {keyId, requestId = null, claim = null, waitForCredits = false, onReplay = null}, send) {
     const id = randomUUID();
     const table = this.ledger.prices;
     const metered = this.ledger.metered(project);
@@ -200,11 +203,11 @@ export class FetchFront {
       await this.ledger.lock(client, project);
       const running = (await client.query(`SELECT count(*)::int AS n FROM fetch_settlements WHERE project = $1 AND status = 'pending'`,
         [project])).rows[0].n;
-      await client.query(`INSERT INTO fetch_settlements (request, project, key_id, deadline, extract)
-        VALUES ($1, $2, $3, clock_timestamp() + make_interval(secs => $4), $5)`,
-        [id, project, keyId, this.limits.provisionalDeadlineMs / 1000, billing.extract]);
+      await client.query(`INSERT INTO fetch_settlements (request, project, key_id, deadline, extract, request_id)
+        VALUES ($1, $2, $3, clock_timestamp() + make_interval(secs => $4), $5, $6)`,
+        [id, project, keyId, this.limits.provisionalDeadlineMs / 1000, billing.extract, requestId]);
       if (claim && !(await claim(client, id))) throw CLAIM_LOST;
-      const cap = this.#concurrencyLimit(project);
+      const cap = this.concurrencyLimit(project);
       if (running >= cap) {
         admission.busy = running;
         admission.cap = cap;
@@ -327,7 +330,7 @@ export class FetchFront {
       if (step && this.ledger.metered(current.project) && current.credits_max !== null) {
         const price = priceOf(this.ledger.prices, {step, captchaSolved: captcha, wireBytes: wireBytes ?? 0, extractTokens});
         charged = await this.ledger.charge(client, {project: current.project, request: id, step,
-          credits: Math.min(price, Number(current.credits_max)), captcha});
+          credits: Math.min(price, Number(current.credits_max)), captcha, keyId: current.key_id});
       } else {
         await this.ledger.release(client, {request: id});
       }
@@ -425,8 +428,9 @@ export class FetchFront {
       payment_hold: balance.held, ...usd} : {credits: null, reserved: 0, trial: 0, purchased: 0, payment_hold: false, ...usd};
   }
 
-  // Requests a project may have running at once, of any kind.
-  #concurrencyLimit(project) {
+  // Requests a project may have running at once, of any kind: the project's
+  // own maxConcurrentRequests (platform config), else the budget for all.
+  concurrencyLimit(project) {
     return this.config.projects?.[project]?.maxConcurrentRequests ?? budget(this.config, 'fetch.maxConcurrentPerProject');
   }
 
@@ -436,7 +440,7 @@ export class FetchFront {
   async concurrency(project) {
     const running = (await this.store.pool.query(`SELECT count(*)::int AS n FROM fetch_settlements WHERE project = $1 AND status = 'pending'`,
       [project])).rows[0].n;
-    return {requests: {limit: this.#concurrencyLimit(project), running}};
+    return {requests: {limit: this.concurrencyLimit(project), running}};
   }
 
   async get(project, id, {includeBody = true} = {}) {
@@ -483,12 +487,18 @@ export class FetchFront {
   }
   removeLogin(project, id) { return this.engine.removeLogin(project, id); }
 
-  // How many of a project's jobs finished in a period, for /v1/usage.
-  async counts(project, {from, to}) {
+  // How many of a project's jobs finished in a period, for /v1/usage; keyIds:
+  // only those made with these console keys (null: all).
+  async counts(project, {from, to, keyIds = null}) {
     return (await this.store.pool.query(`SELECT count(*) FILTER (WHERE status = 'succeeded')::int AS succeeded,
         count(*) FILTER (WHERE status = 'failed')::int AS failed FROM fetch_settlements
-      WHERE project = $1 AND created_at >= $2 AND created_at < $3`, [project, from, to])).rows[0];
+      WHERE project = $1 AND created_at >= $2 AND created_at < $3 AND ($4::text[] IS NULL OR key_id = ANY($4::text[]))`,
+    [project, from, to, keyIds])).rows[0];
   }
+
+  // The keys GET /v1/usage?key_id= counts (the key and its lineage), or null
+  // when the project has no such key.
+  usageKeys(project, keyId) { return keyLineage(this.store.pool, project, keyId); }
 
   // ---------- webhooks and retention ----------
 

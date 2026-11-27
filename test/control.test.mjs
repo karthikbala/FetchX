@@ -103,7 +103,8 @@ test('the console playground, history, usage, billing and webhook secret go thro
  assert.deepEqual((await f.send('GET',`/projects/${project}`)).json(),{project:{id:project,name:'Synthetic project',status:'active'}});
  const submitted=await f.send('POST',`/projects/${project}/fetch`,{url:'https://example.com/',formats:['markdown']});
  assert.equal(submitted.statusCode,200);assert.equal(submitted.json().status,'succeeded');
- assert.deepEqual(f.calls.find(c=>c[0]==='submit'),['submit',project,{url:'https://example.com/',formats:['markdown']},{keyId:'console'}]);
+ const call=f.calls.find(c=>c[0]==='submit');assert.equal(typeof call[3].requestId,'string');
+ assert.deepEqual(call,['submit',project,{url:'https://example.com/',formats:['markdown']},{keyId:'console',requestId:call[3].requestId}]);
  const history=await f.send('GET',`/projects/${project}/fetch?limit=5`);
  assert.deepEqual(history.json().items,[{id:operation,status:'succeeded'}]);assert.equal(f.queries.at(-1).args[0],project);assert.equal(f.queries.at(-1).args[1].limit,'5');
  assert.equal(history.headers['cache-control'],'no-store');

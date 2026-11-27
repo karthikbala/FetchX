@@ -214,7 +214,7 @@ export function registerControl(app,gateway,{identity=gateway.controlIdentity,le
   route('DELETE','/projects/:id/keys/:key',async req=>{query(req);if(req.body!==undefined)input(req,[]);const auth=await member(req);await identity.revokeKey(auth.user.id,auth.id,pathId(req.params.key,UUID));return {revoked:true};});
   // The playground and request history use the public API's fetch service.
   const requestId=req=>pathId(req.params.rid,UUID);
-  route('POST','/projects/:id/fetch',async(req,reply)=>{query(req);const auth=await member(req);const view=await service.submit(auth.id,req.body,{keyId:'console'});return reply.code(view.status==='pending'?202:200).send(view);});
+  route('POST','/projects/:id/fetch',async(req,reply)=>{query(req);const auth=await member(req);const view=await service.submit(auth.id,req.body,{keyId:'console',requestId:req.id});return reply.code(view.status==='pending'?202:200).send(view);});
   route('GET','/projects/:id/fetch',async req=>{const auth=await member(req);return service.list(auth.id,req.query??{});});
   route('GET','/projects/:id/fetch/:rid',async(req,reply)=>{const auth=await member(req);const view=await service.get(auth.id,requestId(req),{includeBody:req.query?.include_body!=='false'});return reply.code(view.status==='pending'?202:200).send(view);});
   route('DELETE','/projects/:id/fetch/:rid',async req=>{query(req);const auth=await member(req);await service.remove(auth.id,requestId(req));return {deleted:true};});

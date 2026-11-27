@@ -56,6 +56,7 @@ export interface FetchXErrorOptions {
   details?: unknown;
   retryAfterSeconds?: number | null;
   idempotencyKey?: string | null;
+  requestId?: string | null;
   response?: unknown;
 }
 
@@ -66,6 +67,8 @@ export class FetchXError extends Error {
   readonly details?: unknown;
   readonly retryAfterSeconds: number | null;
   readonly idempotencyKey: string | null;
+  /** FetchX's id for the call (req_..., also the X-Request-Id header): quote it when asking about one. */
+  readonly requestId: string | null;
   readonly response: unknown;
 }
 
@@ -110,6 +113,8 @@ export interface UsageQuery {
   period?: 'day' | 'month';
   since?: string;
   until?: string;
+  /** Only requests made with this API key (and the keys it was rotated from or to). */
+  key_id?: string;
 }
 
 export interface Download {

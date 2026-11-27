@@ -13,7 +13,6 @@
 // each item merged over `defaults`.
 import {GatewayError} from '../policy.mjs';
 import {STEPS, extractCredits, priceOf} from '../billing/ledger.mjs';
-import {budget} from '../budgets.mjs';
 
 export const MAX_ESTIMATE_ITEMS = 1000;
 // A host's own history is used once it has this many recent requests.
@@ -110,7 +109,7 @@ export class Estimator {
         notes.push({code: 'balance_may_run_out', message: `The balance (${available} credits) covers the expected ${credits.expected} credits but not the high estimate of ${credits.high}.`});
       }
     }
-    const slots = this.#slots(estimated, metered ? available : null);
+    const slots = this.#slots(estimated, metered ? available : null, project);
     if (kind === 'batch' && slots.limited) {
       notes.push({code: 'balance_limits_pace', message: `A running request holds up to ${slots.hold} credits until it finishes, so the balance (${available} credits) lets ${slots.count} run at once. A larger balance runs the batch faster; unused holds are released.`});
     }
@@ -233,8 +232,8 @@ export class Estimator {
   // most max_running at once and start_gap_ms apart.
   // How many of a batch's requests can run at once: the project's limit less the one kept free for single
   // requests, and no more than the balance can hold, since each running request holds its worst-case reservation.
-  #slots(items, available) {
-    const limit = Math.max(1, budget(this.config, 'fetch.maxConcurrentPerProject') - 1);
+  #slots(items, available, project) {
+    const limit = Math.max(1, this.front.concurrencyLimit(project) - 1);
     const hold = items.reduce((most, item) => Math.max(most, item.credits.hold), 0);
     if (available == null || !hold) return {count: limit, limited: false, hold};
     const count = Math.max(1, Math.min(limit, Math.floor(available / hold)));

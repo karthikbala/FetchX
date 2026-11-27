@@ -1100,6 +1100,17 @@ class Usage(Model):
     def daily(self) -> List[dict]:
         return list(self.raw.get("daily") or [])
 
+    @property
+    def key_id(self) -> Optional[str]:
+        """The API key the usage is for, or None for the whole project."""
+        return self.raw.get("key_id")
+
+    @property
+    def key_ids(self) -> Optional[List[str]]:
+        """With ``key_id``: that key and the keys it was rotated from or to, whose requests are counted."""
+        value = self.raw.get("key_ids")
+        return list(value) if isinstance(value, list) else None
+
     def _repr_fields(self):
         return {"credits_used": self.credits_used}
 
