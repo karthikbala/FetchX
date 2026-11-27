@@ -197,9 +197,12 @@ class FetchTests(unittest.TestCase):
                          ("blocked", "retry_later", True, 900))
         self.assertEqual((result.page_status, result.challenge.vendor, result.credits), ("challenge", "examplewall", 0))
         self.assertEqual(result.summary()["next_action"], "retry_later")
+        self.assertRegex(result.request_id, r"^req_[0-9a-f]{24}$")
+        self.assertEqual(result.summary()["request_id"], result.request_id)
         with self.assertRaises(FetchFailed) as caught:
             result.raise_for_status()
-        self.assertEqual((caught.exception.code, caught.exception.result.id), ("blocked", result.id))
+        self.assertEqual((caught.exception.code, caught.exception.result.id, caught.exception.request_id),
+                         ("blocked", result.id, result.request_id))
 
     def test_retry_failed_sends_a_new_key_only_when_error_next_allows_it(self):
         sleeps = Sleeps()

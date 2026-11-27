@@ -68,6 +68,7 @@ A request is a `POST /v1/fetch` body, given as a dict, as keyword fields, or bot
 | `error`, `error_code`, `next_action`, `retry_with_new_key`, `retry_after_seconds` | Why it failed and what to do |
 | `challenge`, `attempts`, `skipped`, `fixes` | The walls it met and the route it took |
 | `id`, `idempotency_key`, `url`, `tags`, `created_at`, `finished_at` | The request |
+| `request_id` | FetchX's id for the call that returned the result (`req_...`, also the `X-Request-Id` header), on failed results too. Log it with `id` and quote both when you ask about a request. Errors carry it as `error.request_id` |
 
 Every result also reads like the JSON it came from (`result["data"]["markdown"]`, `result.get("error")`, `result.raw`), so fields FetchX adds later are there before they get a property. `summary()` gives a compact dict for logs and `raise_for_status()` raises `FetchFailed` unless it succeeded.
 

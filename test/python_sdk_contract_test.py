@@ -220,8 +220,9 @@ def scenario(fake):
     assert client.create_browser_session(allow_hosts=["shop.example.com", "login.shop.example.com"], ttl_s=120, login=login.id,
                                          secrets={"pin": {"value": "synthetic-pin-1", "origins": ["https://login.shop.example.com"]}},
                                          idempotency_key=session.idempotency_key).id == session.id
-    assert client.fill_browser_session(session, secret="pin", selector="#pin", frame_url="https://login.shop.example.com/sign-in?x=1") == {
-        "secret": "pin", "frame_url": "https://login.shop.example.com/sign-in"}
+    filled = client.fill_browser_session(session, secret="pin", selector="#pin", frame_url="https://login.shop.example.com/sign-in?x=1")
+    assert {key: value for key, value in filled.items() if key != "request_id"} == {
+        "secret": "pin", "frame_url": "https://login.shop.example.com/sign-in"}, filled
     client.fill_browser_session(session, secret="login.password", selector="#password", frame_url="https://login.shop.example.com/")
     assert [item.id for item in client.list_browser_sessions(status="open")] == [session.id]
     assert client.get_browser_session(session).open
