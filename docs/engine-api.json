@@ -3389,6 +3389,14 @@
             "maxItems": 100,
             "description": "With allow_passive_subresources, on a browser step: the origins off the list the page loaded scripts, styles, fonts or images from."
           },
+          "challenge_hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "description": "With allow_hosts, on a browser step: the origins off the list the page reached because a bot check's own traffic went there (Cloudflare's challenges.cloudflare.com), before any secret was typed or sent. Once a secret has been handed to the page, they stay off the list like any other host."
+          },
           "body": {
             "type": "string",
             "description": "The body: utf-8 text, or base64 for binary. Only when formats has body (the default); left out on reads with include_body=false, and when it is too large to inline (see body_url)."
@@ -4229,7 +4237,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The only hosts the request may reach: exact hostnames, or *.suffix for every subdomain of suffix (not suffix itself). The URL's host must be on the list (else 400 url_not_allowed, field url). In a browser it covers every request and connection the page makes (navigations, frames, scripts, XHR and fetch, WebSockets, workers, redirect hops): one to a host off the list is refused before it leaves FetchX and listed in data.blocked_requests by origin. Over HTTP a redirect to a host off the list is not followed: the 3xx is the answer, with data.location. Captcha widgets load from their vendors' hosts, which are off most lists. A navigate action to a host off the list is refused (400, field actions[i].url)."
+            "description": "The only hosts the request may reach: exact hostnames, or *.suffix for every subdomain of suffix (not suffix itself). The URL's host must be on the list (else 400 url_not_allowed, field url). In a browser it covers every request and connection the page makes (navigations, frames, scripts, XHR and fetch, WebSockets, workers, redirect hops): one to a host off the list is refused before it leaves FetchX and listed in data.blocked_requests by origin. Over HTTP a redirect to a host off the list is not followed: the 3xx is the answer, with data.location. Captcha widgets load from their vendors' hosts, which are off most lists. A bot check's own traffic is the exception until a secret is typed or sent: Cloudflare's challenge host (challenges.cloudflare.com) is reached even off the list, listed in data.challenge_hosts, and the challenge's script POSTs and its form post back to the site are let through; after a secret, the list holds for it too. A navigate action to a host off the list is refused (400, field actions[i].url)."
           },
           "allow_passive_subresources": {
             "type": "boolean",
