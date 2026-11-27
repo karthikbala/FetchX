@@ -7,6 +7,21 @@
   },
   "releases": [
     {
+      "version": "1.19.0",
+      "date": "2026-11-27",
+      "title": "Captchas load under allow_hosts",
+      "changes": [
+        {
+          "type": "changed",
+          "text": "With allow_hosts, a captcha widget's own traffic is let through without listing its vendor: reCAPTCHA's /recaptcha/ paths on www.google.com, www.recaptcha.net and www.gstatic.com, hCaptcha (hcaptcha.com), Cloudflare Turnstile (challenges.cloudflare.com) and MTCaptcha (mtcaptcha.com), with their subdomains, never as the top-level page. Before, a sign-in form whose button waits for its captcha (one that verifies by itself, or one FetchX solves) could not load the widget unless you listed those hosts, so the sign-in was never sent. A request that would carry one of your secrets or a saved login's password to them is still stopped. The origins reached are listed in data.challenge_hosts, now documented; the rest of www.google.com and www.gstatic.com stays off the list. Browser sessions (POST /v1/browser-sessions) are unchanged: list the vendor hosts there."
+        },
+        {
+          "type": "added",
+          "text": "attempts[].sign_in has a new value, not_sent: FetchX filled in the sign-in form with your saved login but could not send it, because its button never enabled. The password never reached the site, and the login's standing is unchanged (before, this showed as failed). With allow_hosts, error.next.detail then points at data.blocked_requests, where a script or call the form waits for may be listed."
+        }
+      ]
+    },
+    {
       "version": "1.18.0",
       "date": "2026-11-27",
       "title": "Browser sessions you drive with Playwright",

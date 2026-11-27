@@ -820,7 +820,7 @@ export interface components {
              * @default 15000
              */
             action_timeout_ms?: number;
-            /** @description The only hosts the request may reach: exact hostnames, or *.suffix for every subdomain of suffix (not suffix itself). The URL's host must be on the list (else 400 url_not_allowed, field url). In a browser it covers every request and connection the page makes (navigations, frames, scripts, XHR and fetch, WebSockets, workers, redirect hops): one to a host off the list is refused before it leaves FetchX and listed in data.blocked_requests by origin. Over HTTP a redirect to a host off the list is not followed: the 3xx is the answer, with data.location. Captcha widgets load from their vendors' hosts, which are off most lists. A navigate action to a host off the list is refused (400, field actions[i].url). */
+            /** @description The only hosts the request may reach: exact hostnames, or *.suffix for every subdomain of suffix (not suffix itself). The URL's host must be on the list (else 400 url_not_allowed, field url). In a browser it covers every request and connection the page makes (navigations, frames, scripts, XHR and fetch, WebSockets, workers, redirect hops): one to a host off the list is refused before it leaves FetchX and listed in data.blocked_requests by origin. Over HTTP a redirect to a host off the list is not followed: the 3xx is the answer, with data.location. A captcha widget's own traffic is let through without being listed, at any time: reCAPTCHA's /recaptcha/ paths on www.google.com, www.recaptcha.net and www.gstatic.com, hCaptcha (hcaptcha.com), Cloudflare Turnstile (challenges.cloudflare.com) and MTCaptcha (mtcaptcha.com), with their subdomains, never as the top-level page, and listed in data.challenge_hosts; a request that would carry one of your secrets or a saved login's password there is stopped. A navigate action to a host off the list is refused (400, field actions[i].url). */
             allow_hosts?: string[];
             /**
              * @description Only with allow_hosts: let the page load scripts, styles, fonts and images from hosts off the list (GET only, sent without Cookie or Authorization), listed in data.passive_offlist_hosts. Documents, frames, XHR and fetch, WebSockets, beacons, form posts and workers stay on the list.
@@ -1002,6 +1002,8 @@ export interface components {
             blocked_requests?: components["schemas"]["BlockedRequest"][];
             /** @description With allow_passive_subresources, on a browser step: the origins off the list the page loaded scripts, styles, fonts or images from. */
             passive_offlist_hosts?: string[];
+            /** @description With allow_hosts, on a browser step: the origins off the list the page reached for a captcha widget's or a bot check's own traffic (see allow_hosts). No secret is ever sent to them. */
+            challenge_hosts?: string[];
             /** @description On successful results: how the page leads on, or null when FetchX found no next page. Gone with the rest of the content after 7 days or DELETE. */
             next_page?: components["schemas"]["NextPage"] | null;
             /** @description The body: utf-8 text, or base64 for binary. Only when formats has body (the default); left out on reads with include_body=false, and when it is too large to inline (see body_url). */
@@ -1113,10 +1115,10 @@ export interface components {
              */
             content?: "settled" | "still_loading";
             /**
-             * @description A sign-in on the page with a saved login: passed (signed in), rejected (the sign-in form came back), code_required (it asked for a one-time code), failed (no clear answer), no_login (the page asked for a sign-in on a host no usable saved login covers).
+             * @description A sign-in on the page with a saved login: passed (signed in), rejected (the sign-in form came back), code_required (it asked for a one-time code), failed (no clear answer after the form was sent), not_sent (FetchX filled in the form but could not send it: its button never enabled, so the password never reached the site and the login's standing is unchanged), no_login (the page asked for a sign-in on a host no usable saved login covers).
              * @enum {string}
              */
-            sign_in?: "passed" | "rejected" | "code_required" | "failed" | "no_login";
+            sign_in?: "passed" | "rejected" | "code_required" | "failed" | "not_sent" | "no_login";
             /** @description true on the attempt that typed or sent one of the request's secrets. No attempt follows it. */
             secrets_used?: boolean;
         };
