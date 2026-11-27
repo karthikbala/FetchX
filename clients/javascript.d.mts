@@ -27,6 +27,11 @@ export type Login = Schemas['Login'];
 export type LoginList = Schemas['LoginList'];
 export type LoginInput = Schemas['LoginInput'];
 export type LoginUpdate = Schemas['LoginUpdate'];
+export type BrowserSessionRequest = Schemas['BrowserSessionRequest'];
+export type BrowserSession = Schemas['BrowserSession'];
+export type BrowserSessionList = Schemas['BrowserSessionList'];
+export type BrowserSessionFill = Schemas['BrowserSessionFill'];
+export type BrowserSessionFillResult = Schemas['BrowserSessionFillResult'];
 // The batch owns async, webhook_url and idempotency_key; the API refuses them on items and defaults.
 type BatchOwned = 'async' | 'webhook_url' | 'idempotency_key';
 export type BatchItemRequest = Omit<FetchRequest, BatchOwned>;
@@ -169,5 +174,14 @@ export class FetchXClient {
   updateLogin(id: string, changes: LoginUpdate): Promise<Login>;
   /** Delete a saved login and its signed-in session. */
   deleteLogin(id: string): Promise<void>;
+  /** Start a browser you drive with Playwright (connect to ws_url with your key); billed once, when it ends. */
+  createBrowserSession(input: BrowserSessionRequest): Promise<BrowserSession>;
+  /** The session, or its receipt once it has ended. */
+  getBrowserSession(id: string): Promise<BrowserSession>;
+  listBrowserSessions(query?: {status?: 'open' | 'closed'}): Promise<BrowserSessionList>;
+  /** Close the session; resolves with its receipt. */
+  closeBrowserSession(id: string): Promise<BrowserSession>;
+  /** Type a session secret or the saved login's username or password into a field. The value never reaches you. */
+  fillBrowserSession(id: string, input: BrowserSessionFill): Promise<BrowserSessionFillResult>;
   usage(query?: UsageQuery): Promise<Usage>;
 }

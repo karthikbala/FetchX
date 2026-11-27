@@ -9,8 +9,8 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Seque
 import httpx
 
 from ._core import Flow, _Call, _Core, _Send, _Sleep, _Yield, _network_query, log
-from .models import (Balance, Batch, BatchItem, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Login, Me,
-                     NetworkCall, NetworkPage, Prices, ServiceStatus, Usage)
+from .models import (Balance, Batch, BatchItem, BrowserSession, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Login,
+                     Me, NetworkCall, NetworkPage, Prices, ServiceStatus, Usage)
 
 _SIX_HOURS = 6 * 3600.0
 
@@ -347,6 +347,32 @@ class FetchX(_Core):
     def delete_login(self, login_id: Any) -> None:
         """``DELETE /v1/logins/{id}``: the login and its signed-in session."""
         self._call(*self._plan_delete_login(login_id))
+
+    def create_browser_session(self, body: Optional[Mapping[str, Any]] = None, **fields: Any) -> BrowserSession:
+        """``POST /v1/browser-sessions``: a browser you drive yourself with Playwright, held to ``allow_hosts``
+        (also ``ttl_s``, ``idle_ttl_s``, ``route``, ``secrets``, ``login``, ``viewport``, ``max_credits``). Answers
+        once it is open. Connect with ``playwright.firefox.connect(session.ws_url, headers={"Authorization":
+        "Bearer " + key})`` and drive ``browser.contexts[0]``. Sent with an ``idempotency_key`` (made when you
+        give none), so a resend after a lost answer gets the same session. Billed once, when it ends."""
+        return self._call(*self._plan_create_browser_session(body, fields))
+
+    def get_browser_session(self, session_id: Any) -> BrowserSession:
+        """``GET /v1/browser-sessions/{id}``: the session, or its receipt once it has ended."""
+        return self._call(*self._plan_get_browser_session(session_id))
+
+    def list_browser_sessions(self, status: Optional[str] = None) -> List[BrowserSession]:
+        """``GET /v1/browser-sessions``: the project's recent sessions, newest first; ``status`` open or closed."""
+        return self._call(*self._plan_list_browser_sessions(status))
+
+    def close_browser_session(self, session_id: Any) -> BrowserSession:
+        """``DELETE /v1/browser-sessions/{id}``: close it and get its receipt (again, if it was closed)."""
+        return self._call(*self._plan_close_browser_session(session_id))
+
+    def fill_browser_session(self, session_id: Any, body: Optional[Mapping[str, Any]] = None, **fields: Any) -> dict:
+        """``POST /v1/browser-sessions/{id}/fill``: type a session secret (``secret="name"``) or the saved
+        login's username or password (``secret="login.password"``) into the field ``selector`` matches, in the
+        frame at ``frame_url`` (the page by default). The value never reaches you."""
+        return self._call(*self._plan_fill_browser_session(session_id, body, fields))
 
     def usage(self, period: Optional[str] = None, since: Optional[str] = None, until: Optional[str] = None,
               key_id: Optional[str] = None) -> Usage:

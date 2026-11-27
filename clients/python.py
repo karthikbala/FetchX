@@ -237,5 +237,30 @@ class FetchXClient:
         """Delete a saved login and its signed-in session."""
         self._send('DELETE', '/v1/logins/' + quote(id, safe=''))
 
+    def create_browser_session(self, **body):
+        """POST /v1/browser-sessions: a browser you drive with Playwright, held to allow_hosts=[...].
+        Connect with playwright.firefox.connect(session['ws_url'], headers={'Authorization': 'Bearer fxk_...'})
+        and use browser.contexts[0]. Sent with an idempotency_key, so a retry gets the same session."""
+        if not isinstance(body.get('allow_hosts'), list):
+            raise FetchXError('allow_hosts_required')
+        return self._start('/v1/browser-sessions', body)
+
+    def get_browser_session(self, id):
+        """The session, or its receipt once it has ended."""
+        return self._send('GET', '/v1/browser-sessions/' + quote(id, safe=''))
+
+    def list_browser_sessions(self, *, status=None):
+        return self._send('GET', '/v1/browser-sessions' + _query({'status': status}))
+
+    def close_browser_session(self, id):
+        """Close the session; returns its receipt."""
+        return self._send('DELETE', '/v1/browser-sessions/' + quote(id, safe=''))
+
+    def fill_browser_session(self, id, **body):
+        """Type a session secret (secret='name') or the saved login's username or password
+        (secret='login.password') into the field selector= matches, in the frame at frame_url=.
+        The value never reaches you."""
+        return self._send('POST', '/v1/browser-sessions/' + quote(id, safe='') + '/fill', body=body)
+
     def usage(self, *, period=None, since=None, until=None, key_id=None):
         return self._send('GET', '/v1/usage' + _query({'period': period, 'since': since, 'until': until, 'key_id': key_id}))

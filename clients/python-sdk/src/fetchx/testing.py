@@ -46,6 +46,8 @@ FEEDBACK_FIELDS = frozenset({"fetch_id", "url", "method", "kind", "message", "ev
 FEEDBACK_KINDS = frozenset({"blocked_via_fetchx_ok_from_home", "wrong_content", "extract_wrong", "other"})
 FEEDBACK_EVIDENCE = frozenset({"status_code", "final_url", "content_type", "body_excerpt", "client"})
 LOGIN_FIELDS = frozenset({"site", "username", "password", "name"})
+SESSION_FIELDS = frozenset({"allow_hosts", "ttl_s", "idle_ttl_s", "route", "secrets", "login", "viewport", "max_credits", "idempotency_key"})
+SESSION_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
 FAILURE_CODES = frozenset({"blocked", "rate_limited", "content_missing", "login_required", "site_error", "unreachable",
                            "cooling_down", "timeout", "too_large", "uncertain", "route_unavailable", "url_not_allowed",
                            "next_page_missing", "extract_unavailable", "action_failed"})
@@ -158,6 +160,8 @@ class FakeFetchX:
         self._batch_keys: Dict[str, Tuple[str, str]] = {}
         self.feedback: Dict[str, dict] = {}      # id -> report, as POST /v1/feedback stored it
         self.logins: Dict[str, dict] = {}        # id -> saved login, password included (never returned)
+        self.browser_sessions: Dict[str, dict] = {}  # id -> browser session, as GET /v1/browser-sessions/{id} shows it
+        self._session_keys: Dict[str, Tuple[str, str]] = {}
         self._failures: Dict[str, List[dict]] = {}
         self._refusals: List[_Rule] = []
         self._drops: List[_Rule] = []
@@ -334,6 +338,22 @@ class FakeFetchX:
                 del self.logins[login["id"]]
                 return httpx.Response(204)
             return self._update_login(login, payload)
+        if rest == ["browser-sessions"] and method == "POST":
+            return self._create_session(payload)
+        if rest == ["browser-sessions"] and method == "GET":
+            status = params.get("status")
+            if status not in (None, "open", "closed"):
+                return _invalid("status")
+            return _json(200, {"items": [session for session in reversed(list(self.browser_sessions.values()))
+                                         if status is None or (session["status"] == "closed") == (status == "closed")]})
+        if len(rest) == 2 and rest[0] == "browser-sessions" and method in ("GET", "DELETE"):
+            if rest[1] not in self.browser_sessions:
+                return _error(404, "browser_session_not_found", "No browser session with that id in this project.")
+            if method == "DELETE":
+                self.close_session(rest[1])
+            return _json(200, self.browser_sessions[rest[1]])
+        if len(rest) == 3 and rest[0] == "browser-sessions" and rest[2] == "fill" and method == "POST":
+            return self._fill_session(rest[1], payload)
         return _error(404, "route_not_found", "There is no such route")
 
     # ----------------------------------------------------------------- fetches
@@ -999,10 +1019,10 @@ class FakeFetchX:
                 "key_prefix": key[:12] if key.startswith("fxk_") else None,
                 "scopes": ["fetch:write", "fetch:read", "usage:read"],
                 "limits": {"credits_per_day": None, "credits_per_month": None, "expires_at": None},
-                "concurrency": {"requests": {"limit": 10, "running": 0}},
+                "concurrency": {"requests": {"limit": 10, "running": 0}, "browser_sessions": {"limit": 2, "running": 0}},
                 "features": ["actions", "allow_hosts", "batches", "capture", "capture_actions", "estimate", "extract",
                              "feedback", "fixtures", "key_limits", "limits", "logins", "next_page", "redirect_manual",
-                             "request_ids", "solve_captcha", "usage_by_key", "usd"]}
+                             "request_ids", "solve_captcha", "usage_by_key", "usd", "browser_sessions"]}
 
     def _post_feedback(self, body: Any) -> httpx.Response:
         if not isinstance(body, dict):
@@ -1037,6 +1057,116 @@ class FakeFetchX:
                   "created_at": now, "updated_at": now}
         self.feedback[report["id"]] = report
         return _json(201, report)
+
+    # ----------------------------------------------------------------- browser sessions
+
+    def close_session(self, session_id: str, reason: str = "client", traffic_mb: float = 0.0) -> dict:
+        """Ends a browser session as FetchX would (``client``, ``ttl``, ``idle``, ``disconnect``,
+        ``traffic_limit`` or ``error``) and charges it, unless its browser failed. Returns its receipt."""
+        with self._lock:
+            session = self.browser_sessions[session_id]
+            if session["status"] == "closed":
+                return session
+            now = _iso(self._tick())
+            residential = session["route"]["class"] == "residential"
+            step = "browser_session_residential" if residential else "browser_session"
+            extra = max(0, -(-int(traffic_mb * 10 - 50) // 10)) * 5 if residential else 0
+            charged = 0 if reason == "error" else min(session["credits"]["max"] or 10**9, (25 if residential else 10) + extra)
+            if self.balance is not None:
+                self.balance -= charged
+            session.update(status="closed", closed_at=now, close_reason=reason, connections=1, traffic_mb=traffic_mb,
+                           error="browser_failed" if reason == "error" else None)
+            session["credits"] = {"max": session["credits"]["max"], "charged": charged, "breakdown": None if not charged else {
+                "step": step, "step_credits": 25 if residential else 10, "traffic_mb": traffic_mb,
+                "included_mb": 5 if residential else None, "traffic_credits": extra}}
+            return session
+
+    def _create_session(self, body: Any) -> httpx.Response:
+        if not isinstance(body, dict):
+            return _invalid("body")
+        for key in body:
+            if key not in SESSION_FIELDS:
+                return _invalid(key)
+        hosts = body.get("allow_hosts")
+        if not isinstance(hosts, list) or not hosts or not all(isinstance(host, str) and host for host in hosts):
+            return _invalid("allow_hosts")
+        for field, low, high in (("ttl_s", 30, 900), ("idle_ttl_s", 10, 120), ("max_credits", 1, 100_000)):
+            value = body.get(field)
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high):
+                return _invalid(field)
+        route = body.get("route") or {"class": "datacenter"}
+        if not isinstance(route, dict) or route.get("class") not in ("datacenter", "residential"):
+            return _invalid("route")
+        key = body.get("idempotency_key")
+        if key is not None and (not isinstance(key, str) or not SESSION_ID.match(key)):
+            return _invalid("idempotency_key")
+        secrets = body.get("secrets") or {}
+        digest = _fingerprint({**body, "secrets": {name: {**entry, "value": None} for name, entry in secrets.items()
+                                                   if isinstance(entry, dict)}})
+        with self._lock:
+            if key in self._session_keys:
+                session_id, seen = self._session_keys[key]
+                if seen != digest:
+                    return _error(409, "idempotency_conflict", "This idempotency_key was used before with a different request.")
+                return _json(200, self.browser_sessions[session_id])
+            price = 25 if route["class"] == "residential" else 10
+            if (body.get("max_credits") or price) < price:
+                return _error(402, "max_credits_too_low", "max_credits is below the cheapest step; see error.details.min_credits.",
+                              {"min_credits": price})
+            if self.balance is not None and self.balance < price:
+                return _error(402, "insufficient_credits", "The balance is below the cheapest step this request could take.",
+                              {"available": self.balance, "needed": price})
+            running = sum(1 for session in self.browser_sessions.values() if session["status"] != "closed")
+            if running >= 2:
+                return _error(429, "too_many_requests", "The project has too many requests running or queued; wait and retry.",
+                              {"limit": "browser_sessions", "max": 2, "running": running, "retry_after_seconds": 30}, 30,
+                              {"retry-after": "30"})
+            now = self._tick()
+            ttl = body.get("ttl_s") or 300
+            session_id = str(uuid.uuid4())
+            session = {"id": session_id, "idempotency_key": key, "status": "open", "created_at": _iso(now), "ready_at": _iso(now),
+                       "expires_at": _iso(now + timedelta(seconds=ttl)), "closed_at": None, "close_reason": None,
+                       "ws_url": f"wss://fetchx.test/v1/browser-sessions/{session_id}/ws",
+                       "playwright": {"version": "1.62.1", "client": "1.62"}, "browser": {"engine": "camoufox", "version": "146.0.1-beta.25"},
+                       "ttl_s": ttl, "idle_ttl_s": body.get("idle_ttl_s") or 60, "allow_hosts": list(hosts),
+                       "route": {"class": route["class"], "country": route.get("country") or "US"}, "login": body.get("login"),
+                       "secrets": [{"name": name, "origins": list(entry.get("origins") or [])} for name, entry in secrets.items()],
+                       "duration_s": 0, "traffic_mb": 0, "requests": 0, "connections": None, "blocked_requests": [],
+                       "websockets": {"opened": 0, "refused": 0}, "secrets_used": [], "secret_egress": [], "refused_calls": {},
+                       "credits": {"max": body.get("max_credits") or price if route["class"] == "residential" else price, "charged": 0,
+                                   "breakdown": None},
+                       "error": None}
+            self.browser_sessions[session_id] = session
+            if key is not None:
+                self._session_keys[key] = (session_id, digest)
+            return _json(201, session)
+
+    def _fill_session(self, session_id: str, body: Any) -> httpx.Response:
+        session = self.browser_sessions.get(session_id)
+        if session is None:
+            return _error(404, "browser_session_not_found", "No browser session with that id in this project.")
+        if not isinstance(body, dict) or not isinstance(body.get("secret"), str):
+            return _invalid("secret")
+        if not isinstance(body.get("selector"), str) or not body["selector"]:
+            return _invalid("selector")
+        if session["status"] == "closed":
+            return _error(410, "browser_session_closed", "The browser session has ended; GET it for its receipt.")
+        name = body["secret"]
+        if name.startswith("login."):
+            login = self.logins.get(session["login"] or "")
+            origins = [f"https://{login['site']}"] if login else None
+        else:
+            origins = next((secret["origins"] for secret in session["secrets"] if secret["name"] == name), None)
+        if origins is None:
+            return _error(404, "secret_not_found", "The session has no secret by that name (error.details.secret).", {"secret": name})
+        frame = body.get("frame_url") or f"https://{session['allow_hosts'][0].lstrip('*.')}/"
+        parts = urlsplit(frame)
+        if f"{parts.scheme}://{parts.netloc}" not in origins:
+            return _error(403, "secret_origin_mismatch", "That frame is not at one of the origins the secret may be typed into.",
+                          {"secret": name})
+        if name not in session["secrets_used"]:
+            session["secrets_used"].append(name)
+        return _json(200, {"secret": name, "frame_url": f"{parts.scheme}://{parts.netloc}{parts.path}"})
 
     # ----------------------------------------------------------------- saved site logins
 
@@ -1120,6 +1250,8 @@ class FakeFetchX:
                           "http_residential": step(5, True, False, ["residential"], 1),
                           "browser": step(10, False, True, ["direct", "datacenter"], None),
                           "browser_residential": step(25, True, True, ["residential"], 5)},
+                "browser_sessions": {"datacenter": step(10, False, True, ["datacenter"], None),
+                                     "residential": step(25, True, True, ["residential"], 5)},
                 "captcha": {"credits": 10}, "traffic": {"credits_per_mb": 5},
                 "extract": {"credits": 10, "unit_tokens": 25000, "max_tokens": 150000, "max_credits": 60},
                 "packs": [{"credits": c, "usd": usd, "inr": inr, "usd_per_credit": usd / c}

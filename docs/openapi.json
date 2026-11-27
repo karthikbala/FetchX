@@ -2,8 +2,8 @@
  "openapi": "3.1.0",
  "info": {
   "title": "FetchX API",
-  "version": "1.17.0",
-  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. A browser request with capture records the page's own network calls, read with GET /v1/fetch/{id}/network or as a HAR file. POST /v1/logins saves a site’s username and password (encrypted, never returned): when a page asks for a sign-in on that site, FetchX signs in by itself and keeps the session for later requests. GET /v1/me says which project and key are calling, and the key's own credit limits per day and month and expiry, set in the console. POST /v1/feedback tells FetchX how it handled a page, for example blocked through FetchX but fine from your own connection, so routes can be tuned with real cases. GET /v1/status and GET /v1/prices need no key: the service's state, and what each step costs with the trial credits a new account gets.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status).\n\nEvery answer carries an X-Request-Id header, and every JSON answer from /v1, success or error, carries the same id as `request_id`. Log it with the fetch's own `id`, and quote it when you ask about a call."
+  "version": "1.18.0",
+  "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. A browser request with capture records the page's own network calls, read with GET /v1/fetch/{id}/network or as a HAR file. POST /v1/logins saves a site’s username and password (encrypted, never returned): when a page asks for a sign-in on that site, FetchX signs in by itself and keeps the session for later requests. POST /v1/browser-sessions starts a browser you drive yourself with Playwright, held to the hosts you allow: FetchX sees every request its pages and frames make first and refuses what is off the list. GET /v1/me says which project and key are calling, and the key's own credit limits per day and month and expiry, set in the console. POST /v1/feedback tells FetchX how it handled a page, for example blocked through FetchX but fine from your own connection, so routes can be tuned with real cases. GET /v1/status and GET /v1/prices need no key: the service's state, and what each step costs with the trial credits a new account gets.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status).\n\nEvery answer carries an X-Request-Id header, and every JSON answer from /v1, success or error, carries the same id as `request_id`. Log it with the fetch's own `id`, and quote it when you ask about a call."
  },
  "servers": [
   {
@@ -29,6 +29,10 @@
   {
    "name": "Logins",
    "description": "Site logins FetchX signs in with when a page asks."
+  },
+  {
+   "name": "Browser sessions",
+   "description": "A browser you drive yourself with Playwright, held to the hosts you allow, billed once per session."
   },
   {
    "name": "Batches",
@@ -3264,7 +3268,27 @@
            ],
            "trial_credits": 1000,
            "pricing_url": "https://fetchx.ai/pricing",
-           "request_id": "req_57a23868a2aa7f35ac3725c4"
+           "request_id": "req_57a23868a2aa7f35ac3725c4",
+           "browser_sessions": {
+            "datacenter": {
+             "credits": 10,
+             "residential": false,
+             "browser": true,
+             "route_classes": [
+              "datacenter"
+             ],
+             "included_mb": null
+            },
+            "residential": {
+             "credits": 25,
+             "residential": true,
+             "browser": true,
+             "route_classes": [
+              "residential"
+             ],
+             "included_mb": 5
+            }
+           }
           }
          }
         }
@@ -5030,12 +5054,17 @@
             "requests": {
              "limit": 10,
              "running": 2
+            },
+            "browser_sessions": {
+             "limit": 2,
+             "running": 0
             }
            },
            "features": [
             "actions",
             "allow_hosts",
             "batches",
+            "browser_sessions",
             "capture",
             "capture_actions",
             "estimate",
@@ -6390,6 +6419,1202 @@
             "retry_after_seconds": 600
            },
            "request_id": "req_726d21490a24d56169a94450"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/browser-sessions": {
+   "post": {
+    "operationId": "createBrowserSession",
+    "tags": [
+     "Browser sessions"
+    ],
+    "summary": "Start a browser session",
+    "description": "Starts a browser (Camoufox, a hardened Firefox) that you drive yourself with Playwright, and answers once you can connect to it, usually within seconds. Connect to ws_url with playwright.firefox.connect and the API key in the Authorization header, and drive browser.contexts[0]. FetchX holds the session to allow_hosts: every request a page or a frame makes (cross-origin frames included) reaches FetchX's own handler before any route you add, and one to a host off the list is refused and listed in blocked_requests; workers' requests and WebSockets go through FetchX's proxy, which opens connections only to hosts on the list. Saved logins and secrets are typed with POST /v1/browser-sessions/{id}/fill, so they never reach your client. The session closes when you DELETE it, at ttl_s, when your client is idle or gone for idle_ttl_s, or at its traffic limit; FetchX never records what the pages show or what is typed. Billing: the session's price is held when it starts and charged once when it ends (plus residential traffic past the included MB), whatever the reason it closed, except when its browser failed (close_reason error), which costs nothing. Feature id browser_sessions.",
+    "x-scope": "fetch:write",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/BrowserSessionRequest"
+       },
+       "examples": {
+        "session": {
+         "value": {
+          "allow_hosts": [
+           "fixtures.fetchx.ai",
+           "frame.fixtures.fetchx.ai"
+          ],
+          "ttl_s": 300,
+          "idle_ttl_s": 60,
+          "route": {
+           "class": "datacenter",
+           "country": "US"
+          },
+          "secrets": {
+           "password": {
+            "value": "fixture-password",
+            "origins": [
+             "https://frame.fixtures.fetchx.ai"
+            ]
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "A create with an idempotency_key this project used before, with the same body: the session that create started, as it is now. Nothing new was started or held.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/BrowserSession"
+        }
+       }
+      }
+     },
+     "201": {
+      "description": "The session, open.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/BrowserSession"
+        },
+        "examples": {
+         "session": {
+          "value": {
+           "id": "6a1f8e2c-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+           "idempotency_key": null,
+           "status": "open",
+           "created_at": "2026-11-26T19:00:00.000Z",
+           "ready_at": "2026-11-26T19:00:04.200Z",
+           "expires_at": "2026-11-26T19:05:04.200Z",
+           "closed_at": null,
+           "close_reason": null,
+           "ws_url": "wss://app.fetchx.ai/v1/browser-sessions/6a1f8e2c-3b4d-4e5f-8a9b-0c1d2e3f4a5b/ws",
+           "playwright": {
+            "version": "1.62.1",
+            "client": "1.62"
+           },
+           "browser": {
+            "engine": "camoufox",
+            "version": "158.0.1-beta.41"
+           },
+           "ttl_s": 300,
+           "idle_ttl_s": 60,
+           "allow_hosts": [
+            "fixtures.fetchx.ai",
+            "frame.fixtures.fetchx.ai"
+           ],
+           "route": {
+            "class": "datacenter",
+            "country": "US"
+           },
+           "login": null,
+           "secrets": [
+            {
+             "name": "password",
+             "origins": [
+              "https://frame.fixtures.fetchx.ai"
+             ]
+            }
+           ],
+           "duration_s": 0.4,
+           "traffic_mb": 0.1,
+           "requests": 3,
+           "connections": null,
+           "blocked_requests": [],
+           "websockets": {
+            "opened": 0,
+            "refused": 0
+           },
+           "secrets_used": [],
+           "secret_egress": [],
+           "refused_calls": {},
+           "credits": {
+            "max": 10,
+            "charged": 0,
+            "breakdown": null
+           },
+           "error": null
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "A field is missing or wrong; error.details.field names it.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "allow_hosts",
+             "reason": "1 to 32 hostnames or *.suffix entries"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "402": {
+      "description": "Not enough credits for the session's price, max_credits below it, or spending paused by a payment issue. Nothing was started. key_limit_reached: the API key's own credit limit per day or month has less left than the price.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "insufficient_credits": {
+          "value": {
+           "error": {
+            "code": "insufficient_credits",
+            "message": "The balance is below the cheapest step this request could take.",
+            "details": {
+             "available": 0,
+             "needed": 1
+            }
+           }
+          }
+         },
+         "max_credits_too_low": {
+          "value": {
+           "error": {
+            "code": "max_credits_too_low",
+            "message": "max_credits is below the cheapest step; see error.details.min_credits.",
+            "details": {
+             "min_credits": 10
+            }
+           }
+          }
+         },
+         "payment_hold": {
+          "value": {
+           "error": {
+            "code": "payment_hold",
+            "message": "Spending is paused while a payment issue is resolved."
+           }
+          }
+         },
+         "key_limit_reached": {
+          "value": {
+           "error": {
+            "code": "key_limit_reached",
+            "message": "This API key has used its credit limit (error.details.limit: credits_per_day or credits_per_month) until error.details.resets_at. Nothing was sent or charged.",
+            "details": {
+             "limit": "credits_per_month",
+             "credits": 2000,
+             "used": 1996,
+             "remaining": 4,
+             "needed": 5,
+             "resets_at": "2026-12-01T00:00:00Z"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "The idempotency_key was used before with another body.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "idempotency_conflict": {
+          "value": {
+           "error": {
+            "code": "idempotency_conflict",
+            "message": "This idempotency_key was used before with a different request."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "429": {
+      "description": "The project has as many browser sessions open as it may (error.details.limit browser_sessions; max and running), or as many requests running (limit requests). See GET /v1/me concurrency.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "too_many_requests": {
+          "value": {
+           "error": {
+            "code": "too_many_requests",
+            "message": "The project has too many requests running; wait and retry.",
+            "details": {
+             "limit": "browser_sessions",
+             "max": 2,
+             "running": 2,
+             "retry_after_seconds": 30
+            },
+            "retry_after_seconds": 30
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "No browser could start now: error.code unavailable, with error.details.reason naming why (browser_capacity: every session browser is busy; browser_failed or another browser_* code: the browser did not start; route_unavailable or a residential_* code: no exit for that route), and retry_after_seconds. Nothing was started, held or charged; retry after the wait (with the same idempotency_key, if you sent one). During maintenance that pauses the API, error.code is maintenance.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "browser_capacity": {
+          "value": {
+           "error": {
+            "code": "unavailable",
+            "message": "FetchX cannot take work right now; wait and retry.",
+            "details": {
+             "reason": "browser_capacity",
+             "retry_after_seconds": 30
+            },
+            "retry_after_seconds": 30
+           }
+          }
+         },
+         "unavailable": {
+          "value": {
+           "error": {
+            "code": "unavailable",
+            "message": "FetchX cannot take work right now; wait and retry.",
+            "details": {
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 30
+            },
+            "retry_after_seconds": 30
+           }
+          }
+         },
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "get": {
+    "operationId": "listBrowserSessions",
+    "tags": [
+     "Browser sessions"
+    ],
+    "summary": "List browser sessions",
+    "description": "The project's browser sessions, newest first (the last 100), open ones as they stand and closed ones with their receipts.",
+    "x-scope": "fetch:read",
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "description": "open (starting or open) or closed.",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "open",
+        "closed"
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The sessions.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/BrowserSessionList"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "A parameter is wrong.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "status"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "FetchX cannot read the sessions right now (unavailable), or maintenance pauses the API. Retry after retry_after_seconds.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unavailable": {
+          "value": {
+           "error": {
+            "code": "unavailable",
+            "message": "FetchX cannot take work right now; wait and retry.",
+            "details": {
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 30
+            },
+            "retry_after_seconds": 30
+           }
+          }
+         },
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/browser-sessions/{id}": {
+   "get": {
+    "operationId": "getBrowserSession",
+    "tags": [
+     "Browser sessions"
+    ],
+    "summary": "Read a browser session or its receipt",
+    "description": "The session as it stands while it runs, or its receipt once closed (kept for 90 days). Reading a session that has ended settles its credits, so a client that lost track of one can read what it cost.",
+    "x-scope": "fetch:read",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The browser session id.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The session.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/BrowserSession"
+        },
+        "examples": {
+         "receipt": {
+          "value": {
+           "id": "6a1f8e2c-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+           "idempotency_key": null,
+           "status": "closed",
+           "created_at": "2026-11-26T19:00:00.000Z",
+           "ready_at": "2026-11-26T19:00:04.200Z",
+           "expires_at": "2026-11-26T19:05:04.200Z",
+           "closed_at": "2026-11-26T19:02:10.000Z",
+           "close_reason": "client",
+           "ws_url": "wss://app.fetchx.ai/v1/browser-sessions/6a1f8e2c-3b4d-4e5f-8a9b-0c1d2e3f4a5b/ws",
+           "playwright": {
+            "version": "1.62.1",
+            "client": "1.62"
+           },
+           "browser": {
+            "engine": "camoufox",
+            "version": "158.0.1-beta.41"
+           },
+           "ttl_s": 300,
+           "idle_ttl_s": 60,
+           "allow_hosts": [
+            "fixtures.fetchx.ai",
+            "frame.fixtures.fetchx.ai"
+           ],
+           "route": {
+            "class": "datacenter",
+            "country": "US"
+           },
+           "login": null,
+           "secrets": [
+            {
+             "name": "password",
+             "origins": [
+              "https://frame.fixtures.fetchx.ai"
+             ]
+            }
+           ],
+           "duration_s": 125.8,
+           "traffic_mb": 3.4,
+           "requests": 41,
+           "connections": 1,
+           "blocked_requests": [
+            {
+             "origin": "https://outside.example",
+             "type": "document",
+             "action_index": null
+            }
+           ],
+           "websockets": {
+            "opened": 0,
+            "refused": 0
+           },
+           "secrets_used": [
+            "password"
+           ],
+           "secret_egress": [],
+           "refused_calls": {},
+           "credits": {
+            "max": 10,
+            "charged": 10,
+            "breakdown": {
+             "step": "browser_session",
+             "step_credits": 10,
+             "traffic_mb": 3.4,
+             "included_mb": null,
+             "traffic_credits": 0
+            }
+           },
+           "error": null
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No browser session with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "browser_session_not_found": {
+          "value": {
+           "error": {
+            "code": "browser_session_not_found",
+            "message": "No browser session with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "FetchX cannot read the session right now (unavailable), or maintenance pauses the API. Retry after retry_after_seconds.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unavailable": {
+          "value": {
+           "error": {
+            "code": "unavailable",
+            "message": "FetchX cannot take work right now; wait and retry.",
+            "details": {
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 30
+            },
+            "retry_after_seconds": 30
+           }
+          }
+         },
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "operationId": "closeBrowserSession",
+    "tags": [
+     "Browser sessions"
+    ],
+    "summary": "Close a browser session",
+    "description": "Disconnects your clients, closes the browser and answers with the receipt (close_reason client). Closing a closed session answers with its receipt again.",
+    "x-scope": "fetch:write",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The browser session id.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The receipt.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/BrowserSession"
+        },
+        "examples": {
+         "receipt": {
+          "value": {
+           "id": "6a1f8e2c-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+           "idempotency_key": null,
+           "status": "closed",
+           "created_at": "2026-11-26T19:00:00.000Z",
+           "ready_at": "2026-11-26T19:00:04.200Z",
+           "expires_at": "2026-11-26T19:05:04.200Z",
+           "closed_at": "2026-11-26T19:02:10.000Z",
+           "close_reason": "client",
+           "ws_url": "wss://app.fetchx.ai/v1/browser-sessions/6a1f8e2c-3b4d-4e5f-8a9b-0c1d2e3f4a5b/ws",
+           "playwright": {
+            "version": "1.62.1",
+            "client": "1.62"
+           },
+           "browser": {
+            "engine": "camoufox",
+            "version": "158.0.1-beta.41"
+           },
+           "ttl_s": 300,
+           "idle_ttl_s": 60,
+           "allow_hosts": [
+            "fixtures.fetchx.ai",
+            "frame.fixtures.fetchx.ai"
+           ],
+           "route": {
+            "class": "datacenter",
+            "country": "US"
+           },
+           "login": null,
+           "secrets": [
+            {
+             "name": "password",
+             "origins": [
+              "https://frame.fixtures.fetchx.ai"
+             ]
+            }
+           ],
+           "duration_s": 125.8,
+           "traffic_mb": 3.4,
+           "requests": 41,
+           "connections": 1,
+           "blocked_requests": [
+            {
+             "origin": "https://outside.example",
+             "type": "document",
+             "action_index": null
+            }
+           ],
+           "websockets": {
+            "opened": 0,
+            "refused": 0
+           },
+           "secrets_used": [
+            "password"
+           ],
+           "secret_egress": [],
+           "refused_calls": {},
+           "credits": {
+            "max": 10,
+            "charged": 10,
+            "breakdown": {
+             "step": "browser_session",
+             "step_credits": 10,
+             "traffic_mb": 3.4,
+             "included_mb": null,
+             "traffic_credits": 0
+            }
+           },
+           "error": null
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The API key does not have the scope this endpoint needs.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "api_key_scope_forbidden": {
+          "value": {
+           "error": {
+            "code": "api_key_scope_forbidden",
+            "message": "This API key is not allowed to call this endpoint."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No browser session with that id in this project.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "browser_session_not_found": {
+          "value": {
+           "error": {
+            "code": "browser_session_not_found",
+            "message": "No browser session with that id in this project."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "FetchX cannot reach the session's browser right now (unavailable), or maintenance pauses the API. Retry after retry_after_seconds; a session nobody closes still ends at its idle_ttl_s or ttl_s.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unavailable": {
+          "value": {
+           "error": {
+            "code": "unavailable",
+            "message": "FetchX cannot take work right now; wait and retry.",
+            "details": {
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 30
+            },
+            "retry_after_seconds": 30
+           }
+          }
+         },
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/browser-sessions/{id}/fill": {
+   "post": {
+    "operationId": "fillBrowserSession",
+    "tags": [
+     "Browser sessions"
+    ],
+    "summary": "Type a secret into a field",
+    "description": "Types one of the session's secrets (or its saved login's username or password) into the first element matching selector, in the newest page's main frame or in the frame whose URL starts with frame_url. The frame must be on https, at one of the secret's origins (a login's: its site). The value never reaches your client: it is taken out of everything the session sends you, and a request that carries it to another origin is stopped.",
+    "x-scope": "fetch:write",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "description": "The browser session id.",
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/BrowserSessionFill"
+       },
+       "examples": {
+        "fill": {
+         "value": {
+          "secret": "password",
+          "selector": "#password",
+          "frame_url": "https://frame.fixtures.fetchx.ai/"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Typed.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/BrowserSessionFillResult"
+        },
+        "examples": {
+         "fill": {
+          "value": {
+           "secret": "password",
+           "frame_url": "https://frame.fixtures.fetchx.ai/form"
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "A field is wrong, or the frame is on a host the session has not reached (secret_request_invalid).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "invalid_request": {
+          "value": {
+           "error": {
+            "code": "invalid_request",
+            "message": "A field is missing or wrong; error.details.field names it.",
+            "details": {
+             "field": "selector"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "unauthorized": {
+          "value": {
+           "error": {
+            "code": "unauthorized",
+            "message": "A valid API key is required: Authorization: Bearer fxk_..."
+           }
+          }
+         },
+         "api_key_expired": {
+          "value": {
+           "error": {
+            "code": "api_key_expired",
+            "message": "This API key has expired (error.details.expired_at). Change its expiry or make a new key in the console.",
+            "details": {
+             "expired_at": "2026-11-30T00:00:00Z"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "403": {
+      "description": "The frame is not at one of the secret's origins (secret_origin_mismatch) or not on https (secret_insecure), or the API key lacks fetch:write.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "secret_origin_mismatch": {
+          "value": {
+           "error": {
+            "code": "secret_origin_mismatch",
+            "message": "That secret may not be typed on this frame's origin."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "No session with that id (browser_session_not_found), or no secret by that name in it (secret_not_found).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "secret_not_found": {
+          "value": {
+           "error": {
+            "code": "secret_not_found",
+            "message": "The session has no secret by that name."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "No frame matches frame_url (fill_frame_not_found), or the field could not be filled (fill_failed, error.details.reason).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "fill_failed": {
+          "value": {
+           "error": {
+            "code": "fill_failed",
+            "message": "The field could not be filled (error.details.reason).",
+            "details": {
+             "reason": "no element matched the selector"
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "410": {
+      "description": "The session has ended.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "browser_session_closed": {
+          "value": {
+           "error": {
+            "code": "browser_session_closed",
+            "message": "That browser session has ended; GET it for its receipt."
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "The session's browser did not answer (command_timeout, or browser_worker_unavailable when the machine running it cannot be reached): the field may or may not have been typed, so check the page before retrying. unavailable or maintenance: FetchX cannot take work right now; retry after retry_after_seconds.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        },
+        "examples": {
+         "command_timeout": {
+          "value": {
+           "error": {
+            "code": "command_timeout",
+            "message": "The session's browser did not answer in time; it may not have typed. Retry the fill, or check the page."
+           }
+          }
+         },
+         "unavailable": {
+          "value": {
+           "error": {
+            "code": "unavailable",
+            "message": "FetchX cannot take work right now; wait and retry.",
+            "details": {
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 30
+            },
+            "retry_after_seconds": 30
+           }
+          }
+         },
+         "maintenance": {
+          "value": {
+           "error": {
+            "code": "maintenance",
+            "message": "FetchX is paused for maintenance; nothing was sent or charged. Retry after Retry-After seconds; error.details.status_url says more.",
+            "details": {
+             "title": "Database upgrade",
+             "ends_at": "2026-11-22T03:30:00.000Z",
+             "status_url": "https://fetchx.ai/status",
+             "retry_after_seconds": 600
+            },
+            "retry_after_seconds": 600
+           }
           }
          }
         }
@@ -8187,7 +9412,9 @@
           "http",
           "http_residential",
           "browser",
-          "browser_residential"
+          "browser_residential",
+          "browser_session",
+          "browser_session_residential"
          ]
         },
         "requests": {
@@ -10082,9 +11309,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-       "requests"
+       "requests",
+       "browser_sessions"
       ],
-      "description": "The project's concurrency limit. requests: how many of the project's requests may run at once, of any kind (HTTP or browser, next pages and batch items included), and how many are running now. Past it, POST /v1/fetch and POST /v1/fetch/{id}/next answer 429 too_many_requests with error.details.limit \"requests\". There is no separate limit for browser requests. A running batch leaves one of them free for single requests. Ask FetchX support to raise it.",
+      "description": "The project's concurrency limit. requests: how many of the project's requests may run at once, of any kind (HTTP or browser, next pages and batch items included), and how many are running now. Past it, POST /v1/fetch and POST /v1/fetch/{id}/next answer 429 too_many_requests with error.details.limit \"requests\". There is no separate limit for browser requests. A running batch leaves one of them free for single requests. Ask FetchX support to raise it. browser_sessions: how many browser sessions (POST /v1/browser-sessions) may be open at once, and how many are; an open session also counts as a running request.",
       "properties": {
        "requests": {
         "type": "object",
@@ -10105,6 +11333,25 @@
           "description": "Requests running now."
          }
         }
+       },
+       "browser_sessions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "limit",
+         "running"
+        ],
+        "description": "Browser sessions the project may have open at once, and how many are open now. Past it, POST /v1/browser-sessions answers 429 too_many_requests with error.details.limit \"browser_sessions\". An open session also counts as a running request.",
+        "properties": {
+         "limit": {
+          "type": "integer",
+          "minimum": 0
+         },
+         "running": {
+          "type": "integer",
+          "minimum": 0
+         }
+        }
        }
       }
      },
@@ -10113,7 +11360,7 @@
       "items": {
        "type": "string"
       },
-      "description": "What this FetchX supports, by feature id, so a client can check before relying on a newer feature: actions (browser actions on POST /v1/fetch), allow_hosts (the host allowlist on POST /v1/fetch), batches, capture (network capture), capture_actions (wait_for_response, and action_index and complete on captured calls), estimate, extract, feedback, fixtures (FetchX's public test site, https://fixtures.fetchx.ai, may be fetched), key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), logins (saved site logins: /v1/logins, and login on POST /v1/fetch), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), request_ids (request_id in every JSON answer from /v1 and the X-Request-Id header), solve_captcha (the solve_captcha action, and captchas solved after actions and inside frames), usage_by_key (key_id on GET /v1/usage), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation."
+      "description": "What this FetchX supports, by feature id, so a client can check before relying on a newer feature: actions (browser actions on POST /v1/fetch), allow_hosts (the host allowlist on POST /v1/fetch), batches, browser_sessions (POST /v1/browser-sessions), capture (network capture), capture_actions (wait_for_response, and action_index and complete on captured calls), estimate, extract, feedback, fixtures (FetchX's public test site, https://fixtures.fetchx.ai, may be fetched), key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), logins (saved site logins: /v1/logins, and login on POST /v1/fetch), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), request_ids (request_id in every JSON answer from /v1 and the X-Request-Id header), solve_captcha (the solve_captcha action, and captchas solved after actions and inside frames), usage_by_key (key_id on GET /v1/usage), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation."
      },
      "request_id": {
       "type": "string",
@@ -10474,6 +11721,7 @@
     "required": [
      "unit",
      "steps",
+     "browser_sessions",
      "captcha",
      "traffic",
      "extract",
@@ -10630,6 +11878,23 @@
       "type": "string",
       "pattern": "^req_[0-9a-f]{24}$",
       "description": "This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`)."
+     },
+     "browser_sessions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "datacenter",
+       "residential"
+      ],
+      "description": "Browser sessions (POST /v1/browser-sessions): a flat price per session, charged once when it ends (not when its browser failed), plus residential traffic past included_mb at traffic.credits_per_mb.",
+      "properties": {
+       "datacenter": {
+        "$ref": "#/components/schemas/PriceStep"
+       },
+       "residential": {
+        "$ref": "#/components/schemas/PriceStep"
+       }
+      }
      }
     }
    },
@@ -11229,6 +12494,560 @@
        "null"
       ],
       "maxLength": 64
+     }
+    }
+   },
+   "BrowserSessionRequest": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "allow_hosts"
+    ],
+    "description": "Starts a browser session.",
+    "properties": {
+     "allow_hosts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+       "type": "string"
+      },
+      "description": "The only hosts the session's browser may reach: exact hostnames, or *.suffix for every subdomain of suffix (not suffix itself). Every request a page or a frame makes (cross-origin frames included), every request its workers make and every connection (WebSockets included) is held to it: one to a host off the list is refused before it leaves FetchX and listed in blocked_requests. Captcha widgets load from their vendors' hosts, so list those for a page that shows one."
+     },
+     "ttl_s": {
+      "type": "integer",
+      "minimum": 30,
+      "maximum": 900,
+      "default": 300,
+      "description": "How long the session may run, counted from when it opens."
+     },
+     "idle_ttl_s": {
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 120,
+      "default": 60,
+      "description": "The session closes when your connected client sends nothing for this long (idle), or when no client is connected for this long (disconnect)."
+     },
+     "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "class"
+      ],
+      "description": "The exit, one IP for the whole session: datacenter (the default) or residential, in country (US when left out).",
+      "properties": {
+       "class": {
+        "type": "string",
+        "enum": [
+         "datacenter",
+         "residential"
+        ]
+       },
+       "country": {
+        "type": "string",
+        "pattern": "^[A-Z]{2}$"
+       }
+      }
+     },
+     "secrets": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 8,
+      "propertyNames": {
+       "pattern": "^[a-z][a-z0-9_]{0,31}$"
+      },
+      "additionalProperties": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "value",
+        "origins"
+       ],
+       "properties": {
+        "value": {
+         "type": "string",
+         "minLength": 4,
+         "description": "The secret, 4 characters to 4096 bytes. FetchX never stores, logs or returns it: it is held in memory while the request runs, and wherever a page shows or echoes it (as typed, URL-encoded, form-encoded, JSON-escaped or base64) it comes back as [REDACTED:<name>]."
+        },
+        "origins": {
+         "type": "array",
+         "minItems": 1,
+         "maxItems": 4,
+         "items": {
+          "type": "string"
+         },
+         "description": "The https origins (scheme, host and port, no path), such as https://login.example.com, the secret may be typed into or sent to. Each host must be in allow_hosts."
+        }
+       }
+      },
+      "description": "The session's own secrets by name (1 to 8), each typed only into pages at the origins it names (each origin's host must be on allow_hosts), with POST /v1/browser-sessions/{id}/fill. A secret never reaches your client: from the start it is taken out of everything the session sends you (as [REDACTED:<name>]) in the forms a page may show or send it (as typed, URL-encoded, form-encoded, JSON-escaped, base64), and a request a page makes that carries it to another origin is stopped and named in secret_egress. FetchX keeps their names and origins only."
+     },
+     "login": {
+      "type": "string",
+      "format": "uuid",
+      "description": "A saved login (POST /v1/logins) whose site is on allow_hosts. Its signed-in session's cookies are in the browser from the start, and POST /v1/browser-sessions/{id}/fill types its username and password (login.username, login.password) on its site's pages; the password never reaches your client."
+     },
+     "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "width",
+       "height"
+      ],
+      "description": "The pages' viewport; left out, the browser identity's own.",
+      "properties": {
+       "width": {
+        "type": "integer",
+        "minimum": 320,
+        "maximum": 3840
+       },
+       "height": {
+        "type": "integer",
+        "minimum": 240,
+        "maximum": 2160
+       }
+      }
+     },
+     "max_credits": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000,
+      "description": "The most the session may cost. On a residential route it sets how much traffic the session may move (the included MB, then credits per MB, see GET /v1/prices); when it has moved that much it closes with close_reason traffic_limit. Left out, FetchX holds the session's price plus its default traffic allowance, and charges what the session used."
+     },
+     "idempotency_key": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.:-]{1,160}$",
+      "description": "The same key with the same body answers with the session it started (200), whatever state it is in now, and starts and charges nothing more; with another body it is refused (409 idempotency_conflict). Secret values are not compared, since FetchX keeps no trace of them. Use it so a create retried after a lost answer cannot start a second session."
+     }
+    }
+   },
+   "BrowserSessionCredits": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "step",
+     "step_credits",
+     "traffic_mb",
+     "included_mb",
+     "traffic_credits"
+    ],
+    "description": "charged = step_credits + traffic_credits, capped at max.",
+    "properties": {
+     "step": {
+      "type": "string",
+      "enum": [
+       "browser_session",
+       "browser_session_residential"
+      ]
+     },
+     "step_credits": {
+      "type": "integer",
+      "description": "The session's price."
+     },
+     "traffic_mb": {
+      "type": "number",
+      "description": "Megabytes (10^6 bytes) the session moved through its exit, to one decimal."
+     },
+     "included_mb": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "Traffic included in a residential session's price; null when traffic is not charged."
+     },
+     "traffic_credits": {
+      "type": "integer",
+      "description": "Per started MB past included_mb, on a residential route."
+     }
+    }
+   },
+   "BrowserSession": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "idempotency_key",
+     "status",
+     "created_at",
+     "ready_at",
+     "expires_at",
+     "closed_at",
+     "close_reason",
+     "ws_url",
+     "playwright",
+     "browser",
+     "ttl_s",
+     "idle_ttl_s",
+     "allow_hosts",
+     "route",
+     "login",
+     "secrets",
+     "duration_s",
+     "traffic_mb",
+     "requests",
+     "connections",
+     "blocked_requests",
+     "websockets",
+     "secrets_used",
+     "secret_egress",
+     "refused_calls",
+     "credits",
+     "error"
+    ],
+    "description": "A browser session; once closed, its receipt (kept for 90 days).",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "starting",
+       "open",
+       "closed"
+      ],
+      "description": "open: connect to ws_url. closed: the session has ended; this is its receipt."
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "ready_at": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time",
+      "description": "When it opened."
+     },
+     "expires_at": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time",
+      "description": "ready_at plus ttl_s: when it closes at the latest."
+     },
+     "closed_at": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "date-time"
+     },
+     "close_reason": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "enum": [
+       "client",
+       "ttl",
+       "idle",
+       "disconnect",
+       "traffic_limit",
+       "error",
+       null
+      ],
+      "description": "client: closed with DELETE. ttl: reached ttl_s. idle: your client sent nothing for idle_ttl_s. disconnect: no client was connected for idle_ttl_s. traffic_limit: it moved what max_credits (or the default allowance) allows. error: its browser failed or did not start (not charged)."
+     },
+     "ws_url": {
+      "type": "string",
+      "description": "Where your Playwright connects, over wss on port 443, with an API key of the project that has fetch:write in the Authorization header: playwright.firefox.connect(ws_url, headers={'Authorization': 'Bearer fxk_...'}). The URL alone is useless without the key. Use the Playwright release in playwright.version (any patch of playwright.client); another one is refused with HTTP 428. Drive browser.contexts[0], the session's one context, and open pages in it with new_page(). New contexts, closing the browser or the context, launching browsers, tracing, screencasts, CDP and files on FetchX's side are refused with an error your client raises (counted in refused_calls); upload files from your side (set_input_files with a path or a buffer) and save downloads on your side. A client may disconnect and connect again while the session is open; up to 4 at once."
+     },
+     "playwright": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "version",
+       "client"
+      ],
+      "description": "The Playwright release the session runs. A new release is announced in the changelog at least 14 days before sessions move to it.",
+      "properties": {
+       "version": {
+        "type": "string",
+        "description": "Such as 1.62.1."
+       },
+       "client": {
+        "type": "string",
+        "description": "The major.minor your client must have, such as 1.62."
+       }
+      }
+     },
+     "browser": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "engine",
+       "version"
+      ],
+      "description": "The browser: Camoufox, a hardened Firefox (connect with playwright.firefox).",
+      "properties": {
+       "engine": {
+        "type": "string",
+        "enum": [
+         "camoufox"
+        ]
+       },
+       "version": {
+        "type": "string"
+       }
+      }
+     },
+     "ttl_s": {
+      "type": "integer"
+     },
+     "idle_ttl_s": {
+      "type": "integer"
+     },
+     "allow_hosts": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "class",
+       "country"
+      ],
+      "properties": {
+       "class": {
+        "type": "string",
+        "enum": [
+         "datacenter",
+         "residential"
+        ]
+       },
+       "country": {
+        "type": "string"
+       }
+      }
+     },
+     "login": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "format": "uuid"
+     },
+     "secrets": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "name",
+        "origins"
+       ],
+       "properties": {
+        "name": {
+         "type": "string"
+        },
+        "origins": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        }
+       }
+      },
+      "description": "Names and origins only."
+     },
+     "duration_s": {
+      "type": "number",
+      "description": "How long it has been open (until closed_at once closed)."
+     },
+     "traffic_mb": {
+      "type": "number",
+      "description": "Megabytes (10^6 bytes) moved through its exit, both ways, to one decimal."
+     },
+     "requests": {
+      "type": "integer",
+      "description": "Requests and connections FetchX let through."
+     },
+     "connections": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "Client connections over the session; null while it is open."
+     },
+     "blocked_requests": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+       "$ref": "#/components/schemas/BlockedRequest"
+      },
+      "description": "What FetchX refused, by origin and type (each pair once, at most 100; action_index is always null): requests to hosts off allow_hosts or to private addresses, websocket for a WebSocket a page tried to open off the list (wss:// origin), connection for a worker's request, socket or redirect hop the proxy refused."
+     },
+     "websockets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "opened",
+       "refused"
+      ],
+      "properties": {
+       "opened": {
+        "type": "integer",
+        "description": "WebSockets the pages opened to hosts on allow_hosts."
+       },
+       "refused": {
+        "type": "integer",
+        "description": "WebSockets to hosts off the list, refused and listed in blocked_requests."
+       }
+      }
+     },
+     "secrets_used": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Secrets typed into the session, by name."
+     },
+     "secret_egress": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Secrets a page tried to send to another origin; those requests were stopped."
+     },
+     "refused_calls": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "description": "Playwright calls the session refused your client, by Interface.method (such as Browser.newContext), with counts."
+     },
+     "credits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "max",
+       "charged",
+       "breakdown"
+      ],
+      "properties": {
+       "max": {
+        "type": [
+         "integer",
+         "null"
+        ],
+        "description": "What was held for the session when it started: the most it can cost."
+       },
+       "charged": {
+        "type": "integer",
+        "description": "What it cost: 0 while it is open, and for a session that ended in error."
+       },
+       "breakdown": {
+        "oneOf": [
+         {
+          "$ref": "#/components/schemas/BrowserSessionCredits"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "Once charged."
+       }
+      }
+     },
+     "error": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "With close_reason error: a code, such as browser_failed."
+     },
+     "idempotency_key": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "The create's idempotency_key, if it had one."
+     },
+     "request_id": {
+      "type": "string",
+      "pattern": "^req_[0-9a-f]{24}$",
+      "description": "This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`)."
+     }
+    }
+   },
+   "BrowserSessionList": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "items"
+    ],
+    "properties": {
+     "items": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/BrowserSession"
+      }
+     },
+     "request_id": {
+      "type": "string",
+      "pattern": "^req_[0-9a-f]{24}$",
+      "description": "This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`)."
+     }
+    }
+   },
+   "BrowserSessionFill": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "secret",
+     "selector"
+    ],
+    "properties": {
+     "secret": {
+      "type": "string",
+      "pattern": "^(?:[a-z][a-z0-9_]{0,31}|login\\.(?:username|password))$",
+      "description": "One of the session's secrets, or login.username / login.password of its saved login."
+     },
+     "selector": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "description": "A Playwright selector; the first element it matches is filled."
+     },
+     "frame_url": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "maxLength": 2048,
+      "description": "The start of the https URL of the frame the field is in (for a field in a frame from another origin); the newest page's main frame when left out."
+     }
+    }
+   },
+   "BrowserSessionFillResult": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "secret",
+     "frame_url"
+    ],
+    "properties": {
+     "secret": {
+      "type": "string"
+     },
+     "frame_url": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "The frame it was typed in, without query or fragment."
+     },
+     "request_id": {
+      "type": "string",
+      "pattern": "^req_[0-9a-f]{24}$",
+      "description": "This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`)."
      }
     }
    }

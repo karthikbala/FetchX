@@ -40,9 +40,10 @@ export async function openStore() {
 // The platform with a fake engine. `script` decides each job's outcome (see
 // fake-engine.mjs); `webhooks` records customer webhook posts; `wrapEngineFetch`
 // can watch the client's calls to the engine.
-export async function platformFor(store, {config = testConfig(), script, estimates, pace, webhookAnswer = () => 200, wrapEngineFetch = fetch => fetch,
-  deps = {}} = {}) {
-  const engine = fakeEngine({script, estimates, token: config.engine?.serviceToken, eventKey: config.engine?.eventKey, ...(pace ? {pace} : {})});
+export async function platformFor(store, {config = testConfig(), script, estimates, pace, sessionScript, webhookAnswer = () => 200,
+  wrapEngineFetch = fetch => fetch, deps = {}} = {}) {
+  const engine = fakeEngine({script, estimates, token: config.engine?.serviceToken, eventKey: config.engine?.eventKey, ...(pace ? {pace} : {}),
+    ...(sessionScript ? {sessionScript} : {})});
   const webhooks = [];
   const platform = createPlatform({store, config, deps: {engineFetch: wrapEngineFetch(engine.fetchImpl), webhookIntervalMs: 60_000,
     webhookResolve: async () => PUBLIC_ADDRESS,

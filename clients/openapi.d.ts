@@ -491,6 +491,74 @@ export interface paths {
         patch: operations["updateLogin"];
         trace?: never;
     };
+    "/v1/browser-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List browser sessions
+         * @description The project's browser sessions, newest first (the last 100), open ones as they stand and closed ones with their receipts.
+         */
+        get: operations["listBrowserSessions"];
+        put?: never;
+        /**
+         * Start a browser session
+         * @description Starts a browser (Camoufox, a hardened Firefox) that you drive yourself with Playwright, and answers once you can connect to it, usually within seconds. Connect to ws_url with playwright.firefox.connect and the API key in the Authorization header, and drive browser.contexts[0]. FetchX holds the session to allow_hosts: every request a page or a frame makes (cross-origin frames included) reaches FetchX's own handler before any route you add, and one to a host off the list is refused and listed in blocked_requests; workers' requests and WebSockets go through FetchX's proxy, which opens connections only to hosts on the list. Saved logins and secrets are typed with POST /v1/browser-sessions/{id}/fill, so they never reach your client. The session closes when you DELETE it, at ttl_s, when your client is idle or gone for idle_ttl_s, or at its traffic limit; FetchX never records what the pages show or what is typed. Billing: the session's price is held when it starts and charged once when it ends (plus residential traffic past the included MB), whatever the reason it closed, except when its browser failed (close_reason error), which costs nothing. Feature id browser_sessions.
+         */
+        post: operations["createBrowserSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser-sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a browser session or its receipt
+         * @description The session as it stands while it runs, or its receipt once closed (kept for 90 days). Reading a session that has ended settles its credits, so a client that lost track of one can read what it cost.
+         */
+        get: operations["getBrowserSession"];
+        put?: never;
+        post?: never;
+        /**
+         * Close a browser session
+         * @description Disconnects your clients, closes the browser and answers with the receipt (close_reason client). Closing a closed session answers with its receipt again.
+         */
+        delete: operations["closeBrowserSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser-sessions/{id}/fill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Type a secret into a field
+         * @description Types one of the session's secrets (or its saved login's username or password) into the first element matching selector, in the newest page's main frame or in the frame whose URL starts with frame_url. The frame must be on https, at one of the secret's origins (a login's: its site). The value never reaches your client: it is taken out of everything the session sends you, and a request that carries it to another origin is stopped.
+         */
+        post: operations["fillBrowserSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export interface webhooks {
     fetchFinished: {
@@ -1131,7 +1199,7 @@ export interface components {
             };
             by_step: {
                 /** @enum {string} */
-                step: "http" | "http_residential" | "browser" | "browser_residential";
+                step: "http" | "http_residential" | "browser" | "browser_residential" | "browser_session" | "browser_session_residential";
                 requests: number;
                 credits: number;
             }[];
@@ -1693,7 +1761,7 @@ export interface components {
                  */
                 expires_at: string | null;
             };
-            /** @description The project's concurrency limit. requests: how many of the project's requests may run at once, of any kind (HTTP or browser, next pages and batch items included), and how many are running now. Past it, POST /v1/fetch and POST /v1/fetch/{id}/next answer 429 too_many_requests with error.details.limit "requests". There is no separate limit for browser requests. A running batch leaves one of them free for single requests. Ask FetchX support to raise it. */
+            /** @description The project's concurrency limit. requests: how many of the project's requests may run at once, of any kind (HTTP or browser, next pages and batch items included), and how many are running now. Past it, POST /v1/fetch and POST /v1/fetch/{id}/next answer 429 too_many_requests with error.details.limit "requests". There is no separate limit for browser requests. A running batch leaves one of them free for single requests. Ask FetchX support to raise it. browser_sessions: how many browser sessions (POST /v1/browser-sessions) may be open at once, and how many are; an open session also counts as a running request. */
             concurrency: {
                 requests: {
                     /** @description Requests that may run at once. */
@@ -1701,8 +1769,13 @@ export interface components {
                     /** @description Requests running now. */
                     running: number;
                 };
+                /** @description Browser sessions the project may have open at once, and how many are open now. Past it, POST /v1/browser-sessions answers 429 too_many_requests with error.details.limit "browser_sessions". An open session also counts as a running request. */
+                browser_sessions: {
+                    limit: number;
+                    running: number;
+                };
             };
-            /** @description What this FetchX supports, by feature id, so a client can check before relying on a newer feature: actions (browser actions on POST /v1/fetch), allow_hosts (the host allowlist on POST /v1/fetch), batches, capture (network capture), capture_actions (wait_for_response, and action_index and complete on captured calls), estimate, extract, feedback, fixtures (FetchX's public test site, https://fixtures.fetchx.ai, may be fetched), key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), logins (saved site logins: /v1/logins, and login on POST /v1/fetch), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), request_ids (request_id in every JSON answer from /v1 and the X-Request-Id header), solve_captcha (the solve_captcha action, and captchas solved after actions and inside frames), usage_by_key (key_id on GET /v1/usage), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation. */
+            /** @description What this FetchX supports, by feature id, so a client can check before relying on a newer feature: actions (browser actions on POST /v1/fetch), allow_hosts (the host allowlist on POST /v1/fetch), batches, browser_sessions (POST /v1/browser-sessions), capture (network capture), capture_actions (wait_for_response, and action_index and complete on captured calls), estimate, extract, feedback, fixtures (FetchX's public test site, https://fixtures.fetchx.ai, may be fetched), key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), logins (saved site logins: /v1/logins, and login on POST /v1/fetch), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), request_ids (request_id in every JSON answer from /v1 and the X-Request-Id header), solve_captcha (the solve_captcha action, and captchas solved after actions and inside frames), usage_by_key (key_id on GET /v1/usage), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation. */
             features: string[];
             /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
             request_id?: string;
@@ -1881,6 +1954,11 @@ export interface components {
             pricing_url: string;
             /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
             request_id?: string;
+            /** @description Browser sessions (POST /v1/browser-sessions): a flat price per session, charged once when it ends (not when its browser failed), plus residential traffic past included_mb at traffic.credits_per_mb. */
+            browser_sessions: {
+                datacenter: components["schemas"]["PriceStep"];
+                residential: components["schemas"]["PriceStep"];
+            };
         };
         /** @description The frame to act in (default: the top frame): the first whose URL contains url_contains, or the iframe element selector matches. Waited for within the action's timeout; none gives frame_not_found. */
         ActionFrame: {
@@ -2042,6 +2120,180 @@ export interface components {
             username?: string;
             password?: string;
             name?: string | null;
+        };
+        /** @description Starts a browser session. */
+        BrowserSessionRequest: {
+            /** @description The only hosts the session's browser may reach: exact hostnames, or *.suffix for every subdomain of suffix (not suffix itself). Every request a page or a frame makes (cross-origin frames included), every request its workers make and every connection (WebSockets included) is held to it: one to a host off the list is refused before it leaves FetchX and listed in blocked_requests. Captcha widgets load from their vendors' hosts, so list those for a page that shows one. */
+            allow_hosts: string[];
+            /**
+             * @description How long the session may run, counted from when it opens.
+             * @default 300
+             */
+            ttl_s?: number;
+            /**
+             * @description The session closes when your connected client sends nothing for this long (idle), or when no client is connected for this long (disconnect).
+             * @default 60
+             */
+            idle_ttl_s?: number;
+            /** @description The exit, one IP for the whole session: datacenter (the default) or residential, in country (US when left out). */
+            route?: {
+                /** @enum {string} */
+                class: "datacenter" | "residential";
+                country?: string;
+            };
+            /** @description The session's own secrets by name (1 to 8), each typed only into pages at the origins it names (each origin's host must be on allow_hosts), with POST /v1/browser-sessions/{id}/fill. A secret never reaches your client: from the start it is taken out of everything the session sends you (as [REDACTED:<name>]) in the forms a page may show or send it (as typed, URL-encoded, form-encoded, JSON-escaped, base64), and a request a page makes that carries it to another origin is stopped and named in secret_egress. FetchX keeps their names and origins only. */
+            secrets?: {
+                [key: string]: {
+                    /** @description The secret, 4 characters to 4096 bytes. FetchX never stores, logs or returns it: it is held in memory while the request runs, and wherever a page shows or echoes it (as typed, URL-encoded, form-encoded, JSON-escaped or base64) it comes back as [REDACTED:<name>]. */
+                    value: string;
+                    /** @description The https origins (scheme, host and port, no path), such as https://login.example.com, the secret may be typed into or sent to. Each host must be in allow_hosts. */
+                    origins: string[];
+                };
+            };
+            /**
+             * Format: uuid
+             * @description A saved login (POST /v1/logins) whose site is on allow_hosts. Its signed-in session's cookies are in the browser from the start, and POST /v1/browser-sessions/{id}/fill types its username and password (login.username, login.password) on its site's pages; the password never reaches your client.
+             */
+            login?: string;
+            /** @description The pages' viewport; left out, the browser identity's own. */
+            viewport?: {
+                width: number;
+                height: number;
+            };
+            /** @description The most the session may cost. On a residential route it sets how much traffic the session may move (the included MB, then credits per MB, see GET /v1/prices); when it has moved that much it closes with close_reason traffic_limit. Left out, FetchX holds the session's price plus its default traffic allowance, and charges what the session used. */
+            max_credits?: number;
+            /** @description The same key with the same body answers with the session it started (200), whatever state it is in now, and starts and charges nothing more; with another body it is refused (409 idempotency_conflict). Secret values are not compared, since FetchX keeps no trace of them. Use it so a create retried after a lost answer cannot start a second session. */
+            idempotency_key?: string;
+        };
+        /** @description charged = step_credits + traffic_credits, capped at max. */
+        BrowserSessionCredits: {
+            /** @enum {string} */
+            step: "browser_session" | "browser_session_residential";
+            /** @description The session's price. */
+            step_credits: number;
+            /** @description Megabytes (10^6 bytes) the session moved through its exit, to one decimal. */
+            traffic_mb: number;
+            /** @description Traffic included in a residential session's price; null when traffic is not charged. */
+            included_mb: number | null;
+            /** @description Per started MB past included_mb, on a residential route. */
+            traffic_credits: number;
+        };
+        /** @description A browser session; once closed, its receipt (kept for 90 days). */
+        BrowserSession: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description open: connect to ws_url. closed: the session has ended; this is its receipt.
+             * @enum {string}
+             */
+            status: "starting" | "open" | "closed";
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When it opened.
+             */
+            ready_at: string | null;
+            /**
+             * Format: date-time
+             * @description ready_at plus ttl_s: when it closes at the latest.
+             */
+            expires_at: string | null;
+            /** Format: date-time */
+            closed_at: string | null;
+            /**
+             * @description client: closed with DELETE. ttl: reached ttl_s. idle: your client sent nothing for idle_ttl_s. disconnect: no client was connected for idle_ttl_s. traffic_limit: it moved what max_credits (or the default allowance) allows. error: its browser failed or did not start (not charged).
+             * @enum {string|null}
+             */
+            close_reason: "client" | "ttl" | "idle" | "disconnect" | "traffic_limit" | "error" | null;
+            /** @description Where your Playwright connects, over wss on port 443, with an API key of the project that has fetch:write in the Authorization header: playwright.firefox.connect(ws_url, headers={'Authorization': 'Bearer fxk_...'}). The URL alone is useless without the key. Use the Playwright release in playwright.version (any patch of playwright.client); another one is refused with HTTP 428. Drive browser.contexts[0], the session's one context, and open pages in it with new_page(). New contexts, closing the browser or the context, launching browsers, tracing, screencasts, CDP and files on FetchX's side are refused with an error your client raises (counted in refused_calls); upload files from your side (set_input_files with a path or a buffer) and save downloads on your side. A client may disconnect and connect again while the session is open; up to 4 at once. */
+            ws_url: string;
+            /** @description The Playwright release the session runs. A new release is announced in the changelog at least 14 days before sessions move to it. */
+            playwright: {
+                /** @description Such as 1.62.1. */
+                version: string;
+                /** @description The major.minor your client must have, such as 1.62. */
+                client: string;
+            };
+            /** @description The browser: Camoufox, a hardened Firefox (connect with playwright.firefox). */
+            browser: {
+                /** @enum {string} */
+                engine: "camoufox";
+                version: string;
+            };
+            ttl_s: number;
+            idle_ttl_s: number;
+            allow_hosts: string[];
+            route: {
+                /** @enum {string} */
+                class: "datacenter" | "residential";
+                country: string;
+            };
+            /** Format: uuid */
+            login: string | null;
+            /** @description Names and origins only. */
+            secrets: {
+                name: string;
+                origins: string[];
+            }[];
+            /** @description How long it has been open (until closed_at once closed). */
+            duration_s: number;
+            /** @description Megabytes (10^6 bytes) moved through its exit, both ways, to one decimal. */
+            traffic_mb: number;
+            /** @description Requests and connections FetchX let through. */
+            requests: number;
+            /** @description Client connections over the session; null while it is open. */
+            connections: number | null;
+            /** @description What FetchX refused, by origin and type (each pair once, at most 100; action_index is always null): requests to hosts off allow_hosts or to private addresses, websocket for a WebSocket a page tried to open off the list (wss:// origin), connection for a worker's request, socket or redirect hop the proxy refused. */
+            blocked_requests: components["schemas"]["BlockedRequest"][];
+            websockets: {
+                /** @description WebSockets the pages opened to hosts on allow_hosts. */
+                opened: number;
+                /** @description WebSockets to hosts off the list, refused and listed in blocked_requests. */
+                refused: number;
+            };
+            /** @description Secrets typed into the session, by name. */
+            secrets_used: string[];
+            /** @description Secrets a page tried to send to another origin; those requests were stopped. */
+            secret_egress: string[];
+            /** @description Playwright calls the session refused your client, by Interface.method (such as Browser.newContext), with counts. */
+            refused_calls: {
+                [key: string]: number;
+            };
+            credits: {
+                /** @description What was held for the session when it started: the most it can cost. */
+                max: number | null;
+                /** @description What it cost: 0 while it is open, and for a session that ended in error. */
+                charged: number;
+                /** @description Once charged. */
+                breakdown: components["schemas"]["BrowserSessionCredits"] | null;
+            };
+            /** @description With close_reason error: a code, such as browser_failed. */
+            error: string | null;
+            /** @description The create's idempotency_key, if it had one. */
+            idempotency_key: string | null;
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
+        };
+        BrowserSessionList: {
+            items: components["schemas"]["BrowserSession"][];
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
+        };
+        BrowserSessionFill: {
+            /** @description One of the session's secrets, or login.username / login.password of its saved login. */
+            secret: string;
+            /** @description A Playwright selector; the first element it matches is filled. */
+            selector: string;
+            /** @description The start of the https URL of the frame the field is in (for a field in a frame from another origin); the newest page's main frame when left out. */
+            frame_url?: string | null;
+        };
+        BrowserSessionFillResult: {
+            secret: string;
+            /** @description The frame it was typed in, without query or fragment. */
+            frame_url: string | null;
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
     };
     responses: never;
@@ -4051,6 +4303,369 @@ export interface operations {
                 };
             };
             /** @description Maintenance pauses the API: wait Retry-After seconds and retry; error.details.status_url says more. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listBrowserSessions: {
+        parameters: {
+            query?: {
+                /** @description open (starting or open) or closed. */
+                status?: "open" | "closed";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sessions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserSessionList"];
+                };
+            };
+            /** @description A parameter is wrong. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description FetchX cannot read the sessions right now (unavailable), or maintenance pauses the API. Retry after retry_after_seconds. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createBrowserSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrowserSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description A create with an idempotency_key this project used before, with the same body: the session that create started, as it is now. Nothing new was started or held. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserSession"];
+                };
+            };
+            /** @description The session, open. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserSession"];
+                };
+            };
+            /** @description A field is missing or wrong; error.details.field names it. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not enough credits for the session's price, max_credits below it, or spending paused by a payment issue. Nothing was started. key_limit_reached: the API key's own credit limit per day or month has less left than the price. */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The idempotency_key was used before with another body. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The project has as many browser sessions open as it may (error.details.limit browser_sessions; max and running), or as many requests running (limit requests). See GET /v1/me concurrency. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No browser could start now: error.code unavailable, with error.details.reason naming why (browser_capacity: every session browser is busy; browser_failed or another browser_* code: the browser did not start; route_unavailable or a residential_* code: no exit for that route), and retry_after_seconds. Nothing was started, held or charged; retry after the wait (with the same idempotency_key, if you sent one). During maintenance that pauses the API, error.code is maintenance. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getBrowserSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The browser session id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserSession"];
+                };
+            };
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No browser session with that id in this project. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description FetchX cannot read the session right now (unavailable), or maintenance pauses the API. Retry after retry_after_seconds. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    closeBrowserSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The browser session id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The receipt. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserSession"];
+                };
+            };
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key does not have the scope this endpoint needs. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No browser session with that id in this project. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description FetchX cannot reach the session's browser right now (unavailable), or maintenance pauses the API. Retry after retry_after_seconds; a session nobody closes still ends at its idle_ttl_s or ttl_s. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    fillBrowserSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The browser session id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrowserSessionFill"];
+            };
+        };
+        responses: {
+            /** @description Typed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserSessionFillResult"];
+                };
+            };
+            /** @description A field is wrong, or the frame is on a host the session has not reached (secret_request_invalid). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The API key is missing, wrong, revoked or expired (api_key_expired, with error.details.expired_at). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The frame is not at one of the secret's origins (secret_origin_mismatch) or not on https (secret_insecure), or the API key lacks fetch:write. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No session with that id (browser_session_not_found), or no secret by that name in it (secret_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No frame matches frame_url (fill_frame_not_found), or the field could not be filled (fill_failed, error.details.reason). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The session has ended. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The session's browser did not answer (command_timeout, or browser_worker_unavailable when the machine running it cannot be reached): the field may or may not have been typed, so check the page before retrying. unavailable or maintenance: FetchX cannot take work right now; retry after retry_after_seconds. */
             503: {
                 headers: {
                     [name: string]: unknown;

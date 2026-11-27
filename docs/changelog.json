@@ -7,6 +7,25 @@
   },
   "releases": [
     {
+      "version": "1.18.0",
+      "date": "2026-11-27",
+      "title": "Browser sessions you drive with Playwright",
+      "changes": [
+        {
+          "type": "added",
+          "text": "POST /v1/browser-sessions starts a browser (Camoufox, a hardened Firefox) that you drive yourself with Playwright: connect to its ws_url with playwright.firefox.connect and your API key in the Authorization header, and drive browser.contexts[0]. allow_hosts is required: every request a page or a frame makes, cross-origin frames included, reaches FetchX first and one to a host off the list is refused before it leaves FetchX; workers' requests and WebSockets are held to the list by FetchX's proxy, and refused ones are listed in blocked_requests (WebSockets as websocket, with their wss:// origin, and counted in websockets.refused). Your own context.route handlers see every request FetchX lets through. Saved logins and secrets are typed with POST /v1/browser-sessions/{id}/fill and never reach your client. A session runs up to ttl_s (30 to 900 s, default 300) and closes when your client is idle or gone for idle_ttl_s (10 to 120 s, default 60); DELETE closes it and GET reads its receipt, kept for 90 days. Feature id browser_sessions."
+        },
+        {
+          "type": "added",
+          "text": "Browser sessions are billed once per session, when it ends: a flat price (GET /v1/prices browser_sessions), plus residential traffic past the included MB, capped at max_credits. A session whose browser failed (close_reason error) costs nothing. Open sessions are limited per project (GET /v1/me concurrency.browser_sessions), and each also counts as a running request."
+        },
+        {
+          "type": "added",
+          "text": "Browser sessions run Playwright 1.62.1 (playwright.version on each session); connect with a 1.62.x client, as another version is refused with HTTP 428 at connect. A move to a newer Playwright is announced here at least 14 days before sessions change."
+        }
+      ]
+    },
+    {
       "version": "1.17.0",
       "date": "2026-11-27",
       "title": "Captchas in sign-in forms, after actions and inside frames",

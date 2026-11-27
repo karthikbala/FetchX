@@ -13,14 +13,19 @@ import {trialCredits} from './trial.mjs';
 import {PACK_OFFERS} from '../control-stripe-broker-protocol.mjs';
 
 export const STEPS = Object.freeze(['http', 'http_residential', 'browser', 'browser_residential']);
+// A browser session (fetch/browser-sessions.mjs) is billed once, when it ends,
+// at a flat price per route class (plus residential traffic).
+export const SESSION_STEPS = Object.freeze(['browser_session', 'browser_session_residential']);
 export const DEFAULT_PRICES = Object.freeze({
   http: 1,
   http_residential: 5,
   browser: 10,
   browser_residential: 25,
+  browser_session: 10,
+  browser_session_residential: 25,
   captcha: 10,
   // Residential bandwidth is paid per GB, so large pages pay for it.
-  residential_included_mb: {http_residential: 1, browser_residential: 5},
+  residential_included_mb: {http_residential: 1, browser_residential: 5, browser_session_residential: 5},
   residential_overage_per_mb: 5,
   // Reading a page into JSON (`extract`): per started unit of page text the
   // models read, in tokens of 4 characters, up to what the engine reads.
@@ -34,7 +39,7 @@ export function prices(config) {
   const custom = config?.pricing ?? {};
   const merged = {...DEFAULT_PRICES, ...custom,
     residential_included_mb: {...DEFAULT_PRICES.residential_included_mb, ...custom.residential_included_mb}};
-  for (const key of [...STEPS, 'captcha', 'residential_overage_per_mb', 'extract']) {
+  for (const key of [...STEPS, ...SESSION_STEPS, 'captcha', 'residential_overage_per_mb', 'extract']) {
     if (!Number.isSafeInteger(merged[key]) || merged[key] < 0 || merged[key] > 100_000) fail('pricing_configuration_invalid', 500);
   }
   for (const key of ['extract_unit_tokens', 'extract_max_tokens']) {
@@ -100,6 +105,10 @@ export function pricesView(table, trial) {
       http_residential: step('http_residential', true, false, ['residential']),
       browser: step('browser', false, true, ['direct', 'datacenter']),
       browser_residential: step('browser_residential', true, true, ['residential']),
+    },
+    browser_sessions: {
+      datacenter: step('browser_session', false, true, ['datacenter']),
+      residential: step('browser_session_residential', true, true, ['residential']),
     },
     captcha: {credits: table.captcha},
     traffic: {credits_per_mb: table.residential_overage_per_mb},

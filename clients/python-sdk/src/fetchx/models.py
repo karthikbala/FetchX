@@ -1004,6 +1004,81 @@ class Login(Model):
         return {"id": self.id, "site": self.site, "status": self.status}
 
 
+class BrowserSession(Model):
+    """``/v1/browser-sessions``: a browser (Camoufox) you drive yourself with Playwright, held to
+    ``allow_hosts``. Connect with ``playwright.firefox.connect(session.ws_url, headers={"Authorization":
+    "Bearer fxk_..."})`` using the Playwright release in ``playwright_version``, and drive
+    ``browser.contexts[0]``. Billed once, when it ends; a receipt once it has."""
+
+    @property
+    def id(self) -> str:
+        return self.raw.get("id") or ""
+
+    @property
+    def status(self) -> str:
+        """``starting``, ``open`` or ``closed``."""
+        return self.raw.get("status") or ""
+
+    @property
+    def open(self) -> bool:
+        return self.status == "open"
+
+    @property
+    def closed(self) -> bool:
+        return self.status == "closed"
+
+    @property
+    def ws_url(self) -> str:
+        """Where Playwright connects, with your API key in the Authorization header."""
+        return self.raw.get("ws_url") or ""
+
+    @property
+    def idempotency_key(self) -> Optional[str]:
+        return self.raw.get("idempotency_key")
+
+    @property
+    def playwright_version(self) -> Optional[str]:
+        """The Playwright release the session runs; use a client of the same major.minor."""
+        value = self.raw.get("playwright")
+        return value.get("version") if isinstance(value, dict) else None
+
+    @property
+    def expires_at(self) -> Optional[str]:
+        return self.raw.get("expires_at")
+
+    @property
+    def close_reason(self) -> Optional[str]:
+        """``client``, ``ttl``, ``idle``, ``disconnect``, ``traffic_limit`` or ``error``, once closed."""
+        return self.raw.get("close_reason")
+
+    @property
+    def error(self) -> Optional[str]:
+        """Why the browser failed (close_reason ``error``); such a session costs nothing."""
+        return self.raw.get("error")
+
+    @property
+    def blocked_requests(self) -> List[dict]:
+        """Requests and connections to hosts off ``allow_hosts`` that FetchX refused: ``{"origin", "type"}``."""
+        return [dict(item) for item in self.raw.get("blocked_requests") or [] if isinstance(item, dict)]
+
+    @property
+    def secrets_used(self) -> List[str]:
+        return list(self.raw.get("secrets_used") or [])
+
+    @property
+    def secret_egress(self) -> List[str]:
+        """Secrets a page tried to send to another origin (FetchX stopped those requests)."""
+        return list(self.raw.get("secret_egress") or [])
+
+    @property
+    def credits_charged(self) -> int:
+        credits = self.raw.get("credits")
+        return int(credits.get("charged") or 0) if isinstance(credits, dict) else 0
+
+    def _repr_fields(self):
+        return {"id": self.id, "status": self.status, "close_reason": self.close_reason}
+
+
 class Feedback(Model):
     """``POST /v1/feedback`` and ``GET /v1/feedback/{id}``: a report about how FetchX handled a page, and where it stands."""
 

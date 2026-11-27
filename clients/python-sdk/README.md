@@ -121,6 +121,31 @@ for url, result in zip(urls, results):
 
 `run_batch` submits up to 1000 URLs or fetch bodies, waits for the batch and returns one result per item in order (None for an item refused before it started). For more control: `submit_batch()` returns at once, `batch_results(batch_id)` yields each item as it finishes, `wait_batch()`, `batch()`, `batch_items()`, `cancel_batch()` and `list_batches()`. Items must not set `idempotency_key`, `async` or `webhook_url`, since FetchX keys and paces each item itself; the client refuses such a batch before sending it. `max_credits` in `defaults` caps each item.
 
+## Browser sessions
+
+A browser session is a Camoufox browser you drive yourself with Playwright (`pip install "playwright==1.62.*"`; no `playwright install` is needed, since the browser runs on FetchX). FetchX holds it to `allow_hosts`, types secrets and saved logins for you, and bills it once, when it ends.
+
+```python
+import os
+from fetchx import FetchX
+from playwright.sync_api import sync_playwright
+
+fx = FetchX()
+session = fx.create_browser_session(allow_hosts=["portal.example.com", "login.example.com"], ttl_s=300,
+                                    secrets={"password": {"value": os.environ["PORTAL_PASSWORD"],
+                                                          "origins": ["https://login.example.com"]}})
+with sync_playwright() as p:
+    browser = p.firefox.connect(session.ws_url, headers={"Authorization": "Bearer " + os.environ["FETCHX_TOKEN"]})
+    page = browser.contexts[0].new_page()
+    page.goto("https://login.example.com/sign-in")
+    fx.fill_browser_session(session, secret="password", selector="#password", frame_url="https://login.example.com/")
+    page.click("button[type=submit]")
+receipt = fx.close_browser_session(session)
+print(receipt.close_reason, receipt.credits_charged, receipt.blocked_requests)
+```
+
+Use the Playwright release in `session.playwright_version` (the same major.minor). `create_browser_session` sends an `idempotency_key` (made when you give none) and resends after a lost answer, so you get one session. `get_browser_session`, `list_browser_sessions(status="open")` and `close_browser_session` return `BrowserSession`s; the receipt has `close_reason`, `blocked_requests`, `secrets_used`, `secret_egress` and `credits_charged`. `FakeFetchX` keeps sessions in `fake.browser_sessions`, and `fake.close_session(id, "idle")` ends one as FetchX would.
+
 ## Cost and account
 
 `estimate()` takes a fetch body or a batch body and says what it would cost and take, without sending or reserving anything: `estimate.credits.expected`, `.typical`, `.high`, `estimate.covers_expected`, and per item `basis` and `notes`. `balance()`, `usage(period="day")` and `status()` read the account and the service. `prices()` returns the price table (`prices.step("browser_residential")`, `captcha`, `credits_per_mb`, `extract`) and the `trial_credits` a new account gets; the route itself needs no key. `me()` says which project and key are calling (`project_id`, `key_id`, `key_name`, `key_prefix`, `scopes`) and the key's `limits` (credits per day and month with what is used and left, and `expires_at`); any valid key may call it, and `project_id` stays the same when the key is rotated. A request over a key's limit raises `FetchXError` with code `key_limit_reached` (402, not resent). `send_feedback(fetch_id=result.id, kind="blocked_via_fetchx_ok_from_home", evidence={...})` reports a page FetchX could not get or got wrong (or `url=` instead of `fetch_id=`); `get_feedback(report)` returns its `status` and staff's `reply`. `FakeFetchX` keeps reports in `fake.feedback`, and `fake.answer_feedback(id, "resolved", "reply")` plays the staff side.
@@ -188,6 +213,11 @@ assert [r["url"] for r in fake.site_requests] == ["https://shop.example.com/p/1"
 | `GET /v1/me` | `me()` |
 | `POST /v1/feedback` | `send_feedback(body, **fields)` |
 | `GET /v1/feedback/{id}` | `get_feedback(id)` |
+| `POST /v1/browser-sessions` | `create_browser_session(body, **fields)` |
+| `GET /v1/browser-sessions/{id}` | `get_browser_session(id)` |
+| `GET /v1/browser-sessions` | `list_browser_sessions(status=)` |
+| `DELETE /v1/browser-sessions/{id}` | `close_browser_session(id)` |
+| `POST /v1/browser-sessions/{id}/fill` | `fill_browser_session(id, secret=, selector=, frame_url=)` |
 
 ## The single-file client
 

@@ -17,6 +17,7 @@ import {FetchFront} from './fetch/front.mjs';
 import {WebhookSender} from './fetch/webhooks.mjs';
 import {BatchRunner, BatchService} from './fetch/batches.mjs';
 import {FeedbackService} from './fetch/feedback.mjs';
+import {BrowserSessionFront, refuseUpgrade} from './fetch/browser-sessions.mjs';
 import {registerApi, registerRequestIds, apiError, API_SCOPES, ANY_SCOPE, UNAVAILABLE_RETRY_SECONDS} from './api/v1.mjs';
 import {registerLifecycle} from './api/lifecycle.mjs';
 import {Estimator} from './fetch/estimate.mjs';
@@ -42,6 +43,9 @@ export function createPlatform({store, config, deps = {}}) {
   platform.front.batches = platform.batches;
   // Callers' reports of how FetchX handled a page, read by staff in the admin portal.
   platform.feedback = new FeedbackService({store, config, engine: platform.engine, metadataDays: platform.front.limits.metadataDays});
+  // Browser sessions callers drive with Playwright: billed once when they end; their WebSocket is carried below.
+  platform.browserSessions = new BrowserSessionFront({store, config, ledger: platform.ledger, engine: platform.engine, front: platform.front});
+  if (deps.sessionConnect) platform.browserSessions.connect = deps.sessionConnect;
   platform.batchRunner = new BatchRunner({batches: platform.batches, engine: platform.engine, intervalMs: deps.batchIntervalMs});
   platform.batches.kickRunner = () => { if (platform.batchRunner.timer) void platform.batchRunner.kick(); };
   platform.webhooks = new WebhookSender({store, front: platform.front, batches: platform.batches, config, intervalMs: deps.webhookIntervalMs,
@@ -122,7 +126,30 @@ export function server(platform, {stripeFetch, stripeAutoProcess = true} = {}) {
   registerRequestIds(app);
   registerLifecycle(app, {board: platform.board, config});
   registerApi(app, {service: platform.front, ledger: platform.ledger, estimator: platform.estimator, board: platform.board,
-    batches: platform.batches, feedback: platform.feedback});
+    batches: platform.batches, feedback: platform.feedback, sessions: platform.browserSessions});
+  // A browser session's WebSocket (its ws_url): the caller's API key (fetch:write)
+  // is checked here, and the connection goes on to the engine without it.
+  // A browser session's WebSocket: not a Fastify route, so it gets its request
+  // id here, in the X-Request-Id header and the body of a refusal.
+  app.server.on('upgrade', (req, socket, head) => {
+    socket.on('error', () => socket.destroy());
+    const requestId = `req_${randomBytes(12).toString('hex')}`;
+    const refuse = (status, code, details) => {
+      const {body} = apiError(Object.assign(new GatewayError(code, status), details ? {details} : {}));
+      refuseUpgrade(socket, status, body, requestId);
+    };
+    const match = /^\/v1\/browser-sessions\/([0-9a-f-]{36})\/ws(?:\?.*)?$/.exec(req.url ?? '');
+    if (!match || req.method !== 'GET' || String(req.headers.upgrade ?? '').toLowerCase() !== 'websocket') return refuse(404, 'route_not_found');
+    void (async () => {
+      try {
+        await app.authenticate(req, API_SCOPES.write);
+      } catch (error) {
+        const {status, body} = apiError(error);
+        return refuseUpgrade(socket, status, body, requestId);
+      }
+      await platform.browserSessions.upgrade(req.project, match[1], req, socket, head, refuse);
+    })().catch(() => socket.destroy());
+  });
   registerControl(app, platform, {identity: platform.controlIdentity, ledger: platform.ledger, service: platform.front, stripe});
   registerStripeWebhook(app, stripe, {autoProcess: stripeAutoProcess});
   app.addHook('onClose', async () => {
@@ -155,7 +182,8 @@ async function main() {
   let reconciling = null;
   const reconcile = setInterval(async () => {
     if (reconciling) return;
-    reconciling = platform.front.reconcile().catch(() => process.stderr.write('reconcile_failed\n'));
+    reconciling = Promise.all([platform.front.reconcile(), platform.browserSessions.reconcile()])
+      .catch(() => process.stderr.write('reconcile_failed\n'));
     try { await reconciling; } finally { reconciling = null; }
   }, 30_000);
   reconcile.unref();

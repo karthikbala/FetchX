@@ -9,8 +9,8 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, Optional, 
 import httpx
 
 from ._core import Flow, _Call, _Core, _Send, _Sleep, _Yield, _network_query, log
-from .models import (Balance, Batch, BatchItem, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Login, Me,
-                     NetworkCall, NetworkPage, Prices, ServiceStatus, Usage)
+from .models import (Balance, Batch, BatchItem, BrowserSession, Content, Estimate, Feedback, FetchResult, FetchSummary, ListPage, Login,
+                     Me, NetworkCall, NetworkPage, Prices, ServiceStatus, Usage)
 
 _SIX_HOURS = 6 * 3600.0
 
@@ -271,6 +271,26 @@ class AsyncFetchX(_Core):
     async def delete_login(self, login_id: Any) -> None:
         """``DELETE /v1/logins/{id}``: see ``FetchX.delete_login``."""
         await self._call(*self._plan_delete_login(login_id))
+
+    async def create_browser_session(self, body: Optional[Mapping[str, Any]] = None, **fields: Any) -> BrowserSession:
+        """``POST /v1/browser-sessions``: see ``FetchX.create_browser_session``."""
+        return await self._call(*self._plan_create_browser_session(body, fields))
+
+    async def get_browser_session(self, session_id: Any) -> BrowserSession:
+        """``GET /v1/browser-sessions/{id}``: see ``FetchX.get_browser_session``."""
+        return await self._call(*self._plan_get_browser_session(session_id))
+
+    async def list_browser_sessions(self, status: Optional[str] = None) -> List[BrowserSession]:
+        """``GET /v1/browser-sessions``: see ``FetchX.list_browser_sessions``."""
+        return await self._call(*self._plan_list_browser_sessions(status))
+
+    async def close_browser_session(self, session_id: Any) -> BrowserSession:
+        """``DELETE /v1/browser-sessions/{id}``: see ``FetchX.close_browser_session``."""
+        return await self._call(*self._plan_close_browser_session(session_id))
+
+    async def fill_browser_session(self, session_id: Any, body: Optional[Mapping[str, Any]] = None, **fields: Any) -> dict:
+        """``POST /v1/browser-sessions/{id}/fill``: see ``FetchX.fill_browser_session``."""
+        return await self._call(*self._plan_fill_browser_session(session_id, body, fields))
 
     async def usage(self, period: Optional[str] = None, since: Optional[str] = None,
                     until: Optional[str] = None, key_id: Optional[str] = None) -> Usage:

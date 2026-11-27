@@ -6,7 +6,7 @@
 // started.
 import {GatewayError} from '../policy.mjs';
 
-export const ENGINE_CONTRACT = '1.16';
+export const ENGINE_CONTRACT = '1.17';
 const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH']);
 // 503 answers that are refusals: nothing was started, and the caller is told why.
 const REFUSED_503 = new Set(['extract_unavailable']);
@@ -29,7 +29,7 @@ export class EngineClient {
 
   get configured() { return !!this.url && typeof this.token === 'string' && this.token.length >= 32; }
 
-  async #call(method, path, {query, body, headers = {}, raw = false, timeoutMs = this.timeoutMs} = {}) {
+  async #call(method, path, {query, body, headers = {}, raw = false, timeoutMs = this.timeoutMs, refused503 = false} = {}) {
     if (!this.configured) throw unavailable(false, 'not_configured');
     // A repeated parameter (contains=a&contains=b) is an array.
     const search = query ? new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined)
@@ -57,7 +57,7 @@ export class EngineClient {
     }
     const error = json?.error;
     if (typeof error?.code === 'string' && ((response.status >= 400 && response.status < 500)
-      || (response.status === 503 && REFUSED_503.has(error.code)))) {
+      || (response.status === 503 && (refused503 || REFUSED_503.has(error.code))))) {
       // The token is the platform's own configuration, never the caller's fault.
       if (response.status === 401) throw unavailable(true, 'engine_unauthorized');
       const refusal = new GatewayError(error.code, response.status);
@@ -147,6 +147,44 @@ export class EngineClient {
 
   async removeLogin(tenant, id) {
     await this.#call('DELETE', `/internal/v1/logins/${encodeURIComponent(id)}`, {query: {tenant}});
+  }
+
+  // Remote browser sessions (contract 1.17). The engine answers a create once
+  // the session can be connected to (its browser takes up to a minute to
+  // start); a 503 from it started nothing billable, so it is a refusal with the
+  // engine's code (browser_capacity, browser_failed...), not an uncertain call.
+  async createBrowserSession(tenant, body) {
+    return (await this.#call('POST', '/internal/v1/browser-sessions', {query: {tenant}, body, refused503: true,
+      timeoutMs: Math.max(this.timeoutMs, 120_000)})).body.session;
+  }
+
+  async getBrowserSession(tenant, id) {
+    return (await this.#call('GET', `/internal/v1/browser-sessions/${encodeURIComponent(id)}`, {query: {tenant}, timeoutMs: 15_000})).body.session;
+  }
+
+  async listBrowserSessions(tenant, state) {
+    return (await this.#call('GET', '/internal/v1/browser-sessions', {query: {tenant, state}, timeoutMs: 15_000})).body.sessions;
+  }
+
+  // Closes a session and answers with its receipt (the engine waits up to 20 s for its browser).
+  async closeBrowserSession(tenant, id) {
+    return (await this.#call('DELETE', `/internal/v1/browser-sessions/${encodeURIComponent(id)}`, {query: {tenant}, timeoutMs: 40_000})).body.session;
+  }
+
+  async fillBrowserSession(tenant, id, body) {
+    return (await this.#call('POST', `/internal/v1/browser-sessions/${encodeURIComponent(id)}/fill`, {query: {tenant}, body, refused503: true,
+      timeoutMs: 40_000})).body.fill;
+  }
+
+  // Where a session's caller WebSocket goes: the engine's address and the
+  // upgrade's path and token (the platform carries the upgrade itself).
+  sessionUpgradeTarget(tenant, id) {
+    if (!this.configured) return null;
+    const url = new URL(this.url);
+    if (url.protocol !== 'http:') return null;
+    return {host: url.hostname, port: Number(url.port || 80),
+      path: `${url.pathname.replace(/\/+$/, '')}/internal/v1/browser-sessions/${encodeURIComponent(id)}/ws?tenant=${encodeURIComponent(tenant)}`,
+      authorization: `Bearer ${this.token}`};
   }
 
   // Checks requests without starting them: [{host} | {error: {code, details?}}], in order.

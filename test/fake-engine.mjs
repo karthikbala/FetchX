@@ -28,6 +28,11 @@
 // attempt's, and `next` replaces a failed job's next action. A request with
 // `secrets` reports secrets_used (the outcome's, by default every name); one
 // with secrets or store: false has no next page (410 not_stored).
+// Remote browser sessions (/internal/v1/browser-sessions) open at once and run
+// nothing; `sessionScript(input)` may return {refuse: {status, code, details}}
+// to refuse a create, or fields that override the new session (state, usage...).
+// `closeSession(id, {reason, billable, wire_bytes, error})` ends one as the
+// engine would (ttl, idle, error...). Two may be open per tenant.
 // test/engine-contract.test.mjs validates what it answers against the contract.
 import Fastify from 'fastify';
 import {createHmac, randomUUID} from 'node:crypto';
@@ -87,7 +92,8 @@ function refusalOf(request) {
 // `estimates` scripts POST /internal/v1/estimates: {history: {host: SiteUsage},
 // proven: {host: tier}, cooling: {host: {retry_after_seconds}}, pace: {host: Pace},
 // defaults: {requests, steps}}; a request's planned tiers are plannedFor's.
-export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}, pace = () => ({tier: 'open', max_running: 4, start_gap_ms: 0})} = {}) {
+export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}, pace = () => ({tier: 'open', max_running: 4, start_gap_ms: 0}),
+  sessionScript = () => ({})} = {}) {
   const jobs = new Map();
   // host -> running jobs, and when the last one started.
   const hostRunning = new Map();
@@ -465,6 +471,107 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     return reply.code(204).send();
   });
 
+  // Remote browser sessions: open as soon as they are made, closed with a receipt.
+  const sessions = new Map();
+  const SESSION_FIELDS = ['id', 'allow_hosts', 'ttl_s', 'idle_ttl_s', 'proxy', 'country', 'secrets', 'login', 'max_wire_bytes', 'viewport'];
+  const sessionInput = body => {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return {field: 'body'};
+    const unknown = Object.keys(body).find(key => !SESSION_FIELDS.includes(key));
+    if (unknown) return {field: unknown, reason: 'unknown field'};
+    if (!UUID.test(String(body.id))) return {field: 'id'};
+    if (!Array.isArray(body.allow_hosts) || !body.allow_hosts.length || body.allow_hosts.length > 32
+      || body.allow_hosts.some(host => typeof host !== 'string' || !/^(?:\*\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}$/.test(host))) return {field: 'allow_hosts'};
+    if (body.ttl_s !== undefined && (!Number.isInteger(body.ttl_s) || body.ttl_s < 30 || body.ttl_s > 900)) return {field: 'ttl_s', reason: '30 to 900'};
+    if (body.idle_ttl_s !== undefined && (!Number.isInteger(body.idle_ttl_s) || body.idle_ttl_s < 10 || body.idle_ttl_s > 120)) {
+      return {field: 'idle_ttl_s', reason: '10 to 120'};
+    }
+    if (body.login !== undefined && body.login !== null && (!logins.has(body.login))) return {field: 'login', reason: 'no saved login with this id in this project'};
+    if (body.secrets !== undefined && body.secrets !== null && (typeof body.secrets !== 'object' || Object.values(body.secrets)
+      .some(entry => typeof entry?.value !== 'string' || entry.value.length < 4 || !Array.isArray(entry.origins)))) return {field: 'secrets'};
+    if (body.max_wire_bytes !== undefined && (!Number.isInteger(body.max_wire_bytes) || body.max_wire_bytes < 1_000_000)) return {field: 'max_wire_bytes'};
+    return null;
+  };
+  const sessionView = session => {
+    const {tenant: _tenant, ...view} = session;
+    const end = session.closed_at ? Date.parse(session.closed_at) : Date.now();
+    return {...view, usage: {...view.usage, duration_s: Math.max(0, Math.round((end - Date.parse(session.ready_at ?? session.created_at)) / 100) / 10)}};
+  };
+  const closeSession = (id, {reason = 'client', billable, wire_bytes: wireBytes, error = null} = {}) => {
+    const session = sessions.get(id);
+    if (!session || session.state === 'closed') return session ?? null;
+    Object.assign(session, {state: 'closed', closed_at: new Date().toISOString(), close_reason: reason,
+      billable: billable ?? (session.ready_at !== null && reason !== 'error'), error: reason === 'error' ? error ?? 'browser_failed' : null});
+    session.usage.connections = 1;
+    if (wireBytes !== undefined) session.usage.wire_bytes = wireBytes;
+    return session;
+  };
+  const ownSession = (req, reply) => {
+    const tenant = tenantOf(req, reply);
+    if (!tenant) return null;
+    const session = sessions.get(req.params.id);
+    if (!session || session.tenant !== tenant) { refuse(reply, 404, 'not_found'); return null; }
+    return session;
+  };
+  app.post('/internal/v1/browser-sessions', async (req, reply) => {
+    const tenant = tenantOf(req, reply);
+    if (!tenant) return reply;
+    const bad = sessionInput(req.body);
+    if (bad) return refuse(reply, 400, 'invalid_request', bad);
+    const input = req.body;
+    const existing = sessions.get(input.id);
+    if (existing) return existing.tenant === tenant ? reply.code(201).send({session: sessionView(existing)}) : refuse(reply, 409, 'session_id_conflict');
+    const scripted = sessionScript(input) ?? {};
+    if (scripted.refuse) return refuse(reply, scripted.refuse.status, scripted.refuse.code, scripted.refuse.details);
+    const open = [...sessions.values()].filter(session => session.tenant === tenant && session.state !== 'closed').length;
+    if (open >= 2) return refuse(reply, 429, 'browser_session_limit', {limit: 2, open});
+    const now = new Date();
+    const ttl = input.ttl_s ?? 300;
+    const {refuse: _refuse, ...overrides} = scripted;
+    const session = {id: input.id, tenant, state: 'open', created_at: now.toISOString(), ready_at: now.toISOString(),
+      expires_at: new Date(now.getTime() + ttl * 1000).toISOString(), closed_at: null, close_reason: null, ttl_s: ttl, idle_ttl_s: input.idle_ttl_s ?? 60,
+      allow_hosts: input.allow_hosts, route: {class: input.proxy ?? 'datacenter', country: input.country ?? 'US', provider: input.proxy === 'residential' ? 'evomi' : 'oxylabs'},
+      login: input.login ?? null, secrets: Object.entries(input.secrets ?? {}).map(([name, {origins}]) => ({name, origins})),
+      max_wire_bytes: input.max_wire_bytes ?? 500_000_000, browser: {engine: 'camoufox', version: '146.0.1-beta.25'},
+      playwright: {version: '1.62.1', client: '1.62'}, usage: {duration_s: 0, wire_bytes: 0, requests: 0, connections: 0},
+      blocked_requests: [], websockets: {opened: 0, refused: 0}, secrets_used: [], secret_egress: [], refused_calls: {}, billable: null, error: null,
+      ...overrides};
+    sessions.set(session.id, session);
+    return reply.code(201).send({session: sessionView(session)});
+  });
+  app.get('/internal/v1/browser-sessions', async (req, reply) => {
+    const tenant = tenantOf(req, reply);
+    if (!tenant) return reply;
+    const state = req.query.state;
+    if (state !== undefined && !['open', 'closed'].includes(state)) return refuse(reply, 400, 'invalid_request', {field: 'state'});
+    return {sessions: [...sessions.values()].filter(session => session.tenant === tenant
+      && (state === undefined || (state === 'closed') === (session.state === 'closed'))).map(sessionView)};
+  });
+  app.get('/internal/v1/browser-sessions/:id', async (req, reply) => {
+    const session = ownSession(req, reply);
+    return session ? {session: sessionView(session)} : reply;
+  });
+  app.delete('/internal/v1/browser-sessions/:id', async (req, reply) => {
+    const session = ownSession(req, reply);
+    return session ? {session: sessionView(closeSession(session.id))} : reply;
+  });
+  app.post('/internal/v1/browser-sessions/:id/fill', async (req, reply) => {
+    const session = ownSession(req, reply);
+    if (!session) return reply;
+    const body = req.body;
+    if (!body || typeof body.secret !== 'string' || typeof body.selector !== 'string' || !body.selector) {
+      return refuse(reply, 400, 'invalid_request', {field: typeof body?.secret === 'string' ? 'selector' : 'secret'});
+    }
+    if (session.state === 'closed') return refuse(reply, 410, 'browser_session_closed');
+    const login = body.secret.startsWith('login.');
+    if (login ? !session.login : !session.secrets.some(secret => secret.name === body.secret)) return refuse(reply, 404, 'secret_not_found', {secret: body.secret});
+    const frameUrl = body.frame_url ?? `https://${session.allow_hosts[0].replace(/^\*\./, '')}/`;
+    const origins = login ? [`https://${logins.get(session.login)?.site}`] : session.secrets.find(secret => secret.name === body.secret).origins;
+    if (!origins.includes(new URL(frameUrl).origin)) return refuse(reply, 403, 'secret_origin_mismatch', {secret: body.secret});
+    if (body.selector === '#missing') return refuse(reply, 409, 'fill_failed', {reason: 'no element matched the selector'});
+    if (!session.secrets_used.includes(body.secret)) session.secrets_used.push(body.secret);
+    return {fill: {secret: body.secret, frame_url: frameUrl}};
+  });
+
   app.post('/internal/v1/requests/check', async (req, reply) => {
     const requests = req.body?.requests;
     if (!Array.isArray(requests) || !requests.length || requests.length > 1000) return refuse(reply, 400, 'invalid_request', {field: 'requests'});
@@ -561,5 +668,5 @@ export function fakeEngine({script = () => ({}), token, eventKey, estimates = {}
     return answers;
   }
 
-  return {app, fetchImpl, jobs, outbox, calls, admin, deliver, view, envelope, fake, hostRunning, logins};
+  return {app, fetchImpl, jobs, outbox, calls, admin, deliver, view, envelope, fake, hostRunning, logins, sessions, closeSession};
 }

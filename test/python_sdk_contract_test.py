@@ -212,7 +212,35 @@ def scenario(fake):
     assert client.get_login(login).name == "Shop"
     assert client.update_login(login, name="Shop (ops)").name == "Shop (ops)"
     assert client.fetch(url=f"{SHOP}/p/1", login=login.id, idempotency_key="with-login").status == "succeeded"
+    session = client.create_browser_session(allow_hosts=["shop.example.com", "login.shop.example.com"], ttl_s=120,
+                                            secrets={"pin": {"value": "synthetic-pin-1", "origins": ["https://login.shop.example.com"]}},
+                                            login=login.id)
+    assert session.open and session.ws_url.endswith(f"/v1/browser-sessions/{session.id}/ws") and session.playwright_version, session.raw
+    assert "synthetic-pin-1" not in json.dumps(session.raw)
+    assert client.create_browser_session(allow_hosts=["shop.example.com", "login.shop.example.com"], ttl_s=120, login=login.id,
+                                         secrets={"pin": {"value": "synthetic-pin-1", "origins": ["https://login.shop.example.com"]}},
+                                         idempotency_key=session.idempotency_key).id == session.id
+    assert client.fill_browser_session(session, secret="pin", selector="#pin", frame_url="https://login.shop.example.com/sign-in?x=1") == {
+        "secret": "pin", "frame_url": "https://login.shop.example.com/sign-in"}
+    client.fill_browser_session(session, secret="login.password", selector="#password", frame_url="https://login.shop.example.com/")
+    assert [item.id for item in client.list_browser_sessions(status="open")] == [session.id]
+    assert client.get_browser_session(session).open
+    receipt = client.close_browser_session(session)
+    assert receipt.closed and receipt.close_reason == "client" and receipt.credits_charged == 10 and receipt.secrets_used == ["pin", "login.password"]
+    assert client.list_browser_sessions(status="open") == []
     client.delete_login(login)
+    for bad in (lambda: client.create_browser_session(allow_hosts=[""]),
+                lambda: client.create_browser_session(allow_hosts=["shop.example.com"], ttl_s=120, idempotency_key=session.idempotency_key),
+                lambda: client.create_browser_session(allow_hosts=["shop.example.com"], max_credits=5),
+                lambda: client.get_browser_session("00000000-0000-4000-8000-000000000004"),
+                lambda: client.close_browser_session("00000000-0000-4000-8000-000000000004"),
+                lambda: client.fill_browser_session(session, secret="pin", selector="#pin"),
+                lambda: client.fill_browser_session("00000000-0000-4000-8000-000000000004", secret="pin", selector="#pin"),
+                lambda: client.list_browser_sessions(status="gone")):
+        try:
+            bad()
+        except FetchXError:
+            pass
     for bad in (lambda: client.fetch(url="ftp://shop.example.com/"),
                 lambda: client.fetch(url=f"{SHOP}/dear", max_credits=5),
                 lambda: client.fetch(url=f"{SHOP}/p/2", idempotency_key=first.idempotency_key),

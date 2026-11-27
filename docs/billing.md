@@ -15,6 +15,10 @@ A request is charged only when it succeeds, at the price of the step that got th
 | `captcha`, added when the winning step solved one | 10 |
 | `residential_overage_per_mb`, beyond `residential_included_mb` (1 MB for HTTP, 5 MB for a browser) | 5 per started MB |
 | `extract`, per started `extract_unit_tokens` (25,000) of page text the models read, at least one, up to `extract_max_tokens` (150,000) | 10 |
+| `browser_session` (a browser session on a datacenter exit, flat) | 10 |
+| `browser_session_residential` (on a residential exit, 5 MB included) | 25 |
+
+A browser session (`POST /v1/browser-sessions`) is charged once, when it ends, whatever closed it (the caller, its TTL, idle or disconnect, its traffic limit), unless its browser failed (`close_reason: error`) or the create's answer was lost: then it is free. Its price is held while it runs; a residential session also holds the traffic its `max_credits` allows, and the engine closes it at that traffic. See [API: browser sessions](api.md#browser-sessions). The owner set the session prices on 2026-11-27: 10 credits on a datacenter exit, 25 on a residential exit with 5 MB included, then the residential overage per MB (5). They are `config.pricing` values like the others.
 
 Extraction is priced on the engine's `usage.extract.page_tokens` (4 characters a token, counted by FetchX, so the price does not depend on the model). The engine reads at most 150,000 tokens, so it costs at most 60 credits; a request with `extract` reserves that on top of its steps, and a step is sent only when it and one unit fit the reservation. A next page reserves for extraction when the earlier request had `extract` (`fetch_settlements.extract`). At the largest pack's rate a unit (10 credits) is $0.001. The eval on 2026-11-21 measured about $0.0004 a page with Liquid d1.2, so a typical page leaves a margin; a full 25,000-token unit read by both d1.2 routes, or a chat fallback ($0.001 to $0.0025 of input), can cost as much as the unit or more. The engine's `extract.*` budgets cap that spend.
 

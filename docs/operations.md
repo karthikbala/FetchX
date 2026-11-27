@@ -33,6 +33,8 @@ The status page at https://fetchx.ai/status does not run on porttrack. A Cloudfl
 
 When the gateway itself is down (a restart, a crash), host nginx answers `503` with the API's error shape, code `unavailable` and `Retry-After: 30`, instead of its HTML 502 page: [`ops/nginx/fetchx-api-unavailable.conf`](../ops/nginx/fetchx-api-unavailable.conf), installed as `/etc/nginx/snippets/fetchx-api-unavailable.conf` and included in the `app.fetchx.ai` server block. Install it with `sudo install -m 644 ops/nginx/fetchx-api-unavailable.conf /etc/nginx/snippets/`, add the `include` line, then `sudo nginx -t && sudo systemctl reload nginx`. Reloading does not drop connections.
 
+Browser sessions' WebSockets need host nginx to pass the upgrade on: [`ops/nginx/fetchx-browser-sessions.conf`](../ops/nginx/fetchx-browser-sessions.conf), installed as `/etc/nginx/snippets/fetchx-browser-sessions.conf` with `FETCHX_GATEWAY` set to the upstream the server block's `location /` uses, and included in the `app.fetchx.ai` server block the same way. Cloudflare passes WebSockets on by default (zone setting Network > WebSockets). Install it before a release with browser sessions.
+
 Planned maintenance:
 
 1. At least a day ahead, post a maintenance notice in the admin portal's Status tab with its start, planned end, the components it touches and, if requests must stop, **Pause the API**. It shows on the status page as scheduled.

@@ -295,7 +295,7 @@ test('a project with too many jobs running is told to wait', {skip}, async t => 
   const {call, engine} = await platformFor(store, {config: testConfig({fetchLimits: {maxConcurrentPerProject: 2}}), script: () => ({hold: gate})});
   const job = n => ({url: `https://slow.example.com/${n}`, async: true, max_credits: 1});
   for (const n of [1, 2]) assert.equal((await call('POST', '/v1/fetch', {body: job(n)})).status, 202);
-  assert.deepEqual((await call('GET', '/v1/me')).body.concurrency, {requests: {limit: 2, running: 2}});
+  assert.deepEqual((await call('GET', '/v1/me')).body.concurrency, {requests: {limit: 2, running: 2}, browser_sessions: {limit: 2, running: 0}});
   const busy = await call('POST', '/v1/fetch', {body: job(3)});
   assert.equal(busy.status, 429);
   assert.equal(busy.body.error.code, 'too_many_requests');

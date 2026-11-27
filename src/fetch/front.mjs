@@ -74,6 +74,9 @@ export async function initFetchFront(pool) {
     -- and how much page text the models read on success.
     ALTER TABLE fetch_settlements ADD COLUMN IF NOT EXISTS extract boolean NOT NULL DEFAULT false;
     ALTER TABLE fetch_settlements ADD COLUMN IF NOT EXISTS extract_tokens integer;
+    -- What the row bills: an engine job (fetch), or a browser session
+    -- (browser_session, fetch/browser-sessions.mjs), settled from its receipt.
+    ALTER TABLE fetch_settlements ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'fetch';
     CREATE INDEX IF NOT EXISTS fetch_settlements_project_created ON fetch_settlements (project, created_at);
     CREATE INDEX IF NOT EXISTS fetch_settlements_pending ON fetch_settlements (deadline) WHERE status = 'pending';
     -- The call (request_id, X-Request-Id) that started the job, so support can
@@ -317,7 +320,7 @@ export class FetchFront {
     let item = false;
     const row = await this.store.tx(async client => {
       const current = (await client.query('SELECT * FROM fetch_settlements WHERE request = $1 FOR UPDATE', [id])).rows[0];
-      if (!current || (tenant !== undefined && current.project !== tenant)) return null;
+      if (!current || current.kind !== 'fetch' || (tenant !== undefined && current.project !== tenant)) return null;
       if (current.status !== 'pending') return current;
       let charged = 0;
       const step = status === 'succeeded' && STEPS.includes(usage?.step) ? usage.step : null;
@@ -357,7 +360,7 @@ export class FetchFront {
   // the engine: finished ones are settled, unknown ones were never started and
   // their reservation is released.
   async reconcile({limit = 100} = {}) {
-    const rows = (await this.store.pool.query(`SELECT request, project FROM fetch_settlements WHERE status = 'pending'
+    const rows = (await this.store.pool.query(`SELECT request, project FROM fetch_settlements WHERE status = 'pending' AND kind = 'fetch'
       AND deadline < clock_timestamp() - make_interval(secs => $1) ORDER BY deadline LIMIT $2`,
     [this.limits.settleGraceMs / 1000, limit])).rows;
     let settled = 0;
@@ -428,8 +431,9 @@ export class FetchFront {
       payment_hold: balance.held, ...usd} : {credits: null, reserved: 0, trial: 0, purchased: 0, payment_hold: false, ...usd};
   }
 
-  // Requests a project may have running at once, of any kind: the project's
-  // own maxConcurrentRequests (platform config), else the budget for all.
+  // Requests a project may have running at once, of any kind (browser sessions
+  // included): the project's own maxConcurrentRequests (platform config), else
+  // the budget for all.
   concurrencyLimit(project) {
     return this.config.projects?.[project]?.maxConcurrentRequests ?? budget(this.config, 'fetch.maxConcurrentPerProject');
   }
@@ -487,12 +491,13 @@ export class FetchFront {
   }
   removeLogin(project, id) { return this.engine.removeLogin(project, id); }
 
-  // How many of a project's jobs finished in a period, for /v1/usage; keyIds:
-  // only those made with these console keys (null: all).
+  // How many of a project's jobs finished in a period, for /v1/usage (browser
+  // sessions are in its by_step, not here); keyIds: only those made with these
+  // console keys (null: all).
   async counts(project, {from, to, keyIds = null}) {
     return (await this.store.pool.query(`SELECT count(*) FILTER (WHERE status = 'succeeded')::int AS succeeded,
         count(*) FILTER (WHERE status = 'failed')::int AS failed FROM fetch_settlements
-      WHERE project = $1 AND created_at >= $2 AND created_at < $3 AND ($4::text[] IS NULL OR key_id = ANY($4::text[]))`,
+      WHERE project = $1 AND kind = 'fetch' AND created_at >= $2 AND created_at < $3 AND ($4::text[] IS NULL OR key_id = ANY($4::text[]))`,
     [project, from, to, keyIds])).rows[0];
   }
 
