@@ -3395,7 +3395,7 @@
               "type": "string"
             },
             "maxItems": 100,
-            "description": "With allow_hosts, on a browser step: the origins off the list the page reached because a bot check's own traffic went there (Cloudflare's challenges.cloudflare.com), before any secret was typed or sent. Once a secret has been handed to the page, they stay off the list like any other host."
+            "description": "With allow_hosts, on a browser step: the origins off the list the page reached for a captcha widget's or a bot check's own traffic: the widgets' vendor hosts (reCAPTCHA's www.google.com/recaptcha/, www.recaptcha.net/recaptcha/ and www.gstatic.com/recaptcha/, hCaptcha's hcaptcha.com, Cloudflare's challenges.cloudflare.com, MTCaptcha's mtcaptcha.com, with their subdomains), reached at any time; a secret is never sent to them."
           },
           "body": {
             "type": "string",
@@ -3781,9 +3781,10 @@
               "rejected",
               "code_required",
               "failed",
+              "not_sent",
               "no_login"
             ],
-            "description": "A sign-in on the page with the saved login: passed (signed in), rejected (the sign-in form came back), code_required (it asked for a one-time code), failed (no clear answer, or the form could not be sent: its button never enabled, and the password never reached the site), no_login (the page asked for a sign-in on a host no usable saved login covers)."
+            "description": "A sign-in on the page with the saved login: passed (signed in), rejected (the sign-in form came back), code_required (it asked for a one-time code), failed (no clear answer after the form was sent), not_sent (FetchX filled in the form but could not send it: its button never enabled, so the password never reached the site and the login's standing is unchanged), no_login (the page asked for a sign-in on a host no usable saved login covers)."
           },
           "secrets_used": {
             "type": "boolean",
@@ -4237,7 +4238,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The only hosts the request may reach: exact hostnames, or *.suffix for every subdomain of suffix (not suffix itself). The URL's host must be on the list (else 400 url_not_allowed, field url). In a browser it covers every request and connection the page makes (navigations, frames, scripts, XHR and fetch, WebSockets, workers, redirect hops): one to a host off the list is refused before it leaves FetchX and listed in data.blocked_requests by origin. Over HTTP a redirect to a host off the list is not followed: the 3xx is the answer, with data.location. Captcha widgets load from their vendors' hosts, which are off most lists. A bot check's own traffic is the exception until a secret is typed or sent: Cloudflare's challenge host (challenges.cloudflare.com) is reached even off the list, listed in data.challenge_hosts, and the challenge's script POSTs and its form post back to the site are let through; after a secret, the list holds for it too. A navigate action to a host off the list is refused (400, field actions[i].url)."
+            "description": "The only hosts the request may reach: exact hostnames, or *.suffix for every subdomain of suffix (not suffix itself). The URL's host must be on the list (else 400 url_not_allowed, field url). In a browser it covers every request and connection the page makes (navigations, frames, scripts, XHR and fetch, WebSockets, workers, redirect hops): one to a host off the list is refused before it leaves FetchX and listed in data.blocked_requests by origin. Over HTTP a redirect to a host off the list is not followed: the 3xx is the answer, with data.location. A captcha widget's own traffic is the exception, at any time: the hosts the widgets FetchX solves load from and talk to (reCAPTCHA's www.google.com/recaptcha/, www.recaptcha.net/recaptcha/ and www.gstatic.com/recaptcha/ paths, hCaptcha's hcaptcha.com, Cloudflare's challenges.cloudflare.com and MTCaptcha's mtcaptcha.com, with their subdomains) are reached even off the list, never as the top-level page, and listed in data.challenge_hosts, so a sign-in form whose button waits for its captcha works without listing them; a secret is never sent there (the request carrying it is stopped). A Cloudflare check's other traffic is let through until a secret is typed or sent: its script POSTs and its form post back to the site. A navigate action to a host off the list is refused (400, field actions[i].url)."
           },
           "allow_passive_subresources": {
             "type": "boolean",

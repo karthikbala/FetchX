@@ -2,7 +2,7 @@
  "openapi": "3.1.0",
  "info": {
   "title": "FetchX API",
-  "version": "1.18.0",
+  "version": "1.19.0",
   "description": "FetchX gets any public URL and returns its data. POST /v1/fetch does the work, and POST /v1/fetch/{id}/next gets the page after one. POST /v1/batches takes up to 1000 URLs in one job and runs them at the pace each site can take, with results sent to a webhook or read page by page. POST /v1/estimate says what a request or a batch would cost and take before you send it; the other endpoints read results, download files, list, delete and report credits. A browser request with capture records the page's own network calls, read with GET /v1/fetch/{id}/network or as a HAR file. POST /v1/logins saves a site’s username and password (encrypted, never returned): when a page asks for a sign-in on that site, FetchX signs in by itself and keeps the session for later requests. POST /v1/browser-sessions starts a browser you drive yourself with Playwright, held to the hosts you allow: FetchX sees every request its pages and frames make first and refuses what is off the list. GET /v1/me says which project and key are calling, and the key's own credit limits per day and month and expiry, set in the console. POST /v1/feedback tells FetchX how it handled a page, for example blocked through FetchX but fine from your own connection, so routes can be tuned with real cases. GET /v1/status and GET /v1/prices need no key: the service's state, and what each step costs with the trial credits a new account gets.\n\nTwo status layers: the HTTP code says whether FetchX accepted the call; the `status` field says what happened to the fetch. A fetch that ran and failed is HTTP 200 with `status: failed`. A pending fetch is HTTP 202. A 4xx means the request itself was wrong, nothing was sent to the site and nothing was charged.\n\nBilling: a request is charged only when it succeeds, at the price of the step that got the data (plus the page text read, when it asks for `extract`). Failed, uncertain and refused requests cost nothing, and so does a page that loads without what `expect` asked for or without a required `extract` field. Every result says what it cost in `credits`, with a breakdown.\n\nChanges are listed at https://fetchx.ai/changelog (info.version is the latest release). A deprecated route carries Deprecation, Sunset and Link headers until its sunset date; a retired route answers 410 with error.code route_retired and error.details.replacement; an unknown route answers 404 with error.code route_not_found and links to the docs, the changelog and the status page. While maintenance pauses the API, every route except GET /v1/status answers 503 with error.code maintenance, a Retry-After header and error.details.status_url (https://fetchx.ai/status).\n\nEvery answer carries an X-Request-Id header, and every JSON answer from /v1, success or error, carries the same id as `request_id`. Log it with the fetch's own `id`, and quote it when you ask about a call."
  },
  "servers": [
@@ -8081,7 +8081,7 @@
       "items": {
        "type": "string"
       },
-      "description": "The only hosts the request may reach: exact hostnames, or *.suffix for every subdomain of suffix (not suffix itself). The URL's host must be on the list (else 400 url_not_allowed, field url). In a browser it covers every request and connection the page makes (navigations, frames, scripts, XHR and fetch, WebSockets, workers, redirect hops): one to a host off the list is refused before it leaves FetchX and listed in data.blocked_requests by origin. Over HTTP a redirect to a host off the list is not followed: the 3xx is the answer, with data.location. Captcha widgets load from their vendors' hosts, which are off most lists. A navigate action to a host off the list is refused (400, field actions[i].url)."
+      "description": "The only hosts the request may reach: exact hostnames, or *.suffix for every subdomain of suffix (not suffix itself). The URL's host must be on the list (else 400 url_not_allowed, field url). In a browser it covers every request and connection the page makes (navigations, frames, scripts, XHR and fetch, WebSockets, workers, redirect hops): one to a host off the list is refused before it leaves FetchX and listed in data.blocked_requests by origin. Over HTTP a redirect to a host off the list is not followed: the 3xx is the answer, with data.location. A captcha widget's own traffic is let through without being listed, at any time: reCAPTCHA's /recaptcha/ paths on www.google.com, www.recaptcha.net and www.gstatic.com, hCaptcha (hcaptcha.com), Cloudflare Turnstile (challenges.cloudflare.com) and MTCaptcha (mtcaptcha.com), with their subdomains, never as the top-level page, and listed in data.challenge_hosts; a request that would carry one of your secrets or a saved login's password there is stopped. A navigate action to a host off the list is refused (400, field actions[i].url)."
      },
      "allow_passive_subresources": {
       "type": "boolean",
@@ -8702,6 +8702,14 @@
       "maxItems": 100,
       "description": "With allow_passive_subresources, on a browser step: the origins off the list the page loaded scripts, styles, fonts or images from."
      },
+     "challenge_hosts": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 100,
+      "description": "With allow_hosts, on a browser step: the origins off the list the page reached for a captcha widget's or a bot check's own traffic (see allow_hosts). No secret is ever sent to them."
+     },
      "next_page": {
       "oneOf": [
        {
@@ -9056,9 +9064,10 @@
        "rejected",
        "code_required",
        "failed",
+       "not_sent",
        "no_login"
       ],
-      "description": "A sign-in on the page with a saved login: passed (signed in), rejected (the sign-in form came back), code_required (it asked for a one-time code), failed (no clear answer), no_login (the page asked for a sign-in on a host no usable saved login covers)."
+      "description": "A sign-in on the page with a saved login: passed (signed in), rejected (the sign-in form came back), code_required (it asked for a one-time code), failed (no clear answer after the form was sent), not_sent (FetchX filled in the form but could not send it: its button never enabled, so the password never reached the site and the login's standing is unchanged), no_login (the page asked for a sign-in on a host no usable saved login covers)."
      },
      "secrets_used": {
       "type": "boolean",
