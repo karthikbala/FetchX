@@ -1342,7 +1342,9 @@ def _skeleton(content: bytes) -> Optional[dict]:
 
 
 def _json(status: int, body: dict) -> httpx.Response:
-    return httpx.Response(status, json=body)
+    # Like FetchX, every JSON answer names its call: request_id in the body and the X-Request-Id header.
+    request_id = "req_" + uuid.uuid4().hex[:24]
+    return httpx.Response(status, json={**body, "request_id": request_id}, headers={"x-request-id": request_id})
 
 
 def _error(status: int, code: str, message: str, details: Optional[dict] = None,

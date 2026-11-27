@@ -228,6 +228,14 @@ class FetchResult(Model):
         return self.raw.get("id") or ""
 
     @property
+    def request_id(self) -> Optional[str]:
+        """FetchX's id for the HTTP call that returned this result (``req_...``, also the X-Request-Id header),
+        on failed results too. Each call has its own: a poll's differs from the POST's. Quote it with ``id``
+        when asking about a request. None on results built by hand or delivered by webhook."""
+        value = self.raw.get("request_id")
+        return value if isinstance(value, str) else None
+
+    @property
     def status(self) -> str:
         """pending, succeeded or failed."""
         return self.raw.get("status") or ""
@@ -517,7 +525,7 @@ class FetchResult(Model):
         error = self.error
         attempt = self.last_attempt
         return {key: value for key, value in {
-            "fetchx_id": self.id, "status": self.status, "page_status": self.page_status,
+            "fetchx_id": self.id, "request_id": self.request_id, "status": self.status, "page_status": self.page_status,
             "source_status": self.source_status, "content_type": self.content_type or None,
             "bytes": self.body_bytes, "credits": self.credits, "step": self.step,
             "rendered": self.rendered, "final_url": self.final_url,
