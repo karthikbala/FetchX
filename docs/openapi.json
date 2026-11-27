@@ -11360,7 +11360,7 @@
       "items": {
        "type": "string"
       },
-      "description": "What this FetchX supports, by feature id, so a client can check before relying on a newer feature: actions (browser actions on POST /v1/fetch), allow_hosts (the host allowlist on POST /v1/fetch), batches, browser_sessions (POST /v1/browser-sessions), capture (network capture), capture_actions (wait_for_response, and action_index and complete on captured calls), estimate, extract, feedback, fixtures (FetchX's public test site, https://fixtures.fetchx.ai, may be fetched), key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), logins (saved site logins: /v1/logins, and login on POST /v1/fetch), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), request_ids (request_id in every JSON answer from /v1 and the X-Request-Id header), usage_by_key (key_id on GET /v1/usage), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation."
+      "description": "What this FetchX supports, by feature id, so a client can check before relying on a newer feature: actions (browser actions on POST /v1/fetch), allow_hosts (the host allowlist on POST /v1/fetch), batches, browser_sessions (POST /v1/browser-sessions), capture (network capture), capture_actions (wait_for_response, and action_index and complete on captured calls), estimate, extract, feedback, fixtures (FetchX's public test site, https://fixtures.fetchx.ai, may be fetched), key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), logins (saved site logins: /v1/logins, and login on POST /v1/fetch), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), request_ids (request_id in every JSON answer from /v1 and the X-Request-Id header), solve_captcha (the solve_captcha action, and captchas solved after actions and inside frames), usage_by_key (key_id on GET /v1/usage), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation."
      },
      "request_id": {
       "type": "string",
@@ -11923,7 +11923,7 @@
     "required": [
      "type"
     ],
-    "description": "One step. Each type takes only its own fields (anything else is refused, invalid_request with details.field actions[i].name). Every action takes frame (not navigate, wait_for_url or wait_for_response), optional (a failed optional action does not stop the others) and timeout_ms (1 to 60000; an evaluate up to the request's timeout_ms). wait: ms (0 to 60000), or selector with state (attached, visible (default), hidden, detached). wait_for_url: url_contains or url_regex, matched against the top frame's URL. click: selector, button (left, right, middle), click_count (1 to 3); scrolls the element into view and waits until it can be clicked. hover: selector. fill: selector (default: the element with the focus, through open shadow roots) and value (up to 64 KB); clears the field and sets the value as typing would (input and change events). fill_secret: as fill, with secret, the name of an entry in the request's secrets; it is typed only into a field whose frame is at one of the secret's origins, over https (else the action fails with secret_origin_mismatch or secret_insecure). press: key (Enter, Tab, Control+a...), selector optional. select: selector and value or label. scroll: to (top, bottom) or px. navigate: url (https; on allow_hosts when given), in the same tab. evaluate: script (up to 64 KB) run in the page's own world; mode expression (default) gives the completion value of the script, as a console does, and function runs it as a function body with args (JSON up to 64 KB) and gives what it returns. A promise is awaited; the value comes back as JSON (up to 1 MB) in data.actions[i].value. A script that sends the page elsewhere ends ok with value null, and the next action runs in the new document. wait_for_response: url_contains or url_regex, method, status_in (HTTP statuses) and body (text (default) or none); matches the first response, as the browser's network layer saw it, to a request that started after the previous action began (any, for the first action) and that completes, and returns it in data.actions[i].response. type: text typed one key at a time, selector optional, delay_ms (0 to 1000) between keys.",
+    "description": "One step. Each type takes only its own fields (anything else is refused, invalid_request with details.field actions[i].name). Every action takes frame (not navigate, wait_for_url or wait_for_response), optional (a failed optional action does not stop the others) and timeout_ms (1 to 60000; an evaluate or a solve_captcha up to the request's timeout_ms). wait: ms (0 to 60000), or selector with state (attached, visible (default), hidden, detached). wait_for_url: url_contains or url_regex, matched against the top frame's URL. click: selector, button (left, right, middle), click_count (1 to 3); scrolls the element into view and waits until it can be clicked. hover: selector. fill: selector (default: the element with the focus, through open shadow roots) and value (up to 64 KB); clears the field and sets the value as typing would (input and change events). fill_secret: as fill, with secret, the name of an entry in the request's secrets; it is typed only into a field whose frame is at one of the secret's origins, over https (else the action fails with secret_origin_mismatch or secret_insecure). press: key (Enter, Tab, Control+a...), selector optional. select: selector and value or label. scroll: to (top, bottom) or px. navigate: url (https; on allow_hosts when given), in the same tab. evaluate: script (up to 64 KB) run in the page's own world; mode expression (default) gives the completion value of the script, as a console does, and function runs it as a function body with args (JSON up to 64 KB) and gives what it returns. A promise is awaited; the value comes back as JSON (up to 1 MB) in data.actions[i].value. A script that sends the page elsewhere ends ok with value null, and the next action runs in the new document. wait_for_response: url_contains or url_regex, method, status_in (HTTP statuses) and body (text (default) or none); matches the first response, as the browser's network layer saw it, to a request that started after the previous action began (any, for the first action) and that completes, and returns it in data.actions[i].response. type: text typed one key at a time, selector optional, delay_ms (0 to 1000) between keys. solve_captcha: solves a captcha that stands between you and the next action, such as a reCAPTCHA v2, Turnstile, hCaptcha or MTCaptcha in a sign-in form, in the action's frame and the frames inside it (any frame when frame is not given). It looks for a widget for up to 10 s (one an earlier action set off may take a moment to draw), solves the first one not yet verified, and applies the solution in the frame that holds it as the widget would: the token in its response field, then its callback (its data-callback, or the one the page gave grecaptcha.render). The form is left for your next action to send, unless submit is true and the widget has no callback, when it is sent if its submit control is enabled. timeout_ms defaults to 120000 (a solve takes 15 to 60 s; with less than 30000 left the action fails with captcha_not_solved before anything is spent). data.actions[i].value is {type, outcome: passed}, or {type: null, outcome: none} when no captcha waited (it may have verified itself), which is not a failure. A captcha that was found but not solved fails the action with captcha_not_solved (the message gives the type and why); captcha_unavailable means captchas cannot be solved for this request. After any other action, a wall it navigated to (a block status or challenge page) and a captcha's puzzle it opened over the page (an invisible reCAPTCHA on a button) are solved before the next action runs, and listed in data.actions[i].captcha. A request that solved a captcha, in an action or on the page, is charged the captcha price once (10 credits), and only if it succeeds. Feature id solve_captcha.",
     "properties": {
      "type": {
       "type": "string",
@@ -11940,7 +11940,8 @@
        "navigate",
        "evaluate",
        "wait_for_response",
-       "type"
+       "type",
+       "solve_captcha"
       ]
      },
      "frame": {
@@ -12073,6 +12074,11 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 1000
+     },
+     "submit": {
+      "type": "boolean",
+      "default": false,
+      "description": "solve_captcha only: send the widget's form when the widget has no callback and the form's submit control is enabled."
      }
     }
    },
@@ -12202,7 +12208,8 @@
        "navigate",
        "evaluate",
        "wait_for_response",
-       "type"
+       "type",
+       "solve_captcha"
       ]
      },
      "status": {
@@ -12218,7 +12225,7 @@
       "type": "integer"
      },
      "value": {
-      "description": "evaluate only: the script's result as JSON."
+      "description": "evaluate: the script's result as JSON. solve_captcha: {type, outcome}: the captcha's type and passed, or type null and outcome none when no captcha waited."
      },
      "error": {
       "type": "object",
@@ -12241,18 +12248,50 @@
          "secret_not_found",
          "secret_origin_mismatch",
          "secret_insecure",
-         "page_not_ok"
+         "page_not_ok",
+         "captcha_not_solved",
+         "captcha_unavailable"
         ]
        },
        "message": {
         "type": "string",
         "maxLength": 300,
-        "description": "What went wrong, with the failing selector at most; for evaluate_error, the script's own error. page_not_ok: the page answered other than 2xx, so no action ran."
+        "description": "What went wrong, with the failing selector at most; for evaluate_error, the script's own error. page_not_ok: the page answered other than 2xx, so no action ran. captcha_not_solved: the captcha's type and why it was not solved (for example captcha_timeout, still_challenged)."
        }
       }
      },
      "response": {
       "$ref": "#/components/schemas/ActionResponse"
+     },
+     "captcha": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "description": "Captchas solved after this action and before the next one: a wall it navigated to, or a captcha's puzzle it opened over the page. outcome is passed, or why it was not (as in metadata.fetchxRoute.attempts[].captcha).",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "type",
+        "outcome"
+       ],
+       "properties": {
+        "type": {
+         "type": "string",
+         "enum": [
+          "turnstile",
+          "recaptcha_v2",
+          "hcaptcha",
+          "mtcaptcha",
+          "datadome"
+         ]
+        },
+        "outcome": {
+         "type": "string",
+         "pattern": "^[a-z_]{1,60}$"
+        }
+       }
+      }
      }
     }
    },

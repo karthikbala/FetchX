@@ -346,7 +346,7 @@ test('real browser session responses match the contract', {skip: !databaseUrl}, 
   await expect('get', '/v1/browser-sessions/00000000-0000-4000-8000-000000000000', 404, undefined, one);
   const filled = await expect('post', `/v1/browser-sessions/${session.id}/fill`, 200, {body: {secret: 'pin', selector: '#pin',
     frame_url: 'https://login.shop.example.com/sign-in'}}, fill);
-  assert.deepEqual(filled, {secret: 'pin', frame_url: 'https://login.shop.example.com/sign-in'});
+  assert.deepEqual(filled, {secret: 'pin', frame_url: 'https://login.shop.example.com/sign-in', request_id: filled.request_id});
   await expect('post', `/v1/browser-sessions/${session.id}/fill`, 400, {body: {secret: 'pin'}}, fill);
   await expect('post', `/v1/browser-sessions/${session.id}/fill`, 403, {body: {secret: 'pin', selector: '#pin', frame_url: 'https://shop.example.com/'}}, fill);
   await expect('post', `/v1/browser-sessions/${session.id}/fill`, 404, {body: {secret: 'nope', selector: '#pin'}}, fill);

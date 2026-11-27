@@ -62,8 +62,8 @@ CAPTURE_DEFAULTS: Dict[str, Any] = {"types": ["document", "xhr", "fetch"], "max_
                                     "include_trackers": False, "unmask": False}
 CAPTURE_NEEDS_BROWSER = "capture records what a browser loads: use render always or auto with GET"
 ACTION_TYPES = frozenset({"wait", "wait_for_url", "click", "hover", "fill", "fill_secret", "press", "select", "scroll",
-                          "navigate", "evaluate", "wait_for_response", "type"})
-_ACTION_RESULT_FIELDS = ("status", "ms", "value", "error", "response")
+                          "navigate", "evaluate", "wait_for_response", "type", "solve_captcha"})
+_ACTION_RESULT_FIELDS = ("status", "ms", "value", "error", "response", "captcha")
 _HOST = re.compile(r"^(\*\.)?(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$")
 _CAPTURE_TOTAL_BYTES = 25_000_000
 _INLINE_BODY_BYTES = 1_000_000
@@ -104,7 +104,8 @@ class FakePage:
         # "frame" (main), "tracker" (False) and "error" (None, or why no response came).
         self.network = network or []
         # What a request's actions give, by index: dicts with any of "status" (ok, failed), "ms", "value"
-        # (an evaluate's result), "error" ({"code", "message"}) and "response" (a wait_for_response's).
+        # (an evaluate's or a solve_captcha's result), "error" ({"code", "message"}), "response" (a
+        # wait_for_response's) and "captcha" (captchas solved after the action: [{"type", "outcome"}]).
         # An action with no entry is ok. A failed action that is not optional fails the request, free.
         self.actions = actions or []
         # With allow_hosts: what the page tried to reach off the list ({"origin", "type", "action_index"}).
@@ -1021,7 +1022,7 @@ class FakeFetchX:
                 "concurrency": {"requests": {"limit": 10, "running": 0}, "browser_sessions": {"limit": 2, "running": 0}},
                 "features": ["actions", "allow_hosts", "batches", "capture", "capture_actions", "estimate", "extract",
                              "feedback", "fixtures", "key_limits", "limits", "logins", "next_page", "redirect_manual",
-                             "request_ids", "usage_by_key", "usd", "browser_sessions"]}
+                             "request_ids", "solve_captcha", "usage_by_key", "usd", "browser_sessions"]}
 
     def _post_feedback(self, body: Any) -> httpx.Response:
         if not isinstance(body, dict):
@@ -1433,6 +1434,8 @@ def _action_results(request: dict, page: FakePage) -> Tuple[List[dict], Optional
             entry.update({key: value for key, value in (given or {}).items() if key in _ACTION_RESULT_FIELDS})
             if action["type"] == "evaluate":
                 entry.setdefault("value", None)
+            elif action["type"] == "solve_captcha" and entry["status"] == "ok":
+                entry.setdefault("value", {"type": None, "outcome": "none"})
         if entry["status"] == "failed" and not action.get("optional") and failed_at is None:
             failed_at = index
         results.append(entry)

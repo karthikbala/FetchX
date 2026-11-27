@@ -94,8 +94,9 @@ test('the client covers every endpoint against the real app', {skip}, async t =>
   assert.match(session.idempotency_key, /^[0-9a-f-]{36}$/);
   assert.equal((await client.createBrowserSession({allow_hosts: ['shop.example.com', 'login.shop.example.com'],
     secrets: {pin: {value: 'synthetic-pin-1', origins: ['https://login.shop.example.com']}}, idempotency_key: session.idempotency_key})).id, session.id);
-  assert.deepEqual(await client.fillBrowserSession(session.id, {secret: 'pin', selector: '#pin', frame_url: 'https://login.shop.example.com/'}),
-    {secret: 'pin', frame_url: 'https://login.shop.example.com/'});
+  const {request_id: fillRequestId, ...filled} = await client.fillBrowserSession(session.id, {secret: 'pin', selector: '#pin', frame_url: 'https://login.shop.example.com/'});
+  assert.match(fillRequestId, /^req_[0-9a-f]{24}$/);
+  assert.deepEqual(filled, {secret: 'pin', frame_url: 'https://login.shop.example.com/'});
   assert.equal((await client.getBrowserSession(session.id)).status, 'open');
   assert.deepEqual((await client.listBrowserSessions({status: 'open'})).items.map(item => item.id), [session.id]);
   const receipt = await client.closeBrowserSession(session.id);
