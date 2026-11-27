@@ -21,13 +21,15 @@ RETRYABLE = {'network_error', 'too_many_requests', 'unavailable', 'maintenance'}
 
 
 class FetchXError(RuntimeError):
-    def __init__(self, code, *, status=None, details=None, retry_after_seconds=None, idempotency_key=None, response=None):
+    def __init__(self, code, *, status=None, details=None, retry_after_seconds=None, idempotency_key=None, request_id=None,
+                 response=None):
         super().__init__(code)
         self.code = code
         self.status = status
         self.details = details
         self.retry_after_seconds = retry_after_seconds
         self.idempotency_key = idempotency_key
+        self.request_id = request_id  # FetchX's id for the call (X-Request-Id): quote it when asking about one
         self.response = response
 
 
@@ -61,15 +63,19 @@ class FetchXClient:
             data = response.json()
         except ValueError:
             data = None
+        header_id = response.headers.get('x-request-id')
         if not isinstance(data, dict):
-            raise FetchXError('invalid_response', status=response.status_code, idempotency_key=idempotency_key)
+            raise FetchXError('invalid_response', status=response.status_code, idempotency_key=idempotency_key,
+                              request_id=header_id)
         if not response.is_success:
             error = data.get('error') if isinstance(data.get('error'), dict) else {}
             retry_after = error.get('retry_after_seconds') or response.headers.get('retry-after')
             raise FetchXError(error.get('code') if isinstance(error.get('code'), str) else 'request_failed',
                               status=response.status_code, details=error.get('details'),
                               retry_after_seconds=int(retry_after) if retry_after else None,
-                              idempotency_key=idempotency_key, response=data)
+                              idempotency_key=idempotency_key,
+                              request_id=data.get('request_id') if isinstance(data.get('request_id'), str) else header_id,
+                              response=data)
         return data
 
     def _start(self, path, request):
@@ -256,5 +262,5 @@ class FetchXClient:
         The value never reaches you."""
         return self._send('POST', '/v1/browser-sessions/' + quote(id, safe='') + '/fill', body=body)
 
-    def usage(self, *, period=None, since=None, until=None):
-        return self._send('GET', '/v1/usage' + _query({'period': period, 'since': since, 'until': until}))
+    def usage(self, *, period=None, since=None, until=None, key_id=None):
+        return self._send('GET', '/v1/usage' + _query({'period': period, 'since': since, 'until': until, 'key_id': key_id}))

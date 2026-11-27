@@ -165,7 +165,7 @@ export interface paths {
         };
         /**
          * Credits and usage
-         * @description The balance and where credits went in a period (UTC).
+         * @description The balance and where credits went in a period (UTC). With key_id, `used`, `by_step` and `daily` count only requests made with that API key (and the keys it was rotated from or to); `balance` is always the project's.
          */
         get: operations["getUsage"];
         put?: never;
@@ -931,6 +931,8 @@ export interface components {
             network?: components["schemas"]["NetworkSummary"] | null;
             /** @description Only on a request made with secrets: the names of those FetchX typed (fill_secret) or sent (a placeholder), sorted by name. Values never appear anywhere. */
             secrets_used?: string[];
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         /** @description Blocks, bot challenges and rate limits met on the way, and on the page that answered (a captcha, a wall that cleared). FetchX handles them itself; this says what it met and how it got past. */
         Challenge: {
@@ -1166,6 +1168,8 @@ export interface components {
                 secrets_used?: string[];
             }[];
             next_cursor: string | null;
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         Usage: {
             balance: {
@@ -1183,6 +1187,10 @@ export interface components {
                 /** Format: date-time */
                 to: string;
             };
+            /** @description The key_id asked for, or null when the report covers the whole project. */
+            key_id: string | null;
+            /** @description With key_id: the keys counted, that key and the keys it was rotated from or to (its lineage), as its credit limits count them. Null without key_id. */
+            key_ids: string[] | null;
             used: {
                 credits: number;
                 succeeded: number;
@@ -1201,6 +1209,8 @@ export interface components {
                 requests: number;
                 credits: number;
             }[];
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         Error: {
             error: {
@@ -1209,6 +1219,8 @@ export interface components {
                 details?: Record<string, never>;
                 retry_after_seconds?: number;
             };
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         Balance: {
             /** @description Available now: what new requests can reserve. Null for an unmetered project. */
@@ -1228,6 +1240,8 @@ export interface components {
              * @constant
              */
             currency: "USD";
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         /** @description One POST /v1/fetch body, or a batch body: items (URLs, or requests with url) merged over defaults. async, webhook_url and idempotency_key are set once for a batch, never in defaults or an item. */
         EstimateRequest: components["schemas"]["FetchRequest"] | components["schemas"]["EstimateBatch"];
@@ -1326,6 +1340,8 @@ export interface components {
             };
             items: components["schemas"]["EstimateItem"][];
             notes: components["schemas"]["EstimateNote"][];
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         ServiceStatus: {
             /**
@@ -1353,6 +1369,8 @@ export interface components {
                 changelog: string;
                 docs: string;
             };
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         StatusNotice: {
             id: string;
@@ -1482,10 +1500,14 @@ export interface components {
             };
             /** @description Whether results go to a webhook. */
             webhook: boolean;
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         BatchList: {
             items: components["schemas"]["Batch"][];
             next_cursor: string | null;
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         BatchItem: {
             /** @description The item's place in the batch's items, from 0. */
@@ -1518,6 +1540,8 @@ export interface components {
             items: components["schemas"]["BatchItem"][];
             /** @description Pass it as cursor for the next page. With order=finished it is also how to read only what finished since: it stays set while the batch can still change, and is null once the batch is over and everything was read. */
             next_cursor: string | null;
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names this HTTP call: each item's own `request_id` is that item's fetch (GET /v1/fetch/{id}), a different thing. */
+            request_id?: string;
         };
         /** @description What to record. Every field is optional. */
         CaptureSettings: {
@@ -1643,6 +1667,8 @@ export interface components {
             /** @description Pass as cursor for the next page of calls. */
             next_cursor: string | null;
             network: components["schemas"]["NetworkSummary"];
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         NetworkCall: {
             /** @description The call number, from 1 in the order the page made the calls. */
@@ -1708,6 +1734,8 @@ export interface components {
             action_index?: number | null;
             /** @description Whether the call finished: false when it failed or was still open when the page was read. */
             complete?: boolean;
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         /** @description The project and API key making the call. */
         Me: {
@@ -1747,8 +1775,10 @@ export interface components {
                     running: number;
                 };
             };
-            /** @description What this FetchX supports, by feature id, so a client can check before relying on a newer feature: actions (browser actions on POST /v1/fetch), allow_hosts (the host allowlist on POST /v1/fetch), batches, browser_sessions (POST /v1/browser-sessions), capture (network capture), capture_actions (wait_for_response, and action_index and complete on captured calls), estimate, extract, feedback, fixtures (FetchX's public test site, https://fixtures.fetchx.ai, may be fetched), key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), logins (saved site logins: /v1/logins, and login on POST /v1/fetch), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation. */
+            /** @description What this FetchX supports, by feature id, so a client can check before relying on a newer feature: actions (browser actions on POST /v1/fetch), allow_hosts (the host allowlist on POST /v1/fetch), batches, browser_sessions (POST /v1/browser-sessions), capture (network capture), capture_actions (wait_for_response, and action_index and complete on captured calls), estimate, extract, feedback, fixtures (FetchX's public test site, https://fixtures.fetchx.ai, may be fetched), key_limits (credit limits and expiry on keys), limits (concurrency in GET /v1/me), logins (saved site logins: /v1/logins, and login on POST /v1/fetch), next_page, redirect_manual (redirect: manual and all_headers on POST /v1/fetch), request_ids (request_id in every JSON answer from /v1 and the X-Request-Id header), usage_by_key (key_id on GET /v1/usage), usd (USD prices in GET /v1/balance and GET /v1/prices). Ids are added as features ship, and are listed in the changelog; one is removed only after a deprecation. */
             features: string[];
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         /** @description One of the key's credit limits and where the key stands against it now. */
         KeyLimit: {
@@ -1838,6 +1868,8 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         /** @description The shape of a JSON body (formats: skeleton), a few KB however large the body. Fields are read from the first 100 elements of each array. A JSON document a browser shows inside a lone <pre> is read from there. */
         JsonSkeleton: {
@@ -1887,11 +1919,6 @@ export interface components {
                 browser: components["schemas"]["PriceStep"];
                 browser_residential: components["schemas"]["PriceStep"];
             };
-            /** @description Browser sessions (POST /v1/browser-sessions): a flat price per session, charged once when it ends (not when its browser failed), plus residential traffic past included_mb at traffic.credits_per_mb. */
-            browser_sessions: {
-                datacenter: components["schemas"]["PriceStep"];
-                residential: components["schemas"]["PriceStep"];
-            };
             captcha: {
                 /** @description Added for each captcha solved on a browser step that succeeded. */
                 credits: number;
@@ -1925,6 +1952,13 @@ export interface components {
             trial_credits: number | null;
             /** @description Credit packs and their prices in your currency. */
             pricing_url: string;
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
+            /** @description Browser sessions (POST /v1/browser-sessions): a flat price per session, charged once when it ends (not when its browser failed), plus residential traffic past included_mb at traffic.credits_per_mb. */
+            browser_sessions: {
+                datacenter: components["schemas"]["PriceStep"];
+                residential: components["schemas"]["PriceStep"];
+            };
         };
         /** @description The frame to act in (default: the top frame): the first whose URL contains url_contains, or the iframe element selector matches. Waited for within the action's timeout; none gives frame_not_found. */
         ActionFrame: {
@@ -2051,10 +2085,14 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         LoginList: {
             /** @description The project’s saved logins, oldest first (at most 50). */
             items: components["schemas"]["Login"][];
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         LoginInput: {
             /** @description The host FetchX may sign in on, such as login.example.com: the login is typed only into sign-in forms on this host and its subdomains, over https. A URL is taken as its host. It applies by itself to requests on the same registrable domain (a login for login.example.com serves requests to app.example.com); name it with the request’s `login` when the sign-in is on another domain (an SSO provider). */
@@ -2223,9 +2261,13 @@ export interface components {
             error: string | null;
             /** @description The create's idempotency_key, if it had one. */
             idempotency_key: string | null;
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         BrowserSessionList: {
             items: components["schemas"]["BrowserSession"][];
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
         BrowserSessionFill: {
             /** @description One of the session's secrets, or login.username / login.password of its saved login. */
@@ -2239,6 +2281,8 @@ export interface components {
             secret: string;
             /** @description The frame it was typed in, without query or fragment. */
             frame_url: string | null;
+            /** @description This call's id, also in the X-Request-Id header. Every JSON answer from /v1 carries it, success or error; log it and quote it to support. It names the HTTP call, not a fetch (a fetch's own id is `id`). */
+            request_id?: string;
         };
     };
     responses: never;
@@ -2942,6 +2986,8 @@ export interface operations {
                 /** @description A custom range instead of period, up to 92 days. */
                 since?: string;
                 until?: string;
+                /** @description Only the requests made with this API key: its id, as GET /v1/me (key_id) or the console shows it. Revoked keys work too. An id that is not one of this project's keys is 400 invalid_request with error.details.field key_id. */
+                key_id?: string;
             };
             header?: never;
             path?: never;

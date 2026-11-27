@@ -73,3 +73,21 @@ export function keyLimitError(state, needed) {
   return Object.assign(new GatewayError('key_limit_reached', 402), {details: {limit: state.binding, credits: hit.limit, used: hit.used,
     remaining: hit.remaining, needed, resets_at: hit.resets_at}});
 }
+
+// The keys GET /v1/usage?key_id= counts: that key and the keys of its lineage
+// (rotated from or to it), as its limits count them. Null when the project has
+// no such key (revoked keys count: their usage stays theirs).
+export async function keyLineage(db, project, keyId) {
+  if (typeof keyId !== 'string' || !UUID.test(keyId)) return null;
+  let rows;
+  try {
+    rows = (await db.query(`SELECT id::text AS id FROM control_keys WHERE project = $1
+      AND COALESCE(lineage, id) = (SELECT COALESCE(lineage, id) FROM control_keys WHERE id = $2::uuid AND project = $1) ORDER BY id`,
+    [project, keyId.toLowerCase()])).rows;
+  } catch (error) {
+    // A platform without the console has no keys of its own.
+    if (error.code === '42P01') return null;
+    throw error;
+  }
+  return rows.length ? rows.map(row => row.id) : null;
+}

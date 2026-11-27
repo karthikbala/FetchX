@@ -169,8 +169,10 @@ class FetchTests(unittest.TestCase):
                          ("invalid_request", 400, 400, {"field": "url"}, "k1"))
         self.assertTrue(error.refused)
         self.assertNotIn("fxk_", str(error))
+        self.assertRegex(error.request_id, r"^req_[0-9a-f]{24}$")
         copy = pickle.loads(pickle.dumps(error))
-        self.assertEqual((copy.code, copy.status, copy.details), (error.code, error.status, error.details))
+        self.assertEqual((copy.code, copy.status, copy.details, copy.request_id),
+                         (error.code, error.status, error.details, error.request_id))
         with self.assertRaises(FetchXError) as caught:
             client.fetch({"url": f"{SHOP}/p/1"}, max_credits="lots")
         self.assertEqual(caught.exception.details, {"field": "max_credits"})
@@ -592,6 +594,11 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(client.balance().credits, 1_000_000 - 1)
         self.assertEqual(client.usage(period="day").credits_used, 1)
         self.assertEqual(calls(fake, "GET", "/v1/usage")[0].params, {"period": "day"})
+        own = client.usage(key_id=fake.key_id)
+        self.assertEqual((own.key_id, own.key_ids, client.usage().key_id), (fake.key_id, [fake.key_id], None))
+        with self.assertRaises(FetchXError) as caught:
+            client.usage(key_id="00000000-0000-4000-8000-000000000000")
+        self.assertEqual(caught.exception.details, {"field": "key_id"})
         self.assertTrue(client.status().operational)
 
 

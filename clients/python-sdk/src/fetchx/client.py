@@ -374,9 +374,11 @@ class FetchX(_Core):
         frame at ``frame_url`` (the page by default). The value never reaches you."""
         return self._call(*self._plan_fill_browser_session(session_id, body, fields))
 
-    def usage(self, period: Optional[str] = None, since: Optional[str] = None, until: Optional[str] = None) -> Usage:
-        """``GET /v1/usage``: balance and usage for a day, a month (default) or a range."""
-        return self._call(*self._plan_usage(period, since, until))
+    def usage(self, period: Optional[str] = None, since: Optional[str] = None, until: Optional[str] = None,
+              key_id: Optional[str] = None) -> Usage:
+        """``GET /v1/usage``: balance and usage for a day, a month (default) or a range; with ``key_id``, only
+        requests made with that API key (and the keys it was rotated from or to)."""
+        return self._call(*self._plan_usage(period, since, until, key_id))
 
     def status(self) -> ServiceStatus:
         """``GET /v1/status``: the API's state and notices."""

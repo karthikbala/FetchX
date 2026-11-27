@@ -15,7 +15,7 @@ const isObject = value => value !== null && typeof value === 'object' && !Array.
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export class FetchXError extends Error {
-  constructor(code, {status = null, details, retryAfterSeconds = null, idempotencyKey = null, response = null} = {}) {
+  constructor(code, {status = null, details, retryAfterSeconds = null, idempotencyKey = null, requestId = null, response = null} = {}) {
     super(code);
     this.name = 'FetchXError';
     this.code = code;
@@ -23,6 +23,8 @@ export class FetchXError extends Error {
     if (details !== undefined) this.details = details;
     this.retryAfterSeconds = retryAfterSeconds;
     this.idempotencyKey = idempotencyKey;
+    // FetchX's id for the call (X-Request-Id): quote it when asking about one.
+    this.requestId = requestId;
     this.response = response;
   }
 }
@@ -58,12 +60,14 @@ export class FetchXClient {
     }
     let data;
     try { data = await response.json(); } catch { data = null; }
-    if (!isObject(data)) throw new FetchXError('invalid_response', {status: response.status, idempotencyKey});
+    const headerId = response.headers.get('x-request-id');
+    if (!isObject(data)) throw new FetchXError('invalid_response', {status: response.status, idempotencyKey, requestId: headerId});
     if (!response.ok) {
       const error = isObject(data.error) ? data.error : {};
       const retryAfter = Number(error.retry_after_seconds ?? response.headers.get('retry-after')) || null;
       throw new FetchXError(typeof error.code === 'string' ? error.code : 'request_failed',
-        {status: response.status, details: error.details, retryAfterSeconds: retryAfter, idempotencyKey, response: data});
+        {status: response.status, details: error.details, retryAfterSeconds: retryAfter, idempotencyKey,
+          requestId: typeof data.request_id === 'string' ? data.request_id : headerId, response: data});
     }
     return data;
   }
@@ -251,7 +255,7 @@ export class FetchXClient {
   // `selector` matches, in the frame at frame_url. The value never reaches you.
   fillBrowserSession(id, input) { return this.#send('POST', `/v1/browser-sessions/${encodeURIComponent(id)}/fill`, {body: input}); }
 
-  // GET /v1/usage: {period: 'day' | 'month'} or {since, until}
+  // GET /v1/usage: {period: 'day' | 'month'} or {since, until}, and key_id for one API key
   usage(query = {}) {
     const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null));
     return this.#send('GET', '/v1/usage' + (params.size ? `?${params}` : ''));

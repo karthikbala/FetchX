@@ -264,6 +264,11 @@ test('retired routes answer 410 with their replacement, unknown routes 404 with 
   assert.equal(response.headers.sunset, 'Fri, 01 Jan 2027 00:00:00 GMT');
   assert.equal(response.headers.link, '<https://fetchx.ai/changelog>; rel="deprecation"; type="text/html"');
   assert.equal((await call('GET', '/v1/balance')).headers.deprecation, undefined);
+  // A deprecated field is announced in the changelog only: no route is marked deprecated for it.
+  changelog.deprecations.push({field: 'Balance.reserved', deprecated_in: '1.4.0', deprecated_on: '2026-11-21', sunset_on: '2027-01-01',
+    replacement: 'GET /v1/usage balance.reserved'});
+  t.after(() => changelog.deprecations.pop());
+  assert.equal((await call('GET', '/v1/balance')).headers.deprecation, undefined);
 });
 
 test('the changelog is consistent: versions, dates, deprecations with notice, retired paths that nothing serves', () => {
@@ -283,10 +288,12 @@ test('the changelog is consistent: versions, dates, deprecations with notice, re
   }
   const day = value => Date.parse(`${value}T00:00:00Z`);
   for (const entry of changelog.deprecations) {
-    assert.match(entry.path, /^\/v1\//);
-    assert.ok(versions.includes(entry.deprecated_in), entry.path);
+    // A route (path, as in the contract) or a field of an answer (Schema.path, see docs/stable-fields.json).
+    const name = entry.path ?? entry.field;
+    assert.ok(entry.path ? /^\/v1\//.test(entry.path) && !entry.field : /^[A-Z][A-Za-z]+\./.test(entry.field ?? ''), `${name} names a route or a field`);
+    assert.ok(versions.includes(entry.deprecated_in), name);
     assert.ok(entry.replacement && entry.sunset_on && day(entry.sunset_on) - day(entry.deprecated_on) >= changelog.policy.notice_days * 86_400_000,
-      `${entry.path} gives at least ${changelog.policy.notice_days} days' notice`);
+      `${name} gives at least ${changelog.policy.notice_days} days' notice`);
   }
   const served = Object.keys(spec.paths);
   for (const entry of changelog.retired) {

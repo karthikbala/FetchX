@@ -9,4 +9,4 @@ export const API_VERSION = changelog.releases[0].version;
 // checks for an id before relying on a newer feature. Add an id when its
 // feature ships; removing one is a breaking change (see docs/api.md).
 export const FEATURES = Object.freeze(['actions', 'allow_hosts', 'batches', 'browser_sessions', 'capture', 'capture_actions', 'estimate', 'extract', 'feedback',
-  'fixtures', 'key_limits', 'limits', 'logins', 'next_page', 'redirect_manual', 'secrets', 'usd']);
+  'fixtures', 'key_limits', 'limits', 'logins', 'next_page', 'redirect_manual', 'request_ids', 'secrets', 'usage_by_key', 'usd']);

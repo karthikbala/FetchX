@@ -293,8 +293,8 @@ class AsyncFetchX(_Core):
         return await self._call(*self._plan_fill_browser_session(session_id, body, fields))
 
     async def usage(self, period: Optional[str] = None, since: Optional[str] = None,
-                    until: Optional[str] = None) -> Usage:
-        return await self._call(*self._plan_usage(period, since, until))
+                    until: Optional[str] = None, key_id: Optional[str] = None) -> Usage:
+        return await self._call(*self._plan_usage(period, since, until, key_id))
 
     async def status(self) -> ServiceStatus:
         return await self._call(*self._plan_status())

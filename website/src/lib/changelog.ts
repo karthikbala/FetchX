@@ -5,12 +5,13 @@ import document from '../../../docs/changelog.json' with { type: 'json' };
 
 export type ChangeType = 'added' | 'changed' | 'deprecated' | 'removed' | 'fixed' | 'security';
 export type Release = { version: string; date: string; title: string; changes: { type: ChangeType; text: string }[] };
+// A route (path, as in the API contract) or a field of an answer (field, as Schema.path).
 export type Deprecation = {
-  method?: string; path: string; deprecated_in: string; deprecated_on: string; sunset_on?: string; replacement: string; note?: string;
+  method?: string; path?: string; field?: string; deprecated_in: string; deprecated_on: string; sunset_on?: string; replacement: string; note?: string;
 };
 export type Retired = { method?: string; path: string; match?: 'prefix'; retired_in: string; retired_on: string; replacement: string; note?: string };
 export type Changelog = {
-  title: string; description: string; policy: { notice_days: number };
+  title: string; description: string; policy: { notice_days: number; compatibility?: string };
   releases: Release[]; deprecations: Deprecation[]; retired: Retired[];
 };
 
@@ -19,8 +20,9 @@ export const CHANGE_LABELS: Record<ChangeType, string> = {
   added: 'Added', changed: 'Changed', deprecated: 'Deprecated', removed: 'Removed', fixed: 'Fixed', security: 'Security',
 };
 export const releaseAnchor = (version: string) => 'v' + version;
-export const routeLabel = (entry: { method?: string; path: string; match?: string }) =>
-  `${entry.method ? entry.method + ' ' : ''}${entry.path}${entry.match === 'prefix' ? '/…' : ''}`;
+export const routeLabel = (entry: { method?: string; path?: string; field?: string; match?: string }) => entry.field && !entry.path
+  ? `Field ${entry.field}`
+  : `${entry.method ? entry.method + ' ' : ''}${entry.path ?? ''}${entry.match === 'prefix' ? '/…' : ''}`;
 
 const escape = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 

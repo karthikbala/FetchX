@@ -24,6 +24,13 @@ const responseSchema = (method, path, status) => {
   return Object.values(response.content)[0].schema;
 };
 const specPath = url => url.replace(/:([a-z_]+)/g, '{$1}');
+// Every answer names its call (X-Request-Id); every JSON answer, a HAR file aside, says it in the body too.
+function assertNamed(response, method, path, specUrl, status) {
+  assert.match(response.headers['x-request-id'] ?? '', /^req_[0-9a-f]{24}$/, `${method} ${path} has X-Request-Id`);
+  if (response.body && !specUrl.endsWith('network.har')) {
+    assert.equal(response.body.request_id, response.headers['x-request-id'], `${method} ${path} ${status} carries request_id`);
+  }
+}
 
 test('the contract is self-contained, with unique operation ids and matching path parameters', () => {
   const ids = new Set();
@@ -97,6 +104,7 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
     const response = await call(method.toUpperCase(), path, request);
     assert.equal(response.status, status, `${method} ${path}: ${JSON.stringify(response.body)}`);
     if (response.body) assertValid(responseSchema(method, specUrl, status), response.body, `${method} ${path} ${status}`);
+    assertNamed(response, method, path, specUrl, status);
     return response.body;
   };
   const one = '/v1/fetch/{id}';
@@ -175,7 +183,8 @@ test('real responses from the gateway match the contract', {skip: !databaseUrl},
   await expect('delete', `/v1/fetch/${captured.id}`, 204, undefined, one);
   await expect('get', `/v1/fetch/${captured.id}/network`, 410, undefined, network);
   const me = await expect('get', '/v1/me', 200);
-  const {concurrency, ...who} = me;
+  const {concurrency, request_id: requestId, ...who} = me;
+  assert.match(requestId, /^req_[0-9a-f]{24}$/);
   assert.deepEqual(who, {project_id: PROJECT, key_id: null, key_name: null, key_prefix: null, scopes: ['fetch:write', 'fetch:read', 'usage:read'],
     limits: {credits_per_day: null, credits_per_month: null, expires_at: null}, features: [...FEATURES]});
   // Earlier async jobs of this test may still be running.
@@ -249,6 +258,7 @@ test('a 503 unavailable says when to retry', {skip: !databaseUrl}, async t => {
     assert.equal(response.body.error.retry_after_seconds, 30);
     assert.equal(response.body.error.details.status_url, 'https://fetchx.ai/status');
     assertValid(responseSchema(method, specUrl, 503), response.body, `${method} ${path}`);
+    assertNamed(response, method, path, specUrl, 503);
   }
 });
 
@@ -260,6 +270,7 @@ test('real batch responses match the contract', {skip: !databaseUrl}, async t =>
     const response = await call(method.toUpperCase(), path, request);
     assert.equal(response.status, status, `${method} ${path}: ${JSON.stringify(response.body)}`);
     if (response.body) assertValid(responseSchema(method, specUrl, status), response.body, `${method} ${path} ${status}`);
+    assertNamed(response, method, path, specUrl, status);
     return response.body;
   };
   const one = '/v1/batches/{id}';

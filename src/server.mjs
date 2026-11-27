@@ -5,7 +5,7 @@
 import Fastify from 'fastify';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
-import {timingSafeEqual} from 'node:crypto';
+import {randomBytes, timingSafeEqual} from 'node:crypto';
 import {GatewayError} from './policy.mjs';
 import {sha} from './crypto.mjs';
 import {Store} from './store.mjs';
@@ -18,7 +18,7 @@ import {WebhookSender} from './fetch/webhooks.mjs';
 import {BatchRunner, BatchService} from './fetch/batches.mjs';
 import {FeedbackService} from './fetch/feedback.mjs';
 import {BrowserSessionFront, refuseUpgrade} from './fetch/browser-sessions.mjs';
-import {registerApi, apiError, API_SCOPES, ANY_SCOPE, UNAVAILABLE_RETRY_SECONDS} from './api/v1.mjs';
+import {registerApi, registerRequestIds, apiError, API_SCOPES, ANY_SCOPE, UNAVAILABLE_RETRY_SECONDS} from './api/v1.mjs';
 import {registerLifecycle} from './api/lifecycle.mjs';
 import {Estimator} from './fetch/estimate.mjs';
 import {StatusBoard, linksOf} from './status.mjs';
@@ -55,7 +55,10 @@ export function createPlatform({store, config, deps = {}}) {
 
 export function server(platform, {stripeFetch, stripeAutoProcess = true} = {}) {
   const {config} = platform;
-  const app = Fastify({logger: false, bodyLimit: 2 * 1024 * 1024, requestTimeout: 150_000});
+  // Every call gets its own id (req.id): the X-Request-Id header and, on /v1,
+  // request_id in the body (registerRequestIds). A caller's own id header is not taken.
+  const app = Fastify({logger: false, bodyLimit: 2 * 1024 * 1024, requestTimeout: 150_000, requestIdHeader: false,
+    genReqId: () => `req_${randomBytes(12).toString('hex')}`});
   // Some HTTP clients send Content-Type: application/json on every request,
   // also a DELETE or GET with no body: that is no body, not a malformed one.
   // Everything else goes to Fastify's own parser (prototype-poisoning checks included).
@@ -106,6 +109,7 @@ export function server(platform, {stripeFetch, stripeAutoProcess = true} = {}) {
       process.stderr.write(JSON.stringify({event: 'engine_unavailable', cause: error.engineCause}) + '\n');
     }
     const {status, body} = apiError(error);
+    req.errorCode = body.error.code;
     // An engine that does not answer is usually restarting: the same wait the
     // front door gives when the gateway itself does not answer.
     if (body.error.code === 'unavailable' && !body.error.retry_after_seconds) {
@@ -119,16 +123,20 @@ export function server(platform, {stripeFetch, stripeAutoProcess = true} = {}) {
     await platform.store.pool.query('SELECT 1');
     return {ok: true, service: 'FetchX', release: config.release ?? null};
   });
+  registerRequestIds(app);
   registerLifecycle(app, {board: platform.board, config});
   registerApi(app, {service: platform.front, ledger: platform.ledger, estimator: platform.estimator, board: platform.board,
     batches: platform.batches, feedback: platform.feedback, sessions: platform.browserSessions});
   // A browser session's WebSocket (its ws_url): the caller's API key (fetch:write)
   // is checked here, and the connection goes on to the engine without it.
+  // A browser session's WebSocket: not a Fastify route, so it gets its request
+  // id here, in the X-Request-Id header and the body of a refusal.
   app.server.on('upgrade', (req, socket, head) => {
     socket.on('error', () => socket.destroy());
+    const requestId = `req_${randomBytes(12).toString('hex')}`;
     const refuse = (status, code, details) => {
       const {body} = apiError(Object.assign(new GatewayError(code, status), details ? {details} : {}));
-      refuseUpgrade(socket, status, body);
+      refuseUpgrade(socket, status, body, requestId);
     };
     const match = /^\/v1\/browser-sessions\/([0-9a-f-]{36})\/ws(?:\?.*)?$/.exec(req.url ?? '');
     if (!match || req.method !== 'GET' || String(req.headers.upgrade ?? '').toLowerCase() !== 'websocket') return refuse(404, 'route_not_found');
@@ -137,7 +145,7 @@ export function server(platform, {stripeFetch, stripeAutoProcess = true} = {}) {
         await app.authenticate(req, API_SCOPES.write);
       } catch (error) {
         const {status, body} = apiError(error);
-        return refuseUpgrade(socket, status, body);
+        return refuseUpgrade(socket, status, body, requestId);
       }
       await platform.browserSessions.upgrade(req.project, match[1], req, socket, head, refuse);
     })().catch(() => socket.destroy());

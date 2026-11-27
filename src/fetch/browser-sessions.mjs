@@ -131,7 +131,7 @@ export class BrowserSessionFront {
   // ---------- admission ----------
 
   // -> {session, created}: created false when the idempotency_key already has a session.
-  async create(project, raw, {keyId = null} = {}) {
+  async create(project, raw, {keyId = null, requestId = null} = {}) {
     const input = this.#input(raw);
     const id = randomUUID();
     const price = this.ledger.prices[input.step];
@@ -168,9 +168,9 @@ export class BrowserSessionFront {
         held = Math.min(ceiling, balance.available, key.room);
         await this.ledger.hold(client, {project, request: id, credits: held});
       }
-      await client.query(`INSERT INTO fetch_settlements (request, project, key_id, kind, credits_max, deadline)
-        VALUES ($1, $2, $3, 'browser_session', $4, clock_timestamp() + make_interval(secs => $5))`,
-      [id, project, keyId, held, (this.limits.launchMs + ttl * 1000 + this.limits.closeGraceMs) / 1000]);
+      await client.query(`INSERT INTO fetch_settlements (request, project, key_id, kind, credits_max, deadline, request_id)
+        VALUES ($1, $2, $3, 'browser_session', $4, clock_timestamp() + make_interval(secs => $5), $6)`,
+      [id, project, keyId, held, (this.limits.launchMs + ttl * 1000 + this.limits.closeGraceMs) / 1000, requestId]);
       await client.query('INSERT INTO browser_session_records (id, project, step, idempotency_key, input_hash) VALUES ($1, $2, $3, $4, $5)',
         [id, project, input.step, input.key, input.hash]);
       this.#wire(input, held ?? ceiling);
@@ -285,7 +285,7 @@ export class BrowserSessionFront {
         if (billable && this.ledger.metered(project) && current.credits_max !== null) {
           const price = priceOf(this.ledger.prices, {step: current.session_step, wireBytes});
           charged = await this.ledger.charge(client, {project, request: id, step: current.session_step,
-            credits: Math.min(price, Number(current.credits_max))});
+            credits: Math.min(price, Number(current.credits_max)), keyId: current.key_id});
         } else {
           await this.ledger.release(client, {request: id});
         }
@@ -497,8 +497,9 @@ export class BrowserSessionFront {
 }
 
 // An HTTP answer to an upgrade that is refused, in the API's error shape.
-export function refuseUpgrade(socket, status, body) {
-  const text = JSON.stringify(body);
+export function refuseUpgrade(socket, status, body, requestId = null) {
+  const text = JSON.stringify(requestId ? {...body, request_id: requestId} : body);
   socket.end(`HTTP/1.1 ${status} ${STATUS_CODES[status] ?? 'Error'}\r\nConnection: close\r\nContent-Type: application/json\r\n`
+    + (requestId ? `X-Request-Id: ${requestId}\r\n` : '')
     + `Cache-Control: no-store\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`);
 }

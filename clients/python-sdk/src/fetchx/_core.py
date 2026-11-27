@@ -837,8 +837,10 @@ class _Core:
     def _plan_balance(self) -> Plan:
         return self._plan_get_model("balance", "/v1/balance", Balance)
 
-    def _plan_usage(self, period: Optional[str], since: Optional[str], until: Optional[str]) -> Plan:
-        return self._plan_get_model("usage", "/v1/usage", Usage, _query(period=period, since=since, until=until))
+    def _plan_usage(self, period: Optional[str], since: Optional[str], until: Optional[str],
+                    key_id: Optional[str] = None) -> Plan:
+        return self._plan_get_model("usage", "/v1/usage", Usage,
+                                    _query(period=period, since=since, until=until, key_id=key_id))
 
     def _plan_status(self) -> Plan:
         return self._plan_get_model("status", "/v1/status", ServiceStatus)

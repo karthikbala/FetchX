@@ -309,7 +309,9 @@ class FakeFetchX:
         if rest == ["balance"] and method == "GET":
             return _json(200, self._balance())
         if rest == ["usage"] and method == "GET":
-            return _json(200, self._usage())
+            if params.get("key_id") not in (None, self.key_id):
+                return _invalid("key_id")
+            return _json(200, self._usage(params.get("key_id")))
         if rest == ["status"] and method == "GET":
             return _json(200, self._status())
         if rest == ["prices"] and method == "GET":
@@ -991,7 +993,7 @@ class FakeFetchX:
                 "purchased": self.balance or 0, "payment_hold": False,
                 "usd_per_credit": 0.0002 if self.balance is not None else None, "currency": "USD"}
 
-    def _usage(self) -> dict:
+    def _usage(self, key_id: Optional[str] = None) -> dict:
         finished = [state for state in self._results.values() if state["polls_left"] <= 0]
         spent = sum(state["charged"] for state in finished)
         by_step: Dict[str, List[int]] = {}
@@ -1004,6 +1006,7 @@ class FakeFetchX:
                     "credits": self.balance, "trial": 0, "purchased": self.balance, "reserved": 0,
                     "payment_hold": False},
                 "period": {"from": _iso(self._clock.replace(day=1)), "to": _iso(self._clock)},
+                "key_id": key_id, "key_ids": [key_id] if key_id else None,
                 "used": {"credits": spent, "succeeded": sum(1 for s in finished if s["failure"] is None),
                          "failed": sum(1 for s in finished if s["failure"] is not None), "captcha_solved": 0},
                 "by_step": [{"step": step, "requests": n, "credits": c} for step, (n, c) in by_step.items()],
@@ -1017,8 +1020,8 @@ class FakeFetchX:
                 "limits": {"credits_per_day": None, "credits_per_month": None, "expires_at": None},
                 "concurrency": {"requests": {"limit": 10, "running": 0}, "browser_sessions": {"limit": 2, "running": 0}},
                 "features": ["actions", "allow_hosts", "batches", "capture", "capture_actions", "estimate", "extract",
-                             "feedback", "fixtures", "key_limits", "limits", "logins", "next_page", "redirect_manual", "usd",
-                             "browser_sessions"]}
+                             "feedback", "fixtures", "key_limits", "limits", "logins", "next_page", "redirect_manual",
+                             "request_ids", "usage_by_key", "usd", "browser_sessions"]}
 
     def _post_feedback(self, body: Any) -> httpx.Response:
         if not isinstance(body, dict):
@@ -1348,7 +1351,9 @@ def _error(status: int, code: str, message: str, details: Optional[dict] = None,
         error["details"] = details
     if retry_after_seconds is not None:
         error["retry_after_seconds"] = retry_after_seconds
-    return httpx.Response(status, json={"error": error}, headers=headers or {})
+    request_id = "req_" + uuid.uuid4().hex[:24]
+    return httpx.Response(status, json={"error": error, "request_id": request_id},
+                          headers={**(headers or {}), "x-request-id": request_id})
 
 
 def _invalid(field: str) -> httpx.Response:

@@ -260,6 +260,8 @@ test('a session\'s WebSocket goes to the engine with the service token, never th
     const answer = await upgrade(port, url, {...ws, ...headers});
     answer.socket.destroy();
     assert.deepEqual([answer.status, answer.body.error.code], [status, code], `${url}: ${answer.head}`);
+    assert.match(answer.body.request_id, /^req_[0-9a-f]{24}$/);
+    assert.ok(answer.head.toLowerCase().includes(`x-request-id: ${answer.body.request_id}`), 'the refusal carries its request id');
   };
   await refused(path, {}, 401, 'unauthorized');
   await refused(path, {Authorization: 'Bearer wrong'}, 401, 'unauthorized');
